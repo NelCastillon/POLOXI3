@@ -44,6 +44,13 @@ public sealed class OpportunitiesController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("competitor-lookups")]
+    public async Task<IActionResult> SearchCompetitorLookups([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken cancellationToken = default)
+    {
+        var result = await _service.SearchCompetitorLookupsAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOpportunityRequest request, CancellationToken cancellationToken)
     {
@@ -54,8 +61,7 @@ public sealed class OpportunitiesController : ControllerBase
     [HttpPut("{id:guid}/stage")]
     public async Task<IActionResult> UpdateStage(Guid id, [FromBody] Ams.Application.Features.Opportunities.UpdateOpportunityStageRequest request, CancellationToken cancellationToken)
     {
-        await _service.UpdateStageAsync(id, request, cancellationToken);
-        return NoContent();
+        return Ok(await _service.UpdateStageAsync(id, request, cancellationToken));
     }
 
     [HttpPost("{id:guid}/lines")]

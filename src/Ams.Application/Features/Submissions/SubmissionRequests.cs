@@ -33,6 +33,101 @@ public sealed record AssignSubmissionRequest(Guid AssignedToUserId);
 
 public sealed record SubmissionActionResult(Guid Id, string Message);
 
+public sealed record AddSubmissionNoteRequest(
+    Guid TenantId,
+    [property: Required, StringLength(1000)]
+    string Notes,
+    Guid? CreatedByUserId);
+
+public sealed record CreateSubmissionFollowUpTaskRequest(
+    Guid TenantId,
+    [property: Required, StringLength(200)]
+    string Title,
+    [property: StringLength(2000)]
+    string? Description,
+    [property: Required, StringLength(50)]
+    string PriorityCode,
+    Guid? AssignedToUserId,
+    DateOnly? DueDate,
+    Guid? CreatedByUserId);
+
+public sealed record UpdateSubmissionIntakeQuestionRequest(
+    Guid TenantId,
+    [property: StringLength(2000)]
+    string? AnswerText,
+    bool IsAnswered,
+    Guid? AnsweredByUserId);
+
+public sealed record UpdateSubmissionMarketPackageRequest(
+    Guid TenantId,
+    Guid SubmissionMarketId,
+    [property: Required, StringLength(50)]
+    string Status,
+    [property: StringLength(80)]
+    string? ReasonCode,
+    [property: StringLength(1000)]
+    string? Notes,
+    DateTime? NextActionDateUtc,
+    Guid[] DocumentIds,
+    Guid? ModifiedByUserId);
+
+public sealed record UpdateSubmissionQuoteRequest(
+    Guid TenantId,
+    [property: Required, StringLength(50)]
+    string Status,
+    [property: Range(0, 999999999999)]
+    decimal AnnualPremium,
+    [property: Range(0, 999999999999)]
+    decimal? Deductible,
+    [property: Range(0, 999999999999)]
+    decimal? Limit,
+    [property: Range(0, 100)]
+    decimal? CommissionPercent,
+    [property: StringLength(2000)]
+    string? Subjectivities,
+    [property: StringLength(2000)]
+    string? Exclusions,
+    [property: StringLength(80)]
+    string? CarrierRating,
+    [property: StringLength(200)]
+    string? PaymentTerms,
+    [property: Range(0, 999999999999)]
+    decimal? MinimumEarnedPremium,
+    [property: Range(0, 999999999999)]
+    decimal? TaxesAndFees,
+    [property: Range(0, 999999999999)]
+    decimal? BrokerFee,
+    bool? TriaIncluded,
+    Guid? QuoteDocumentId,
+    [property: StringLength(1000)]
+    string? CoverageNotes,
+    DateTime ExpiresDateUtc,
+    Guid? ModifiedByUserId);
+
+public sealed record SelectSubmissionQuoteRequest(
+    Guid TenantId,
+    Guid QuoteId,
+    bool IsRecommended,
+    [property: Required, StringLength(1000)]
+    string Reason,
+    Guid? SelectedByUserId);
+
+public sealed record ProposalDeliveryRequest(
+    Guid TenantId,
+    [property: Required, StringLength(50)]
+    string DeliveryMethod,
+    [property: Required, StringLength(320)]
+    string Recipient,
+    Guid? SentByUserId);
+
+public sealed record ProposalDecisionRequest(
+    Guid TenantId,
+    [property: Required, StringLength(50)]
+    string Decision,
+    [property: StringLength(1000)]
+    string? DecisionNotes,
+    Guid? DecidedByUserId);
+
 public sealed record SubmitSubmissionToMarketRequest(
     Guid TenantId,
     Guid? CarrierId,
@@ -85,6 +180,34 @@ public sealed record GenerateProposalRequest(
     string Title,
     Guid[] QuoteIds,
     string? CustomIntroduction);
+
+public sealed record UpsertSubmissionIntakeTemplateRequest(
+    Guid TenantId,
+    [property: Required, StringLength(100)]
+    string LineOfBusiness,
+    [property: Required, StringLength(100)]
+    string QuestionCode,
+    [property: Required, StringLength(500)]
+    string QuestionText,
+    [property: StringLength(1000)]
+    string? HelpText,
+    bool IsRequired,
+    int SortOrder,
+    bool IsActive,
+    Guid? ModifiedByUserId);
+
+public sealed record UpsertSubmissionDocumentRequirementRequest(
+    Guid TenantId,
+    [property: Required, StringLength(100)]
+    string LineOfBusiness,
+    [property: Required, StringLength(100)]
+    string CategoryCode,
+    [property: Required, StringLength(200)]
+    string DisplayName,
+    bool IsRequired,
+    int SortOrder,
+    bool IsActive,
+    Guid? ModifiedByUserId);
 
 public sealed record AppetiteSearchRequest(
     Guid TenantId,

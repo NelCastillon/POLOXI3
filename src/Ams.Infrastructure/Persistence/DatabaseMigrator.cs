@@ -16496,6 +16496,71 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.Oppor
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'IX_OpportunitySubmissionLine_Opportunity')
     EXEC(N'CREATE INDEX IX_OpportunitySubmissionLine_Opportunity ON CRM.OpportunitySubmissionLine(OpportunityId, IsDeleted, SubmissionId);');
 
+IF OBJECT_ID(N'CRM.OpportunityBoundPolicy', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityBoundPolicy
+    (
+        OpportunityBoundPolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityBoundPolicy PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        OpportunitySubmissionId UNIQUEIDENTIFIER NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        BindingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BindingStatus DEFAULT N'Bound',
+        BoundDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BoundDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_TenantId DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'OpportunityId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_OpportunityId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'OpportunitySubmissionId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD OpportunitySubmissionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'SubmissionId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_SubmissionId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'QuoteId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_QuoteId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'PolicyId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD PolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_PolicyId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'PolicyNumber') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD PolicyNumber NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_PolicyNumber DEFAULT N'POL-SEEDED';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'BindingStatus') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD BindingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BindingStatusB DEFAULT N'Bound';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'BoundDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD BoundDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BoundDateUtcB DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_CreatedDateUtcB DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_IsDeletedB DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'UX_OpportunityBoundPolicy_Policy')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityBoundPolicy_Policy ON CRM.OpportunityBoundPolicy(PolicyId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'IX_OpportunityBoundPolicy_Opportunity')
+    EXEC(N'CREATE INDEX IX_OpportunityBoundPolicy_Opportunity ON CRM.OpportunityBoundPolicy(TenantId, OpportunityId, IsDeleted, BoundDateUtc DESC);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'IX_OpportunityBoundPolicy_SourceSubmission')
+    EXEC(N'CREATE INDEX IX_OpportunityBoundPolicy_SourceSubmission ON CRM.OpportunityBoundPolicy(OpportunitySubmissionId, IsDeleted) WHERE OpportunitySubmissionId IS NOT NULL;');
+
+INSERT INTO CRM.OpportunityBoundPolicy
+    (OpportunityBoundPolicyId, TenantId, OpportunityId, OpportunitySubmissionId, SubmissionId, QuoteId, PolicyId, PolicyNumber, BindingStatus, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, s.OpportunityId, os.SubmissionId, p.SubmissionId, p.QuoteId, p.PolicyId, p.PolicyNumber, p.Status, p.BoundDateUtc, SYSUTCDATETIME(), s.CreatedByUserId, 0
+FROM Submissions.BoundPolicy p
+INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+OUTER APPLY
+(
+    SELECT TOP 1 source.SubmissionId
+    FROM CRM.OpportunitySubmission source
+    WHERE source.TenantId = p.TenantId
+      AND source.OpportunityId = s.OpportunityId
+      AND source.IsDeleted = 0
+      AND (source.LineOfBusiness = s.LineOfBusiness OR source.SubmissionNumber = s.SubmissionNumber)
+    ORDER BY CASE WHEN source.Status = N'Bound' THEN 0 ELSE 1 END, source.ModifiedDateUtc DESC, source.CreatedDateUtc DESC
+) os
+WHERE s.OpportunityId IS NOT NULL
+  AND p.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityBoundPolicy existing WHERE existing.PolicyId = p.PolicyId AND existing.IsDeleted = 0);
+
 IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.SubmissionLine
@@ -16518,6 +16583,9 @@ END;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'UX_SubmissionLine_Submission_Line')
     EXEC(N'CREATE UNIQUE INDEX UX_SubmissionLine_Submission_Line ON Submissions.SubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0 AND OpportunityLineId IS NOT NULL;');
 
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'IX_SubmissionLine_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionLine_Submission ON Submissions.SubmissionLine(SubmissionId, IsDeleted, LineOfBusiness);');
+
 IF OBJECT_ID(N'Submissions.QuoteLine', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.QuoteLine
@@ -16534,6 +16602,12 @@ BEGIN
         IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_IsDeleted DEFAULT 0
     );
 END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteLine') AND name = N'IX_QuoteLine_Quote')
+    EXEC(N'CREATE INDEX IX_QuoteLine_Quote ON Submissions.QuoteLine(QuoteId, IsDeleted, LineOfBusiness);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteLine') AND name = N'IX_QuoteLine_Submission')
+    EXEC(N'CREATE INDEX IX_QuoteLine_Submission ON Submissions.QuoteLine(SubmissionId, IsDeleted, OpportunityLineId);');
 
 IF OBJECT_ID(N'Submissions.PolicyLine', N'U') IS NULL
 BEGIN
@@ -16552,6 +16626,12 @@ BEGIN
         IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_IsDeleted DEFAULT 0
     );
 END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyLine') AND name = N'IX_PolicyLine_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Policy ON Submissions.PolicyLine(PolicyId, IsDeleted, LineOfBusiness);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyLine') AND name = N'IX_PolicyLine_Submission')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Submission ON Submissions.PolicyLine(SubmissionId, IsDeleted, OpportunityLineId);');
 
 INSERT INTO CRM.OpportunitySubmissionLine (OpportunitySubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
 SELECT NEWID(), s.TenantId, s.SubmissionId, s.OpportunityId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(s.TargetPremium, 0), line.EstPremium), SYSUTCDATETIME(), s.CreatedByUserId, 0

@@ -50,6 +50,57 @@ public sealed class SubmissionsController : ControllerBase
         return NoContent();
     }
 
+    [HttpGet("{id:guid}/activities")]
+    public async Task<IActionResult> GetActivities(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetActivitiesAsync(id, cancellationToken));
+
+    [HttpPost("{id:guid}/notes")]
+    public async Task<IActionResult> AddNote(Guid id, [FromBody] AddSubmissionNoteRequest request, CancellationToken cancellationToken)
+        => Ok(new { id = await _service.AddNoteAsync(id, request, cancellationToken) });
+
+    [HttpGet("{id:guid}/documents")]
+    public async Task<IActionResult> GetDocuments(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetDocumentsAsync(id, tenantId, cancellationToken));
+
+    [HttpGet("{id:guid}/tasks")]
+    public async Task<IActionResult> GetTasks(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetTasksAsync(id, tenantId, cancellationToken));
+
+    [HttpPost("{id:guid}/tasks")]
+    public async Task<IActionResult> CreateFollowUpTask(Guid id, [FromBody] CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken)
+        => Ok(new { id = await _service.CreateFollowUpTaskAsync(id, request, cancellationToken) });
+
+    [HttpGet("{id:guid}/lines")]
+    public async Task<IActionResult> GetLines(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetLinesAsync(id, cancellationToken));
+
+    [HttpGet("{id:guid}/intake")]
+    public async Task<IActionResult> GetIntake(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetIntakeAsync(id, cancellationToken));
+
+    [HttpPatch("{id:guid}/intake/{intakeQuestionId:guid}")]
+    public async Task<IActionResult> UpdateIntakeQuestion(Guid id, Guid intakeQuestionId, [FromBody] UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateIntakeQuestionAsync(id, intakeQuestionId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpGet("{id:guid}/document-checklist")]
+    public async Task<IActionResult> GetDocumentChecklist(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetDocumentChecklistAsync(id, tenantId, cancellationToken));
+
+    [HttpGet("{id:guid}/readiness")]
+    public async Task<IActionResult> GetReadiness(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetReadinessAsync(id, tenantId, cancellationToken));
+
+    [HttpGet("task-templates")]
+    public async Task<IActionResult> GetTaskTemplates([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetTaskTemplatesAsync(tenantId, cancellationToken));
+
+    [HttpGet("metrics")]
+    public async Task<IActionResult> GetMetrics([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetMetricsAsync(tenantId, cancellationToken));
+
     [HttpPost("{id:guid}/submit-to-market")]
     public async Task<IActionResult> SubmitToMarket(Guid id, [FromBody] SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken)
         => Ok(await _service.SubmitToMarketAsync(id, request, cancellationToken));
@@ -91,6 +142,13 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> UpdateMarketStatus(Guid marketId, [FromBody] UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken)
     {
         await _service.UpdateMarketStatusAsync(marketId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPatch("markets/{marketId:guid}/package")]
+    public async Task<IActionResult> UpdateMarketPackage(Guid marketId, [FromBody] UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateMarketPackageAsync(request with { SubmissionMarketId = marketId }, cancellationToken);
         return NoContent();
     }
 
@@ -142,6 +200,49 @@ public sealed class SubmissionsController : ControllerBase
     [HttpGet("{id:guid}/quotes")]
     public async Task<IActionResult> GetQuotes(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetQuoteComparisonAsync(id, cancellationToken));
+
+    [HttpPatch("{id:guid}/quotes/{quoteId:guid}")]
+    public async Task<IActionResult> UpdateQuote(Guid id, Guid quoteId, [FromBody] UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpdateQuoteAsync(quoteId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/quotes/select")]
+    public async Task<IActionResult> SelectQuote(Guid id, [FromBody] SelectSubmissionQuoteRequest request, CancellationToken cancellationToken)
+    {
+        await _service.SelectQuoteAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpGet("{id:guid}/proposals")]
+    public async Task<IActionResult> GetProposals(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetProposalsAsync(id, cancellationToken));
+
+    [HttpGet("proposals/{proposalId:guid}")]
+    public async Task<IActionResult> GetProposalById(Guid proposalId, CancellationToken cancellationToken)
+    {
+        var proposal = await _service.GetProposalByIdAsync(proposalId, cancellationToken);
+        return proposal is null ? NotFound() : Ok(proposal);
+    }
+
+    [HttpPost("{id:guid}/proposals")]
+    public async Task<IActionResult> GenerateProposal(Guid id, [FromBody] GenerateProposalRequest request, CancellationToken cancellationToken)
+        => Ok(new { id = await _service.GenerateProposalAsync(request with { SubmissionId = id }, cancellationToken) });
+
+    [HttpPost("proposals/{proposalId:guid}/deliver")]
+    public async Task<IActionResult> DeliverProposal(Guid proposalId, [FromBody] ProposalDeliveryRequest request, CancellationToken cancellationToken)
+    {
+        await _service.DeliverProposalAsync(proposalId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("proposals/{proposalId:guid}/decision")]
+    public async Task<IActionResult> RecordProposalDecision(Guid proposalId, [FromBody] ProposalDecisionRequest request, CancellationToken cancellationToken)
+    {
+        await _service.RecordProposalDecisionAsync(proposalId, request, cancellationToken);
+        return NoContent();
+    }
 
     [HttpGet("{id:guid}/policy")]
     public async Task<IActionResult> GetPolicy(Guid id, CancellationToken cancellationToken)

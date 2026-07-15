@@ -52,6 +52,42 @@ public sealed class SubmissionService : ISubmissionService
     public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default)
         => _repository.AssignAsync(id, request, cancellationToken);
 
+    public Task<IReadOnlyList<SubmissionActivityDto>> GetActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetActivitiesAsync(submissionId, cancellationToken);
+
+    public Task<Guid> AddNoteAsync(Guid submissionId, AddSubmissionNoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.AddNoteAsync(submissionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<DocumentDto>> GetDocumentsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetDocumentsAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskDto>> GetTasksAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetTasksAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<Guid> CreateFollowUpTaskAsync(Guid submissionId, CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateFollowUpTaskAsync(submissionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionLineDto>> GetLinesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetLinesAsync(submissionId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionIntakeQuestionDto>> GetIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetIntakeAsync(submissionId, cancellationToken);
+
+    public Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateIntakeQuestionAsync(submissionId, intakeQuestionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetTaskTemplatesAsync(tenantId, cancellationToken);
+
+    public Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetMetricsAsync(tenantId, cancellationToken);
+
     public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
         => _repository.SubmitToMarketAsync(id, request, cancellationToken);
 
@@ -90,6 +126,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task UpdateMarketStatusAsync(Guid submissionMarketId, UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateMarketStatusAsync(submissionMarketId, request, cancellationToken);
 
+    public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateMarketPackageAsync(request, cancellationToken);
+
     public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default)
         => _repository.RemoveMarketAsync(submissionMarketId, cancellationToken);
 
@@ -99,11 +138,26 @@ public sealed class SubmissionService : ISubmissionService
     public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteByIdAsync(quoteId, cancellationToken);
 
+    public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateQuoteAsync(quoteId, request, cancellationToken);
+
+    public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.SelectQuoteAsync(submissionId, request, cancellationToken);
+
     public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
         => _repository.GetProposalByIdAsync(proposalId, cancellationToken);
 
+    public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalsAsync(submissionId, cancellationToken);
+
     public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         => _repository.GenerateProposalAsync(request, cancellationToken);
+
+    public Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.DeliverProposalAsync(proposalId, request, cancellationToken);
+
+    public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordProposalDecisionAsync(proposalId, request, cancellationToken);
 
     public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default)
         => _repository.SearchAppetiteAsync(request, cancellationToken);

@@ -1,5 +1,8 @@
 @page "/quotes/compare/{SubmissionId:guid}"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -10,6 +13,14 @@
 @if (_loading)
 {
     <div class="qc-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading quotes?</span></div>
+}
+else if (_loadError is not null)
+{
+    <div class="qc-loading"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@_loadError</span></div>
+}
+else if (!_quotes.Any())
+{
+    <div class="qc-loading"><i class="bi bi-file-earmark-text" aria-hidden="true"></i><span>No DB-backed quotes are available for this submission yet.</span><button class="um-btn um-btn-primary um-btn-sm" @onclick="GoBack">Back to Submission</button></div>
 }
 else
 {
@@ -34,7 +45,7 @@ else
                 <i class="bi bi-file-earmark-richtext" aria-hidden="true"></i> Build Proposal
             </button>
             <button class="um-btn um-btn-primary um-btn-sm"
-                    @onclick='() => Nav.NavigateTo("/quotes/bind")'>
+                    @onclick="BindSelectedOrRecommended">
                 <i class="bi bi-shield-check" aria-hidden="true"></i> Bind
             </button>
         </div>
@@ -45,7 +56,7 @@ else
         <div class="qc-rec-icon"><i class="bi bi-stars" aria-hidden="true"></i></div>
         <div class="qc-rec-body">
             <div class="qc-rec-title">Recommended: <strong>@_recommended?.Carrier</strong></div>
-            <div class="qc-rec-reason">Lowest premium ? Best SLA ? Highest bind ratio ? Producer preferred ? Full limits with no exclusions</div>
+            <div class="qc-rec-reason">@(_recommended?.RecommendationReason ?? "Premium, coverage breadth, carrier rating, appetite, subjectivity burden, commission, expiration risk, and producer preference are evaluated.")</div>
         </div>
         <button class="um-btn um-btn-success um-btn-sm" @onclick="() => BindRecommended()">
             <i class="bi bi-shield-check" aria-hidden="true"></i> Bind Recommended
@@ -70,9 +81,10 @@ else
                     @if (q.FullLimits) { <span class="qc-chip qc-chip-lim"><i class="bi bi-shield" aria-hidden="true"></i> Full Limits</span> }
                 </div>
                 <div class="qc-sum-meta">Quote #@q.QuoteNo ? Exp @q.ExpDate.ToString("MM/dd/yy")</div>
+                <div class="qc-sum-meta">Score @q.RecommendationScore ? Rating @Safe(q.CarrierRating, "-") ? Commission @PercentOrDash(q.CommissionPercent)</div>
                 <div class="qc-sum-actions">
                     <button class="um-btn @(q.IsSelected ? "um-btn-success" : "um-btn-ghost") um-btn-sm"
-                            @onclick="() => SelectQuote(q)">
+                            @onclick="() => SelectQuoteAsync(q)">
                         <i class="bi @(q.IsSelected ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i>
                         @(q.IsSelected ? "Selected" : "Select")
                     </button>
@@ -223,10 +235,12 @@ else
     EnterpriseToast _toast = default!;
 
     bool   _loading     = true;
+    string? _loadError;
     string _viewTab     = "Coverage";
     string _submissionNo = "";
     string _account      = "";
     string _lob          = "";
+    SubmissionDto? _submission;
 
     sealed class QuoteModel
     {
@@ -239,6 +253,13 @@ else
         public bool     IsLowest       { get; set; }
         public bool     BestSla        { get; set; }
         public bool     FullLimits     { get; set; }
+        public Guid     QuoteId        { get; set; }
+        public Guid     CarrierId      { get; set; }
+        public int      RecommendationScore { get; set; }
+        public string?  RecommendationReason { get; set; }
+        public decimal? CommissionPercent { get; set; }
+        public string?  CarrierRating { get; set; }
+        public string?  Subjectivities { get; set; }
         public string   Notes          { get; set; } = "";
         public string   Exclusions     { get; set; } = "";
         public Dictionary<string,string>  CoverageValues { get; set; } = new();
@@ -273,128 +294,184 @@ else
             new("Home","/"), new("Submissions","/submissions"),
             new("Submission",$"/submissions/{SubmissionId}"),
             new("Compare",$"/quotes/compare/{SubmissionId}"));
-        await Task.Delay(0);
-        BuildStub();
-        _loading = false;
+        await LoadAsync();
     }
 
-    void BuildStub()
+    async Task LoadAsync()
     {
-        _submissionNo = "SUB-2025-0042";
-        _account      = "Sullivan Mfg. LLC";
-        _lob          = "General Liability";
-
-        _quotes = new()
+        _loading = true;
+        _loadError = null;
+        try
         {
-            new QuoteModel
+            _submission = await Api.GetSubmissionByIdAsync(SubmissionId);
+            if (_submission is null)
             {
-                Carrier="Travelers Indemnity", QuoteNo="TRV-2025-88421", Premium=17_250m,
-                ExpDate=new DateTime(2025,8,15), IsRecommended=true, IsLowest=true, BestSla=true, FullLimits=true,
-                Notes="Standard GL package. No unusual exclusions. Preferred class account.",
-                Exclusions="Standard ISO exclusions only.",
-                CoverageValues=new()
-                {
-                    {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},
-                    {"Personal & Adv Injury","$2,000,000"},{"Deductible","$0"},{"HNOA","Yes"},
-                    {"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},
-                    {"Blanket AI Endorsement","Yes"},{"Contractual Liability","Yes"},{"Fire Legal Liability","$100,000"},
-                    {"Medical Payments","$5,000"},{"Products-Completed Ops","Included"},{"XCU Exclusion","No ? Waived"},
-                },
-                PremiumLines=new()
-                {
-                    {"General Liability",8_500m},{"Products/Completed Ops",4_750m},{"HNOA",1_200m},
-                    {"Endorsements",600m},{"Policy Fee",200m},{"Total",17_250m}
-                },
-                IntelValues=new()
-                {
-                    {"Appetite Score","92 / 100"},{"Turnaround SLA","5 days"},{"Hit Ratio (this LOB)","78%"},
-                    {"Bind Ratio (this LOB)","64%"},{"Producer Preference","?????"},{"Commission","16.5%"},{"AM Best Rating","A+ (XV)"},
-                }
-            },
-            new QuoteModel
-            {
-                Carrier="Hartford Fire & Cas.", QuoteNo="HFD-2025-14822", Premium=18_900m,
-                ExpDate=new DateTime(2025,8,1), IsLowest=false, BestSla=false, FullLimits=true,
-                Notes="Broad form package. Products-completed ops included. Slightly higher premium but broader grant.",
-                Exclusions="Absolute pollution exclusion applies.",
-                CoverageValues=new()
-                {
-                    {"Occurrence Limit","$2,000,000"},{"Aggregate","$4,000,000"},{"Products/CO Limit","$2,000,000"},
-                    {"Personal & Adv Injury","$2,000,000"},{"Deductible","$0"},{"HNOA","Yes"},
-                    {"Waiver of Subrogation","Yes"},{"Additional Insured","Yes"},{"Primary & Non-Contributory","Yes"},
-                    {"Blanket AI Endorsement","No"},{"Contractual Liability","Yes"},{"Fire Legal Liability","$300,000"},
-                    {"Medical Payments","$5,000"},{"Products-Completed Ops","Included"},{"XCU Exclusion","Applies"},
-                },
-                PremiumLines=new()
-                {
-                    {"General Liability",9_200m},{"Products/Completed Ops",5_400m},{"HNOA",1_500m},
-                    {"Endorsements",600m},{"Policy Fee",200m},{"Total",18_900m}
-                },
-                IntelValues=new()
-                {
-                    {"Appetite Score","85 / 100"},{"Turnaround SLA","7 days"},{"Hit Ratio (this LOB)","65%"},
-                    {"Bind Ratio (this LOB)","52%"},{"Producer Preference","?????"},{"Commission","15.0%"},{"AM Best Rating","A+ (XV)"},
-                }
-            },
-        };
+                _loadError = "Submission was not found.";
+                return;
+            }
 
-        _recommended = _quotes.FirstOrDefault(q => q.IsRecommended);
+            _submissionNo = _submission.SubmissionNumber;
+            _account = _submission.AccountName;
+            _lob = _submission.LineOfBusiness;
+
+            var quoteDtos = await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? [];
+            BuildComparison(quoteDtos);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Quote comparison failed to load: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    void BuildComparison(IReadOnlyList<QuoteComparisonDto> quoteDtos)
+    {
+        var lowest = quoteDtos.Count == 0 ? 0 : quoteDtos.Min(q => q.AnnualPremium);
+        var latestExpiry = quoteDtos.Count == 0 ? DateTime.MinValue : quoteDtos.Max(q => q.ExpiresDateUtc);
+
+        _quotes = quoteDtos.Select(q => new QuoteModel
+        {
+            Carrier = q.CarrierName,
+            QuoteId = q.QuoteId,
+            CarrierId = q.CarrierId,
+            QuoteNo = q.QuoteNumber,
+            Premium = q.AnnualPremium,
+            ExpDate = q.ExpiresDateUtc,
+            IsLowest = q.AnnualPremium == lowest,
+            IsRecommended = q.IsRecommended || (!quoteDtos.Any(x => x.IsRecommended) && q.RecommendationScore == quoteDtos.Max(x => x.RecommendationScore)),
+            IsSelected = q.IsSelected,
+            BestSla = q.ExpiresDateUtc == latestExpiry,
+            FullLimits = q.Limit.HasValue && q.Limit.Value > 0,
+            RecommendationScore = q.RecommendationScore,
+            RecommendationReason = q.RecommendationReason,
+            CommissionPercent = q.CommissionPercent,
+            CarrierRating = q.CarrierRating,
+            Subjectivities = q.Subjectivities,
+            Notes = string.IsNullOrWhiteSpace(q.CoverageNotes) ? q.Status : q.CoverageNotes,
+            Exclusions = q.Exclusions ?? string.Empty,
+            CoverageValues = new()
+            {
+                { "Carrier", q.CarrierName },
+                { "Quote Status", q.Status },
+                { "Limit", q.Limit?.ToString("C0") ?? "Not provided" },
+                { "Deductible", q.Deductible?.ToString("C0") ?? "Not provided" },
+                { "Carrier Rating", string.IsNullOrWhiteSpace(q.CarrierRating) ? "Not provided" : q.CarrierRating },
+                { "Subjectivities", string.IsNullOrWhiteSpace(q.Subjectivities) ? "None listed" : q.Subjectivities },
+                { "Exclusions", string.IsNullOrWhiteSpace(q.Exclusions) ? "None listed" : q.Exclusions },
+                { "Coverage Notes", string.IsNullOrWhiteSpace(q.CoverageNotes) ? "Not provided" : q.CoverageNotes }
+            },
+            PremiumLines = new()
+            {
+                { _lob, q.AnnualPremium },
+                { "Taxes & Fees", q.TaxesAndFees ?? 0 },
+                { "Broker Fee", q.BrokerFee ?? 0 },
+                { "Commission", q.CommissionPercent ?? 0 },
+                { "Deductible", q.Deductible ?? 0 },
+                { "Limit", q.Limit ?? 0 },
+                { "Total", q.AnnualPremium + (q.TaxesAndFees ?? 0) + (q.BrokerFee ?? 0) }
+            },
+            IntelValues = new()
+            {
+                { "Quote Status", q.Status },
+                { "Recommendation Score", q.RecommendationScore.ToString() },
+                { "Carrier Rating", string.IsNullOrWhiteSpace(q.CarrierRating) ? "Not provided" : q.CarrierRating },
+                { "Subjectivity Burden", string.IsNullOrWhiteSpace(q.Subjectivities) ? "Low" : "Review" },
+                { "Commission", q.CommissionPercent.HasValue ? $"{q.CommissionPercent:N2}%" : "Not provided" },
+                { "Quoted Date", q.QuotedDateUtc.ToLocalTime().ToString("MMM d, yyyy") },
+                { "Expires", q.ExpiresDateUtc.ToLocalTime().ToString("MMM d, yyyy") },
+                { "Premium Delta", lowest > 0 ? (q.AnnualPremium - lowest).ToString("C0") : "-" },
+                { "Bind Readiness", q.Status.Contains("Accepted", StringComparison.OrdinalIgnoreCase) || q.Status.Contains("Presented", StringComparison.OrdinalIgnoreCase) ? "Ready" : "Review" }
+            }
+        }).OrderByDescending(q => q.IsSelected).ThenByDescending(q => q.RecommendationScore).ThenBy(q => q.Premium).ToList();
+
+        _recommended = _quotes.FirstOrDefault(q => q.IsRecommended) ?? _quotes.OrderByDescending(q => q.RecommendationScore).FirstOrDefault();
 
         _coverageRows = new()
         {
-            new() { Field="Limits & Deductibles", IsSection=true },
-            new() { Field="Occurrence Limit",    IsKey=true, BestValue="Travelers Indemnity" },
-            new() { Field="Aggregate",           IsKey=true },
-            new() { Field="Products/CO Limit",   IsKey=true },
-            new() { Field="Personal & Adv Injury" },
-            new() { Field="Deductible",          IsKey=true, BestValue="Travelers Indemnity", IsHighlighted=true },
-            new() { Field="Extensions", IsSection=true },
-            new() { Field="HNOA" },
-            new() { Field="Waiver of Subrogation" },
-            new() { Field="Additional Insured",  IsKey=true },
-            new() { Field="Primary & Non-Contributory", IsKey=true },
-            new() { Field="Blanket AI Endorsement",     IsHighlighted=true, BestValue="Travelers Indemnity" },
-            new() { Field="Contractual Liability" },
-            new() { Field="Fire Legal Liability",        BestValue="Hartford Fire & Cas." },
-            new() { Field="Medical Payments" },
-            new() { Field="Products / Coverage Detail", IsSection=true },
-            new() { Field="Products-Completed Ops" },
-            new() { Field="XCU Exclusion",       IsHighlighted=true, BestValue="Travelers Indemnity" },
+            new() { Field="Quote Summary", IsSection=true },
+            new() { Field="Carrier", IsKey=true },
+            new() { Field="Quote Status", IsKey=true },
+            new() { Field="Limit", IsKey=true, BestValue = BestCarrierByLimit(), IsHighlighted=true },
+            new() { Field="Deductible", IsKey=true, BestValue = _recommended?.Carrier ?? string.Empty, IsHighlighted=true },
+            new() { Field="Carrier Rating", IsKey=true },
+            new() { Field="Subjectivities", IsKey=true },
+            new() { Field="Exclusions", IsKey=true },
+            new() { Field="Coverage Notes" },
         };
 
         _premiumLines = new()
         {
-            new() { Label="General Liability" }, new() { Label="Products/Completed Ops" },
-            new() { Label="HNOA" },              new() { Label="Endorsements" },
-            new() { Label="Policy Fee" },        new() { Label="Total", IsTotalRow=true },
+            new() { Label=_lob },
+            new() { Label="Taxes & Fees" },
+            new() { Label="Broker Fee" },
+            new() { Label="Commission" },
+            new() { Label="Deductible" },
+            new() { Label="Limit" },
+            new() { Label="Total", IsTotalRow=true },
         };
 
         _intelRows = new()
         {
-            "Appetite Score","Turnaround SLA","Hit Ratio (this LOB)","Bind Ratio (this LOB)",
-            "Producer Preference","Commission","AM Best Rating"
+            "Quote Status", "Recommendation Score", "Carrier Rating", "Subjectivity Burden", "Commission", "Quoted Date", "Expires", "Premium Delta", "Bind Readiness"
         };
     }
 
-    void SelectQuote(QuoteModel q)
+    string BestCarrierByLimit()
     {
+        var best = _quotes
+            .Select(q => new { Quote = q, Limit = q.PremiumLines.GetValueOrDefault("Limit") })
+            .OrderByDescending(x => x.Limit)
+            .FirstOrDefault(x => x.Limit > 0);
+        return best?.Quote.Carrier ?? string.Empty;
+    }
+
+    async Task SelectQuoteAsync(QuoteModel q)
+    {
+        if (_submission is null)
+            return;
+
+        await Api.SelectSubmissionQuoteAsync(SubmissionId, new SelectSubmissionQuoteRequest(_submission.TenantId, q.QuoteId, true, q.RecommendationReason ?? $"Selected from quote comparison with score {q.RecommendationScore}.", null));
         foreach (var x in _quotes) x.IsSelected = false;
         q.IsSelected = true;
+        await _toast.ShowAsync(new ToastModel { Title = "Quote selected", Content = $"{q.QuoteNo} was persisted as the selected quote.", CssClass = "e-toast-success" });
     }
 
     async Task BindQuote(QuoteModel q)
     {
-        SelectQuote(q);
-        Nav.NavigateTo("/quotes/bind");
-        await Task.CompletedTask;
+        await SelectQuoteAsync(q);
+        if (_submission is null)
+            return;
+
+        var quote = (await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? [])
+            .FirstOrDefault(x => x.QuoteId == q.QuoteId);
+        if (quote is null)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Bind", Content = "Quote could not be resolved for binding.", CssClass = "e-toast-danger" });
+            return;
+        }
+
+        await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(_submission.TenantId, quote.QuoteId, quote.CarrierId, quote.AnnualPremium, _submission.EffectiveDate, _submission.ExpirationDate));
+        await _toast.ShowAsync(new ToastModel { Title = "Bind", Content = "Policy created from selected quote.", CssClass = "e-toast-success" });
+        Nav.NavigateTo($"/submissions/{SubmissionId}");
     }
 
     void BindRecommended()
     {
         if (_recommended is not null)
         {
-            SelectQuote(_recommended);
-            Nav.NavigateTo("/quotes/bind");
+            _ = BindQuote(_recommended);
+        }
+    }
+
+    void BindSelectedOrRecommended()
+    {
+        var selected = _quotes.FirstOrDefault(q => q.IsSelected) ?? _recommended ?? _quotes.FirstOrDefault();
+        if (selected is not null)
+        {
+            _ = BindQuote(selected);
         }
     }
 
@@ -409,4 +486,6 @@ else
     }
 
     void GoBack() => Nav.NavigateTo($"/submissions/{SubmissionId}");
+    static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string PercentOrDash(decimal? value) => value.HasValue ? $"{value.Value:N2}%" : "-";
 }

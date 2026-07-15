@@ -1200,10 +1200,11 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task UpdateOpportunityStageAsync(Guid opportunityId, Ams.Application.Features.Opportunities.UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
+    public async Task<OpportunityStageUpdateResult> UpdateOpportunityStageAsync(Guid opportunityId, Ams.Application.Features.Opportunities.UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PutAsJsonAsync($"api/opportunities/{opportunityId}/stage", request, cancellationToken);
         response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<OpportunityStageUpdateResult>(cancellationToken: cancellationToken))!;
     }
 
     public async Task<Guid> UpsertOpportunityLineAsync(Guid opportunityId, UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
@@ -1275,6 +1276,9 @@ public sealed partial class ApiClient
         var response = await _httpClient.DeleteAsync($"api/opportunities/competitors/{competitorId}?modifiedByUserId={modifiedByUserId}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }
+
+    public Task<PagedResult<OpportunityCompetitorLookupDto>?> SearchOpportunityCompetitorLookupsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<OpportunityCompetitorLookupDto>>($"api/opportunities/competitor-lookups?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
     public Task<IReadOnlyList<LeadScoringRuleDto>?> GetLeadScoringRulesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadScoringRuleDto>>($"api/leads/scoring-rules?tenantId={tenantId}", cancellationToken);
@@ -2712,6 +2716,61 @@ public sealed partial class ApiClient
         return result!.Id;
     }
 
+    public async Task AssignSubmissionAsync(Guid submissionId, AssignSubmissionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/{submissionId}/assign", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<SubmissionActivityDto>?> GetSubmissionActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionActivityDto>>($"api/submissions/{submissionId}/activities", cancellationToken);
+
+    public async Task<Guid> AddSubmissionNoteAsync(Guid submissionId, AddSubmissionNoteRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/notes", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public Task<IReadOnlyList<DocumentDto>?> GetSubmissionDocumentsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<DocumentDto>>($"api/submissions/{submissionId}/documents?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskDto>?> GetSubmissionTasksAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionTaskDto>>($"api/submissions/{submissionId}/tasks?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreateSubmissionFollowUpTaskAsync(Guid submissionId, CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/tasks", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public Task<IReadOnlyList<SubmissionLineDto>?> GetSubmissionLinesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionLineDto>>($"api/submissions/{submissionId}/lines", cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionIntakeQuestionDto>?> GetSubmissionIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionIntakeQuestionDto>>($"api/submissions/{submissionId}/intake", cancellationToken);
+
+    public async Task UpdateSubmissionIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/{submissionId}/intake/{intakeQuestionId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<SubmissionDocumentChecklistDto>?> GetSubmissionDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionDocumentChecklistDto>>($"api/submissions/{submissionId}/document-checklist?tenantId={tenantId}", cancellationToken);
+
+    public Task<SubmissionReadinessDto?> GetSubmissionReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubmissionReadinessDto>($"api/submissions/{submissionId}/readiness?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskTemplateDto>?> GetSubmissionTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionTaskTemplateDto>>($"api/submissions/task-templates?tenantId={tenantId}", cancellationToken);
+
+    public Task<SubmissionMetricsDto?> GetSubmissionMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubmissionMetricsDto>($"api/submissions/metrics?tenantId={tenantId}", cancellationToken);
+
     public async Task<SubmissionActionResult> SubmitSubmissionToMarketAsync(Guid submissionId, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/submit-to-market", request, cancellationToken);
@@ -2750,6 +2809,18 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes", cancellationToken);
 
+    public async Task UpdateSubmissionQuoteAsync(Guid submissionId, Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/{submissionId}/quotes/{quoteId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task SelectSubmissionQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/quotes/select", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<IReadOnlyList<SubmissionMarketDto>?> GetSubmissionMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionMarketDto>>($"api/submissions/{submissionId}/markets", cancellationToken);
 
@@ -2770,18 +2841,42 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public async Task UpdateSubmissionMarketPackageAsync(Guid marketId, UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/markets/{marketId}/package", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public async Task RemoveSubmissionMarketAsync(Guid marketId, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.DeleteAsync($"api/submissions/markets/{marketId}", cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public Task<IReadOnlyList<ProposalWorkflowDto>?> GetSubmissionProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalWorkflowDto>>($"api/submissions/{submissionId}/proposals", cancellationToken);
+
+    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ProposalDto>($"api/submissions/proposals/{proposalId}", cancellationToken);
+
     public async Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync("api/proposals", request, cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{request.SubmissionId}/proposals", request, cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
         return result!.Id;
+    }
+
+    public async Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/deliver", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/decision", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
     public async Task<Guid> InitiateWorkflowForSubmissionAsync(Guid submissionId, Guid tenantId, Guid? workflowDefinitionId = null, CancellationToken cancellationToken = default)

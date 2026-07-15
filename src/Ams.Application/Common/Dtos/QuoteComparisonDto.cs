@@ -11,7 +11,39 @@ public sealed class QuoteComparisonDto
     public decimal AnnualPremium { get; set; }
     public decimal? Deductible { get; set; }
     public decimal? Limit { get; set; }
+    public decimal? CommissionPercent { get; set; }
+    public string? Subjectivities { get; set; }
+    public string? Exclusions { get; set; }
+    public string? CarrierRating { get; set; }
+    public string? PaymentTerms { get; set; }
+    public decimal? MinimumEarnedPremium { get; set; }
+    public decimal? TaxesAndFees { get; set; }
+    public decimal? BrokerFee { get; set; }
+    public bool? TriaIncluded { get; set; }
+    public Guid? QuoteDocumentId { get; set; }
+    public string? QuoteDocumentFileName { get; set; }
+    public bool IsSelected { get; set; }
+    public bool IsRecommended { get; set; }
+    public int RecommendationScore { get; set; }
+    public string? RecommendationReason { get; set; }
     public string? CoverageNotes { get; set; }
     public DateTime QuotedDateUtc { get; set; }
     public DateTime ExpiresDateUtc { get; set; }
+}
+
+public sealed class ProposalWorkflowDto
+{
+    public Guid ProposalId { get; set; }
+    public Guid SubmissionId { get; set; }
+    public Guid TenantId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string? DeliveryMethod { get; set; }
+    public string? Recipient { get; set; }
+    public DateTime? SentDateUtc { get; set; }
+    public string? ClientDecision { get; set; }
+    public string? DecisionNotes { get; set; }
+    public DateTime? DecisionDateUtc { get; set; }
+    public Guid? DocumentId { get; set; }
+    public string? DocumentFileName { get; set; }
 }

@@ -11,6 +11,187 @@ public sealed class SubmissionRepository : ISubmissionRepository
     private readonly ISqlConnectionFactory _connectionFactory;
     public SubmissionRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
+    private static async Task EnsureEnterpriseWorkflowSchemaAsync(System.Data.IDbConnection cn, Guid? tenantId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionIntakeQuestion
+    (
+        IntakeQuestionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionIntakeQuestion PRIMARY KEY DEFAULT NEWID(),
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        QuestionCode NVARCHAR(100) NOT NULL,
+        QuestionText NVARCHAR(500) NOT NULL,
+        HelpText NVARCHAR(1000) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_IsRequired DEFAULT 1,
+        AnswerText NVARCHAR(2000) NULL,
+        IsAnswered BIT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_IsAnswered DEFAULT 0,
+        AnsweredByUserId UNIQUEIDENTIFIER NULL,
+        AnsweredDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'UX_SubmissionIntakeQuestion_Submission_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionIntakeQuestion_Submission_Code ON Submissions.SubmissionIntakeQuestion(SubmissionId, QuestionCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionDocumentRequirement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionDocumentRequirement
+    (
+        DocumentRequirementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionDocumentRequirement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionDocumentRequirement_IsRequired DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionDocumentRequirement_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionDocumentRequirement_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionDocumentRequirement_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionDocumentRequirement') AND name = N'UX_SubmissionDocumentRequirement_Tenant_Lob_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionDocumentRequirement_Tenant_Lob_Code ON Submissions.SubmissionDocumentRequirement(TenantId, LineOfBusiness, CategoryCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketDocument
+    (
+        SubmissionMarketDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketDocument PRIMARY KEY DEFAULT NEWID(),
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDocument_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDocument_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ReasonCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ReasonCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'NextActionDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD NextActionDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Submissions.Quote', N'CommissionPercent') IS NULL ALTER TABLE Submissions.Quote ADD CommissionPercent DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'Subjectivities') IS NULL ALTER TABLE Submissions.Quote ADD Subjectivities NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'Exclusions') IS NULL ALTER TABLE Submissions.Quote ADD Exclusions NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'CarrierRating') IS NULL ALTER TABLE Submissions.Quote ADD CarrierRating NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'PaymentTerms') IS NULL ALTER TABLE Submissions.Quote ADD PaymentTerms NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'MinimumEarnedPremium') IS NULL ALTER TABLE Submissions.Quote ADD MinimumEarnedPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'TaxesAndFees') IS NULL ALTER TABLE Submissions.Quote ADD TaxesAndFees DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'BrokerFee') IS NULL ALTER TABLE Submissions.Quote ADD BrokerFee DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'TriaIncluded') IS NULL ALTER TABLE Submissions.Quote ADD TriaIncluded BIT NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'QuoteDocumentId') IS NULL ALTER TABLE Submissions.Quote ADD QuoteDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'IsSelected') IS NULL ALTER TABLE Submissions.Quote ADD IsSelected BIT NOT NULL CONSTRAINT DF_Quote_IsSelected DEFAULT 0;
+IF COL_LENGTH(N'Submissions.Quote', N'IsRecommended') IS NULL ALTER TABLE Submissions.Quote ADD IsRecommended BIT NOT NULL CONSTRAINT DF_Quote_IsRecommended DEFAULT 0;
+IF COL_LENGTH(N'Submissions.Quote', N'SelectedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD SelectedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'SelectedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD SelectedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'SelectionReason') IS NULL ALTER TABLE Submissions.Quote ADD SelectionReason NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'RecommendationScore') IS NULL ALTER TABLE Submissions.Quote ADD RecommendationScore INT NOT NULL CONSTRAINT DF_Quote_RecommendationScore DEFAULT 0;
+IF COL_LENGTH(N'Submissions.Quote', N'RecommendationReason') IS NULL ALTER TABLE Submissions.Quote ADD RecommendationReason NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.Quote', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+IF COL_LENGTH(N'Submissions.Proposal', N'DeliveryMethod') IS NULL ALTER TABLE Submissions.Proposal ADD DeliveryMethod NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'Recipient') IS NULL ALTER TABLE Submissions.Proposal ADD Recipient NVARCHAR(320) NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'SentDateUtc') IS NULL ALTER TABLE Submissions.Proposal ADD SentDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'SentByUserId') IS NULL ALTER TABLE Submissions.Proposal ADD SentByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'ClientDecision') IS NULL ALTER TABLE Submissions.Proposal ADD ClientDecision NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'DecisionNotes') IS NULL ALTER TABLE Submissions.Proposal ADD DecisionNotes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'DecisionDateUtc') IS NULL ALTER TABLE Submissions.Proposal ADD DecisionDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'DecidedByUserId') IS NULL ALTER TABLE Submissions.Proposal ADD DecidedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'DocumentId') IS NULL ALTER TABLE Submissions.Proposal ADD DocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.Proposal', N'CustomIntroduction') IS NULL ALTER TABLE Submissions.Proposal ADD CustomIntroduction NVARCHAR(2000) NULL;
+
+IF OBJECT_ID(N'Submissions.ProposalQuote', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.ProposalQuote
+    (
+        ProposalQuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ProposalQuote PRIMARY KEY DEFAULT NEWID(),
+        ProposalId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_ProposalQuote_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ProposalQuote_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ProposalQuote_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.ProposalQuote') AND name = N'UX_ProposalQuote_Proposal_Quote')
+    EXEC(N'CREATE UNIQUE INDEX UX_ProposalQuote_Proposal_Quote ON Submissions.ProposalQuote(ProposalId, QuoteId) WHERE IsDeleted = 0;');
+
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityName') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ActionSource') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ActionSource NVARCHAR(50) NULL;
+
+IF @TenantId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionDocumentRequirement WHERE TenantId = @TenantId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionDocumentRequirement (TenantId, LineOfBusiness, CategoryCode, DisplayName, IsRequired, SortOrder)
+    SELECT @TenantId, lob.LineOfBusiness, req.CategoryCode, req.DisplayName, 1, req.SortOrder
+    FROM (VALUES (N'Application', N'Application', 10), (N'LossRuns', N'Loss runs', 20), (N'ExposureSchedules', N'Exposure schedules', 30), (N'PriorPolicies', N'Prior policies', 40), (N'Financials', N'Financials', 50), (N'ACORD', N'ACORD forms', 60)) req(CategoryCode, DisplayName, SortOrder)
+    CROSS JOIN (SELECT DISTINCT COALESCE(NULLIF(LineOfBusiness, N''), N'General Liability') AS LineOfBusiness FROM Submissions.Submission WHERE TenantId = @TenantId AND IsDeleted = 0) lob;
+END;";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    private async Task EnsureDefaultIntakeAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        const string sql = @"
+INSERT INTO Submissions.SubmissionIntakeQuestion (IntakeQuestionId, SubmissionId, TenantId, QuestionCode, QuestionText, HelpText, IsRequired, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @SubmissionId, @TenantId, src.QuestionCode, src.QuestionText, src.HelpText, src.IsRequired, SYSUTCDATETIME(), 0
+FROM (VALUES
+    (N'OperationsDescription', N'Operations description complete', N'Confirm operations, locations, exposures, and risk narrative are complete.', CAST(1 AS bit)),
+    (N'CoverageNeeds', N'Coverage needs confirmed', N'Confirm limits, deductibles, forms, and requested coverage enhancements.', CAST(1 AS bit)),
+    (N'LossHistoryReviewed', N'Loss history reviewed', N'Confirm loss runs and known claim explanations have been reviewed.', CAST(1 AS bit)),
+    (N'ExposureDataValidated', N'Exposure data validated', N'Confirm schedules, payroll, sales, vehicles, properties, and other exposure bases are complete.', CAST(1 AS bit)),
+    (N'ProducerPreference', N'Producer preference documented', N'Capture producer/client preference that may influence recommendation scoring.', CAST(0 AS bit))
+) src(QuestionCode, QuestionText, HelpText, IsRequired)
+WHERE NOT EXISTS (SELECT 1 FROM Submissions.SubmissionIntakeQuestion q WHERE q.SubmissionId = @SubmissionId AND q.QuestionCode = src.QuestionCode AND q.IsDeleted = 0);";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task RecordOpportunityWorkflowAsync(System.Data.IDbConnection cn, Guid submissionId, Guid tenantId, string stageName, string eventType, string eventTitle, string eventDetail, string relatedEntityName, Guid? relatedEntityId, Guid? userId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+DECLARE @OpportunityId UNIQUEIDENTIFIER;
+SELECT @OpportunityId = OpportunityId FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @OpportunityId IS NOT NULL AND @OpportunityId <> '00000000-0000-0000-0000-000000000000'
+BEGIN
+    DECLARE @StageId UNIQUEIDENTIFIER = (SELECT TOP 1 OpportunityStageId FROM CRM.OpportunityStage WHERE TenantId = @TenantId AND StageName = @StageName AND IsActive = 1 ORDER BY SortOrder, StageName);
+
+    UPDATE CRM.Opportunity
+    SET StageName = @StageName,
+        OpportunityStageId = COALESCE(@StageId, OpportunityStageId),
+        ForecastCategoryCode = CASE WHEN @StageName IN (N'Won', N'Bound', N'Closed Won') THEN N'Closed Won' WHEN @StageName IN (N'Lost', N'Declined', N'Closed Lost') THEN N'Closed Lost' ELSE COALESCE(NULLIF(ForecastCategoryCode, N''), N'Pipeline') END,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @UserId
+    WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0
+      AND COALESCE(StageName, N'') NOT IN (N'Closed Won', N'Closed Lost');
+
+    INSERT INTO CRM.OpportunityWorkflowEvent (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES (NEWID(), @TenantId, @OpportunityId, @EventType, @EventTitle, @EventDetail, @RelatedEntityName, @RelatedEntityId, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0);
+END;";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId, StageName = stageName, EventType = eventType, EventTitle = eventTitle, EventDetail = eventDetail, RelatedEntityName = relatedEntityName, RelatedEntityId = relatedEntityId, UserId = userId }, cancellationToken: cancellationToken));
+    }
+
     // ── Submission Register ───────────────────────────────────────────
 
     private const string SubmissionColumns = @"
@@ -197,8 +378,332 @@ WHERE  SubmissionId = @Id AND IsDeleted = 0;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AssignedToUserId }, cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyList<SubmissionActivityDto>> GetActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT al.ActionLogId AS ActivityId,
+       al.SubmissionId,
+       al.TenantId,
+       al.ActionCode,
+       CASE al.ActionCode
+           WHEN N'Note' THEN N'Note added'
+           WHEN N'SubmitToMarket' THEN N'Submitted to market'
+           WHEN N'RequestQuote' THEN N'Quote requested'
+           WHEN N'Decline' THEN N'Submission declined'
+           WHEN N'Copy' THEN N'Submission copied'
+           WHEN N'Assign' THEN N'Submission assigned'
+           WHEN N'FollowUpTask' THEN N'Follow-up task created'
+           WHEN N'DocumentAttached' THEN N'Document attached'
+           ELSE al.ActionCode
+       END AS Title,
+       al.Notes,
+       NULL AS CreatedByName,
+       al.CreatedDateUtc
+FROM Submissions.SubmissionActionLog al
+WHERE al.SubmissionId = @SubmissionId
+  AND al.IsDeleted = 0
+ORDER BY al.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<SubmissionActivityDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<Guid> AddNoteAsync(Guid submissionId, AddSubmissionNoteRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52010, 'Submission was not found for note creation.', 1;
+
+DECLARE @ActionLogId UNIQUEIDENTIFIER = NEWID();
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (@ActionLogId, @SubmissionId, @TenantId, N'Note', @Notes, SYSUTCDATETIME(), 0);
+
+UPDATE Submissions.Submission
+SET ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @CreatedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+SELECT @ActionLogId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = submissionId, request.TenantId, request.Notes, request.CreatedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<DocumentDto>> GetDocumentsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT DocumentId, TenantId, DocumentTypeCode, CategoryCode, EntityName, EntityId, FileName, StoragePath, ContentType, FileSizeBytes, VersionNumber, StatusCode, RetentionDate, Description, Tags, UploadedByName, CreatedDateUtc, ModifiedDateUtc
+FROM DMS.Document
+WHERE TenantId = @TenantId
+  AND EntityName = N'Submission'
+  AND EntityId = @SubmissionId
+  AND IsDeleted = 0
+ORDER BY CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<DocumentDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<SubmissionTaskDto>> GetTasksAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT t.TaskItemId,
+       t.TenantId,
+       t.TaskNumber,
+       t.Title,
+       t.Description,
+       t.TaskTypeCode,
+       t.StageCode,
+       t.PriorityCode,
+       t.StatusCode,
+       t.AssignedToUserId,
+       COALESCE(u.FullName, u.DisplayName, u.UserName) AS AssignedToUserName,
+       t.DueDate,
+       t.CreatedDateUtc
+FROM OPS.TaskItem t
+LEFT JOIN IAM.[User] u ON u.UserId = t.AssignedToUserId
+WHERE t.TenantId = @TenantId
+  AND t.RelatedEntityName = N'Submission'
+  AND t.RelatedEntityId = @SubmissionId
+  AND t.IsDeleted = 0
+ORDER BY CASE WHEN t.StatusCode IN (N'Completed', N'Closed') THEN 1 ELSE 0 END, t.DueDate ASC, t.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<SubmissionTaskDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<Guid> CreateFollowUpTaskAsync(Guid submissionId, CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @AccountId UNIQUEIDENTIFIER;
+SELECT @AccountId = AccountId
+FROM Submissions.Submission
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @AccountId IS NULL
+    THROW 52011, 'Submission was not found for follow-up task creation.', 1;
+
+DECLARE @TaskItemId UNIQUEIDENTIFIER = NEWID();
+DECLARE @TaskNumber NVARCHAR(50) = CONCAT(N'TASK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @TaskItemId), N'-', N''), 6));
+
+INSERT INTO OPS.TaskItem
+    (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode,
+     RelatedEntityName, RelatedEntityId, AccountId, AssignedToUserId, DueDate, CompletedDate,
+     CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+VALUES
+    (@TaskItemId, @TenantId, @TaskNumber, @Title, @Description, N'FollowUp', N'Submission', @PriorityCode, N'Open',
+     N'Submission', @SubmissionId, @AccountId, @AssignedToUserId, @DueDate, NULL,
+     SYSUTCDATETIME(), @CreatedByUserId, NULL, NULL, 0);
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'FollowUpTask', CONCAT(N'Follow-up task created: ', @Title), SYSUTCDATETIME(), 0);
+
+UPDATE Submissions.Submission
+SET ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @CreatedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+SELECT @TaskItemId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new
+        {
+            SubmissionId = submissionId,
+            request.TenantId,
+            request.Title,
+            request.Description,
+            request.PriorityCode,
+            request.AssignedToUserId,
+            request.DueDate,
+            request.CreatedByUserId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<SubmissionLineDto>> GetLinesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT sl.SubmissionLineId,
+       sl.TenantId,
+       sl.SubmissionId,
+       sl.OpportunityId,
+       sl.OpportunityLineId,
+       sl.LineOfBusiness,
+       CAST(NULL AS NVARCHAR(200)) AS Carrier,
+       sl.TargetPremium,
+       CAST(NULL AS NVARCHAR(50)) AS Priority,
+       CAST(CASE WHEN ROW_NUMBER() OVER (ORDER BY sl.TargetPremium DESC, sl.CreatedDateUtc) = 1 THEN 1 ELSE 0 END AS bit) AS IsPrimary,
+       s.EffectiveDate AS TargetEffectiveDate
+FROM Submissions.SubmissionLine sl
+JOIN Submissions.Submission s ON s.SubmissionId = sl.SubmissionId
+WHERE sl.SubmissionId = @SubmissionId AND sl.IsDeleted = 0
+ORDER BY IsPrimary DESC, sl.LineOfBusiness;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<SubmissionLineDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<SubmissionIntakeQuestionDto>> GetIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    {
+        var submission = await GetByIdAsync(submissionId, cancellationToken) ?? throw new InvalidOperationException("Submission was not found for intake.");
+        await EnsureDefaultIntakeAsync(submissionId, submission.TenantId, cancellationToken);
+
+        const string sql = @"
+SELECT IntakeQuestionId, SubmissionId, TenantId, QuestionCode, QuestionText, COALESCE(HelpText, N'') AS HelpText,
+       IsRequired, AnswerText, IsAnswered, AnsweredByUserId, AnsweredDateUtc
+FROM Submissions.SubmissionIntakeQuestion
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0
+ORDER BY IsRequired DESC, QuestionText;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<SubmissionIntakeQuestionDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+UPDATE Submissions.SubmissionIntakeQuestion
+SET AnswerText = @AnswerText,
+    IsAnswered = @IsAnswered,
+    AnsweredByUserId = @AnsweredByUserId,
+    AnsweredDateUtc = CASE WHEN @IsAnswered = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE IntakeQuestionId = @IntakeQuestionId AND SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @@ROWCOUNT = 0 THROW 52012, 'Submission intake question was not found.', 1;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'IntakeUpdated', N'Underwriting intake answer updated.', SYSUTCDATETIME(), @AnsweredByUserId, N'SubmissionIntakeQuestion', @IntakeQuestionId, N'User', 0);";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, IntakeQuestionId = intakeQuestionId, request.TenantId, request.AnswerText, request.IsAnswered, request.AnsweredByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        const string sql = @"
+DECLARE @LineOfBusiness NVARCHAR(100) = (SELECT TOP 1 LineOfBusiness FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0);
+
+SELECT r.DocumentRequirementId AS ChecklistItemId,
+       @SubmissionId AS SubmissionId,
+       r.TenantId,
+       r.CategoryCode,
+       r.DisplayName,
+       r.IsRequired,
+       CAST(CASE WHEN d.DocumentId IS NULL THEN 0 ELSE 1 END AS bit) AS IsSatisfied,
+       d.DocumentId,
+       d.FileName,
+       d.CreatedDateUtc AS UploadedDateUtc
+FROM Submissions.SubmissionDocumentRequirement r
+OUTER APPLY (
+    SELECT TOP 1 DocumentId, FileName, CreatedDateUtc
+    FROM DMS.Document d
+    WHERE d.TenantId = @TenantId
+      AND d.EntityName = N'Submission'
+      AND d.EntityId = @SubmissionId
+      AND d.IsDeleted = 0
+      AND (d.CategoryCode = r.CategoryCode OR d.DocumentTypeCode = r.CategoryCode OR d.Tags LIKE N'%' + r.DisplayName + N'%')
+    ORDER BY d.CreatedDateUtc DESC
+) d
+WHERE r.TenantId = @TenantId
+  AND r.IsDeleted = 0
+  AND r.LineOfBusiness = COALESCE(@LineOfBusiness, r.LineOfBusiness)
+ORDER BY r.SortOrder, r.DisplayName;";
+        return (await cn.QueryAsync<SubmissionDocumentChecklistDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var intake = await GetIntakeAsync(submissionId, cancellationToken);
+        var checklist = await GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
+        var blockingReasons = intake.Where(q => q.IsRequired && !q.IsAnswered).Select(q => $"Missing intake: {q.QuestionText}")
+            .Concat(checklist.Where(d => d.IsRequired && !d.IsSatisfied).Select(d => $"Missing document: {d.DisplayName}"))
+            .ToArray();
+
+        return new SubmissionReadinessDto
+        {
+            SubmissionId = submissionId,
+            RequiredQuestionCount = intake.Count(q => q.IsRequired),
+            AnsweredRequiredQuestionCount = intake.Count(q => q.IsRequired && q.IsAnswered),
+            RequiredDocumentCount = checklist.Count(d => d.IsRequired),
+            SatisfiedRequiredDocumentCount = checklist.Count(d => d.IsRequired && d.IsSatisfied),
+            IsReadyForMarketing = blockingReasons.Length == 0,
+            BlockingReasons = blockingReasons
+        };
+    }
+
+    public async Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string seedSql = @"
+DECLARE @Templates TABLE (TaskTypeCode NVARCHAR(50), TaskTypeName NVARCHAR(100), Description NVARCHAR(500), SortOrder INT);
+INSERT INTO @Templates VALUES
+(N'MissingInformation', N'Missing information', N'Collect missing intake or underwriting details.', 110),
+(N'CarrierFollowUp', N'Carrier follow-up', N'Follow up with carrier for response or terms.', 120),
+(N'QuoteReview', N'Quote review', N'Review received quote terms and compare options.', 130),
+(N'ProposalFollowUp', N'Proposal follow-up', N'Follow up with client on delivered proposal.', 140),
+(N'BindRequest', N'Bind request', N'Coordinate binding request and subjectivities.', 150),
+(N'SubjectivitiesFollowUp', N'Subjectivities follow-up', N'Collect and clear quote subjectivities.', 160),
+(N'DocumentCollection', N'Document collection', N'Collect required submission or post-bind documents.', 170);
+
+INSERT INTO OPS.TaskType (TaskTypeId, TenantId, TaskTypeCode, TaskTypeName, Description, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, t.TaskTypeCode, t.TaskTypeName, t.Description, t.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM @Templates t
+WHERE NOT EXISTS (SELECT 1 FROM OPS.TaskType x WHERE x.TenantId = @TenantId AND x.TaskTypeCode = t.TaskTypeCode AND x.IsDeleted = 0);
+
+SELECT TaskTypeCode, TaskTypeName AS DisplayName, COALESCE(Description, N'') AS Description,
+       CASE WHEN TaskTypeCode IN (N'BindRequest', N'QuoteReview') THEN N'High' ELSE N'Medium' END AS PriorityCode,
+       CASE WHEN TaskTypeCode IN (N'CarrierFollowUp', N'ProposalFollowUp') THEN 3 WHEN TaskTypeCode = N'BindRequest' THEN 1 ELSE 5 END AS DefaultDueDays
+FROM OPS.TaskType
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND TaskTypeCode IN (N'MissingInformation', N'CarrierFollowUp', N'QuoteReview', N'ProposalFollowUp', N'BindRequest', N'SubjectivitiesFollowUp', N'DocumentCollection')
+ORDER BY SortOrder, TaskTypeName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<SubmissionTaskTemplateDto>(new CommandDefinition(seedSql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        const string sql = @"
+SELECT COUNT(DISTINCT s.SubmissionId)
+FROM Submissions.Submission s
+LEFT JOIN Submissions.SubmissionIntakeQuestion q ON q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0 AND q.IsRequired = 1 AND q.IsAnswered = 0
+WHERE s.TenantId = @TenantId AND s.IsDeleted = 0 AND s.Status NOT IN (N'Bound', N'Declined', N'Withdrawn') AND (s.Status IN (N'Draft', N'New') OR q.IntakeQuestionId IS NOT NULL);
+
+SELECT COUNT(1)
+FROM Submissions.Submission s
+WHERE s.TenantId = @TenantId AND s.IsDeleted = 0 AND s.Status IN (N'Ready', N'Ready for Market');
+
+SELECT COUNT(1)
+FROM Submissions.SubmissionMarket sm
+JOIN Submissions.Submission s ON s.SubmissionId = sm.SubmissionId
+WHERE s.TenantId = @TenantId AND sm.IsDeleted = 0 AND sm.Status IN (N'Sent', N'Submitted', N'In Review');
+
+SELECT COUNT(1)
+FROM Submissions.Quote q
+JOIN Submissions.Submission s ON s.SubmissionId = q.SubmissionId
+WHERE s.TenantId = @TenantId AND q.IsDeleted = 0 AND q.Status IN (N'Received', N'Presented', N'Accepted') AND q.ExpiresDateUtc BETWEEN SYSUTCDATETIME() AND DATEADD(day, 14, SYSUTCDATETIME());
+
+SELECT COUNT(1)
+FROM Submissions.Proposal p
+WHERE p.TenantId = @TenantId AND p.IsDeleted = 0 AND p.Status IN (N'Sent', N'Delivered', N'Pending Decision');
+
+SELECT COUNT(1)
+FROM OPS.TaskItem
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND TaskTypeCode = N'BindRequest' AND StatusCode NOT IN (N'Completed', N'Closed', N'Done');";
+
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+        return new SubmissionMetricsDto
+        {
+            PendingIntake = await multi.ReadSingleAsync<int>(),
+            ReadyForMarket = await multi.ReadSingleAsync<int>(),
+            MarketsAwaitingResponse = await multi.ReadSingleAsync<int>(),
+            QuotesExpiringSoon = await multi.ReadSingleAsync<int>(),
+            ProposalsPendingDecision = await multi.ReadSingleAsync<int>(),
+            BindRequestsPending = await multi.ReadSingleAsync<int>()
+        };
+    }
+
     public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
     {
+        var readiness = await GetReadinessAsync(id, request.TenantId, cancellationToken);
+        if (!readiness.IsReadyForMarketing)
+            throw new InvalidOperationException("Submission is not ready for marketing: " + string.Join("; ", readiness.BlockingReasons));
+
         const string sql = @"
 DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE(@CarrierIdIn, (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CarrierName));
 IF @CarrierId IS NULL THROW 52000, 'No carrier is available for this tenant.', 1;
@@ -208,27 +713,42 @@ IF @MarketId IS NULL
 BEGIN
     SET @MarketId = NEWID();
     INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, DeclineReason, AddedDateUtc, RespondedDateUtc, IsDeleted)
-    VALUES (@MarketId, @SubmissionId, @CarrierId, N'Submitted', 80, 1, NULL, SYSUTCDATETIME(), NULL, 0);
+    VALUES (@MarketId, @SubmissionId, @CarrierId, N'Sent', 80, 1, NULL, SYSUTCDATETIME(), NULL, 0);
 END
 ELSE
 BEGIN
     UPDATE Submissions.SubmissionMarket
-    SET Status = N'Submitted', DeclineReason = NULL, RespondedDateUtc = NULL
+    SET Status = N'Sent', DeclineReason = NULL, RespondedDateUtc = NULL
     WHERE SubmissionMarketId = @MarketId;
 END
 
+UPDATE Submissions.SubmissionMarket
+SET SubmittedDateUtc = SYSUTCDATETIME(),
+    SubmittedByUserId = NULL,
+    Notes = COALESCE(@Notes, Notes),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionMarketId = @MarketId;
+
+INSERT INTO Submissions.SubmissionMarketDocument (SubmissionMarketDocumentId, SubmissionMarketId, SubmissionId, TenantId, DocumentId, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @MarketId, @SubmissionId, @TenantId, d.DocumentId, SYSUTCDATETIME(), 0
+FROM DMS.Document d
+WHERE d.TenantId = @TenantId AND d.EntityName = N'Submission' AND d.EntityId = @SubmissionId AND d.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarketDocument md WHERE md.SubmissionMarketId = @MarketId AND md.DocumentId = d.DocumentId AND md.IsDeleted = 0);
+
 UPDATE Submissions.Submission
-SET Status = CASE WHEN Status IN (N'Bound', N'Declined', N'Withdrawn') THEN Status ELSE N'In Review' END,
+SET Status = CASE WHEN Status IN (N'Bound', N'Declined', N'Withdrawn') THEN Status ELSE N'Marketing' END,
     MarketCount = (SELECT COUNT(1) FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
 
-INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, N'SubmitToMarket', COALESCE(@Notes, N'Submitted to market.'), SYSUTCDATETIME(), 0);
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'MarketSubmitted', COALESCE(@Notes, N'Submitted to market.'), SYSUTCDATETIME(), N'SubmissionMarket', @MarketId, N'User', 0);
 
 SELECT @MarketId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         var marketId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, CarrierIdIn = request.CarrierId, request.Notes }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, id, request.TenantId, "Marketing", "Market Submitted", "Market Submitted", request.Notes ?? "Submission package sent to market.", "SubmissionMarket", marketId, null, cancellationToken);
         return new SubmissionActionResult(marketId, "Submission sent to market.");
     }
 
@@ -244,19 +764,26 @@ DECLARE @Premium DECIMAL(18,2) = COALESCE(@AnnualPremium, (SELECT NULLIF(TargetP
 INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
 VALUES (@QuoteId, @SubmissionId, @CarrierId, N'QT-' + CONVERT(NVARCHAR(8), SYSUTCDATETIME(), 112) + N'-' + RIGHT(REPLACE(CONVERT(NVARCHAR(36), @QuoteId), N'-', N''), 6), N'Requested', @Premium, COALESCE(@Deductible, 2500), COALESCE(@Limit, 1000000), COALESCE(@CoverageNotes, N'Enterprise quote requested from submissions register.'), SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
 
+UPDATE Submissions.SubmissionMarket
+SET Status = CASE WHEN Status IN (N'Bound', N'Declined') THEN Status ELSE N'In Review' END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND CarrierId = @CarrierId AND IsDeleted = 0;
+
 UPDATE Submissions.Submission
-SET Status = N'Quoted',
+SET Status = N'Quoting',
     QuoteCount = (SELECT COUNT(1) FROM Submissions.Quote WHERE SubmissionId = @SubmissionId AND IsDeleted = 0),
     TargetPremium = COALESCE(TargetPremium, @Premium),
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
 
-INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, N'RequestQuote', COALESCE(@CoverageNotes, N'Quote requested.'), SYSUTCDATETIME(), 0);
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'QuoteRequested', COALESCE(@CoverageNotes, N'Quote requested.'), SYSUTCDATETIME(), N'Quote', @QuoteId, N'User', 0);
 
 SELECT @QuoteId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         var quoteId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, CarrierIdIn = request.CarrierId, request.AnnualPremium, request.Deductible, request.Limit, request.CoverageNotes }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, id, request.TenantId, "Quoting", "Quote Requested", "Quote Requested", request.CoverageNotes ?? "Quote requested from market.", "Quote", quoteId, null, cancellationToken);
         return new SubmissionActionResult(quoteId, "Quote requested.");
     }
 
@@ -313,6 +840,7 @@ VALUES (NEWID(), @SubmissionId, @TenantId, N'Decline', @Reason, SYSUTCDATETIME()
 SELECT @SubmissionId;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var declinedId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { SubmissionId = id, request.TenantId, request.Reason }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, id, request.TenantId, "Lost", "Submission Declined", "Submission Declined", request.Reason, "Submission", id, null, cancellationToken);
         return new SubmissionActionResult(declinedId, "Submission declined.");
     }
 
@@ -408,6 +936,49 @@ WHERE  SubmissionMarketId = @Id AND IsDeleted = 0;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = submissionMarketId, request.Status, request.DeclineReason }, cancellationToken: cancellationToken));
     }
 
+    public async Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+SELECT @SubmissionId = SubmissionId FROM Submissions.SubmissionMarket WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0;
+IF @SubmissionId IS NULL THROW 52013, 'Submission market was not found.', 1;
+
+UPDATE Submissions.SubmissionMarket
+SET Status = @Status,
+    ReasonCode = @ReasonCode,
+    DeclineReason = CASE WHEN @Status IN (N'Declined', N'Blocked') THEN COALESCE(@Notes, DeclineReason) ELSE DeclineReason END,
+    Notes = @Notes,
+    NextActionDateUtc = @NextActionDateUtc,
+    RespondedDateUtc = CASE WHEN @Status IN (N'Declined', N'Quoted', N'Blocked') THEN SYSUTCDATETIME() ELSE RespondedDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE SubmissionMarketId = @SubmissionMarketId;
+
+UPDATE Submissions.SubmissionMarketDocument SET IsDeleted = 1 WHERE SubmissionMarketId = @SubmissionMarketId;
+
+INSERT INTO Submissions.SubmissionMarketDocument (SubmissionMarketDocumentId, SubmissionMarketId, SubmissionId, TenantId, DocumentId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @SubmissionMarketId, @SubmissionId, @TenantId, value, SYSUTCDATETIME(), @ModifiedByUserId, 0
+FROM STRING_SPLIT(@DocumentIdsCsv, N',')
+WHERE TRY_CONVERT(uniqueidentifier, value) IS NOT NULL;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, CASE WHEN @Status = N'Declined' THEN N'MarketDeclined' WHEN @Status = N'Blocked' THEN N'MarketBlocked' ELSE N'MarketUpdated' END,
+        COALESCE(@Notes, CONCAT(N'Market status updated to ', @Status)), SYSUTCDATETIME(), @ModifiedByUserId, N'SubmissionMarket', @SubmissionMarketId, N'User', 0);";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.TenantId,
+            request.SubmissionMarketId,
+            request.Status,
+            request.ReasonCode,
+            request.Notes,
+            request.NextActionDateUtc,
+            request.ModifiedByUserId,
+            DocumentIdsCsv = string.Join(',', request.DocumentIds ?? [])
+        }, cancellationToken: cancellationToken));
+    }
+
     public async Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -428,12 +999,18 @@ WHERE  SubmissionId = (SELECT SubmissionId FROM Submissions.SubmissionMarket WHE
         const string sql = @"
 SELECT q.QuoteId, q.SubmissionId, q.CarrierId, c.CarrierName,
        q.QuoteNumber, q.Status, q.AnnualPremium, q.Deductible, q.Limit,
+       q.CommissionPercent, q.Subjectivities, q.Exclusions, q.CarrierRating, q.PaymentTerms,
+       q.MinimumEarnedPremium, q.TaxesAndFees, q.BrokerFee, q.TriaIncluded,
+       q.QuoteDocumentId, d.FileName AS QuoteDocumentFileName,
+       q.IsSelected, q.IsRecommended, q.RecommendationScore, q.RecommendationReason,
        q.CoverageNotes, q.QuotedDateUtc, q.ExpiresDateUtc
 FROM   Submissions.Quote q
 JOIN   Core.Carrier      c ON c.CarrierId = q.CarrierId
+LEFT JOIN DMS.Document d ON d.DocumentId = q.QuoteDocumentId AND d.IsDeleted = 0
 WHERE  q.SubmissionId = @SubmissionId AND q.IsDeleted = 0
-ORDER BY q.AnnualPremium ASC;";
+ORDER BY q.IsSelected DESC, q.RecommendationScore DESC, q.AnnualPremium ASC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
         return (await cn.QueryAsync<QuoteComparisonDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
     }
 
@@ -442,12 +1019,101 @@ ORDER BY q.AnnualPremium ASC;";
         const string sql = @"
 SELECT q.QuoteId, q.SubmissionId, q.CarrierId, c.CarrierName,
        q.QuoteNumber, q.Status, q.AnnualPremium, q.Deductible, q.Limit,
+       q.CommissionPercent, q.Subjectivities, q.Exclusions, q.CarrierRating, q.PaymentTerms,
+       q.MinimumEarnedPremium, q.TaxesAndFees, q.BrokerFee, q.TriaIncluded,
+       q.QuoteDocumentId, d.FileName AS QuoteDocumentFileName,
+       q.IsSelected, q.IsRecommended, q.RecommendationScore, q.RecommendationReason,
        q.CoverageNotes, q.QuotedDateUtc, q.ExpiresDateUtc
 FROM   Submissions.Quote q
 JOIN   Core.Carrier      c ON c.CarrierId = q.CarrierId
+LEFT JOIN DMS.Document d ON d.DocumentId = q.QuoteDocumentId AND d.IsDeleted = 0
 WHERE  q.QuoteId = @QuoteId AND q.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
         return await cn.QuerySingleOrDefaultAsync<QuoteComparisonDto>(new CommandDefinition(sql, new { QuoteId = quoteId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+SELECT @SubmissionId = SubmissionId FROM Submissions.Quote WHERE QuoteId = @QuoteId AND IsDeleted = 0;
+IF @SubmissionId IS NULL THROW 52014, 'Quote was not found.', 1;
+
+UPDATE Submissions.Quote
+SET Status = @Status,
+    AnnualPremium = @AnnualPremium,
+    Deductible = @Deductible,
+    [Limit] = @Limit,
+    CommissionPercent = @CommissionPercent,
+    Subjectivities = @Subjectivities,
+    Exclusions = @Exclusions,
+    CarrierRating = @CarrierRating,
+    PaymentTerms = @PaymentTerms,
+    MinimumEarnedPremium = @MinimumEarnedPremium,
+    TaxesAndFees = @TaxesAndFees,
+    BrokerFee = @BrokerFee,
+    TriaIncluded = @TriaIncluded,
+    QuoteDocumentId = @QuoteDocumentId,
+    CoverageNotes = @CoverageNotes,
+    ExpiresDateUtc = @ExpiresDateUtc,
+    RecommendationScore = CONVERT(int, ROUND(
+        (CASE WHEN NULLIF(@AnnualPremium, 0) IS NULL THEN 0 ELSE 35 END) +
+        (CASE WHEN @CarrierRating IN (N'A++', N'A+', N'A', N'A-') THEN 20 WHEN @CarrierRating LIKE N'B%' THEN 10 ELSE 5 END) +
+        (CASE WHEN COALESCE(NULLIF(@Subjectivities, N''), N'') = N'' THEN 15 ELSE 5 END) +
+        (CASE WHEN COALESCE(@CommissionPercent, 0) >= 10 THEN 10 ELSE 5 END) +
+        (CASE WHEN @ExpiresDateUtc > DATEADD(day, 14, SYSUTCDATETIME()) THEN 10 ELSE 2 END) +
+        (CASE WHEN COALESCE(@TriaIncluded, 0) = 1 THEN 10 ELSE 5 END), 0)),
+    RecommendationReason = CONCAT(N'Premium, carrier rating, subjectivity burden, commission, expiration risk, and coverage breadth scored on ', CONVERT(nvarchar(10), SYSUTCDATETIME(), 120), N'.'),
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE QuoteId = @QuoteId;
+
+UPDATE Submissions.Submission
+SET Status = CASE WHEN @Status IN (N'Received', N'Presented', N'Accepted') THEN N'Quoting' ELSE Status END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'QuoteUpdated', CONCAT(N'Quote updated to ', @Status, N'.'), SYSUTCDATETIME(), @ModifiedByUserId, N'Quote', @QuoteId, N'User', 0);";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { QuoteId = quoteId, request.TenantId, request.Status, request.AnnualPremium, request.Deductible, request.Limit, request.CommissionPercent, request.Subjectivities, request.Exclusions, request.CarrierRating, request.PaymentTerms, request.MinimumEarnedPremium, request.TaxesAndFees, request.BrokerFee, request.TriaIncluded, request.QuoteDocumentId, request.CoverageNotes, request.ExpiresDateUtc, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM Submissions.Quote WHERE QuoteId = @QuoteId AND SubmissionId = @SubmissionId AND IsDeleted = 0)
+    THROW 52015, 'Quote was not found for selection.', 1;
+
+UPDATE Submissions.Quote
+SET IsSelected = 0,
+    IsRecommended = 0,
+    Status = CASE WHEN Status IN (N'Bound', N'Accepted') THEN Status ELSE N'Rejected' END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND QuoteId <> @QuoteId AND IsDeleted = 0;
+
+UPDATE Submissions.Quote
+SET IsSelected = 1,
+    IsRecommended = @IsRecommended,
+    Status = CASE WHEN Status = N'Bound' THEN Status ELSE N'Accepted' END,
+    SelectedByUserId = @SelectedByUserId,
+    SelectedDateUtc = SYSUTCDATETIME(),
+    SelectionReason = @Reason,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE QuoteId = @QuoteId;
+
+UPDATE Submissions.Submission
+SET Status = N'Proposal', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @SelectedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'QuoteSelected', @Reason, SYSUTCDATETIME(), @SelectedByUserId, N'Quote', @QuoteId, N'User', 0);";
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, request.TenantId, request.QuoteId, request.IsRecommended, request.Reason, request.SelectedByUserId }, cancellationToken: cancellationToken));
     }
 
     // ── Proposals ─────────────────────────────────────────────────────
@@ -462,23 +1128,167 @@ WHERE  ProposalId = @ProposalId AND IsDeleted = 0;";
         return await cn.QuerySingleOrDefaultAsync<ProposalDto>(new CommandDefinition(sql, new { ProposalId = proposalId }, cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT p.ProposalId,
+       p.SubmissionId,
+       p.TenantId,
+       p.Title,
+       p.Status,
+       p.DeliveryMethod,
+       p.Recipient,
+       p.SentDateUtc,
+       p.ClientDecision,
+       p.DecisionNotes,
+       p.DecisionDateUtc,
+       p.DocumentId,
+       d.FileName AS DocumentFileName
+FROM Submissions.Proposal p
+LEFT JOIN DMS.Document d ON d.DocumentId = p.DocumentId AND d.IsDeleted = 0
+WHERE p.SubmissionId = @SubmissionId AND p.IsDeleted = 0
+ORDER BY p.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
+        return (await cn.QueryAsync<ProposalWorkflowDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public async Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+DECLARE @QuoteScope TABLE (QuoteId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, SortOrder INT NOT NULL);
+
+INSERT INTO @QuoteScope (QuoteId, SortOrder)
+SELECT q.QuoteId, ROW_NUMBER() OVER (ORDER BY q.IsSelected DESC, q.IsRecommended DESC, q.RecommendationScore DESC, q.AnnualPremium ASC)
+FROM Submissions.Quote q
+WHERE q.SubmissionId = @SubmissionId
+  AND q.IsDeleted = 0
+  AND EXISTS (SELECT 1 FROM STRING_SPLIT(@QuoteIdsCsv, N',') s WHERE TRY_CONVERT(uniqueidentifier, s.value) = q.QuoteId);
+
+IF NOT EXISTS (SELECT 1 FROM @QuoteScope)
+BEGIN
+    INSERT INTO @QuoteScope (QuoteId, SortOrder)
+    SELECT q.QuoteId, ROW_NUMBER() OVER (ORDER BY q.IsSelected DESC, q.IsRecommended DESC, q.RecommendationScore DESC, q.AnnualPremium ASC)
+    FROM Submissions.Quote q
+    WHERE q.SubmissionId = @SubmissionId AND q.IsDeleted = 0;
+END;
+
+DECLARE @QuoteRows NVARCHAR(MAX);
+SELECT @QuoteRows = STRING_AGG(CONCAT(N'<tr><td>', c.CarrierName, N'</td><td>', q.QuoteNumber, N'</td><td>', FORMAT(q.AnnualPremium, N'C'), N'</td><td>', COALESCE(q.CarrierRating, N''), N'</td><td>', CONVERT(nvarchar(20), q.ExpiresDateUtc, 101), N'</td><td>', COALESCE(q.CoverageNotes, N''), N'</td></tr>'), N'')
+FROM @QuoteScope qs
+JOIN Submissions.Quote q ON q.QuoteId = qs.QuoteId
+JOIN Core.Carrier c ON c.CarrierId = q.CarrierId;
+
+DECLARE @Html NVARCHAR(MAX) = CONCAT(
+    N'<html><body><h1>', @Title, N'</h1>',
+    CASE WHEN NULLIF(@CustomIntroduction, N'') IS NULL THEN N'' ELSE CONCAT(N'<p>', @CustomIntroduction, N'</p>') END,
+    N'<p>Prepared proposal package for selected submission quote options.</p>',
+    N'<table><thead><tr><th>Carrier</th><th>Quote</th><th>Annual Premium</th><th>Rating</th><th>Expires</th><th>Coverage Notes</th></tr></thead><tbody>',
+    COALESCE(@QuoteRows, N'<tr><td colspan=""6"">No quote options were available.</td></tr>'),
+    N'</tbody></table></body></html>');
+
 INSERT INTO Submissions.Proposal
-    (ProposalId, SubmissionId, TenantId, Title, Status, CreatedDateUtc, IsDeleted)
+    (ProposalId, SubmissionId, TenantId, Title, Status, PdfUrl, HtmlContent, CustomIntroduction, CreatedDateUtc, GeneratedDateUtc, IsDeleted)
 VALUES
-    (@ProposalId, @SubmissionId, @TenantId, @Title, 'Generating', GETUTCDATE(), 0);";
+    (@ProposalId, @SubmissionId, @TenantId, @Title, N'Generated', CONCAT(N'dms://proposal/', CONVERT(nvarchar(36), @ProposalId)), @Html, @CustomIntroduction, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+
+INSERT INTO Submissions.ProposalQuote (ProposalQuoteId, ProposalId, QuoteId, SubmissionId, TenantId, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @ProposalId, QuoteId, @SubmissionId, @TenantId, SortOrder, SYSUTCDATETIME(), 0
+FROM @QuoteScope;
+
+UPDATE Submissions.Submission
+SET Status = N'Proposal', ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalGenerated', CONCAT(@Title, N' (', (SELECT COUNT(1) FROM @QuoteScope), N' quote option(s)).'), SYSUTCDATETIME(), N'Proposal', @ProposalId, N'User', 0);";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             ProposalId   = id,
             request.SubmissionId,
             request.TenantId,
             request.Title,
+            request.CustomIntroduction,
+            QuoteIdsCsv = string.Join(',', request.QuoteIds ?? []),
         }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, request.SubmissionId, request.TenantId, "Proposal", "Proposal Generated", "Proposal Generated", request.Title, "Proposal", id, null, cancellationToken);
         return id;
+    }
+
+    public async Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+UPDATE Submissions.Proposal
+SET Status = N'Sent',
+    DeliveryMethod = @DeliveryMethod,
+    Recipient = @Recipient,
+    SentDateUtc = SYSUTCDATETIME(),
+    SentByUserId = @SentByUserId,
+    @SubmissionId = SubmissionId
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @SubmissionId IS NULL THROW 52016, 'Proposal was not found for delivery.', 1;
+
+UPDATE Submissions.Submission
+SET Status = CASE WHEN Status IN (N'Bound', N'Declined', N'Withdrawn') THEN Status ELSE N'Proposal Sent' END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @SentByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDelivered', CONCAT(N'Proposal sent by ', @DeliveryMethod, N' to ', @Recipient), SYSUTCDATETIME(), @SentByUserId, N'Proposal', @ProposalId, N'User', 0);
+
+SELECT @SubmissionId;";
+        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.DeliveryMethod, request.Recipient, request.SentByUserId }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Delivered", "Proposal Delivered", $"Proposal sent by {request.DeliveryMethod} to {request.Recipient}.", "Proposal", proposalId, request.SentByUserId, cancellationToken);
+    }
+
+    public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+UPDATE Submissions.Proposal
+SET Status = CASE WHEN @Decision = N'Accepted' THEN N'Accepted' WHEN @Decision = N'Rejected' THEN N'Rejected' WHEN @Decision = N'Needs revision' THEN N'Needs Revision' ELSE N'Pending Decision' END,
+    ClientDecision = @Decision,
+    DecisionNotes = @DecisionNotes,
+    DecisionDateUtc = SYSUTCDATETIME(),
+    DecidedByUserId = @DecidedByUserId,
+    @SubmissionId = SubmissionId
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @SubmissionId IS NULL THROW 52017, 'Proposal was not found for decision.', 1;
+
+IF @Decision = N'Accepted'
+BEGIN
+    UPDATE Submissions.Quote SET Status = CASE WHEN IsSelected = 1 THEN N'Accepted' ELSE N'Rejected' END WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+END;
+
+UPDATE Submissions.Submission
+SET Status = CASE
+        WHEN @Decision = N'Accepted' THEN N'Bind Requested'
+        WHEN @Decision = N'Rejected' THEN N'Declined'
+        WHEN @Decision = N'Needs revision' THEN N'Proposal Revision'
+        ELSE N'Proposal'
+    END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @DecidedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0 AND Status NOT IN (N'Bound', N'Withdrawn');
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDecision', CONCAT(@Decision, N'. ', COALESCE(@DecisionNotes, N'')), SYSUTCDATETIME(), @DecidedByUserId, N'Proposal', @ProposalId, N'User', 0);
+
+SELECT @SubmissionId;";
+        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.Decision, request.DecisionNotes, DecidedByUserId = request.DecidedByUserId }, cancellationToken: cancellationToken));
+        var stageName = string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) ? "Lost" : "Proposal";
+        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, stageName, "Proposal Decision", "Proposal Decision", $"{request.Decision}. {request.DecisionNotes}".Trim(), "Proposal", proposalId, request.DecidedByUserId, cancellationToken);
     }
 
     // ── Appetite ──────────────────────────────────────────────────────
@@ -873,8 +1683,30 @@ UPDATE Submissions.Submission
 SET    Status          = 'Bound',
        ModifiedDateUtc = GETUTCDATE()
 WHERE  SubmissionId = @SubmissionId;";
+        const string postBindSql = @"
+UPDATE Submissions.Quote
+SET Status = CASE WHEN QuoteId = @QuoteId THEN N'Bound' ELSE N'Rejected' END,
+    IsSelected = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
+    IsRecommended = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+UPDATE Submissions.SubmissionMarket
+SET Status = CASE WHEN CarrierId = @CarrierId THEN N'Bound' ELSE CASE WHEN Status IN (N'Declined', N'Blocked') THEN Status ELSE N'Not Selected' END END,
+    RespondedDateUtc = COALESCE(RespondedDateUtc, SYSUTCDATETIME()),
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'PolicyBound', N'Policy bound from selected quote.', SYSUTCDATETIME(), N'Quote', @QuoteId, N'User', 0);
+
+INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, DueDate, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, CONCAT(N'TASK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 6)),
+       v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', N'Submission', @SubmissionId, @AccountId, DATEADD(day, 7, CONVERT(date, SYSUTCDATETIME())), SYSUTCDATETIME(), 0
+FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect policy', N'Attach issued policy.'), (N'Collect invoice', N'Attach invoice.'), (N'Collect certificates', N'Attach certificates.'), (N'Collect evidence of insurance', N'Attach evidence of insurance.'), (N'Collect endorsements', N'Attach required endorsements.')) v(Title, Description);";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             PolicyId       = id,
@@ -887,6 +1719,8 @@ WHERE  SubmissionId = @SubmissionId;";
             request.EffectiveDate,
             request.ExpirationDate,
         }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(postBindSql, new { request.SubmissionId, request.QuoteId, request.TenantId, request.AccountId, request.CarrierId }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, request.SubmissionId, request.TenantId, "Won", "Policy Bound", "Policy Bound", "Policy bound from selected quote.", "BoundPolicy", id, null, cancellationToken);
         return id;
     }
 }

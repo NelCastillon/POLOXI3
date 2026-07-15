@@ -3,9 +3,11 @@
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Submissions
+@using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>@(_submission is null ? "Submission Detail" : $"{_submission.SubmissionNumber} - Submission Detail")</PageTitle>
 
@@ -40,7 +42,12 @@ else
             </div>
             <div class="sdd-hero__actions">
                 <button type="button" class="sdd-btn sdd-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @_refreshIconClass" aria-hidden="true"></i> Refresh</button>
+                @if (_submission.OpportunityId != Guid.Empty)
+                {
+                    <button type="button" class="sdd-btn sdd-btn--light" @onclick='() => Nav.NavigateTo($"/crm/opportunities/{_submission.OpportunityId}")'><i class="bi bi-arrow-return-left" aria-hidden="true"></i> Opportunity</button>
+                }
                 <button type="button" class="sdd-btn sdd-btn--light" @onclick='() => Nav.NavigateTo("/submissions")'><i class="bi bi-list-check" aria-hidden="true"></i> Submissions</button>
+                <button type="button" class="sdd-btn sdd-btn--light" @onclick='() => OpenActionDialog("assign")'><i class="bi bi-person-check" aria-hidden="true"></i> Assign</button>
                 <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
             </div>
         </section>
@@ -102,6 +109,14 @@ else
                         {
                             <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="MarkAllAnswered"><i class="bi bi-check-all" aria-hidden="true"></i> Mark Complete</button>
                         }
+                        @if (_activeTab == 4)
+                        {
+                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("document")'><i class="bi bi-upload" aria-hidden="true"></i> Upload Document</button>
+                        }
+                        @if (_activeTab == 6)
+                        {
+                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("task")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Task</button>
+                        }
                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("note")'><i class="bi bi-sticky" aria-hidden="true"></i> Add Note</button>
                     </div>
                 </div>
@@ -119,6 +134,19 @@ else
                                     <div><span>Line of Business</span><strong>@_submission.LineOfBusiness</strong></div>
                                     <div><span>Priority</span><strong>@_submission.Priority</strong></div>
                                     <div><span>Assigned To</span><strong>@Safe(_submission.AssignedToUserName, "Unassigned")</strong></div>
+                                </div>
+                            </div>
+                            <div class="sdd-section-card">
+                                <span class="sdd-section-title"><i class="bi bi-diagram-3" aria-hidden="true"></i> Coverage lines</span>
+                                <div class="sdd-detail-list">
+                                    @foreach (var line in _lines)
+                                    {
+                                        <div><span>@line.LineOfBusiness</span><strong>@line.TargetPremium.ToString("C0")</strong></div>
+                                    }
+                                    @if (!_lines.Any())
+                                    {
+                                        <div><span>Line</span><strong>@_submission.LineOfBusiness</strong></div>
+                                    }
                                 </div>
                             </div>
                             <div class="sdd-section-card">
@@ -168,6 +196,7 @@ else
                                     <div class="sdd-market-actions">
                                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick="() => SubmitMarketAsync(market)"><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
                                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => RequestQuoteForMarket(market)"><i class="bi bi-journal-plus" aria-hidden="true"></i> Quote</button>
+                                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenMarketPackageDialog(market)"><i class="bi bi-clipboard-data" aria-hidden="true"></i> Status</button>
                                         <button type="button" class="sdd-icon-btn" @onclick="() => ConfirmRemoveMarket(market)"><i class="bi bi-trash" aria-hidden="true"></i></button>
                                     </div>
                                 </div>
@@ -194,14 +223,26 @@ else
                                         <div><small>Status</small><strong>@quote.Status</strong></div>
                                         <div><small>Deductible</small><strong>@MoneyOrDash(quote.Deductible)</strong></div>
                                         <div><small>Limit</small><strong>@MoneyOrDash(quote.Limit)</strong></div>
+                                         <div><small>Commission</small><strong>@PercentOrDash(quote.CommissionPercent)</strong></div>
+                                         <div><small>Carrier Rating</small><strong>@Safe(quote.CarrierRating, "-")</strong></div>
+                                         <div><small>Score</small><strong>@quote.RecommendationScore</strong></div>
                                         <div><small>Expires</small><strong>@quote.ExpiresDateUtc.ToLocalTime().ToString("MMM d, yyyy")</strong></div>
                                     </div>
+                                     @if (!string.IsNullOrWhiteSpace(quote.Subjectivities))
+                                     {
+                                         <p><strong>Subjectivities:</strong> @quote.Subjectivities</p>
+                                     }
+                                     @if (!string.IsNullOrWhiteSpace(quote.Exclusions))
+                                     {
+                                         <p><strong>Exclusions:</strong> @quote.Exclusions</p>
+                                     }
                                     @if (!string.IsNullOrWhiteSpace(quote.CoverageNotes))
                                     {
                                         <p>@quote.CoverageNotes</p>
                                     }
                                     <div class="sdd-quote-actions">
-                                        <button type="button" class="sdd-btn @(quote.QuoteId == _selectedQuoteId ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => SelectQuote(quote)"><i class="bi bi-check-circle" aria-hidden="true"></i> Select</button>
+                                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenQuoteReviewDialog(quote)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Review</button>
+                                         <button type="button" class="sdd-btn @(quote.QuoteId == _selectedQuoteId ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => SelectQuoteAsync(quote)"><i class="bi bi-check-circle" aria-hidden="true"></i> Select</button>
                                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => CreatePolicyFromQuoteAsync(quote)"><i class="bi bi-shield-check" aria-hidden="true"></i> Bind</button>
                                     </div>
                                 </div>
@@ -216,12 +257,16 @@ else
                     {
                         <section class="sdd-question-list">
                             <div class="sdd-progress-card"><span>Underwriting readiness</span><strong>@ReadinessPercent%</strong><div class="sdd-progress"><span style="width:@ReadinessPercent%"></span></div></div>
-                            @foreach (var question in _questions)
+                             @if (_readiness is not null && !_readiness.IsReadyForMarketing)
+                             {
+                                 <div class="alert alert-warning sdd-alert" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@string.Join("; ", _readiness.BlockingReasons)</span></div>
+                             }
+                             @foreach (var question in _intakeQuestions)
                             {
-                                <div class="sdd-question-row @(question.Required && !question.Answered ? "sdd-question-row--required" : string.Empty)">
-                                    <span class="sdd-question-num">Q@question.Number</span>
-                                    <div><strong>@question.Text</strong><small>@question.HelpText</small></div>
-                                    <button type="button" class="sdd-btn @(question.Answered ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => ToggleQuestion(question)">@(question.Answered ? "Answered" : "Mark")</button>
+                                 <div class="sdd-question-row @(question.IsRequired && !question.IsAnswered ? "sdd-question-row--required" : string.Empty)">
+                                     <span class="sdd-question-num">Q</span>
+                                     <div><strong>@question.QuestionText</strong><small>@question.HelpText</small><p>@Safe(question.AnswerText, "No answer recorded")</p></div>
+                                     <button type="button" class="sdd-btn @(question.IsAnswered ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => ToggleQuestionAsync(question)">@(question.IsAnswered ? "Answered" : "Mark")</button>
                                 </div>
                             }
                         </section>
@@ -229,9 +274,17 @@ else
                     else if (_activeTab == 4)
                     {
                         <section class="sdd-doc-list">
+                             @foreach (var item in _documentChecklist)
+                             {
+                                 <div class="sdd-doc-row"><i class="bi @(item.IsSatisfied ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i><div><strong>@item.DisplayName</strong><small>@(item.IsRequired ? "Required" : "Optional") - @(item.IsSatisfied ? $"Satisfied by {item.FileName}" : "Missing")</small></div></div>
+                             }
                             @foreach (var doc in _docs)
                             {
-                                <div class="sdd-doc-row"><i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i><div><strong>@doc.FileName</strong><small>@doc.DocType - @doc.Size - @doc.UploadedDate.ToString("MMM d, yyyy")</small></div><button type="button" class="sdd-icon-btn" @onclick="ShowDocumentAction"><i class="bi bi-download" aria-hidden="true"></i></button></div>
+                                <div class="sdd-doc-row"><i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i><div><strong>@doc.FileName</strong><small>@doc.CategoryCode - @FormatBytes(doc.FileSizeBytes) - @doc.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small></div><a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(doc.DocumentId)" title="Download"><i class="bi bi-download" aria-hidden="true"></i></a></div>
+                            }
+                            @if (!_docs.Any())
+                            {
+                                <div class="sdd-empty"><i class="bi bi-file-earmark-plus" aria-hidden="true"></i><strong>No documents attached</strong><span>Upload applications, loss runs, schedules, or carrier correspondence to this submission.</span></div>
                             }
                         </section>
                     }
@@ -253,9 +306,17 @@ else
                     else
                     {
                         <section class="sdd-activity-list">
-                            @foreach (var activity in _activity.OrderByDescending(x => x.When))
+                            @foreach (var task in _tasks)
                             {
-                                <div class="sdd-activity-row"><i class="bi @ActivityIcon(activity.Type)" aria-hidden="true"></i><div><strong>@activity.Action</strong><small>@activity.User - @activity.When.ToString("MMM d, yyyy h:mm tt")</small><p>@activity.Detail</p></div></div>
+                                <div class="sdd-activity-row"><i class="bi bi-list-check" aria-hidden="true"></i><div><strong>@task.Title</strong><small>@task.StatusCode - @Safe(task.AssignedToUserName, "Unassigned") - @(task.DueDate?.ToString("MMM d, yyyy") ?? "No due date")</small><p>@task.Description</p></div></div>
+                            }
+                            @foreach (var activity in _activity)
+                            {
+                                <div class="sdd-activity-row"><i class="bi @ActivityIcon(activity.ActionCode)" aria-hidden="true"></i><div><strong>@activity.Title</strong><small>@Safe(activity.CreatedByName, "System") - @activity.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small><p>@activity.Notes</p></div></div>
+                            }
+                            @if (!_tasks.Any() && !_activity.Any())
+                            {
+                                <div class="sdd-empty"><i class="bi bi-activity" aria-hidden="true"></i><strong>No activity yet</strong><span>Add a note or create a follow-up task to start the submission timeline.</span></div>
                             }
                         </section>
                     }
@@ -291,6 +352,8 @@ else
                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit Market</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i> Request Quote</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i> Create Policy</button>
+                             <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("proposal-delivery")'><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Delivery</button>
+                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("task")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Task</button>
                         <button type="button" class="sdd-btn sdd-btn--danger" @onclick='() => OpenActionDialog("decline")'><i class="bi bi-x-circle" aria-hidden="true"></i> Decline</button>
                     </div>
                 </section>
@@ -342,6 +405,127 @@ else
                             <label class="sdd-field">
                                 <span>Priority</span>
                                 <InputText class="form-control" @bind-Value="_actionForm.Priority" />
+                            </label>
+                        }
+                        @if (_actionMode is "assign" or "task")
+                        {
+                            <label class="sdd-field">
+                                <span>Owner</span>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.AssignedToUserId">
+                                    <option value="">Unassigned</option>
+                                    @foreach (var user in _users)
+                                    {
+                                        <option value="@user.UserId">@Safe(user.FullName, user.UserName)</option>
+                                    }
+                                </InputSelect>
+                            </label>
+                        }
+                        @if (_actionMode == "task")
+                        {
+                             <label class="sdd-field">
+                                 <span>Task Type</span>
+                                 <InputSelect class="form-select" @bind-Value="_actionForm.TaskTypeCode">
+                                     @foreach (var template in _taskTemplates)
+                                     {
+                                         <option value="@template.TaskTypeCode">@template.DisplayName</option>
+                                     }
+                                 </InputSelect>
+                             </label>
+                            <label class="sdd-field sdd-field--full">
+                                <span>Task Title <em>*</em></span>
+                                <InputText class="form-control" @bind-Value="_actionForm.TaskTitle" />
+                            </label>
+                            <label class="sdd-field">
+                                <span>Due Date</span>
+                                <InputDate class="form-control" @bind-Value="_actionForm.TaskDueDate" />
+                            </label>
+                            <label class="sdd-field">
+                                <span>Priority</span>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Priority">
+                                    <option value="Low">Low</option>
+                                    <option value="Medium">Medium</option>
+                                    <option value="High">High</option>
+                                    <option value="Urgent">Urgent</option>
+                                </InputSelect>
+                            </label>
+                        }
+                         @if (_actionMode == "market-package")
+                         {
+                             <label class="sdd-field">
+                                 <span>Market Status</span>
+                                 <InputSelect class="form-select" @bind-Value="_actionForm.MarketStatus">
+                                     @foreach (var status in _marketStatuses)
+                                     {
+                                         <option value="@status">@status</option>
+                                     }
+                                 </InputSelect>
+                             </label>
+                             <label class="sdd-field">
+                                 <span>Reason Code</span>
+                                 <InputText class="form-control" @bind-Value="_actionForm.ReasonCode" />
+                             </label>
+                             <label class="sdd-field">
+                                 <span>Next Action Date</span>
+                                 <InputDate class="form-control" @bind-Value="_actionForm.NextActionDateUtc" />
+                             </label>
+                         }
+                         @if (_actionMode == "quote-review")
+                         {
+                             <label class="sdd-field">
+                                 <span>Quote Status</span>
+                                 <InputSelect class="form-select" @bind-Value="_actionForm.QuoteStatus">
+                                     @foreach (var status in _quoteStatuses)
+                                     {
+                                         <option value="@status">@status</option>
+                                     }
+                                 </InputSelect>
+                             </label>
+                             <label class="sdd-field"><span>Deductible</span><InputNumber class="form-control" @bind-Value="_actionForm.Deductible" /></label>
+                             <label class="sdd-field"><span>Limit</span><InputNumber class="form-control" @bind-Value="_actionForm.Limit" /></label>
+                             <label class="sdd-field"><span>Commission %</span><InputNumber class="form-control" @bind-Value="_actionForm.CommissionPercent" /></label>
+                             <label class="sdd-field"><span>Carrier Rating</span><InputText class="form-control" @bind-Value="_actionForm.CarrierRating" /></label>
+                             <label class="sdd-field"><span>Payment Terms</span><InputText class="form-control" @bind-Value="_actionForm.PaymentTerms" /></label>
+                             <label class="sdd-field"><span>Taxes & Fees</span><InputNumber class="form-control" @bind-Value="_actionForm.TaxesAndFees" /></label>
+                             <label class="sdd-field"><span>Broker Fee</span><InputNumber class="form-control" @bind-Value="_actionForm.BrokerFee" /></label>
+                             <label class="sdd-field"><span>Minimum Earned Premium</span><InputNumber class="form-control" @bind-Value="_actionForm.MinimumEarnedPremium" /></label>
+                             <label class="sdd-field"><span>Expires</span><InputDate class="form-control" @bind-Value="_actionForm.ExpiresDateUtc" /></label>
+                             <label class="sdd-field"><span>TRIA Included</span><InputCheckbox class="form-check-input" @bind-Value="_actionForm.TriaIncluded" /></label>
+                             <label class="sdd-field sdd-field--full"><span>Subjectivities</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Subjectivities" /></label>
+                             <label class="sdd-field sdd-field--full"><span>Exclusions</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Exclusions" /></label>
+                         }
+                         @if (_actionMode == "proposal-delivery")
+                         {
+                             <label class="sdd-field">
+                                 <span>Proposal</span>
+                                 <InputSelect class="form-select" @bind-Value="_actionForm.ProposalId">
+                                     <option value="">Select proposal</option>
+                                     @foreach (var proposal in _proposals)
+                                     {
+                                         <option value="@proposal.ProposalId">@proposal.Title - @proposal.Status</option>
+                                     }
+                                 </InputSelect>
+                             </label>
+                             <label class="sdd-field"><span>Delivery Method</span><InputSelect class="form-select" @bind-Value="_actionForm.DeliveryMethod"><option>Email</option><option>Portal</option><option>Download</option></InputSelect></label>
+                             <label class="sdd-field"><span>Recipient</span><InputText class="form-control" @bind-Value="_actionForm.Recipient" /></label>
+                             <label class="sdd-field"><span>Client Decision</span><InputSelect class="form-select" @bind-Value="_actionForm.ClientDecision"><option>Pending</option><option>Accepted</option><option>Rejected</option><option>Needs revision</option></InputSelect></label>
+                         }
+                        @if (_actionMode == "document")
+                        {
+                            <label class="sdd-field">
+                                <span>Category</span>
+                                <InputText class="form-control" @bind-Value="_actionForm.DocumentCategoryCode" />
+                            </label>
+                            <label class="sdd-field">
+                                <span>Document Type</span>
+                                <InputText class="form-control" @bind-Value="_actionForm.DocumentTypeCode" />
+                            </label>
+                            <label class="sdd-field sdd-field--full">
+                                <span>File <em>*</em></span>
+                                <InputFile OnChange="OnDocumentSelected" />
+                                @if (_selectedDocumentFile is not null)
+                                {
+                                    <small>@_selectedDocumentFile.Name - @FormatBytes(_selectedDocumentFile.Size)</small>
+                                }
                             </label>
                         }
                         <label class="sdd-field sdd-field--full">
@@ -413,17 +597,31 @@ else
     string _confirmMessage = string.Empty;
     Guid? _selectedQuoteId;
     SubmissionMarketDto? _pendingRemoveMarket;
+    CurrentUserContextModel? _currentUser;
+    IBrowserFile? _selectedDocumentFile;
 
     SubmissionDto? _submission;
     readonly List<SubmissionMarketDto> _markets = [];
     readonly List<SubmissionMarketDto> _suggestedMarkets = [];
     readonly List<QuoteComparisonDto> _quotes = [];
-    readonly List<DocItem> _docs = [];
+     readonly List<SubmissionLineDto> _lines = [];
+     readonly List<SubmissionIntakeQuestionDto> _intakeQuestions = [];
+     readonly List<SubmissionDocumentChecklistDto> _documentChecklist = [];
+     readonly List<SubmissionTaskTemplateDto> _taskTemplates = [];
+     readonly List<ProposalWorkflowDto> _proposals = [];
+    readonly List<DocumentDto> _docs = [];
     readonly List<UwQuestion> _questions = [];
-    readonly List<ActivityItem> _activity = [];
+    readonly List<SubmissionActivityDto> _activity = [];
+    readonly List<SubmissionTaskDto> _tasks = [];
+    readonly List<UserDto> _users = [];
     readonly List<CommItem> _communications = [];
     readonly List<ToastMessage> _toasts = [];
     readonly ActionForm _actionForm = new();
+     SubmissionReadinessDto? _readiness;
+     SubmissionMarketDto? _selectedMarket;
+     QuoteComparisonDto? _selectedQuote;
+     readonly string[] _marketStatuses = ["Draft", "Selected", "Sent", "In Review", "Blocked", "Declined", "Quoted", "Bound", "Not Selected"];
+     readonly string[] _quoteStatuses = ["Requested", "Received", "Presented", "Accepted", "Rejected", "Expired", "Bound", "Withdrawn"];
 
     readonly TabDef[] _tabs =
     [
@@ -442,7 +640,7 @@ else
     string PremiumDisplay => _submission?.TargetPremium is > 0 ? _submission.TargetPremium.Value.ToString("C0") : "Not set";
     int DaysToEffective => _submission is null ? 0 : (int)Math.Ceiling((_submission.EffectiveDate.Date - DateTime.Today).TotalDays);
     decimal LowestQuotePremium => _quotes.Any() ? _quotes.Min(q => q.AnnualPremium) : 0;
-    int ReadinessPercent => _questions.Count == 0 ? 100 : (int)Math.Round((double)_questions.Count(q => q.Answered) / _questions.Count * 100);
+    int ReadinessPercent => _readiness is null || _readiness.RequiredQuestionCount + _readiness.RequiredDocumentCount == 0 ? 100 : (int)Math.Round((double)(_readiness.AnsweredRequiredQuestionCount + _readiness.SatisfiedRequiredDocumentCount) / (_readiness.RequiredQuestionCount + _readiness.RequiredDocumentCount) * 100);
     int ImportanceScore => CalculateImportanceScore();
     string ImportanceLabel => ImportanceScore >= 85 ? "Critical" : ImportanceScore >= 70 ? "High" : ImportanceScore >= 50 ? "Medium" : "Standard";
     IEnumerable<SubmissionMarketDto> VisibleMarkets => _activeKpi == "markets" ? _markets : _markets;
@@ -484,18 +682,47 @@ else
         _loadError = null;
         try
         {
+            _currentUser ??= await CurrentUser.RequireAsync();
             _submission = await Api.GetSubmissionByIdAsync(SubmissionId);
             if (_submission is null)
             {
                 return;
             }
 
+            await LoadUsersAsync(_submission.TenantId);
+
             _markets.Clear();
             _markets.AddRange(await Api.GetSubmissionMarketsAsync(SubmissionId) ?? []);
 
             _quotes.Clear();
             _quotes.AddRange(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? []);
-            _selectedQuoteId = _quotes.OrderBy(q => q.AnnualPremium).FirstOrDefault()?.QuoteId;
+            _selectedQuoteId = _quotes.FirstOrDefault(q => q.IsSelected)?.QuoteId ?? _quotes.OrderByDescending(q => q.RecommendationScore).ThenBy(q => q.AnnualPremium).FirstOrDefault()?.QuoteId;
+
+            _lines.Clear();
+            _lines.AddRange(await Api.GetSubmissionLinesAsync(SubmissionId) ?? []);
+
+            _intakeQuestions.Clear();
+            _intakeQuestions.AddRange(await Api.GetSubmissionIntakeAsync(SubmissionId) ?? []);
+
+            _documentChecklist.Clear();
+            _documentChecklist.AddRange(await Api.GetSubmissionDocumentChecklistAsync(SubmissionId, _submission.TenantId) ?? []);
+
+            _readiness = await Api.GetSubmissionReadinessAsync(SubmissionId, _submission.TenantId);
+
+            _taskTemplates.Clear();
+            _taskTemplates.AddRange(await Api.GetSubmissionTaskTemplatesAsync(_submission.TenantId) ?? []);
+
+            _proposals.Clear();
+            _proposals.AddRange(await Api.GetSubmissionProposalsAsync(SubmissionId) ?? []);
+
+            _docs.Clear();
+            _docs.AddRange(await Api.GetSubmissionDocumentsAsync(SubmissionId, _submission.TenantId) ?? []);
+
+            _activity.Clear();
+            _activity.AddRange(await Api.GetSubmissionActivitiesAsync(SubmissionId) ?? []);
+
+            _tasks.Clear();
+            _tasks.AddRange(await Api.GetSubmissionTasksAsync(SubmissionId, _submission.TenantId) ?? []);
 
             BuildDerivedDashboardData();
         }
@@ -514,14 +741,17 @@ else
     void BuildDerivedDashboardData()
     {
         if (_submission is null) return;
-        _docs.Clear();
-        _docs.AddRange(BuildDocumentRows(_submission.LineOfBusiness));
         _questions.Clear();
-        _questions.AddRange(BuildQuestionRows(_submission.LineOfBusiness));
-        _activity.Clear();
-        _activity.AddRange(BuildActivityRows(_submission));
+        _questions.AddRange(_intakeQuestions.Select((q, index) => new UwQuestion(index + 1, q.QuestionText, q.IsRequired, q.IsAnswered, q.HelpText)));
         _communications.Clear();
         _communications.AddRange(BuildCommunicationRows(_submission));
+    }
+
+    async Task LoadUsersAsync(Guid tenantId)
+    {
+        if (_users.Count > 0) return;
+        var users = await Api.SearchUsersAsync(tenantId, pageSize: 100);
+        _users.AddRange(users?.Items ?? []);
     }
 
     async Task LoadSuggestionsAsync()
@@ -576,6 +806,12 @@ else
             "decline" => "Decline Submission",
             "copy" => "Copy Submission",
             "note" => "Add Note",
+            "assign" => "Assign Owner",
+            "task" => "Create Follow-Up Task",
+            "document" => "Upload Document",
+            "market-package" => "Update Market Package",
+            "quote-review" => "Review Quote Terms",
+            "proposal-delivery" => "Proposal Delivery / Decision",
             _ => "Submission Action"
         };
         _actionIcon = mode switch
@@ -587,11 +823,52 @@ else
             "decline" => "bi-x-circle",
             "copy" => "bi-copy",
             "note" => "bi-sticky",
+            "assign" => "bi-person-check",
+            "task" => "bi-list-check",
+            "document" => "bi-upload",
+            "market-package" => "bi-clipboard-data",
+            "quote-review" => "bi-pencil-square",
+            "proposal-delivery" => "bi-envelope-check",
             _ => "bi-lightning-charge"
         };
-        _actionButtonText = mode == "decline" ? "Decline" : "Continue";
+        _actionButtonText = mode switch { "decline" => "Decline", "assign" => "Assign", "task" => "Create Task", "document" => "Upload", "note" => "Add Note", "market-package" => "Save Package", "quote-review" => "Save Quote", "proposal-delivery" => "Save Proposal", _ => "Continue" };
         _actionForm.Reset(_submission);
+        if (_taskTemplates.Count > 0)
+        {
+            _actionForm.TaskTypeCode = _taskTemplates[0].TaskTypeCode;
+        }
+        _selectedDocumentFile = null;
         _showActionDialog = true;
+    }
+
+    void OpenMarketPackageDialog(SubmissionMarketDto market)
+    {
+        _selectedMarket = market;
+        OpenActionDialog("market-package");
+        _actionForm.MarketStatus = string.IsNullOrWhiteSpace(market.Status) ? "Selected" : market.Status;
+        _actionForm.Notes = market.DeclineReason ?? string.Empty;
+    }
+
+    void OpenQuoteReviewDialog(QuoteComparisonDto quote)
+    {
+        _selectedQuote = quote;
+        OpenActionDialog("quote-review");
+        _actionForm.CarrierId = quote.CarrierId;
+        _actionForm.AnnualPremium = quote.AnnualPremium;
+        _actionForm.Deductible = quote.Deductible;
+        _actionForm.Limit = quote.Limit;
+        _actionForm.CommissionPercent = quote.CommissionPercent;
+        _actionForm.Subjectivities = quote.Subjectivities;
+        _actionForm.Exclusions = quote.Exclusions;
+        _actionForm.CarrierRating = quote.CarrierRating;
+        _actionForm.PaymentTerms = quote.PaymentTerms;
+        _actionForm.MinimumEarnedPremium = quote.MinimumEarnedPremium;
+        _actionForm.TaxesAndFees = quote.TaxesAndFees;
+        _actionForm.BrokerFee = quote.BrokerFee;
+        _actionForm.TriaIncluded = quote.TriaIncluded ?? false;
+        _actionForm.ExpiresDateUtc = quote.ExpiresDateUtc;
+        _actionForm.QuoteStatus = quote.Status;
+        _actionForm.Notes = quote.CoverageNotes ?? string.Empty;
     }
 
     void RequestQuoteForMarket(SubmissionMarketDto market)
@@ -617,6 +894,13 @@ else
             "proposal" => "Generate a proposal from the available quote options?",
             "decline" => "Decline this submission? This updates the submission status and market rows.",
             "copy" => "Create a copied submission for remarketing or renewal?",
+            "assign" => "Assign this submission to the selected owner?",
+            "task" => "Create this follow-up task and link it to the submission?",
+            "document" => "Upload and attach this document to the submission?",
+            "note" => "Persist this note to the submission activity timeline?",
+            "market-package" => "Persist market package status, reason, next action date, and sent document set?",
+            "quote-review" => "Persist quote terms, subjectivities, exclusions, commission, rating, and recommendation score?",
+            "proposal-delivery" => "Persist proposal delivery and client decision tracking?",
             _ => "Record this submission action?"
         };
         _showActionDialog = false;
@@ -670,15 +954,50 @@ else
                 Nav.NavigateTo($"/submissions/{result.Id}");
                 return;
             }
+            else if (_actionMode == "assign" && _actionForm.AssignedToUserId.HasValue)
+            {
+                await Api.AssignSubmissionAsync(SubmissionId, new AssignSubmissionRequest(_actionForm.AssignedToUserId.Value));
+                await Api.AddSubmissionNoteAsync(SubmissionId, new AddSubmissionNoteRequest(_submission.TenantId, $"Submission assigned to {ResolveUserName(_actionForm.AssignedToUserId.Value)}.", _currentUser?.UserId));
+                ShowToast("Submission assigned.");
+            }
+            else if (_actionMode == "task")
+            {
+                await Api.CreateSubmissionFollowUpTaskAsync(SubmissionId, new CreateSubmissionFollowUpTaskRequest(_submission.TenantId, _actionForm.TaskTitle, _actionForm.Notes, _actionForm.Priority ?? "Medium", _actionForm.AssignedToUserId, ToDateOnly(_actionForm.TaskDueDate), _currentUser?.UserId));
+                ShowToast("Follow-up task created.");
+            }
+            else if (_actionMode == "document")
+            {
+                await UploadSelectedDocumentAsync(_submission);
+                ShowToast("Document uploaded and attached.");
+            }
+            else if (_actionMode == "note")
+            {
+                await Api.AddSubmissionNoteAsync(SubmissionId, new AddSubmissionNoteRequest(_submission.TenantId, _actionForm.Notes, _currentUser?.UserId));
+                ShowToast("Note added.");
+            }
+            else if (_actionMode == "market-package" && _selectedMarket is not null)
+            {
+                await Api.UpdateSubmissionMarketPackageAsync(_selectedMarket.SubmissionMarketId, new UpdateSubmissionMarketPackageRequest(_submission.TenantId, _selectedMarket.SubmissionMarketId, _actionForm.MarketStatus, _actionForm.ReasonCode, _actionForm.Notes, _actionForm.NextActionDateUtc, _docs.Select(d => d.DocumentId).ToArray(), _currentUser?.UserId));
+                ShowToast("Market package updated.");
+            }
+            else if (_actionMode == "quote-review" && _selectedQuote is not null)
+            {
+                await Api.UpdateSubmissionQuoteAsync(SubmissionId, _selectedQuote.QuoteId, new UpdateSubmissionQuoteRequest(_submission.TenantId, _actionForm.QuoteStatus, _actionForm.AnnualPremium ?? _selectedQuote.AnnualPremium, _actionForm.Deductible, _actionForm.Limit, _actionForm.CommissionPercent, _actionForm.Subjectivities, _actionForm.Exclusions, _actionForm.CarrierRating, _actionForm.PaymentTerms, _actionForm.MinimumEarnedPremium, _actionForm.TaxesAndFees, _actionForm.BrokerFee, _actionForm.TriaIncluded, null, _actionForm.Notes, _actionForm.ExpiresDateUtc ?? DateTime.UtcNow.AddDays(30), _currentUser?.UserId));
+                ShowToast("Quote terms updated.");
+            }
+            else if (_actionMode == "proposal-delivery" && _actionForm.ProposalId.HasValue)
+            {
+                await Api.DeliverProposalAsync(_actionForm.ProposalId.Value, new ProposalDeliveryRequest(_submission.TenantId, _actionForm.DeliveryMethod, _actionForm.Recipient, _currentUser?.UserId));
+                if (!string.Equals(_actionForm.ClientDecision, "Pending", StringComparison.OrdinalIgnoreCase))
+                {
+                    await Api.RecordProposalDecisionAsync(_actionForm.ProposalId.Value, new ProposalDecisionRequest(_submission.TenantId, _actionForm.ClientDecision, _actionForm.Notes, _currentUser?.UserId));
+                }
+                ShowToast("Proposal workflow updated.");
+            }
             else if (_actionMode == "remove-market" && _pendingRemoveMarket is not null)
             {
                 await Api.RemoveSubmissionMarketAsync(_pendingRemoveMarket.SubmissionMarketId);
                 ShowToast("Market removed.");
-            }
-            else
-            {
-                _activity.Insert(0, new ActivityItem("Tenant Admin", _actionTitle, _actionForm.Notes, "note", DateTime.Now));
-                ShowToast("Action recorded.");
             }
 
             await LoadAsync();
@@ -725,10 +1044,20 @@ else
         }
     }
 
-    void SelectQuote(QuoteComparisonDto quote)
+    async Task SelectQuoteAsync(QuoteComparisonDto quote)
     {
+        if (_submission is null) return;
         _selectedQuoteId = quote.QuoteId;
-        ShowToast($"Selected quote {quote.QuoteNumber}.");
+        try
+        {
+            await Api.SelectSubmissionQuoteAsync(SubmissionId, new SelectSubmissionQuoteRequest(_submission.TenantId, quote.QuoteId, true, $"Selected from quote comparison with score {quote.RecommendationScore}.", _currentUser?.UserId));
+            await LoadAsync();
+            ShowToast($"Selected quote {quote.QuoteNumber}.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Quote selection failed: {ex.Message}", true);
+        }
     }
 
     void ConfirmRemoveMarket(SubmissionMarketDto market)
@@ -742,16 +1071,60 @@ else
         _showConfirmDialog = true;
     }
 
-    void ToggleQuestion(UwQuestion question) => question.Answered = !question.Answered;
-    void MarkAllAnswered()
+    async Task ToggleQuestionAsync(SubmissionIntakeQuestionDto question)
     {
-        foreach (var question in _questions) question.Answered = true;
-        ShowToast("Underwriting readiness marked complete.");
+        if (_submission is null) return;
+        try
+        {
+            var answered = !question.IsAnswered;
+            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, answered ? Safe(question.AnswerText, "Completed") : null, answered, _currentUser?.UserId));
+            await LoadAsync();
+            ShowToast("Readiness answer saved.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Readiness update failed: {ex.Message}", true);
+        }
+    }
+
+    async Task MarkAllAnswered()
+    {
+        if (_submission is null) return;
+        foreach (var question in _intakeQuestions.Where(q => !q.IsAnswered))
+        {
+            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, Safe(question.AnswerText, "Completed"), true, _currentUser?.UserId));
+        }
+        await LoadAsync();
+        ShowToast("Underwriting readiness persisted as complete.");
     }
 
     void NotifyActionValidation() => ShowToast("Complete required action fields.", true);
 
-    void ShowDocumentAction() => ShowToast("Document action queued.");
+    void OnDocumentSelected(InputFileChangeEventArgs e) => _selectedDocumentFile = e.File;
+
+    async Task UploadSelectedDocumentAsync(SubmissionDto submission)
+    {
+        if (_selectedDocumentFile is null)
+            throw new InvalidOperationException("Select a document file to upload.");
+
+        await using var stream = _selectedDocumentFile.OpenReadStream(104_857_600);
+        await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+        {
+            TenantId = submission.TenantId,
+            DocumentTypeCode = string.IsNullOrWhiteSpace(_actionForm.DocumentTypeCode) ? "Submission" : _actionForm.DocumentTypeCode,
+            CategoryCode = string.IsNullOrWhiteSpace(_actionForm.DocumentCategoryCode) ? "Submission" : _actionForm.DocumentCategoryCode,
+            FileName = _selectedDocumentFile.Name,
+            OriginalFileName = _selectedDocumentFile.Name,
+            EntityName = "Submission",
+            EntityId = SubmissionId,
+            Description = _actionForm.Notes,
+            UploadedByName = ResolveUserName(_currentUser?.UserId),
+            CreatedByUserId = _currentUser?.UserId,
+            Content = stream
+        });
+
+        await Api.AddSubmissionNoteAsync(SubmissionId, new AddSubmissionNoteRequest(submission.TenantId, $"Document attached: {_selectedDocumentFile.Name}.", _currentUser?.UserId));
+    }
 
     int CalculateImportanceScore()
     {
@@ -800,31 +1173,34 @@ else
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string MoneyOrDash(decimal? value) => value.HasValue ? value.Value.ToString("C0") : "-";
+    static string PercentOrDash(decimal? value) => value.HasValue ? $"{value.Value:N2}%" : "-";
+    static DateOnly? ToDateOnly(DateTime? value) => value.HasValue ? DateOnly.FromDateTime(value.Value) : null;
+    static string FormatBytes(long? bytes)
+    {
+        if (!bytes.HasValue) return "Unknown size";
+        if (bytes.Value >= 1_048_576) return $"{bytes.Value / 1_048_576d:N1} MB";
+        if (bytes.Value >= 1024) return $"{bytes.Value / 1024d:N0} KB";
+        return $"{bytes.Value:N0} B";
+    }
+
+    string ResolveUserName(Guid? userId)
+    {
+        if (!userId.HasValue) return "System";
+        var user = _users.FirstOrDefault(u => u.UserId == userId.Value);
+        return user is null ? "System" : Safe(user.FullName, user.UserName);
+    }
+
     static string StatusClass(string status) => $"sdd-status--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string MarketStatusClass(string status) => $"sdd-market-status--{status.ToLowerInvariant().Replace(" ", "-")}";
-    static string ActivityIcon(string type) => type switch { "submit" => "bi-send", "quote" => "bi-journal-text", "decline" => "bi-x-circle", "note" => "bi-sticky", "email" => "bi-envelope", _ => "bi-dot" };
+    static string ActivityIcon(string type) => type switch { "SubmitToMarket" => "bi-send", "RequestQuote" => "bi-journal-text", "Decline" => "bi-x-circle", "Note" => "bi-sticky", "FollowUpTask" => "bi-list-check", "DocumentAttached" => "bi-file-earmark", "Assign" => "bi-person-check", _ => "bi-dot" };
     static string CommIcon(string type) => type switch { "Email" => "bi-envelope", "Call" => "bi-telephone", "Note" => "bi-sticky", "SMS" => "bi-chat-text", _ => "bi-chat" };
     static string DocIcon(string name) => System.IO.Path.GetExtension(name).ToLowerInvariant() switch { ".pdf" => "bi-file-earmark-pdf", ".doc" or ".docx" => "bi-file-earmark-word", ".xls" or ".xlsx" => "bi-file-earmark-spreadsheet", _ => "bi-file-earmark" };
-
-    static List<DocItem> BuildDocumentRows(string lineOfBusiness) =>
-    [
-        new("submission-application.pdf", "Application", "Tenant Admin", DateTime.Today.AddDays(-5), "842 KB"),
-        new("loss-runs-5-year.pdf", "Loss Runs", "Tenant Admin", DateTime.Today.AddDays(-4), "318 KB"),
-        new($"{lineOfBusiness.ToLowerInvariant().Replace(' ', '-')}-schedule.xlsx", "Schedule", "Tenant Admin", DateTime.Today.AddDays(-3), "96 KB")
-    ];
 
     static List<UwQuestion> BuildQuestionRows(string lineOfBusiness) =>
     [
         new(1, $"Confirm all {lineOfBusiness} operations are represented in the application.", true, true, "Carrier may decline if operations are incomplete."),
         new(2, "Describe material changes since the expiring term.", true, false, "Include new locations, payroll, vehicles, or revenue changes."),
         new(3, "Confirm target premium and requested effective date with the insured.", false, true, "Used for quote comparisons and proposal strategy.")
-    ];
-
-    static List<ActivityItem> BuildActivityRows(SubmissionDto dto) =>
-    [
-        new(dto.AssignedToUserName ?? "Tenant Admin", "Created submission", $"Submission {dto.SubmissionNumber} created for {dto.LineOfBusiness}.", "system", dto.CreatedDateUtc.ToLocalTime()),
-        new("Tenant Admin", "Prepared market package", "Application, schedules, and loss runs staged for carrier underwriting.", "submit", DateTime.Now.AddDays(-2)),
-        new("Underwriting", "Readiness review", "Missing questions and quote workflow reviewed by importance score.", "note", DateTime.Now.AddDays(-1))
     ];
 
     static List<CommItem> BuildCommunicationRows(SubmissionDto dto) =>
@@ -846,6 +1222,58 @@ else
         [StringLength(50)]
         public string? Priority { get; set; }
 
+        public Guid? AssignedToUserId { get; set; }
+
+        public Guid? ProposalId { get; set; }
+
+        public string TaskTitle { get; set; } = string.Empty;
+
+        public string TaskTypeCode { get; set; } = "MissingInformation";
+
+        public DateTime? TaskDueDate { get; set; }
+
+        public string MarketStatus { get; set; } = "Selected";
+
+        public string QuoteStatus { get; set; } = "Received";
+
+        public string? ReasonCode { get; set; }
+
+        public DateTime? NextActionDateUtc { get; set; }
+
+        public decimal? Deductible { get; set; }
+
+        public decimal? Limit { get; set; }
+
+        public decimal? CommissionPercent { get; set; }
+
+        public string? Subjectivities { get; set; }
+
+        public string? Exclusions { get; set; }
+
+        public string? CarrierRating { get; set; }
+
+        public string? PaymentTerms { get; set; }
+
+        public decimal? MinimumEarnedPremium { get; set; }
+
+        public decimal? TaxesAndFees { get; set; }
+
+        public decimal? BrokerFee { get; set; }
+
+        public bool TriaIncluded { get; set; }
+
+        public DateTime? ExpiresDateUtc { get; set; }
+
+        public string DeliveryMethod { get; set; } = "Email";
+
+        public string Recipient { get; set; } = string.Empty;
+
+        public string ClientDecision { get; set; } = "Pending";
+
+        public string DocumentTypeCode { get; set; } = "Submission";
+
+        public string DocumentCategoryCode { get; set; } = "Submission";
+
         [Required, StringLength(1000)]
         public string Notes { get; set; } = string.Empty;
 
@@ -855,17 +1283,41 @@ else
             AnnualPremium = submission?.TargetPremium;
             EffectiveDate = submission?.EffectiveDate.AddYears(1);
             Priority = submission?.Priority;
+            AssignedToUserId = submission?.AssignedToUserId;
+            ProposalId = null;
+            TaskTitle = submission is null ? string.Empty : $"Follow up on {submission.SubmissionNumber}";
+            TaskTypeCode = "MissingInformation";
+            TaskDueDate = DateTime.Today.AddDays(2);
+            MarketStatus = "Selected";
+            QuoteStatus = "Received";
+            ReasonCode = null;
+            NextActionDateUtc = null;
+            Deductible = null;
+            Limit = null;
+            CommissionPercent = null;
+            Subjectivities = null;
+            Exclusions = null;
+            CarrierRating = null;
+            PaymentTerms = null;
+            MinimumEarnedPremium = null;
+            TaxesAndFees = null;
+            BrokerFee = null;
+            TriaIncluded = false;
+            ExpiresDateUtc = DateTime.Today.AddDays(30);
+            DeliveryMethod = "Email";
+            Recipient = string.Empty;
+            ClientDecision = "Pending";
+            DocumentTypeCode = "Submission";
+            DocumentCategoryCode = "Submission";
             Notes = string.Empty;
         }
     }
 
     sealed record TabDef(int Index, string Key, string Label, string Kicker, string Title, string Description, string Icon);
-    sealed record DocItem(string FileName, string DocType, string UploadedBy, DateTime UploadedDate, string Size);
     sealed record UwQuestion(int Number, string Text, bool Required, bool Answered, string HelpText)
     {
         public bool Answered { get; set; } = Answered;
     }
-    sealed record ActivityItem(string User, string Action, string Detail, string Type, DateTime When);
     sealed record CommItem(string Type, string Subject, string From, string To, string Body, DateTime When);
     sealed record IntelItem(string Icon, string Title, string Description);
     sealed record ToastMessage(Guid Id, string Message, string CssClass);

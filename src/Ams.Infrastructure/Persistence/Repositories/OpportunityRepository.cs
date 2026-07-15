@@ -183,6 +183,7 @@ FROM CRM.Quote
 WHERE OpportunityId = @Id AND IsDeleted = 0
 ORDER BY CreatedDateUtc DESC;
 
+DECLARE @PolicySql NVARCHAR(MAX) = N'
 SELECT p.PolicyId,
        p.SubmissionId,
        p.QuoteId,
@@ -190,11 +191,11 @@ SELECT p.PolicyId,
        p.AccountId,
        COALESCE(a.AccountName, s.SubmissionNumber, p.PolicyNumber) AS AccountName,
        p.CarrierId,
-       COALESCE(c.CarrierName, N'') AS CarrierName,
+       COALESCE(c.CarrierName, N'''') AS CarrierName,
        p.PolicyNumber,
-       CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
-       COALESCE(NULLIF(s.LineOfBusiness, N''), ol.LineOfBusiness, N'') AS LineOfBusiness,
-       COALESCE(NULLIF(s.Priority, N''), ol.Priority, N'') AS Priority,
+       CASE WHEN p.Status = N''Bound'' THEN N''Active'' ELSE p.Status END AS Status,
+       COALESCE(NULLIF(s.LineOfBusiness, N''''), ol.LineOfBusiness, N'''') AS LineOfBusiness,
+       COALESCE(NULLIF(s.Priority, N''''), ol.Priority, N'''') AS Priority,
        p.AnnualPremium,
        p.AnnualPremium AS WrittenPremium,
        p.EffectiveDate,
@@ -202,32 +203,39 @@ SELECT p.PolicyId,
        p.BoundDateUtc,
        s.AssignedToUserId,
        COALESCE(u.FullName, u.DisplayName, u.UserName, u.Email) AS AssignedToUserName,
-       COALESCE(u.FullName, u.DisplayName, u.UserName, u.Email, N'') AS ProducerName,
-       COALESCE(u.FullName, u.DisplayName, u.UserName, u.Email, N'') AS CsrName,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, u.Email, N'''') AS ProducerName,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, u.Email, N'''') AS CsrName,
        (SELECT COUNT(1) FROM Compliance.PolicyDocument d WHERE d.TenantId = p.TenantId AND d.IsDeleted = 0 AND d.PolicyCode = p.PolicyNumber) AS DocumentCount,
        (SELECT COUNT(1) FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0) AS ActivityCount,
        (SELECT COUNT(1) FROM Policy.PolicyEndorsement e WHERE e.TenantId = p.TenantId AND e.PolicyNumber = p.PolicyNumber AND e.IsDeleted = 0) AS EndorsementCount,
-       COALESCE(NULLIF(lastRenewal.Notes, N''), CASE
-           WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N'Pre-Renewal'
-           WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
-           ELSE N'Not Started'
+       COALESCE(NULLIF(lastRenewal.Notes, N''''), CASE
+           WHEN DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) BETWEEN 0 AND 90 THEN N''Pre-Renewal''
+           WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N''Expired''
+           ELSE N''Not Started''
        END) AS RenewalStage,
-       COALESCE(lastAction.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N''))) AS LastAction,
+       COALESCE(lastAction.Notes, CONCAT(N''Policy bound '', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N'' from submission '', COALESCE(s.SubmissionNumber, N''''))) AS LastAction,
        DATEDIFF(day, SYSUTCDATETIME(), p.ExpirationDate) AS DaysToExpiration,
-       CAST(CASE WHEN p.IsDeleted = 0 AND p.ExpirationDate >= SYSUTCDATETIME() AND p.Status IN (N'Bound', N'Active', N'In Force') THEN 1 ELSE 0 END AS bit) AS IsActive
+       CAST(CASE WHEN p.IsDeleted = 0 AND p.ExpirationDate >= SYSUTCDATETIME() AND p.Status IN (N''Bound'', N''Active'', N''In Force'') THEN 1 ELSE 0 END AS bit) AS IsActive
 FROM Submissions.BoundPolicy p
-JOIN CRM.Opportunity o ON o.AccountId = p.AccountId AND o.OpportunityId = @Id AND o.TenantId = p.TenantId AND o.IsDeleted = 0
+JOIN CRM.Opportunity o ON o.OpportunityId = @PolicyOpportunityId AND o.TenantId = p.TenantId AND o.IsDeleted = 0
 LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
 LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
 LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
 LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
-OUTER APPLY (SELECT TOP 1 LineOfBusiness, Priority FROM CRM.OpportunityLine line WHERE line.OpportunityId = @Id AND line.IsDeleted = 0 AND (s.LineOfBusiness IS NULL OR s.LineOfBusiness = N'' OR line.LineOfBusiness = s.LineOfBusiness) ORDER BY line.CreatedDateUtc DESC) ol
+OUTER APPLY (SELECT TOP 1 LineOfBusiness, Priority FROM CRM.OpportunityLine line WHERE line.OpportunityId = @PolicyOpportunityId AND line.IsDeleted = 0 AND (s.LineOfBusiness IS NULL OR s.LineOfBusiness = N'''' OR line.LineOfBusiness = s.LineOfBusiness) ORDER BY line.CreatedDateUtc DESC) ol
 OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 ORDER BY al.CreatedDateUtc DESC) lastAction
-OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N'RenewalStage' ORDER BY al.CreatedDateUtc DESC) lastRenewal
+OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N''RenewalStage'' ORDER BY al.CreatedDateUtc DESC) lastRenewal
+' + CASE WHEN OBJECT_ID(N'CRM.OpportunityBoundPolicy', N'U') IS NOT NULL THEN N'
+LEFT JOIN CRM.OpportunityBoundPolicy link ON link.PolicyId = p.PolicyId AND link.TenantId = p.TenantId AND link.OpportunityId = o.OpportunityId AND link.IsDeleted = 0
+' ELSE N'' END + N'
 WHERE p.IsDeleted = 0
-ORDER BY CASE WHEN p.ExpirationDate >= SYSUTCDATETIME() AND p.Status IN (N'Bound', N'Active', N'In Force') THEN 0 ELSE 1 END,
+  AND p.AccountId = o.AccountId
+  AND (s.OpportunityId = o.OpportunityId' + CASE WHEN OBJECT_ID(N'CRM.OpportunityBoundPolicy', N'U') IS NOT NULL THEN N' OR link.OpportunityBoundPolicyId IS NOT NULL' ELSE N'' END + N')
+ORDER BY CASE WHEN p.ExpirationDate >= SYSUTCDATETIME() AND p.Status IN (N''Bound'', N''Active'', N''In Force'') THEN 0 ELSE 1 END,
          p.ExpirationDate ASC,
-         p.BoundDateUtc DESC;
+         p.BoundDateUtc DESC;';
+
+EXEC sp_executesql @PolicySql, N'@PolicyOpportunityId UNIQUEIDENTIFIER', @PolicyOpportunityId = @Id;
 
 SELECT CompetitorId, TenantId, OpportunityId, Name, Strength, CreatedDateUtc, ModifiedDateUtc
 FROM CRM.OpportunityCompetitor
@@ -324,6 +332,58 @@ WHERE o.TenantId = @TenantId AND o.IsDeleted = 0
         };
     }
 
+    public async Task<PagedResult<OpportunityCompetitorLookupDto>> SearchCompetitorLookupsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+;WITH Competitors AS (
+    SELECT LTRIM(RTRIM(Name)) AS Name,
+           COUNT(DISTINCT OpportunityId) AS OpportunityCount,
+           MAX(COALESCE(ModifiedDateUtc, CreatedDateUtc)) AS LastUsedDateUtc
+    FROM CRM.OpportunityCompetitor
+    WHERE TenantId = @TenantId
+      AND IsDeleted = 0
+      AND NULLIF(LTRIM(RTRIM(Name)), N'') IS NOT NULL
+      AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Name LIKE '%' + @SearchTerm + '%')
+    GROUP BY LTRIM(RTRIM(Name))
+)
+SELECT Name, OpportunityCount, LastUsedDateUtc
+FROM Competitors
+ORDER BY LastUsedDateUtc DESC, Name ASC
+OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+
+SELECT COUNT(*)
+FROM (
+    SELECT LTRIM(RTRIM(Name)) AS Name
+    FROM CRM.OpportunityCompetitor
+    WHERE TenantId = @TenantId
+      AND IsDeleted = 0
+      AND NULLIF(LTRIM(RTRIM(Name)), N'') IS NOT NULL
+      AND (@SearchTerm IS NULL OR @SearchTerm = '' OR Name LIKE '%' + @SearchTerm + '%')
+    GROUP BY LTRIM(RTRIM(Name))
+) c;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(
+            new CommandDefinition(sql, new
+            {
+                TenantId = tenantId,
+                SearchTerm = searchTerm,
+                Offset = (Math.Max(pageNumber, 1) - 1) * Math.Max(pageSize, 1),
+                PageSize = Math.Max(pageSize, 1)
+            }, cancellationToken: cancellationToken));
+
+        var items = (await multi.ReadAsync<OpportunityCompetitorLookupDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+
+        return new PagedResult<OpportunityCompetitorLookupDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageNumber = pageNumber,
+            PageSize = pageSize
+        };
+    }
+
     public async Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -407,19 +467,403 @@ WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;";
         await RecordWorkflowEventAsync(cn, id, null, "Updated", "Opportunity updated", $"Opportunity was updated with stage {request.StageName} and forecast {request.ForecastCategoryCode}.", "Opportunity", id, request.ModifiedByUserId, cancellationToken);
     }
 
-    public async Task UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
+    public async Task<OpportunityStageUpdateResult> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-UPDATE CRM.Opportunity
-SET StageName = @Stage,
-    ForecastCategoryCode = CASE WHEN @Stage IN (N'Closed Won', N'Closed Lost') THEN N'Closed' ELSE ForecastCategoryCode END,
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @ModifiedByUserId
-WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;";
+SET XACT_ABORT ON;
+
+DECLARE @TenantId UNIQUEIDENTIFIER;
+DECLARE @AccountId UNIQUEIDENTIFIER;
+DECLARE @OpportunityNumber NVARCHAR(50);
+DECLARE @OpportunityName NVARCHAR(200);
+DECLARE @EstimatedAmount DECIMAL(18,2);
+DECLARE @CloseDate DATETIME2;
+DECLARE @OwnerUserId UNIQUEIDENTIFIER;
+DECLARE @OpportunityStageId UNIQUEIDENTIFIER;
+
+DECLARE @PolicyId UNIQUEIDENTIFIER = NULL;
+DECLARE @PolicyNumber NVARCHAR(50) = NULL;
+DECLARE @PolicyCreated BIT = 0;
+DECLARE @PolicyAlreadyExists BIT = 0;
+DECLARE @Message NVARCHAR(500) = CONCAT(N'Opportunity marked ', @Stage, N'.');
+
+BEGIN TRY
+    BEGIN TRANSACTION;
+
+    SELECT @TenantId = o.TenantId,
+           @AccountId = o.AccountId,
+           @OpportunityNumber = o.OpportunityNumber,
+           @OpportunityName = o.OpportunityName,
+           @EstimatedAmount = o.EstimatedAmount,
+           @CloseDate = o.CloseDate,
+           @OwnerUserId = o.OwnerUserId
+    FROM CRM.Opportunity o WITH (UPDLOCK, HOLDLOCK)
+    WHERE o.OpportunityId = @OpportunityId AND o.IsDeleted = 0;
+
+    IF @TenantId IS NULL
+        THROW 51001, 'Opportunity was not found.', 1;
+
+    SELECT TOP 1 @OpportunityStageId = OpportunityStageId
+    FROM CRM.OpportunityStage
+    WHERE TenantId = @TenantId
+      AND IsActive = 1
+      AND IsDeleted = 0
+      AND (StageName = @Stage OR StageCode = UPPER(REPLACE(@Stage, N' ', N'_')))
+    ORDER BY SortOrder, StageName;
+
+    UPDATE CRM.Opportunity
+    SET StageName = @Stage,
+        OpportunityStageId = COALESCE(@OpportunityStageId, OpportunityStageId),
+        ForecastCategoryCode = CASE WHEN @Stage IN (N'Closed Won', N'Closed Lost') THEN N'Closed' ELSE ForecastCategoryCode END,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @ModifiedByUserId
+    WHERE OpportunityId = @OpportunityId AND IsDeleted = 0;
+
+    IF @CreateBoundPolicy = 1 AND @Stage = N'Closed Won'
+    BEGIN
+        SELECT TOP 1 @PolicyId = p.PolicyId,
+                     @PolicyNumber = p.PolicyNumber
+        FROM CRM.OpportunityBoundPolicy link WITH (UPDLOCK, HOLDLOCK)
+        INNER JOIN Submissions.BoundPolicy p WITH (UPDLOCK, HOLDLOCK) ON p.PolicyId = link.PolicyId AND p.IsDeleted = 0
+        WHERE link.OpportunityId = @OpportunityId
+          AND link.TenantId = @TenantId
+          AND link.IsDeleted = 0
+        ORDER BY p.BoundDateUtc DESC;
+
+        IF @PolicyId IS NULL
+        BEGIN
+            SELECT TOP 1 @PolicyId = p.PolicyId,
+                         @PolicyNumber = p.PolicyNumber
+            FROM Submissions.BoundPolicy p WITH (UPDLOCK, HOLDLOCK)
+            INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+            WHERE s.OpportunityId = @OpportunityId
+              AND p.TenantId = @TenantId
+              AND p.IsDeleted = 0
+            ORDER BY p.BoundDateUtc DESC;
+
+            IF @PolicyId IS NOT NULL
+            BEGIN
+                INSERT INTO CRM.OpportunityBoundPolicy
+                    (OpportunityBoundPolicyId, TenantId, OpportunityId, OpportunitySubmissionId, SubmissionId, QuoteId, PolicyId, PolicyNumber, BindingStatus, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+                SELECT NEWID(), p.TenantId, @OpportunityId, source.SubmissionId, p.SubmissionId, p.QuoteId, p.PolicyId, p.PolicyNumber, p.Status, p.BoundDateUtc, SYSUTCDATETIME(), @ModifiedByUserId, 0
+                FROM Submissions.BoundPolicy p
+                INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+                OUTER APPLY
+                (
+                    SELECT TOP 1 os.SubmissionId
+                    FROM CRM.OpportunitySubmission os
+                    WHERE os.TenantId = p.TenantId
+                      AND os.OpportunityId = @OpportunityId
+                      AND os.IsDeleted = 0
+                      AND (os.LineOfBusiness = s.LineOfBusiness OR os.SubmissionNumber = s.SubmissionNumber)
+                    ORDER BY CASE WHEN os.Status = N'Bound' THEN 0 ELSE 1 END, os.ModifiedDateUtc DESC, os.CreatedDateUtc DESC
+                ) source
+                WHERE p.PolicyId = @PolicyId
+                  AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityBoundPolicy existing WHERE existing.PolicyId = p.PolicyId AND existing.IsDeleted = 0);
+            END
+        END
+
+        IF @PolicyId IS NOT NULL
+        BEGIN
+            SET @PolicyAlreadyExists = 1;
+            SET @Message = CONCAT(N'Opportunity marked Closed Won. Bound policy ', @PolicyNumber, N' already exists.');
+        END
+        ELSE
+        BEGIN
+            DECLARE @SourceOpportunitySubmissionId UNIQUEIDENTIFIER = NULL;
+            DECLARE @SubmissionId UNIQUEIDENTIFIER = NULL;
+            DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
+            DECLARE @CarrierId UNIQUEIDENTIFIER = NULL;
+            DECLARE @SubmissionNumber NVARCHAR(50) = NULL;
+            DECLARE @LineOfBusiness NVARCHAR(100) = NULL;
+            DECLARE @Priority NVARCHAR(50) = NULL;
+            DECLARE @CarrierName NVARCHAR(200) = NULL;
+            DECLARE @AnnualPremium DECIMAL(18,2) = NULL;
+            DECLARE @EffectiveDate DATETIME2 = NULL;
+            DECLARE @ExpirationDate DATETIME2 = NULL;
+            DECLARE @QuoteNumber NVARCHAR(50) = NULL;
+
+            SELECT TOP 1 @SourceOpportunitySubmissionId = s.SubmissionId,
+                         @SubmissionNumber = NULLIF(LTRIM(RTRIM(s.SubmissionNumber)), N''),
+                         @LineOfBusiness = NULLIF(LTRIM(RTRIM(s.LineOfBusiness)), N''),
+                         @AnnualPremium = NULLIF(s.TargetPremium, 0)
+            FROM CRM.OpportunitySubmission s WITH (UPDLOCK, HOLDLOCK)
+            WHERE s.OpportunityId = @OpportunityId
+              AND s.TenantId = @TenantId
+              AND s.IsDeleted = 0
+            ORDER BY CASE s.Status WHEN N'Quoted' THEN 0 WHEN N'In Review' THEN 1 WHEN N'InReview' THEN 1 WHEN N'Draft' THEN 2 ELSE 3 END,
+                     s.ModifiedDateUtc DESC,
+                     s.CreatedDateUtc DESC;
+
+            SELECT TOP 1 @LineOfBusiness = COALESCE(@LineOfBusiness, NULLIF(LTRIM(RTRIM(line.LineOfBusiness)), N'')),
+                         @Priority = NULLIF(LTRIM(RTRIM(line.Priority)), N''),
+                         @CarrierName = NULLIF(LTRIM(RTRIM(line.Carrier)), N''),
+                         @AnnualPremium = COALESCE(@AnnualPremium, NULLIF(line.EstPremium, 0)),
+                         @EffectiveDate = line.TargetEffectiveDate
+            FROM CRM.OpportunityLine line
+            WHERE line.OpportunityId = @OpportunityId
+              AND line.TenantId = @TenantId
+              AND line.IsDeleted = 0
+              AND (@SourceOpportunitySubmissionId IS NULL OR EXISTS
+                  (
+                      SELECT 1
+                      FROM CRM.OpportunitySubmissionLine sl
+                      WHERE sl.SubmissionId = @SourceOpportunitySubmissionId
+                        AND sl.OpportunityLineId = line.OpportunityLineId
+                        AND sl.IsDeleted = 0
+                  ))
+            ORDER BY line.IsPrimary DESC, line.EstPremium DESC, line.CreatedDateUtc DESC;
+
+            SELECT @AnnualPremium = COALESCE(@AnnualPremium,
+                (SELECT NULLIF(SUM(line.EstPremium), 0)
+                 FROM CRM.OpportunityLine line
+                 WHERE line.OpportunityId = @OpportunityId AND line.TenantId = @TenantId AND line.IsDeleted = 0));
+
+            SET @LineOfBusiness = COALESCE(@LineOfBusiness, N'Package');
+            SET @Priority = COALESCE(@Priority, N'High');
+            SET @AnnualPremium = COALESCE(@AnnualPremium, NULLIF(@EstimatedAmount, 0), 0);
+            SET @EffectiveDate = COALESCE(@EffectiveDate, @CloseDate, DATEADD(day, 30, CAST(SYSUTCDATETIME() AS date)));
+            SET @ExpirationDate = DATEADD(year, 1, @EffectiveDate);
+
+            SELECT TOP 1 @CarrierId = CarrierId
+            FROM Core.Carrier WITH (UPDLOCK, HOLDLOCK)
+            WHERE TenantId = @TenantId
+              AND IsDeleted = 0
+              AND IsActive = 1
+              AND (@CarrierName IS NULL OR CarrierName = @CarrierName OR CarrierCode = @CarrierName)
+            ORDER BY CASE WHEN @CarrierName IS NOT NULL AND (CarrierName = @CarrierName OR CarrierCode = @CarrierName) THEN 0 ELSE 1 END,
+                     IsActive DESC,
+                     CarrierName;
+
+            IF @CarrierId IS NULL
+                THROW 51002, 'A bound policy requires an active carrier. Add a carrier to the selected opportunity line before marking the opportunity won.', 1;
+
+            SELECT TOP 1 @SubmissionId = SubmissionId
+            FROM Submissions.Submission WITH (UPDLOCK, HOLDLOCK)
+            WHERE TenantId = @TenantId
+              AND OpportunityId = @OpportunityId
+              AND IsDeleted = 0
+              AND LineOfBusiness = @LineOfBusiness
+            ORDER BY CASE WHEN Status = N'Bound' THEN 0 WHEN Status = N'Quoted' THEN 1 ELSE 2 END,
+                     CreatedDateUtc DESC;
+
+            IF @SubmissionId IS NULL
+            BEGIN
+                SET @SubmissionId = NEWID();
+                SET @SubmissionNumber = COALESCE(@SubmissionNumber, CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(10)), 5)));
+
+                WHILE EXISTS (SELECT 1 FROM Submissions.Submission WHERE TenantId = @TenantId AND SubmissionNumber = @SubmissionNumber AND IsDeleted = 0)
+                    SET @SubmissionNumber = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(10)), 5));
+
+                INSERT INTO Submissions.Submission
+                (
+                    SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness,
+                    Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium,
+                    MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted
+                )
+                VALUES
+                (
+                    @SubmissionId, @TenantId, @AccountId, @OpportunityId, @SubmissionNumber, @LineOfBusiness,
+                    N'Bound', @Priority, @OwnerUserId, @EffectiveDate, @ExpirationDate, @AnnualPremium,
+                    1, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0
+                );
+            END
+            ELSE
+            BEGIN
+                UPDATE Submissions.Submission
+                SET Status = N'Bound',
+                    TargetPremium = COALESCE(TargetPremium, @AnnualPremium),
+                    EffectiveDate = COALESCE(EffectiveDate, @EffectiveDate),
+                    ExpirationDate = COALESCE(ExpirationDate, @ExpirationDate),
+                    MarketCount = CASE WHEN MarketCount < 1 THEN 1 ELSE MarketCount END,
+                    QuoteCount = CASE WHEN QuoteCount < 1 THEN 1 ELSE QuoteCount END,
+                    ModifiedDateUtc = SYSUTCDATETIME(),
+                    ModifiedByUserId = @ModifiedByUserId
+                WHERE SubmissionId = @SubmissionId;
+            END
+
+            IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND CarrierId = @CarrierId AND IsDeleted = 0)
+            BEGIN
+                INSERT INTO Submissions.SubmissionMarket
+                    (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, IsDeleted)
+                VALUES
+                    (NEWID(), @SubmissionId, @CarrierId, N'Quoted', 100, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+            END
+
+            SET @QuoteNumber = CONCAT(N'QT-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @QuoteId), N'-', N''), 6));
+
+            INSERT INTO Submissions.Quote
+                (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+            VALUES
+                (@QuoteId, @SubmissionId, @CarrierId, @QuoteNumber, N'Accepted', @AnnualPremium, NULL, NULL, CONCAT(N'Accepted quote created when opportunity ', @OpportunityNumber, N' was marked Closed Won.'), SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+
+            INSERT INTO Submissions.SubmissionLine
+                (SubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), line.TenantId, @SubmissionId, @OpportunityId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), SYSUTCDATETIME(), @ModifiedByUserId, 0
+            FROM CRM.OpportunityLine line
+            LEFT JOIN CRM.OpportunitySubmissionLine sl ON sl.SubmissionId = @SourceOpportunitySubmissionId AND sl.OpportunityLineId = line.OpportunityLineId AND sl.IsDeleted = 0
+            WHERE line.TenantId = @TenantId
+              AND line.OpportunityId = @OpportunityId
+              AND line.IsDeleted = 0
+              AND (@SourceOpportunitySubmissionId IS NULL OR sl.OpportunitySubmissionLineId IS NOT NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine sourceLine WHERE sourceLine.SubmissionId = @SourceOpportunitySubmissionId AND sourceLine.IsDeleted = 0))
+              AND NOT EXISTS
+              (
+                  SELECT 1
+                  FROM Submissions.SubmissionLine existing
+                  WHERE existing.SubmissionId = @SubmissionId
+                    AND existing.OpportunityLineId = line.OpportunityLineId
+                    AND existing.IsDeleted = 0
+              );
+
+            INSERT INTO Submissions.QuoteLine
+                (QuoteLineId, TenantId, QuoteId, SubmissionId, OpportunityLineId, LineOfBusiness, QuotedPremium, Status, CreatedDateUtc, IsDeleted)
+            SELECT NEWID(), line.TenantId, @QuoteId, @SubmissionId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), N'Accepted', SYSUTCDATETIME(), 0
+            FROM CRM.OpportunityLine line
+            LEFT JOIN CRM.OpportunitySubmissionLine sl ON sl.SubmissionId = @SourceOpportunitySubmissionId AND sl.OpportunityLineId = line.OpportunityLineId AND sl.IsDeleted = 0
+            WHERE line.TenantId = @TenantId
+              AND line.OpportunityId = @OpportunityId
+              AND line.IsDeleted = 0
+              AND (@SourceOpportunitySubmissionId IS NULL OR sl.OpportunitySubmissionLineId IS NOT NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine sourceLine WHERE sourceLine.SubmissionId = @SourceOpportunitySubmissionId AND sourceLine.IsDeleted = 0));
+
+            SET @PolicyId = NEWID();
+            SET @PolicyNumber = CONCAT(N'POL-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS NVARCHAR(10)), 5));
+
+            INSERT INTO Submissions.BoundPolicy
+                (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+            VALUES
+                (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId, @PolicyNumber, N'Bound', @AnnualPremium, @EffectiveDate, @ExpirationDate, SYSUTCDATETIME(), 0);
+
+            INSERT INTO Submissions.PolicyLine
+                (PolicyLineId, TenantId, PolicyId, SubmissionId, QuoteId, OpportunityLineId, LineOfBusiness, WrittenPremium, Status, CreatedDateUtc, IsDeleted)
+            SELECT NEWID(), line.TenantId, @PolicyId, @SubmissionId, @QuoteId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), N'Bound', SYSUTCDATETIME(), 0
+            FROM CRM.OpportunityLine line
+            LEFT JOIN CRM.OpportunitySubmissionLine sl ON sl.SubmissionId = @SourceOpportunitySubmissionId AND sl.OpportunityLineId = line.OpportunityLineId AND sl.IsDeleted = 0
+            WHERE line.TenantId = @TenantId
+              AND line.OpportunityId = @OpportunityId
+              AND line.IsDeleted = 0
+              AND (@SourceOpportunitySubmissionId IS NULL OR sl.OpportunitySubmissionLineId IS NOT NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine sourceLine WHERE sourceLine.SubmissionId = @SourceOpportunitySubmissionId AND sourceLine.IsDeleted = 0));
+
+            INSERT INTO CRM.OpportunityBoundPolicy
+                (OpportunityBoundPolicyId, TenantId, OpportunityId, OpportunitySubmissionId, SubmissionId, QuoteId, PolicyId, PolicyNumber, BindingStatus, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            VALUES
+                (NEWID(), @TenantId, @OpportunityId, @SourceOpportunitySubmissionId, @SubmissionId, @QuoteId, @PolicyId, @PolicyNumber, N'Bound', SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+            UPDATE Submissions.Submission
+            SET Status = N'Bound',
+                QuoteCount = CASE WHEN QuoteCount < 1 THEN 1 ELSE QuoteCount END,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ModifiedByUserId
+            WHERE SubmissionId = @SubmissionId;
+
+            UPDATE CRM.OpportunitySubmission
+            SET Status = N'Bound',
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ModifiedByUserId
+            WHERE SubmissionId = @SourceOpportunitySubmissionId;
+
+            INSERT INTO Submissions.SubmissionActionLog
+                (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
+            VALUES
+                (NEWID(), @SubmissionId, @TenantId, N'OpportunityWonPolicyBound', CONCAT(N'Bound policy ', @PolicyNumber, N' created when opportunity ', @OpportunityNumber, N' was marked Closed Won.'), SYSUTCDATETIME(), 0);
+
+            SET @PolicyCreated = 1;
+            SET @Message = CONCAT(N'Opportunity marked Closed Won. Bound policy ', @PolicyNumber, N' was created.');
+        END
+    END
+    ELSE IF @CreateBoundPolicy = 1 AND @Stage <> N'Closed Won'
+    BEGIN
+        SET @Message = CONCAT(N'Opportunity moved to ', @Stage, N'. Bound policy creation only runs for Closed Won opportunities.');
+    END
+    ELSE IF @CreateBoundPolicy = 0 AND @Stage = N'Closed Won'
+    BEGIN
+        SET @Message = N'Opportunity marked Closed Won. Policy binding was deferred and a follow-up action was created.';
+    END
+
+    IF OBJECT_ID(N'CRM.OpportunityWorkflowEvent', N'U') IS NOT NULL
+    BEGIN
+        INSERT INTO CRM.OpportunityWorkflowEvent
+        (
+            WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail,
+            RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        VALUES
+        (
+            NEWID(), @TenantId, @OpportunityId, N'Stage', CONCAT(N'Moved to ', @Stage), CONCAT(N'Opportunity stage changed to ', @Stage, N'.'),
+            N'Opportunity', @OpportunityId, SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0
+        );
+
+        IF @PolicyCreated = 1 OR @PolicyAlreadyExists = 1
+        BEGIN
+            UPDATE CRM.OpportunityWorkflowEvent
+            SET IsDeleted = 1,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ModifiedByUserId
+            WHERE TenantId = @TenantId
+              AND OpportunityId = @OpportunityId
+              AND EventType = N'PolicyBindingRequired'
+              AND IsDeleted = 0;
+
+            INSERT INTO CRM.OpportunityWorkflowEvent
+            (
+                WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail,
+                RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted
+            )
+            VALUES
+            (
+                NEWID(), @TenantId, @OpportunityId, N'PolicyBound', CASE WHEN @PolicyCreated = 1 THEN N'Bound policy created' ELSE N'Bound policy already exists' END, @Message,
+                N'BoundPolicy', @PolicyId, SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0
+            );
+        END
+
+        IF @CreateBoundPolicy = 0 AND @Stage = N'Closed Won'
+           AND NOT EXISTS
+           (
+               SELECT 1
+               FROM CRM.OpportunityWorkflowEvent existing
+               WHERE existing.OpportunityId = @OpportunityId
+                 AND existing.TenantId = @TenantId
+                 AND existing.EventType = N'PolicyBindingRequired'
+                 AND existing.IsDeleted = 0
+           )
+        BEGIN
+            INSERT INTO CRM.OpportunityWorkflowEvent
+            (
+                WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail,
+                RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted
+            )
+            VALUES
+            (
+                NEWID(), @TenantId, @OpportunityId, N'PolicyBindingRequired', N'Policy binding required',
+                N'Opportunity was marked Closed Won without creating a bound policy. Operations must create or bind the policy from the opportunity submission workflow.',
+                N'Opportunity', @OpportunityId, SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0
+            );
+        END
+    END
+
+    COMMIT TRANSACTION;
+
+    SELECT @OpportunityId AS OpportunityId,
+           @Stage AS Stage,
+           @PolicyId AS PolicyId,
+           @PolicyNumber AS PolicyNumber,
+           @PolicyCreated AS PolicyCreated,
+           @PolicyAlreadyExists AS PolicyAlreadyExists,
+           @Message AS Message;
+END TRY
+BEGIN CATCH
+    IF XACT_STATE() <> 0
+        ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { OpportunityId = id, request.Stage, request.ModifiedByUserId }, cancellationToken: cancellationToken));
-        await RecordWorkflowEventAsync(cn, id, null, "Stage", $"Moved to {request.Stage}", $"Opportunity stage changed to {request.Stage}.", "Opportunity", id, request.ModifiedByUserId, cancellationToken);
+        return await cn.QuerySingleAsync<OpportunityStageUpdateResult>(new CommandDefinition(sql, new
+        {
+            OpportunityId = id,
+            request.Stage,
+            request.ModifiedByUserId,
+            request.CreateBoundPolicy
+        }, cancellationToken: cancellationToken));
     }
 
     public async Task<Guid> UpsertLineAsync(UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
@@ -609,12 +1053,129 @@ SELECT @ActivityId;";
     public async Task<Guid> UpsertSubmissionAsync(UpsertOpportunitySubmissionRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-DECLARE @Number NVARCHAR(50) = COALESCE(NULLIF(@SubmissionNumber, N''), CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), 'yyyyMMddHHmmss')));
+IF OBJECT_ID(N'CRM.OpportunitySubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunitySubmissionLine
+    (
+        OpportunitySubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunitySubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_TargetPremium_Runtime DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_CreatedDateUtc_Runtime DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'UX_OpportunitySubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunitySubmissionLine_Submission_Line ON CRM.OpportunitySubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'IX_OpportunitySubmissionLine_Opportunity')
+    EXEC(N'CREATE INDEX IX_OpportunitySubmissionLine_Opportunity ON CRM.OpportunitySubmissionLine(OpportunityId, IsDeleted, SubmissionId);');
+
+IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionLine
+    (
+        SubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionLine_TargetPremium_Runtime DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionLine_CreatedDateUtc_Runtime DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionLine_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'UX_SubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionLine_Submission_Line ON Submissions.SubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0 AND OpportunityLineId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'IX_SubmissionLine_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionLine_Submission ON Submissions.SubmissionLine(SubmissionId, IsDeleted, LineOfBusiness);');
+
+DECLARE @Number NVARCHAR(50) = NULLIF(LTRIM(RTRIM(@SubmissionNumber)), N'');
+DECLARE @AccountId UNIQUEIDENTIFIER;
+DECLARE @OwnerUserId UNIQUEIDENTIFIER;
+DECLARE @EffectiveDate DATETIME2;
+DECLARE @ExpirationDate DATETIME2;
+DECLARE @SubmissionStageId UNIQUEIDENTIFIER;
+
+SELECT @AccountId = o.AccountId,
+       @OwnerUserId = o.OwnerUserId,
+       @EffectiveDate = COALESCE(primaryLine.TargetEffectiveDate, o.CloseDate, DATEADD(day, 30, CAST(SYSUTCDATETIME() AS date)))
+FROM CRM.Opportunity o
+OUTER APPLY
+(
+    SELECT TOP 1 line.TargetEffectiveDate
+    FROM CRM.OpportunityLine line
+    WHERE line.OpportunityId = o.OpportunityId
+      AND line.IsDeleted = 0
+      AND line.OpportunityLineId IN @OpportunityLineIds
+    ORDER BY line.IsPrimary DESC, line.EstPremium DESC, line.CreatedDateUtc
+) primaryLine
+WHERE o.OpportunityId = @OpportunityId
+  AND o.TenantId = @TenantId
+  AND o.IsDeleted = 0;
+
+IF @AccountId IS NULL
+    THROW 51001, 'Opportunity was not found for submission creation.', 1;
+
+SET @ExpirationDate = DATEADD(year, 1, @EffectiveDate);
+
+IF @Number IS NULL
+BEGIN
+    DECLARE @NumberLockResult INT;
+    EXEC @NumberLockResult = sys.sp_getapplock
+        @Resource = CONCAT(N'OpportunitySubmissionNumber:', CONVERT(NVARCHAR(36), @TenantId)),
+        @LockMode = N'Exclusive',
+        @LockOwner = N'Transaction',
+        @LockTimeout = 10000;
+
+    IF @NumberLockResult < 0
+        THROW 51002, 'Unable to reserve a submission number. Please retry.', 1;
+
+    DECLARE @NextNumber INT = ISNULL((SELECT COUNT(1) FROM CRM.OpportunitySubmission WITH (UPDLOCK, HOLDLOCK) WHERE TenantId = @TenantId AND IsDeleted = 0), 0) + 1;
+    SET @Number = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', FORMAT(@NextNumber, N'00000'));
+
+    WHILE EXISTS (SELECT 1 FROM CRM.OpportunitySubmission WHERE TenantId = @TenantId AND SubmissionNumber = @Number AND IsDeleted = 0)
+       OR EXISTS (SELECT 1 FROM Submissions.Submission WHERE TenantId = @TenantId AND SubmissionNumber = @Number AND IsDeleted = 0)
+    BEGIN
+        SET @NextNumber += 1;
+        SET @Number = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', FORMAT(@NextNumber, N'00000'));
+    END;
+END;
+
 IF @SubmissionId IS NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
 BEGIN
     SET @SubmissionId = NEWID();
     INSERT INTO CRM.OpportunitySubmission (SubmissionId, TenantId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, TargetPremium, CreatedByUserId, CreatedDateUtc, IsDeleted)
     VALUES (@SubmissionId, @TenantId, @OpportunityId, @Number, @LineOfBusiness, @Status, @TargetPremium, @UserId, SYSUTCDATETIME(), 0);
+
+    IF NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+    BEGIN
+        INSERT INTO Submissions.Submission
+        (
+            SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness,
+            Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium,
+            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        VALUES
+        (
+            @SubmissionId, @TenantId, @AccountId, @OpportunityId, @Number, @LineOfBusiness,
+            @Status, N'Normal', @OwnerUserId, @EffectiveDate, @ExpirationDate, @TargetPremium,
+            0, 0, SYSUTCDATETIME(), @UserId, 0
+        );
+    END
 END
 ELSE
 BEGIN
@@ -625,15 +1186,86 @@ BEGIN
         ModifiedByUserId = @UserId,
         ModifiedDateUtc = SYSUTCDATETIME()
     WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+    IF EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+    BEGIN
+        UPDATE Submissions.Submission
+        SET LineOfBusiness = @LineOfBusiness,
+            Status = @Status,
+            TargetPremium = @TargetPremium,
+            EffectiveDate = COALESCE(EffectiveDate, @EffectiveDate),
+            ExpirationDate = COALESCE(ExpirationDate, @ExpirationDate),
+            ModifiedByUserId = @UserId,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+    END
+    ELSE
+    BEGIN
+        INSERT INTO Submissions.Submission
+        (
+            SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness,
+            Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium,
+            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted
+        )
+        VALUES
+        (
+            @SubmissionId, @TenantId, @AccountId, @OpportunityId, @Number, @LineOfBusiness,
+            @Status, N'Normal', @OwnerUserId, @EffectiveDate, @ExpirationDate, @TargetPremium,
+            0, 0, SYSUTCDATETIME(), @UserId, 0
+        );
+    END
 END
+
+SELECT TOP 1 @SubmissionStageId = OpportunityStageId
+FROM CRM.OpportunityStage
+WHERE TenantId = @TenantId
+  AND IsActive = 1
+  AND IsDeleted = 0
+  AND (StageCode IN (N'SUBMISSION', N'MARKETING', N'PROPOSAL') OR StageName IN (N'Submission', N'Marketing', N'Proposal'))
+ORDER BY CASE
+    WHEN StageCode = N'SUBMISSION' OR StageName = N'Submission' THEN 0
+    WHEN StageCode = N'MARKETING' OR StageName = N'Marketing' THEN 1
+    ELSE 2
+END, SortOrder, StageName;
+
+UPDATE CRM.Opportunity
+SET StageName = CASE
+        WHEN StageName IN (N'Closed Won', N'Closed Lost') THEN StageName
+        ELSE COALESCE((SELECT StageName FROM CRM.OpportunityStage WHERE OpportunityStageId = @SubmissionStageId), N'Submission')
+    END,
+    OpportunityStageId = CASE
+        WHEN StageName IN (N'Closed Won', N'Closed Lost') THEN OpportunityStageId
+        ELSE COALESCE(@SubmissionStageId, OpportunityStageId)
+    END,
+    ForecastCategoryCode = CASE
+        WHEN ForecastCategoryCode IN (N'Closed', N'Won', N'Lost') THEN ForecastCategoryCode
+        ELSE N'Pipeline'
+    END,
+    ModifiedByUserId = @UserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE OpportunityId = @OpportunityId
+  AND TenantId = @TenantId
+  AND IsDeleted = 0;
+
 SELECT @SubmissionId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var isNew = request.SubmissionId is null;
-        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.SubmissionId, request.TenantId, request.OpportunityId, request.SubmissionNumber, request.LineOfBusiness, request.Status, request.TargetPremium, request.UserId }, cancellationToken: cancellationToken));
-        await SyncOpportunitySubmissionLinesAsync(cn, request, id, cancellationToken);
-        await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Submission" : "SubmissionUpdated", isNew ? "Submission created" : "Submission updated", $"{request.LineOfBusiness} submission is {request.Status} with target premium {request.TargetPremium:C0}.", "Submission", id, request.UserId, cancellationToken);
-        return id;
+        var requestedLineIds = request.OpportunityLineIds?.Where(lineId => lineId != Guid.Empty).Distinct().ToArray() ?? [];
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.SubmissionId, request.TenantId, request.OpportunityId, request.SubmissionNumber, request.LineOfBusiness, request.Status, request.TargetPremium, request.UserId, OpportunityLineIds = requestedLineIds }, tx, cancellationToken: cancellationToken));
+            await SyncOpportunitySubmissionLinesAsync(cn, request, id, tx, cancellationToken);
+            await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Submission" : "SubmissionUpdated", isNew ? "Submission created" : "Submission updated", $"{request.LineOfBusiness} submission is {request.Status} with target premium {request.TargetPremium:C0}.", "Submission", id, request.UserId, tx, cancellationToken);
+            tx.Commit();
+            return id;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     public async Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
@@ -684,10 +1316,13 @@ SELECT @CompetitorId;";
     }
 
     private static async Task RecordWorkflowEventAsync(IDbConnection cn, Guid opportunityId, Guid? tenantId, string eventType, string eventTitle, string? eventDetail, string? relatedEntityName, Guid? relatedEntityId, Guid? userId, CancellationToken cancellationToken)
+        => await RecordWorkflowEventAsync(cn, opportunityId, tenantId, eventType, eventTitle, eventDetail, relatedEntityName, relatedEntityId, userId, null, cancellationToken);
+
+    private static async Task RecordWorkflowEventAsync(IDbConnection cn, Guid opportunityId, Guid? tenantId, string eventType, string eventTitle, string? eventDetail, string? relatedEntityName, Guid? relatedEntityId, Guid? userId, IDbTransaction? transaction, CancellationToken cancellationToken)
     {
         var resolvedTenantId = tenantId ?? await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition(
             "SELECT TenantId FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId;",
-            new { OpportunityId = opportunityId }, cancellationToken: cancellationToken));
+            new { OpportunityId = opportunityId }, transaction, cancellationToken: cancellationToken));
 
         if (!resolvedTenantId.HasValue || resolvedTenantId.Value == Guid.Empty)
             return;
@@ -717,7 +1352,7 @@ END;";
             RelatedEntityName = relatedEntityName,
             RelatedEntityId = relatedEntityId,
             UserId = userId
-        }, cancellationToken: cancellationToken));
+        }, transaction, cancellationToken: cancellationToken));
     }
 
     private static async Task AttachSubmissionLinesAsync(IDbConnection cn, List<OpportunitySubmissionDto> submissions, CancellationToken cancellationToken)
@@ -741,7 +1376,7 @@ ORDER BY CreatedDateUtc;";
         }
     }
 
-    private static async Task SyncOpportunitySubmissionLinesAsync(IDbConnection cn, UpsertOpportunitySubmissionRequest request, Guid submissionId, CancellationToken cancellationToken)
+    private static async Task SyncOpportunitySubmissionLinesAsync(IDbConnection cn, UpsertOpportunitySubmissionRequest request, Guid submissionId, IDbTransaction transaction, CancellationToken cancellationToken)
     {
         var requestedLineIds = request.OpportunityLineIds?.Where(id => id != Guid.Empty).Distinct().ToArray() ?? [];
 
@@ -754,7 +1389,7 @@ WHERE OpportunityId = @OpportunityId
   AND IsDeleted = 0
   AND (LineOfBusiness = @LineOfBusiness OR IsPrimary = 1)
 ORDER BY CASE WHEN LineOfBusiness = @LineOfBusiness THEN 0 ELSE 1 END, IsPrimary DESC, EstPremium DESC, CreatedDateUtc;",
-                new { request.OpportunityId, request.LineOfBusiness }, cancellationToken: cancellationToken))).ToArray();
+                new { request.OpportunityId, request.LineOfBusiness }, transaction, cancellationToken: cancellationToken))).ToArray();
         }
 
         if (requestedLineIds.Length == 0)
@@ -767,7 +1402,7 @@ WHERE SubmissionId = @SubmissionId
   AND IsDeleted = 0
   AND OpportunityLineId NOT IN @OpportunityLineIds;";
 
-        await cn.ExecuteAsync(new CommandDefinition(softDeleteSql, new { SubmissionId = submissionId, OpportunityLineIds = requestedLineIds, request.UserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(softDeleteSql, new { SubmissionId = submissionId, OpportunityLineIds = requestedLineIds, request.UserId }, transaction, cancellationToken: cancellationToken));
 
         const string upsertSql = @"
 MERGE CRM.OpportunitySubmissionLine AS target
@@ -792,7 +1427,7 @@ WHEN NOT MATCHED THEN INSERT
 VALUES
     (NEWID(), source.TenantId, source.SubmissionId, source.OpportunityId, source.OpportunityLineId, source.LineOfBusiness, source.TargetPremium, SYSUTCDATETIME(), @UserId, 0);";
 
-        await cn.ExecuteAsync(new CommandDefinition(upsertSql, new { SubmissionId = submissionId, request.OpportunityId, OpportunityLineIds = requestedLineIds, SelectedLineCount = requestedLineIds.Length, request.TargetPremium, request.UserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(upsertSql, new { SubmissionId = submissionId, request.OpportunityId, OpportunityLineIds = requestedLineIds, SelectedLineCount = requestedLineIds.Length, request.TargetPremium, request.UserId }, transaction, cancellationToken: cancellationToken));
 
         const string summarySql = @"
 UPDATE CRM.OpportunitySubmission
@@ -810,7 +1445,48 @@ CROSS APPLY
 ) lineSummary
 WHERE s.SubmissionId = @SubmissionId;";
 
-        await cn.ExecuteAsync(new CommandDefinition(summarySql, new { SubmissionId = submissionId, request.UserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(summarySql, new { SubmissionId = submissionId, request.UserId }, transaction, cancellationToken: cancellationToken));
+
+        const string canonicalLineSyncSql = @"
+UPDATE Submissions.SubmissionLine
+SET IsDeleted = 1,
+    ModifiedByUserId = @UserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId
+  AND IsDeleted = 0
+  AND OpportunityLineId NOT IN @OpportunityLineIds;
+
+MERGE Submissions.SubmissionLine AS target
+USING
+(
+    SELECT line.TenantId, @SubmissionId AS SubmissionId, line.OpportunityId, line.OpportunityLineId, line.LineOfBusiness, line.TargetPremium
+    FROM CRM.OpportunitySubmissionLine line
+    WHERE line.SubmissionId = @SubmissionId
+      AND line.IsDeleted = 0
+) AS source
+ON target.SubmissionId = source.SubmissionId AND target.OpportunityLineId = source.OpportunityLineId
+WHEN MATCHED THEN UPDATE SET
+    target.LineOfBusiness = source.LineOfBusiness,
+    target.TargetPremium = source.TargetPremium,
+    target.IsDeleted = 0,
+    target.ModifiedByUserId = @UserId,
+    target.ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (SubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), source.TenantId, source.SubmissionId, source.OpportunityId, source.OpportunityLineId, source.LineOfBusiness, source.TargetPremium, SYSUTCDATETIME(), @UserId, 0);
+
+UPDATE Submissions.Submission
+SET LineOfBusiness = crm.LineOfBusiness,
+    TargetPremium = crm.TargetPremium,
+    ModifiedByUserId = @UserId,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM CRM.OpportunitySubmission crm
+WHERE Submissions.Submission.SubmissionId = crm.SubmissionId
+  AND crm.SubmissionId = @SubmissionId
+  AND Submissions.Submission.IsDeleted = 0;";
+
+        await cn.ExecuteAsync(new CommandDefinition(canonicalLineSyncSql, new { SubmissionId = submissionId, OpportunityLineIds = requestedLineIds, request.UserId }, transaction, cancellationToken: cancellationToken));
     }
 
     private static bool IsLaunchActionAvailable(string actionCode, OpportunityConversionLaunchDto launch)

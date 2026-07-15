@@ -1,0 +1,173 @@
+using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Common.Dtos;
+using Ams.Application.Common.Models;
+using Ams.Application.Features.Accounts;
+using Ams.Application.Features.Opportunities;
+using Ams.Application.Features.Submissions;
+using Xunit;
+
+namespace Ams.Application.Tests;
+
+public sealed class SubmissionProposalWorkflowTests
+{
+    private static readonly Guid TenantId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid SubmissionId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid ProposalId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+    private static readonly Guid QuoteId = Guid.Parse("44444444-4444-4444-4444-444444444444");
+    private static readonly Guid UserId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+
+    [Fact]
+    public async Task GenerateProposalAsync_Forwards_QuoteIds_And_CustomIntroduction()
+    {
+        var repository = new FakeSubmissionRepository { GeneratedProposalId = ProposalId };
+        var service = CreateService(repository);
+        var request = new GenerateProposalRequest(SubmissionId, TenantId, "Enterprise proposal", [QuoteId], "Executive introduction");
+
+        var result = await service.GenerateProposalAsync(request);
+
+        Assert.Equal(ProposalId, result);
+        Assert.Same(request, repository.LastGenerateProposalRequest);
+        Assert.Equal(QuoteId, repository.LastGenerateProposalRequest!.QuoteIds.Single());
+        Assert.Equal("Executive introduction", repository.LastGenerateProposalRequest.CustomIntroduction);
+    }
+
+    [Fact]
+    public async Task DeliverProposalAsync_Forwards_Delivery_Metadata()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new ProposalDeliveryRequest(TenantId, "Email", "client@example.com", UserId);
+
+        await service.DeliverProposalAsync(ProposalId, request);
+
+        Assert.Equal(ProposalId, repository.LastDeliveredProposalId);
+        Assert.Same(request, repository.LastProposalDeliveryRequest);
+        Assert.Equal("Email", repository.LastProposalDeliveryRequest!.DeliveryMethod);
+        Assert.Equal("client@example.com", repository.LastProposalDeliveryRequest.Recipient);
+        Assert.Equal(UserId, repository.LastProposalDeliveryRequest.SentByUserId);
+    }
+
+    [Fact]
+    public async Task RecordProposalDecisionAsync_Forwards_Decision_Metadata()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new ProposalDecisionRequest(TenantId, "Accepted", "Client approved selected option.", UserId);
+
+        await service.RecordProposalDecisionAsync(ProposalId, request);
+
+        Assert.Equal(ProposalId, repository.LastDecisionProposalId);
+        Assert.Same(request, repository.LastProposalDecisionRequest);
+        Assert.Equal("Accepted", repository.LastProposalDecisionRequest!.Decision);
+        Assert.Equal("Client approved selected option.", repository.LastProposalDecisionRequest.DecisionNotes);
+        Assert.Equal(UserId, repository.LastProposalDecisionRequest.DecidedByUserId);
+    }
+
+    private static SubmissionService CreateService(FakeSubmissionRepository repository)
+        => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository());
+
+    private sealed class FakeSubmissionRepository : ISubmissionRepository
+    {
+        public Guid GeneratedProposalId { get; set; } = Guid.NewGuid();
+        public GenerateProposalRequest? LastGenerateProposalRequest { get; private set; }
+        public Guid? LastDeliveredProposalId { get; private set; }
+        public ProposalDeliveryRequest? LastProposalDeliveryRequest { get; private set; }
+        public Guid? LastDecisionProposalId { get; private set; }
+        public ProposalDecisionRequest? LastProposalDecisionRequest { get; private set; }
+
+        public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
+        {
+            LastGenerateProposalRequest = request;
+            return Task.FromResult(GeneratedProposalId);
+        }
+
+        public Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        {
+            LastDeliveredProposalId = proposalId;
+            LastProposalDeliveryRequest = request;
+            return Task.CompletedTask;
+        }
+
+        public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+        {
+            LastDecisionProposalId = proposalId;
+            LastProposalDecisionRequest = request;
+            return Task.CompletedTask;
+        }
+
+        public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<SubmissionDto>());
+        public Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<SubmissionDto?>(new SubmissionDto { SubmissionId = id, TenantId = TenantId, AccountId = Guid.NewGuid(), OpportunityId = Guid.NewGuid() });
+        public Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<SubmissionActivityDto>> GetActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionActivityDto>>([]);
+        public Task<Guid> AddNoteAsync(Guid submissionId, AddSubmissionNoteRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<IReadOnlyList<DocumentDto>> GetDocumentsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<DocumentDto>>([]);
+        public Task<IReadOnlyList<SubmissionTaskDto>> GetTasksAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionTaskDto>>([]);
+        public Task<Guid> CreateFollowUpTaskAsync(Guid submissionId, CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<IReadOnlyList<SubmissionLineDto>> GetLinesAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionLineDto>>([]);
+        public Task<IReadOnlyList<SubmissionIntakeQuestionDto>> GetIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionIntakeQuestionDto>>([]);
+        public Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionDocumentChecklistDto>>([]);
+        public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionReadinessDto { SubmissionId = submissionId, IsReadyForMarketing = true });
+        public Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionTaskTemplateDto>>([]);
+        public Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionMetricsDto());
+        public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<SubmissionActionResult> DeclineAsync(Guid id, DeclineSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(id, "ok"));
+        public Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionMarketDto>>([]);
+        public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketSuggestionsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionMarketDto>>([]);
+        public Task<Guid> AddMarketAsync(AddSubmissionMarketRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task UpdateMarketStatusAsync(Guid submissionMarketId, UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<QuoteComparisonDto>>([]);
+        public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default) => Task.FromResult<QuoteComparisonDto?>(null);
+        public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default) => Task.FromResult<ProposalDto?>(null);
+        public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalWorkflowDto>>([]);
+        public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<AppetiteMatchDto>>([]);
+        public Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<PolicyRegisterDto>());
+        public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyRegisterDto?>(null);
+        public Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<SubmissionActionResult> ExecutePolicyRegisterActionAsync(Guid policyId, PolicyRegisterActionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(policyId, "ok"));
+        public Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyBindDto?>(null);
+        public Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+    }
+
+    private sealed class FakeAccountRepository : IAccountRepository
+    {
+        public Task<Guid> CreateAsync(CreateAccountRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<AccountDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<AccountDto?>(new AccountDto { AccountId = id, TenantId = TenantId });
+        public Task<PagedResult<AccountDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<AccountDto>());
+        public Task UpdateAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ContactDto>>([]);
+        public Task<IReadOnlyList<AccountDto>> FindMatchCandidatesAsync(AccountMatchCriteria criteria, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<AccountDto>>([]);
+    }
+
+    private sealed class FakeOpportunityRepository : IOpportunityRepository
+    {
+        public Task<PagedResult<OpportunityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<OpportunityDto>());
+        public Task<OpportunityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDto?>(new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = Guid.NewGuid() });
+        public Task<OpportunityDetailDto?> GetDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDetailDto?>(new OpportunityDetailDto { Opportunity = new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = Guid.NewGuid() } });
+        public Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityConversionLaunchDto?>(null);
+        public Task<PagedResult<OpportunityCompetitorLookupDto>> SearchCompetitorLookupsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<OpportunityCompetitorLookupDto>());
+        public Task<Guid> CreateAsync(CreateOpportunityRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task UpdateAsync(Guid id, UpdateOpportunityRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<OpportunityStageUpdateResult> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new OpportunityStageUpdateResult { OpportunityId = id, Stage = request.Stage, Message = "ok" });
+        public Task<Guid> UpsertLineAsync(UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.OpportunityLineId ?? Guid.NewGuid());
+        public Task SetPrimaryLineAsync(Guid opportunityId, Guid opportunityLineId, Guid? userId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteLineAsync(Guid opportunityLineId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<Guid> UpsertActivityAsync(UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.ActivityId ?? Guid.NewGuid());
+        public Task DeleteActivityAsync(Guid activityId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<Guid> UpsertSubmissionAsync(UpsertOpportunitySubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.SubmissionId ?? Guid.NewGuid());
+        public Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<Guid> UpsertCompetitorAsync(UpsertOpportunityCompetitorRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.CompetitorId ?? Guid.NewGuid());
+        public Task DeleteCompetitorAsync(Guid competitorId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+}

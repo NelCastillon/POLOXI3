@@ -126,6 +126,22 @@ else
         </div>
     </div>
 
+    @if (ShowPolicyBindingRequiredCta)
+    {
+        <section class="od-policy-cta" aria-label="Policy binding required">
+            <div class="od-policy-cta-icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
+            <div class="od-policy-cta-copy">
+                <span>Policy binding required</span>
+                <strong>Create the bound policy record or continue the submission workflow.</strong>
+                <p>@PolicyBindingRequiredDetail</p>
+            </div>
+            <div class="od-policy-cta-actions">
+                <button type="button" class="um-btn um-btn-primary" @onclick="CreateDeferredBoundPolicyAsync" disabled="@_savingAction"><i class="bi bi-shield-check" aria-hidden="true"></i> Create Bound Policy</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="ContinuePolicyBindingSubmission"><i class="bi bi-send" aria-hidden="true"></i> Continue to Submission</button>
+            </div>
+        </section>
+    }
+
     <!-- Two-column layout -->
     <div class="od-layout">
         <div class="od-tabs-col">
@@ -170,7 +186,7 @@ else
                                 <div class="od-info-card">
                                     <div class="od-tab-toolbar">
                                         <h3 class="od-section-hdr">Coverage Lines</h3>
-                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddLine"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Line</button>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm od-add-line-btn" @onclick="OpenAddLine"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Line</button>
                                     </div>
                                     @if (_lines.Count == 0)
                                     { <p class="od-empty-sm">No lines added yet.</p> }
@@ -567,12 +583,74 @@ else
 <!-- Add/Edit competitor dialog -->
 @if (_showAddComp)
 {
-    <div class="od-modal-backdrop" role="presentation" @onclick="CloseCompetitorDialog"><div class="od-modal od-modal-xs" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseCompetitorDialog"><div class="od-modal od-modal-xs od-competitor-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-crosshair" aria-hidden="true"></i><span>@(_editingCompetitor is null ? "Add Competitor" : "Edit Competitor")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseCompetitorDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_competitorForm" OnValidSubmit="CommitAddCompAsync">
             <DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Competitor Name <span class="text-danger">*</span></label><InputText @bind-Value="_competitorForm.Name" class="um-input" /></div><div class="um-field um-field--full"><label>Strength <span class="text-danger">*</span></label><InputSelect @bind-Value="_competitorForm.Strength" class="um-input">@foreach (var option in _compStrengths) { <option value="@option.Value">@option.Label</option> }</InputSelect></div></div></div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field um-field--full od-lookup-field">
+                    <div class="od-label-action-row">
+                        <label>Competitor Name <span class="text-danger">*</span></label>
+                    </div>
+                    <div class="od-lookup-compose">
+                        <button type="button" class="od-search-select" aria-haspopup="listbox" aria-expanded="@_showCompetitorPicker" @onclick="ToggleCompetitorPicker">
+                            <span class="od-search-select-main"><i class="bi bi-crosshair" aria-hidden="true"></i>@CompetitorButtonText</span>
+                            <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" class="od-lookup-more od-lookup-more-inline" title="Add new competitor" aria-label="Add new competitor" @onclick="OpenNewCompetitorDialog"><i class="bi bi-three-dots" aria-hidden="true"></i></button>
+                    </div>
+                    @if (_showCompetitorPicker)
+                    {
+                        <div class="od-search-menu" role="listbox" @onclick:stopPropagation="true">
+                            <div class="od-search-box"><i class="bi bi-search" aria-hidden="true"></i><input type="search" value="@_competitorSearch" @oninput="OnCompetitorSearchChanged" placeholder="Search competitors..." autocomplete="off" /></div>
+                            <div class="od-search-options">
+                                @if (FilteredCompetitorOptions.Any())
+                                {
+                                    @foreach (var competitor in FilteredCompetitorOptions)
+                                    {
+                                        <button type="button" class="@LookupOptionClass(_competitorForm.Name, competitor.Name)" role="option" aria-selected="@IsSelected(_competitorForm.Name, competitor.Name)" @onclick="() => SelectCompetitor(competitor)">
+                                            <strong>@competitor.Name</strong>
+                                            <small>@CompetitorMeta(competitor)</small>
+                                        </button>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="od-search-empty">No DB-backed competitors match your search.</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="um-field um-field--full"><label>Strength <span class="text-danger">*</span></label><InputSelect @bind-Value="_competitorForm.Strength" class="um-input">@foreach (var option in _compStrengths) { <option value="@option.Value">@option.Label</option> }</InputSelect></div>
+            </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCompetitorDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingCompetitor is null ? "Add" : "Save")</button></div>
+        </EditForm>
+    </div></div>
+}
+
+@if (_showNewCompetitor)
+{
+    <div class="od-modal-backdrop od-modal-backdrop-nested" role="presentation" @onclick="CloseNewCompetitorDialog"><div class="od-modal od-modal-xs od-new-competitor-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="um-modal-header"><i class="bi bi-crosshair" aria-hidden="true"></i><span>Add New Competitor</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseNewCompetitorDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <EditForm Model="_newCompetitorForm" OnValidSubmit="AddNewCompetitorAsync">
+            <DataAnnotationsValidator />
+            <div class="od-line-modal-intro">
+                <span><i class="bi bi-database-check" aria-hidden="true"></i> Competitor lookup</span>
+                <p>Add a competitor name once. It will be selected in the dropdown and saved with the opportunity when you finish.</p>
+            </div>
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field um-field--full">
+                    <label for="newCompetitorName">Competitor Name <span class="text-danger">*</span></label>
+                    <InputText id="newCompetitorName" class="um-input" @bind-Value="_newCompetitorForm.Name" maxlength="200" />
+                    <ValidationMessage For="() => _newCompetitorForm.Name" class="text-danger" />
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_newCompetitorError))
+                {
+                    <div class="od-inline-error um-field--full"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_newCompetitorError</span></div>
+                }
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseNewCompetitorDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg" aria-hidden="true"></i> Add Competitor</button></div>
         </EditForm>
     </div></div>
 }
@@ -580,13 +658,77 @@ else
 <!-- Add/Edit coverage line dialog -->
 @if (_showLine)
 {
-    <div class="od-modal-backdrop" role="presentation" @onclick="CloseLineDialog"><div class="od-modal od-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseLineDialog"><div class="od-modal od-modal-sm od-line-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-layers" aria-hidden="true"></i><span>@(_editingLine is null ? "Add Coverage Line" : "Edit Coverage Line")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseLineDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
         <EditForm Model="_lineForm" OnValidSubmit="CommitLineAsync">
             <DataAnnotationsValidator />
+            <div class="od-line-modal-intro">
+                <span><i class="bi bi-database-check" aria-hidden="true"></i> DB-backed selections</span>
+                <p>Choose line of business and carrier from configured tenant records.</p>
+            </div>
             <div class="um-modal-body"><div class="um-form-grid">
-                <div class="um-field"><label>Line of Business <span class="text-danger">*</span></label><InputText @bind-Value="_lineForm.LineOfBusiness" class="um-input" /></div>
-                <div class="um-field"><label>Carrier</label><InputText @bind-Value="_lineForm.Carrier" class="um-input" /></div>
+                <div class="um-field od-lookup-field">
+                    <label>Line of Business <span class="text-danger">*</span></label>
+                    <button type="button" class="od-search-select" aria-haspopup="listbox" aria-expanded="@_showLobPicker" @onclick="ToggleLobPicker">
+                        <span class="od-search-select-main"><i class="bi bi-diagram-3" aria-hidden="true"></i>@LineOfBusinessButtonText</span>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                    </button>
+                    @if (_showLobPicker)
+                    {
+                        <div class="od-search-menu" role="listbox" @onclick:stopPropagation="true">
+                            <div class="od-search-box"><i class="bi bi-search" aria-hidden="true"></i><input type="search" value="@_lobSearch" @oninput="OnLobSearchChanged" placeholder="Search line or code..." autocomplete="off" /></div>
+                            <div class="od-search-options">
+                                @if (FilteredLobOptions.Any())
+                                {
+                                    @foreach (var lob in FilteredLobOptions)
+                                    {
+                                        <button type="button" class="@LookupOptionClass(_lineForm.LineOfBusiness, lob.LobName)" role="option" aria-selected="@IsSelected(_lineForm.LineOfBusiness, lob.LobName)" @onclick="() => SelectLineOfBusiness(lob)">
+                                            <strong>@lob.LobName</strong>
+                                            <small>@LobMeta(lob)</small>
+                                        </button>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="od-search-empty">No active lines of business match your search.</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="um-field od-lookup-field">
+                    <label>Carrier</label>
+                    <button type="button" class="od-search-select" aria-haspopup="listbox" aria-expanded="@_showCarrierPicker" @onclick="ToggleCarrierPicker">
+                        <span class="od-search-select-main"><i class="bi bi-building" aria-hidden="true"></i>@CarrierButtonText</span>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                    </button>
+                    @if (_showCarrierPicker)
+                    {
+                        <div class="od-search-menu" role="listbox" @onclick:stopPropagation="true">
+                            <div class="od-search-box"><i class="bi bi-search" aria-hidden="true"></i><input type="search" value="@_carrierSearch" @oninput="OnCarrierSearchChanged" placeholder="Search carrier or NAIC..." autocomplete="off" /></div>
+                            <div class="od-search-options">
+                                @if (!string.IsNullOrWhiteSpace(_lineForm.Carrier))
+                                {
+                                    <button type="button" class="od-search-option od-search-option-muted" @onclick="ClearCarrier"><strong>Clear carrier</strong><small>Leave carrier pending</small></button>
+                                }
+                                @if (FilteredCarrierOptions.Any())
+                                {
+                                    @foreach (var carrier in FilteredCarrierOptions)
+                                    {
+                                        <button type="button" class="@LookupOptionClass(_lineForm.Carrier, carrier.CarrierName)" role="option" aria-selected="@IsSelected(_lineForm.Carrier, carrier.CarrierName)" @onclick="() => SelectCarrier(carrier)">
+                                            <strong>@carrier.CarrierName</strong>
+                                            <small>@CarrierMeta(carrier)</small>
+                                        </button>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="od-search-empty">No active carriers match your search.</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
                 <div class="um-field"><label>Estimated Premium</label><InputNumber @bind-Value="_lineForm.EstPremium" class="um-input" /></div>
                 <div class="um-field"><label>Priority <span class="text-danger">*</span></label><InputSelect @bind-Value="_lineForm.Priority" class="um-input"><option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option></InputSelect></div>
                 <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_lineForm.Status" class="um-input"><option value="Draft">Draft</option><option value="Marketing">Marketing</option><option value="Quoted">Quoted</option><option value="Bound">Bound</option><option value="Declined">Declined</option><option value="Lost">Lost</option></InputSelect></div>
@@ -630,6 +772,25 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSubmissionDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingSubmission is null ? "Create" : "Save")</button></div>
         </EditForm>
+    </div></div>
+}
+
+@if (_postCreateSubmission is not null)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="ClosePostCreatePanel"><div class="od-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="um-modal-header"><i class="bi bi-send-check" aria-hidden="true"></i><span>Submission created</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePostCreatePanel"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+        <div class="um-modal-body">
+            <div class="od-empty-sm"><strong>@_postCreateSubmission.SubmissionNumber</strong> is ready for next-step workflow actions.</div>
+            <div class="od-action-grid">
+                <button type="button" class="um-btn um-btn-primary" @onclick='() => NavigatePostCreate(null)'><i class="bi bi-eye" aria-hidden="true"></i> View Submission</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => NavigatePostCreate("action=document")'><i class="bi bi-upload" aria-hidden="true"></i> Add Documents</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => NavigatePostCreate("tab=markets")'><i class="bi bi-bank" aria-hidden="true"></i> Select Markets</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => NavigatePostCreate("action=submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit to Market</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => NavigatePostCreate("action=assign")'><i class="bi bi-person-check" aria-hidden="true"></i> Assign Owner</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => NavigatePostCreate("action=task")'><i class="bi bi-list-check" aria-hidden="true"></i> Create Follow-Up Task</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick="ClosePostCreatePanel"><i class="bi bi-arrow-return-left" aria-hidden="true"></i> Return to Opportunity</button>
+            </div>
+        </div>
     </div></div>
 }
 
@@ -677,7 +838,18 @@ else
     private List<WorkflowEventRow> _workflowEvents = [];
     private List<OpportunityStageDto> _stages = [];
     private List<OpportunityForecastCategoryDto> _forecastCategories = [];
+    private List<LineOfBusinessDto> _lobOptions = [];
+    private List<CarrierDto> _carrierOptions = [];
+    private List<OpportunityCompetitorLookupDto> _competitorLookupOptions = [];
     private OpportunityConversionLaunchDto? _conversionLaunch;
+    private bool _showLobPicker;
+    private bool _showCarrierPicker;
+    private bool _showCompetitorPicker;
+    private bool _showNewCompetitor;
+    private string _lobSearch = string.Empty;
+    private string _carrierSearch = string.Empty;
+    private string _competitorSearch = string.Empty;
+    private string? _newCompetitorError;
 
     private bool   _showEdit        = false;
     private bool   _showStage       = false;
@@ -688,12 +860,14 @@ else
     private bool   _showDeleteConfirm = false;
     private bool   _showSubmission = false;
     private bool   _showLine = false;
+    private SubmissionRow? _postCreateSubmission;
 
     private OpportunityEditForm _editForm = new();
     private StageMoveForm _stageForm = new();
     private WonForm _wonForm = new();
     private ActivityForm _activityForm = new();
     private CompetitorForm _competitorForm = new();
+    private NewCompetitorForm _newCompetitorForm = new();
     private SubmissionForm _submissionForm = new();
     private OpportunityLineForm _lineForm = new();
     private ActivityRow? _editingActivity;
@@ -746,6 +920,7 @@ else
             var forecastCategories = await Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
             _stages = stages?.Items.OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).ToList() ?? [];
             _forecastCategories = forecastCategories?.Items.OrderBy(c => c.SortOrder).ThenBy(c => c.CategoryName).ToList() ?? [];
+            await LoadCoverageLineLookupsAsync();
             _lines = detail.Lines.Select(MapLine).ToList();
             _activities = detail.Activities.Select(MapActivity).ToList();
             _submissions = detail.Submissions.Select(MapSubmission).ToList();
@@ -753,6 +928,7 @@ else
             _currentPolicies = detail.CurrentPolicies.Select(MapCurrentPolicy).ToList();
             _competitors = detail.Competitors.Select(MapCompetitor).ToList();
             _workflowEvents = detail.WorkflowEvents.Select(MapWorkflowEvent).ToList();
+            await LoadCompetitorLookupsAsync();
             await LoadDocumentCategoriesAsync();
             await LoadOpportunityDocumentsAsync();
             await LoadConversionLaunchAsync();
@@ -780,6 +956,20 @@ else
     }
 
     private static string CategoryLabel(DocumentConfigItemDto category) => Normalize(category.Name) ?? Normalize(category.Code) ?? string.Empty;
+
+    private async Task LoadCoverageLineLookupsAsync()
+    {
+        var lobs = await Api.SearchLobsAsync(_tenantId, pageSize: 500);
+        var carriers = await Api.SearchCarriersAsync(_tenantId, pageSize: 500);
+        _lobOptions = lobs?.Items.Where(l => l.IsActive).OrderBy(l => l.LobName).ThenBy(l => l.LobCode).ToList() ?? [];
+        _carrierOptions = carriers?.Items.Where(c => c.IsActive).OrderBy(c => c.CarrierName).ThenBy(c => c.NaicCode).ToList() ?? [];
+    }
+
+    private async Task LoadCompetitorLookupsAsync()
+    {
+        var result = await Api.SearchOpportunityCompetitorLookupsAsync(_tenantId, pageSize: 250);
+        _competitorLookupOptions = result?.Items.OrderBy(c => c.Name).ToList() ?? [];
+    }
 
     private async Task LoadConversionLaunchAsync()
     {
@@ -842,10 +1032,10 @@ else
     }
     private async Task CommitWonAsync()
     {
-        await Api.UpdateOpportunityStageAsync(OpportunityId, new UpdateOpportunityStageRequest { Stage = "Closed Won", ModifiedByUserId = _currentUserId });
+        var result = await Api.UpdateOpportunityStageAsync(OpportunityId, new UpdateOpportunityStageRequest { Stage = "Closed Won", ModifiedByUserId = _currentUserId, CreateBoundPolicy = _wonForm.CreatePolicy });
         _showWon = false;
         await LoadAsync();
-        await ShowToast(_wonForm.CreatePolicy ? "Opportunity marked Closed Won. Policy creation queued." : "Opportunity marked Closed Won.");
+        await ShowToast(string.IsNullOrWhiteSpace(result.Message) ? "Opportunity marked Closed Won." : result.Message);
     }
     private async Task CommitAddCompAsync()
     {
@@ -967,6 +1157,43 @@ else
 
     private void OpenSubmission(Guid submissionId) => Nav.NavigateTo($"/submissions/{submissionId}");
 
+    private async Task CreateDeferredBoundPolicyAsync()
+    {
+        if (_opp is null) return;
+
+        _savingAction = true;
+        try
+        {
+            var result = await Api.UpdateOpportunityStageAsync(OpportunityId, new UpdateOpportunityStageRequest { Stage = "Closed Won", ModifiedByUserId = _currentUserId, CreateBoundPolicy = true });
+            await LoadAsync();
+            await ShowToast(string.IsNullOrWhiteSpace(result.Message) ? "Bound policy created." : result.Message);
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Policy binding failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _savingAction = false;
+        }
+    }
+
+    private void ContinuePolicyBindingSubmission()
+    {
+        if (_submissions.Count == 0)
+        {
+            OpenNewSubmission();
+            return;
+        }
+
+        var submission = _submissions
+            .OrderByDescending(s => string.Equals(s.Status, "Quoted", StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(s => s.ModifiedDateUtc ?? s.CreatedDateUtc)
+            .First();
+
+        OpenEditSubmission(submission);
+    }
+
     private void OpenEditOpportunity()
     {
         if (_opp is null) return;
@@ -990,12 +1217,77 @@ else
     private void OpenLogActivity() { _editingActivity = null; _activityForm = new() { Type = "Call", OccurredAt = DateTime.UtcNow }; _showLogActivity = true; }
     private void OpenEditActivity(ActivityRow row) { _editingActivity = row; _activityForm = new() { Type = row.Type, Subject = row.Subject, Notes = row.Notes, OccurredAt = row.OccurredAt }; _showLogActivity = true; }
     private void CloseActivityDialog() { _showLogActivity = false; _editingActivity = null; _activityForm = new(); }
-    private void OpenAddCompetitor() { _editingCompetitor = null; _competitorForm = new() { Strength = "Moderate" }; _showAddComp = true; }
-    private void OpenEditCompetitor(CompetitorRow row) { _editingCompetitor = row; _competitorForm = new() { Name = row.Name, Strength = row.Strength }; _showAddComp = true; }
-    private void CloseCompetitorDialog() { _showAddComp = false; _editingCompetitor = null; _competitorForm = new(); }
-    private void OpenAddLine() { _editingLine = null; _lineForm = new() { Priority = "Medium", Status = "Draft", IsPrimary = _lines.Count == 0 }; _showLine = true; }
-    private void OpenEditLine(OppLine row) { _editingLine = row; _lineForm = new() { LineOfBusiness = row.LineOfBusiness, Carrier = row.Carrier, EstPremium = row.EstPremium, Priority = row.Priority, Status = row.Status, IsPrimary = row.IsPrimary, TargetEffectiveDate = row.TargetEffectiveDate }; _showLine = true; }
-    private void CloseLineDialog() { _showLine = false; _editingLine = null; _lineForm = new(); }
+    private void OpenAddCompetitor() { _editingCompetitor = null; _competitorForm = new() { Strength = "Moderate" }; ResetCompetitorLookupState(); _showAddComp = true; }
+    private void OpenEditCompetitor(CompetitorRow row) { _editingCompetitor = row; _competitorForm = new() { Name = row.Name, Strength = row.Strength }; ResetCompetitorLookupState(); _showAddComp = true; }
+    private void CloseCompetitorDialog() { _showAddComp = false; _editingCompetitor = null; _competitorForm = new(); ResetCompetitorLookupState(); }
+    private IEnumerable<OpportunityCompetitorLookupDto> FilteredCompetitorOptions => FilterBy(_competitorLookupOptions, _competitorSearch, competitor => competitor.Name).Take(25);
+    private string CompetitorButtonText => string.IsNullOrWhiteSpace(_competitorForm.Name) ? "Select competitor" : _competitorForm.Name;
+    private void ToggleCompetitorPicker() { _showCompetitorPicker = !_showCompetitorPicker; _showLobPicker = false; _showCarrierPicker = false; }
+    private void OnCompetitorSearchChanged(ChangeEventArgs args) => _competitorSearch = args.Value?.ToString() ?? string.Empty;
+    private void SelectCompetitor(OpportunityCompetitorLookupDto competitor) { _competitorForm.Name = competitor.Name; _competitorSearch = string.Empty; _showCompetitorPicker = false; }
+    private void ResetCompetitorLookupState() { _showCompetitorPicker = false; _competitorSearch = string.Empty; }
+    private void OpenNewCompetitorDialog() { _newCompetitorForm = new(); _newCompetitorError = null; _showCompetitorPicker = false; _showNewCompetitor = true; }
+    private void CloseNewCompetitorDialog() { _showNewCompetitor = false; _newCompetitorForm = new(); _newCompetitorError = null; }
+
+    private Task AddNewCompetitorAsync()
+    {
+        var name = Normalize(_newCompetitorForm.Name) ?? string.Empty;
+        if (CompetitorNameExists(name))
+        {
+            _newCompetitorError = $"{name} already exists in the competitor list.";
+            return Task.CompletedTask;
+        }
+
+        var option = new OpportunityCompetitorLookupDto
+        {
+            Name = name,
+            OpportunityCount = 0,
+            LastUsedDateUtc = DateTime.UtcNow
+        };
+
+        _competitorLookupOptions.Add(option);
+        _competitorLookupOptions = _competitorLookupOptions.OrderBy(c => c.Name).ToList();
+        SelectCompetitor(option);
+        CloseNewCompetitorDialog();
+        return Task.CompletedTask;
+    }
+
+    private bool CompetitorNameExists(string name) =>
+        _competitorLookupOptions.Any(c => string.Equals(c.Name.Trim(), name, StringComparison.OrdinalIgnoreCase)) ||
+        _competitors.Any(c => string.Equals(c.Name.Trim(), name, StringComparison.OrdinalIgnoreCase));
+    private void OpenAddLine() { _editingLine = null; _lineForm = new() { Priority = "Medium", Status = "Draft", IsPrimary = _lines.Count == 0 }; ResetLineLookupState(); _showLine = true; }
+    private void OpenEditLine(OppLine row) { _editingLine = row; _lineForm = new() { LineOfBusiness = row.LineOfBusiness, Carrier = row.Carrier, EstPremium = row.EstPremium, Priority = row.Priority, Status = row.Status, IsPrimary = row.IsPrimary, TargetEffectiveDate = row.TargetEffectiveDate }; ResetLineLookupState(); _showLine = true; }
+    private void CloseLineDialog() { _showLine = false; _editingLine = null; _lineForm = new(); ResetLineLookupState(); }
+
+    private IEnumerable<LineOfBusinessDto> FilteredLobOptions => FilterBy(_lobOptions, _lobSearch, lob => lob.LobName, lob => lob.LobCode, lob => lob.Category).Take(25);
+    private IEnumerable<CarrierDto> FilteredCarrierOptions => FilterBy(_carrierOptions, _carrierSearch, carrier => carrier.CarrierName, carrier => carrier.NaicCode, carrier => carrier.AmBestRating).Take(25);
+    private string LineOfBusinessButtonText => string.IsNullOrWhiteSpace(_lineForm.LineOfBusiness) ? "Select line of business" : _lineForm.LineOfBusiness;
+    private string CarrierButtonText => string.IsNullOrWhiteSpace(_lineForm.Carrier) ? "Select carrier" : _lineForm.Carrier;
+    private void ToggleLobPicker() { _showLobPicker = !_showLobPicker; _showCarrierPicker = false; }
+    private void ToggleCarrierPicker() { _showCarrierPicker = !_showCarrierPicker; _showLobPicker = false; }
+    private void OnLobSearchChanged(ChangeEventArgs args) => _lobSearch = args.Value?.ToString() ?? string.Empty;
+    private void OnCarrierSearchChanged(ChangeEventArgs args) => _carrierSearch = args.Value?.ToString() ?? string.Empty;
+    private void SelectLineOfBusiness(LineOfBusinessDto lob) { _lineForm.LineOfBusiness = lob.LobName; _lobSearch = string.Empty; _showLobPicker = false; }
+    private void SelectCarrier(CarrierDto carrier) { _lineForm.Carrier = carrier.CarrierName; _carrierSearch = string.Empty; _showCarrierPicker = false; }
+    private void ClearCarrier() { _lineForm.Carrier = null; _carrierSearch = string.Empty; _showCarrierPicker = false; }
+    private void ResetLineLookupState() { _showLobPicker = false; _showCarrierPicker = false; _lobSearch = string.Empty; _carrierSearch = string.Empty; }
+
+    private static IEnumerable<T> FilterBy<T>(IEnumerable<T> source, string search, params Func<T, string?>[] selectors)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return source;
+        }
+
+        var term = search.Trim();
+        return source.Where(item => selectors.Any(selector => (selector(item) ?? string.Empty).Contains(term, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string LookupOptionClass(string? selected, string value) => IsSelected(selected, value) ? "od-search-option od-search-option-active" : "od-search-option";
+    private static bool IsSelected(string? selected, string value) => string.Equals(selected?.Trim(), value.Trim(), StringComparison.OrdinalIgnoreCase);
+    private static string CompetitorMeta(OpportunityCompetitorLookupDto competitor) => $"{competitor.OpportunityCount} opportunit{(competitor.OpportunityCount == 1 ? "y" : "ies")} - last used {competitor.LastUsedDateUtc:d}";
+    private static string LobMeta(LineOfBusinessDto lob) => string.Join(" - ", new[] { lob.LobCode, lob.Category }.Where(v => !string.IsNullOrWhiteSpace(v)));
+    private static string CarrierMeta(CarrierDto carrier) => string.Join(" - ", new[] { string.IsNullOrWhiteSpace(carrier.NaicCode) ? null : $"NAIC {carrier.NaicCode}", carrier.AmBestRating, carrier.IsAdmitted ? "Admitted" : "Non-admitted" }.Where(v => !string.IsNullOrWhiteSpace(v)));
 
     private async Task CommitLineAsync()
     {
@@ -1028,10 +1320,10 @@ else
     private void OpenNewSubmission()
     {
         _editingSubmission = null;
-        var primary = _lines.FirstOrDefault(l => l.IsPrimary) ?? _lines.FirstOrDefault();
-        _submissionForm = new() { Status = "Draft", TargetPremium = primary?.EstPremium ?? 0 };
-        if (primary is not null)
-            _submissionForm.OpportunityLineIds.Add(primary.OpportunityLineId);
+        _submissionForm = new() { Status = "Draft" };
+        foreach (var line in _lines)
+            _submissionForm.OpportunityLineIds.Add(line.OpportunityLineId);
+        SyncSubmissionTargetPremium();
         _showSubmission = true;
     }
     private void OpenEditSubmission(SubmissionRow row)
@@ -1042,6 +1334,7 @@ else
         {
             foreach (var line in _lines.Where(l => string.Equals(l.LineOfBusiness, row.LineOfBusiness, StringComparison.OrdinalIgnoreCase)))
                 _submissionForm.OpportunityLineIds.Add(line.OpportunityLineId);
+            SyncSubmissionTargetPremium();
         }
         _showSubmission = true;
     }
@@ -1058,22 +1351,47 @@ else
         }
 
         var lineLabel = selectedLines.Count == 1 ? selectedLines[0].LineOfBusiness : $"{selectedLines.Count} line package";
-        var targetPremium = _submissionForm.TargetPremium > 0 ? _submissionForm.TargetPremium : selectedLines.Sum(l => l.EstPremium);
-        await Api.UpsertOpportunitySubmissionAsync(OpportunityId, new UpsertOpportunitySubmissionRequest
+        var targetPremium = selectedLines.Sum(l => l.EstPremium);
+        _savingAction = true;
+        try
         {
-            SubmissionId = _editingSubmission?.SubmissionId,
-            TenantId = _tenantId,
-            OpportunityId = OpportunityId,
-            SubmissionNumber = _editingSubmission?.SubmissionNumber,
-            LineOfBusiness = lineLabel,
-            OpportunityLineIds = selectedLines.Select(l => l.OpportunityLineId).ToList(),
-            Status = _submissionForm.Status,
-            TargetPremium = targetPremium,
-            UserId = _currentUserId
-        });
-        CloseSubmissionDialog();
-        await LoadAsync();
-        await ShowToast(isNew ? "Submission created." : "Submission updated.");
+            var savedSubmissionId = await Api.UpsertOpportunitySubmissionAsync(OpportunityId, new UpsertOpportunitySubmissionRequest
+            {
+                SubmissionId = _editingSubmission?.SubmissionId,
+                TenantId = _tenantId,
+                OpportunityId = OpportunityId,
+                SubmissionNumber = _editingSubmission?.SubmissionNumber,
+                LineOfBusiness = lineLabel,
+                OpportunityLineIds = selectedLines.Select(l => l.OpportunityLineId).ToList(),
+                Status = _submissionForm.Status,
+                TargetPremium = targetPremium,
+                UserId = _currentUserId
+            });
+            CloseSubmissionDialog();
+            await LoadAsync();
+            if (isNew)
+            {
+                _postCreateSubmission = _submissions.FirstOrDefault(s => s.SubmissionId == savedSubmissionId) ?? new SubmissionRow { SubmissionId = savedSubmissionId, SubmissionNumber = lineLabel, LineOfBusiness = lineLabel, Status = _submissionForm.Status, TargetPremium = targetPremium };
+            }
+            await ShowToast(isNew ? "Submission created and synchronized to the submissions workflow." : "Submission updated and synchronized to the submissions workflow.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Submission save failed: {ex.Message}", "e-toast-danger");
+        }
+        finally
+        {
+            _savingAction = false;
+        }
+    }
+
+    private void ClosePostCreatePanel() => _postCreateSubmission = null;
+
+    private void NavigatePostCreate(string? query)
+    {
+        if (_postCreateSubmission is null) return;
+        var suffix = string.IsNullOrWhiteSpace(query) ? string.Empty : $"?{query}";
+        Nav.NavigateTo($"/submissions/{_postCreateSubmission.SubmissionId}{suffix}");
     }
 
     private void ToggleSubmissionLine(OppLine line, Microsoft.AspNetCore.Components.ChangeEventArgs args)
@@ -1085,8 +1403,14 @@ else
             _submissionForm.OpportunityLineIds.Remove(line.OpportunityLineId);
 
         var selectedLines = _lines.Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId)).ToList();
-        if (selectedLines.Count > 0)
-            _submissionForm.TargetPremium = selectedLines.Sum(l => l.EstPremium);
+        SyncSubmissionTargetPremium();
+    }
+
+    private void SyncSubmissionTargetPremium()
+    {
+        _submissionForm.TargetPremium = _lines
+            .Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId))
+            .Sum(l => l.EstPremium);
     }
 
     private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => { await Api.DeleteOpportunityActivityAsync(row.ActivityId, _currentUserId); await LoadAsync(); await ShowToast("Activity deleted."); });
@@ -1154,6 +1478,18 @@ else
 
     private string CurrentPolicyPremiumText => _currentPolicies.Count == 0 ? "No current premium" : _currentPolicies.Sum(p => p.AnnualPremium).ToString("C0");
 
+    private bool ShowPolicyBindingRequiredCta => _opp is not null
+        && string.Equals(_opp.Stage, "Closed Won", StringComparison.OrdinalIgnoreCase)
+        && _currentPolicies.Count == 0
+        && _workflowEvents.Any(e => string.Equals(e.EventType, "PolicyBindingRequired", StringComparison.OrdinalIgnoreCase));
+
+    private string PolicyBindingRequiredDetail => _workflowEvents
+        .Where(e => string.Equals(e.EventType, "PolicyBindingRequired", StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(e => e.EventDateUtc)
+        .Select(e => e.EventDetail)
+        .FirstOrDefault(detail => !string.IsNullOrWhiteSpace(detail))
+        ?? "This opportunity was won without creating a bound policy. Complete the binding workflow when operations is ready.";
+
     private string KpiClass(string key) => _activeKpi == key ? "od-kpi-card od-kpi-card-active" : "od-kpi-card";
 
     private void ActivateKpi(string key, int tab)
@@ -1195,7 +1531,7 @@ else
 
     private static OppLine MapLine(OpportunityLineDto dto) => new() { OpportunityLineId = dto.OpportunityLineId, LineOfBusiness = dto.LineOfBusiness, Carrier = dto.Carrier, EstPremium = dto.EstPremium, Priority = dto.Priority, Status = dto.Status, IsPrimary = dto.IsPrimary, TargetEffectiveDate = dto.TargetEffectiveDate };
     private static ActivityRow MapActivity(OpportunityActivityDto dto) => new() { ActivityId = dto.ActivityId, Type = dto.ActivityTypeCode, Subject = dto.Subject, Notes = dto.Notes, By = dto.CreatedByName ?? "System", OccurredAt = dto.ActivityDate };
-    private static SubmissionRow MapSubmission(OpportunitySubmissionDto dto) => new() { SubmissionId = dto.SubmissionId, SubmissionNumber = dto.SubmissionNumber, LineOfBusiness = dto.LineOfBusiness, Status = dto.Status, TargetPremium = dto.TargetPremium, QuoteCount = dto.QuoteCount, Lines = dto.Lines.Select(MapSubmissionLine).ToList() };
+    private static SubmissionRow MapSubmission(OpportunitySubmissionDto dto) => new() { SubmissionId = dto.SubmissionId, SubmissionNumber = dto.SubmissionNumber, LineOfBusiness = dto.LineOfBusiness, Status = dto.Status, TargetPremium = dto.TargetPremium, QuoteCount = dto.QuoteCount, Lines = dto.Lines.Select(MapSubmissionLine).ToList(), CreatedDateUtc = dto.CreatedDateUtc, ModifiedDateUtc = dto.ModifiedDateUtc };
     private static SubmissionLineRow MapSubmissionLine(OpportunitySubmissionLineDto dto) => new() { OpportunityLineId = dto.OpportunityLineId, LineOfBusiness = dto.LineOfBusiness, TargetPremium = dto.TargetPremium };
     private static QuoteRow MapQuote(QuoteDto dto) => new() { QuoteId = dto.QuoteId, QuoteNumber = dto.QuoteNumber, Premium = dto.TotalAmount, Status = dto.StatusCode, ExpiresAt = dto.ValidUntilDate ?? DateTime.UtcNow.AddDays(30), Carrier = dto.AccountName ?? string.Empty };
     private static CurrentPolicyRow MapCurrentPolicy(OpportunityCurrentPolicyDto dto) => new()
@@ -1374,6 +1710,12 @@ else
         [StringLength(50, ErrorMessage = "Strength cannot exceed 50 characters.")]
         public string Strength { get; set; } = "Moderate";
     }
+    private sealed class NewCompetitorForm
+    {
+        [Required(ErrorMessage = "Competitor name is required.")]
+        [StringLength(200, MinimumLength = 2, ErrorMessage = "Competitor name must be between 2 and 200 characters.")]
+        public string Name { get; set; } = string.Empty;
+    }
     private sealed class OpportunityLineForm
     {
         [Required(ErrorMessage = "Line of business is required.")]
@@ -1399,7 +1741,6 @@ else
     }
     private sealed class SubmissionForm
     {
-        [Required(ErrorMessage = "Line of business is required.")]
         [StringLength(100, ErrorMessage = "Line of business cannot exceed 100 characters.")]
         public string LineOfBusiness { get; set; } = string.Empty;
 
@@ -1413,7 +1754,7 @@ else
         public HashSet<Guid> OpportunityLineIds { get; set; } = [];
     }
     private sealed class OppLine     { public Guid OpportunityLineId { get; set; } public string LineOfBusiness { get; set; }=string.Empty; public string? Carrier { get; set; } public decimal EstPremium { get; set; } public string Priority { get; set; }="Medium"; public string Status { get; set; }="Draft"; public bool IsPrimary { get; set; } public DateTime? TargetEffectiveDate { get; set; } }
-    private sealed class SubmissionRow { public Guid SubmissionId { get; set; }=Guid.NewGuid(); public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Status { get; set; }="Draft"; public decimal TargetPremium { get; set; } public int QuoteCount { get; set; } public List<SubmissionLineRow> Lines { get; set; } = []; }
+    private sealed class SubmissionRow { public Guid SubmissionId { get; set; }=Guid.NewGuid(); public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Status { get; set; }="Draft"; public decimal TargetPremium { get; set; } public int QuoteCount { get; set; } public List<SubmissionLineRow> Lines { get; set; } = []; public DateTime CreatedDateUtc { get; set; } public DateTime? ModifiedDateUtc { get; set; } }
     private sealed class SubmissionLineRow { public Guid OpportunityLineId { get; set; } public string LineOfBusiness { get; set; }=string.Empty; public decimal TargetPremium { get; set; } }
     private sealed class ActivityRow { public Guid ActivityId { get; set; } public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public string By { get; set; }=string.Empty; public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
     private sealed class QuoteRow    { public Guid QuoteId { get; set; }=Guid.NewGuid(); public string QuoteNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Pending"; public DateTime ExpiresAt { get; set; }=DateTime.UtcNow.AddDays(30); }

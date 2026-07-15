@@ -61,6 +61,13 @@ public sealed class OpportunityLineDto
     public DateTime? ModifiedDateUtc { get; set; }
 }
 
+public sealed class OpportunityCompetitorLookupDto
+{
+    public string Name { get; set; } = string.Empty;
+    public int OpportunityCount { get; set; }
+    public DateTime LastUsedDateUtc { get; set; }
+}
+
 public sealed class OpportunitySubmissionLineDto
 {
     public Guid OpportunitySubmissionLineId { get; set; }

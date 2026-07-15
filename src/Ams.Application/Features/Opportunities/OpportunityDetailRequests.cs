@@ -35,6 +35,19 @@ public sealed class UpdateOpportunityStageRequest
     public string Stage { get; set; } = string.Empty;
 
     public Guid? ModifiedByUserId { get; set; }
+
+    public bool CreateBoundPolicy { get; set; }
+}
+
+public sealed class OpportunityStageUpdateResult
+{
+    public Guid OpportunityId { get; set; }
+    public string Stage { get; set; } = string.Empty;
+    public Guid? PolicyId { get; set; }
+    public string? PolicyNumber { get; set; }
+    public bool PolicyCreated { get; set; }
+    public bool PolicyAlreadyExists { get; set; }
+    public string Message { get; set; } = string.Empty;
 }
 
 public sealed class UpsertOpportunityActivityRequest
