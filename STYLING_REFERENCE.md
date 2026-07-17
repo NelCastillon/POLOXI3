@@ -55,7 +55,7 @@
         <i class="bi bi-search [prefix]-si"></i>
         <input class="[prefix]-search" type="search" />
     </div>
-    <SfDropDownList>...</SfDropDownList>
+    <select class="form-select">...</select>
 </div>
 ```
 
@@ -87,13 +87,13 @@
 ### Grid Card (Segments, Invites)
 ```html
 <div class="[prefix]-grid-card app-datagrid">
-    <SfGrid>...</SfGrid>
+    <AppGrid>...</AppGrid>
 </div>
 ```
 
 ### Dialog/Modal
 ```html
-<SfDialog>
+<div class="um-modal" role="dialog">
     <DialogTemplates>
         <Header>
             <span class="[prefix]-dlg-hdr">
@@ -107,7 +107,7 @@
             <div class="[prefix]-dlg-footer"><!-- Buttons --></div>
         </FooterTemplate>
     </DialogTemplates>
-</SfDialog>
+</div>
 ```
 
 ## Responsive Utilities
@@ -251,8 +251,8 @@ Width="80"      /* Action button columns */
 
 ### Text Alignment
 ```csharp
-TextAlign="Syncfusion.Blazor.Grids.TextAlign.Center"   /* Centered */
-TextAlign="Syncfusion.Blazor.Grids.TextAlign.Right"    /* Right-aligned (numbers) */
+TextAlign="enterprise CSS.Blazor.Grids.TextAlign.Center"   /* Centered */
+TextAlign="enterprise CSS.Blazor.Grids.TextAlign.Right"    /* Right-aligned (numbers) */
 /* Default is left */
 ```
 

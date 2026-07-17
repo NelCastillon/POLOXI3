@@ -320,13 +320,13 @@ CRM_PAGES_IMPLEMENTATION_GUIDE.md              [NEW - comprehensive guide]
 - LeadScoring.razor - Scoring and evaluation
 - Forecast.razor - Analytics and metrics
 
-### Syncfusion Components Used
-- SfGrid - Data grid with paging, sorting, filtering
-- SfDialog - Modal forms
-- SfDropDownList - Dropdown filters
-- SfTextBox - Text input fields
-- SfNumericTextBox - Number input fields
-- SfToast - Toast notifications
+### Enterprise native components Used
+- AppGrid - Data grid with paging, sorting, filtering
+- enterprise modal - Modal forms
+- native select - Dropdown filters
+- native input - Text input fields
+- native numeric input - Number input fields
+- enterprise toast - Toast notifications
 
 ---
 

@@ -87,17 +87,17 @@ private void ViewJobDetails(job)            // Navigate to job details
         <input class="sr-search" placeholder="Search…"
                @oninput="@((Microsoft.AspNetCore.Components.ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty)" />
     </div>
-    <SfDropDownList TValue="string" TItem="LV" DataSource="_options"
+    <select class="form-select" @bind="_selectedValue"
                     ShowClearButton="true" Width="160px"
                     Value="_filter" ValueChanged="@((string v) => _filter = v)">
         <DropDownListFieldSettings Value="Value" Text="Label" />
-    </SfDropDownList>
+    </select>
 </div>
 ```
 
 ### Dialog Form
 ```razor
-<SfDialog @bind-Visible="_showDialog" Width="600px" IsModal="true" ShowCloseIcon="true">
+<div class="um-modal" role="dialog">
     <DialogTemplates>
         <Header><span class="sr-dlg-hdr"><i class="bi bi-icon"></i> Title</span></Header>
         <Content>
@@ -113,13 +113,13 @@ private void ViewJobDetails(job)            // Navigate to job details
             </div>
         </FooterTemplate>
     </DialogTemplates>
-</SfDialog>
+</div>
 ```
 
 ### Grid with Filtering
 ```razor
 <div class="app-datagrid sr-grid">
-    <SfGrid TValue="Model" DataSource="GetFilteredData()" AllowPaging="true" AllowSorting="true">
+    <AppGrid TValue="Model" DataSource="GetFilteredData()" AllowPaging="true" AllowSorting="true">
         <GridPageSettings PageSize="15" />
         <GridColumns>
             <GridColumn Field="@nameof(Model.Name)" HeaderText="Name" MinWidth="180" />
@@ -130,7 +130,7 @@ private void ViewJobDetails(job)            // Navigate to job details
                 </Template>
             </GridColumn>
         </GridColumns>
-    </SfGrid>
+    </AppGrid>
 </div>
 ```
 
@@ -300,7 +300,7 @@ new() {
 
 1. **ChangeEventArgs Ambiguity**
    - Use fully qualified: `Microsoft.AspNetCore.Components.ChangeEventArgs`
-   - Syncfusion also has a `ChangeEventArgs`
+   - The previous third-party component model also had a `ChangeEventArgs`
 
 2. **HttpClient Injection**
    - Current pages inject `HttpClient` directly
@@ -348,7 +348,7 @@ new() {
 ### Grid not showing data
 **Solution:** Ensure DataSource is not null and GetFilteredData() returns data:
 ```csharp
-<SfGrid TValue="Model" DataSource="GetFilteredRules()" ...>
+<AppGrid TValue="Model" DataSource="GetFilteredRules()" ...>
 ```
 
 ### Dialog won't close

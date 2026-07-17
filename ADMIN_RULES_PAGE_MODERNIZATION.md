@@ -9,7 +9,7 @@ The admin business rules page at `/admin/system/rules` has been completely moder
 ## 📊 Before vs After
 
 ### **Before**
-- ❌ Basic layout with Syncfusion SfGrid component
+- ❌ Basic layout with enterprise CSS AppGrid component
 - ❌ Limited visual hierarchy
 - ❌ Generic styling
 - ❌ No KPI metrics display

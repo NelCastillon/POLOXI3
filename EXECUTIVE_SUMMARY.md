@@ -154,8 +154,8 @@ Build Status             Pass      ✅ Verified
 │                                          │
 │  ┌─────────────────────────────────┐    │
 │  │     UI Layer                    │    │
-│  │  ├─ SfGrid components           │    │  ← Data grids
-│  │  ├─ SfKanban component          │    │  ← Pipeline view
+│  │  ├─ AppGrid components           │    │  ← Data grids
+│  │  ├─ enterprise kanban board component          │    │  ← Pipeline view
 │  │  ├─ Bootstrap Icons             │    │  ← Icon system
 │  │  └─ CSS Styling                 │    │  ← Responsive design
 │  └─────────────────────────────────┘    │

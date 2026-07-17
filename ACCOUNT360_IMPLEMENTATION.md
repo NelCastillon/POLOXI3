@@ -102,7 +102,7 @@ The Account360.razor page implements all 14 tabs:
 ## Styling
 
 All styling is scoped CSS in `Account360.razor.css`:
-- No Syncfusion CSS dependencies
+- No enterprise CSS dependencies
 - Enterprise gradient backgrounds
 - Responsive grid layouts
 - Professional color palette

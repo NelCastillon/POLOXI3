@@ -308,7 +308,7 @@
 - ✅ Correct namespaces
 
 ### Dependencies
-- ✅ Syncfusion components available
+- ✅ Enterprise native components available
 - ✅ ApiClient injected
 - ✅ NavigationManager injected
 - ✅ BreadcrumbService injected

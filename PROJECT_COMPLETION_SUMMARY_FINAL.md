@@ -304,7 +304,7 @@ Repository Root/
 ## 💡 KEY TECHNOLOGIES
 
 - **Framework**: Blazor Server Components
-- **UI Library**: Syncfusion Blazor components
+- **UI Library**: enterprise native Blazor components
 - **HTTP Client**: System.Net.Http.Json
 - **Data Binding**: Two-way binding with @bind
 - **API**: RESTful HTTP endpoints

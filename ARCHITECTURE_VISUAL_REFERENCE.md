@@ -297,7 +297,7 @@ PortalInvites.razor
 ├── Main Content
 │   ├── Loading Spinner [if loading]
 │   ├── Empty State [if no data]
-│   ├── SfGrid [if has data]
+│   ├── AppGrid [if has data]
 │   │   ├── Account Column
 │   │   ├── Contact Column
 │   │   ├── Email Column
@@ -306,8 +306,8 @@ PortalInvites.razor
 │   │   ├── Expires Date Column
 │   │   └── Actions Column
 │   └── Grid Pagination
-├── SfToast [notifications]
-└── SfDialog [send invite form]
+├── enterprise toast [notifications]
+└── enterprise modal [send invite form]
     ├── Account Dropdown
     ├── Contact Dropdown
     ├── Email Input
@@ -340,8 +340,8 @@ AccountNotes.razor
 │   │       └── Footer
 │   │           ├── Creator Info
 │   │           └── Actions (Edit, Delete)
-├── SfToast [notifications]
-└── SfDialog [create/edit note form]
+├── enterprise toast [notifications]
+└── enterprise modal [create/edit note form]
     ├── Account Dropdown
     ├── Note Content Textarea
     ├── Note Type Dropdown
@@ -516,8 +516,8 @@ private string _search = "";         // Search term
 private string _filterStatus = "";   // Active filters
 
 // References
-private SfToast? _toast;             // Toast service
-private SfGrid<T>? _grid;            // Grid reference
+private enterprise toast? _toast;             // Toast service
+private AppGrid<T>? _grid;            // Grid reference
 ```
 
 ---

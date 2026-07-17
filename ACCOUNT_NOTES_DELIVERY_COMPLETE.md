@@ -94,10 +94,10 @@ All update dynamically as data changes.
 ## 💻 Technical Stack
 
 - **Framework**: Blazor Server Components
-- **Components**: Syncfusion Blazor Suite
-  - SfDialog (Modal with form)
-  - SfDropDownList (Filters)
-  - SfToast (Notifications)
+- **Components**: enterprise native Blazor component set
+  - enterprise modal (Modal with form)
+  - native select (Filters)
+  - enterprise toast (Notifications)
 - **Styling**: Component-scoped CSS (no conflicts)
 - **Icons**: Bootstrap Icons (bi-*)
 

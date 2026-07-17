@@ -233,7 +233,7 @@ Colors assigned via: `avatarColors[id % avatarColors.Length]`
 
 ## Toast Notifications
 
-Uses `SfToast` component with standard messages:
+Uses `enterprise toast` component with standard messages:
 - Success: "Lead Assigned", "Bulk Assignment Complete", "Rule Deleted"
 - Warning: "Invalid Selection"
 - Error: "Failed to load data"

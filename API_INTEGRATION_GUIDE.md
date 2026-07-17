@@ -42,7 +42,7 @@ private async Task LoadAsync()
     }
     catch (Exception ex)
     {
-        await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");
+        await ShowToastAsync($"Error: {ex.Message}", "enterprise-toast-danger");
     }
     finally
     {
@@ -225,7 +225,7 @@ private async Task LoadAsync()
 await ShowToast("success", "Title", "Message");    // Success
 await ShowToast("warning", "Title", "Message");    // Warning
 await ShowToast("error", "Title", "Message");      // Error
-await ShowToastAsync($"Error: {ex.Message}", "e-toast-danger");  // Alternative
+await ShowToastAsync($"Error: {ex.Message}", "enterprise-toast-danger");  // Alternative
 ```
 
 ---

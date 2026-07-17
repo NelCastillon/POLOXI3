@@ -118,10 +118,10 @@ Each lead's score is broken down into four components:
 - **Mock Data** for demonstration (replace with API calls)
 
 ### Dependencies
-- Syncfusion SfGrid - For data tables
-- Syncfusion SfDropDownList - For filtering
-- Syncfusion SfToast - For notifications
-- SfToast for success/error feedback
+- enterprise CSS AppGrid - For data tables
+- enterprise CSS native select - For filtering
+- enterprise CSS enterprise toast - For notifications
+- enterprise toast for success/error feedback
 - AppCrudDrawer - Custom drawer component
 
 ### Styling Features

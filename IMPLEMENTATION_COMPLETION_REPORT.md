@@ -197,14 +197,14 @@ App.razor (Root)
 ├── Routes.razor (Router)
 │   ├── ProducerWorkbench.razor
 │   │   └── AppPageHeader
-│   │   └── SfGrid
-│   │   └── SfKanban
+│   │   └── AppGrid
+│   │   └── enterprise kanban board
 │   │
 │   ├── CsrWorkbench.razor
 │   │   └── WorkbenchShell
 │   │       ├── KPI Strip
 │   │       ├── Queue Tabs
-│   │       ├── SfGrid (multiple)
+│   │       ├── AppGrid (multiple)
 │   │       └── Detail Panel
 │   │
 │   ├── ServiceManagerWorkbench.razor
@@ -218,7 +218,7 @@ App.razor (Root)
 │   │
 │   ├── OperationsWorkbench.razor
 │   │   └── AppPageHeader
-│   │   └── SfGrid
+│   │   └── AppGrid
 │   │
 │   └── Layout.MainLayout
 │       ├── NavSidebar
@@ -281,7 +281,7 @@ new("workbench", "Workbench", "bi bi-grid-1x2",
 ### Framework & Technologies
 - **Framework**: ASP.NET Core Blazor (.NET 9)
 - **Component Model**: Blazor Server/WASM compatible
-- **UI Library**: Syncfusion for Data Components
+- **UI Library**: enterprise CSS for Data Components
 - **Icons**: Bootstrap Icons
 - **Styling**: CSS with responsive design
 - **State Management**: Component-level with services
@@ -292,7 +292,7 @@ new("workbench", "Workbench", "bi bi-grid-1x2",
 - **Deployment**: Ready for Azure/On-premise
 
 ### Key Dependencies
-- `Syncfusion.Blazor` - Data grids, Kanban
+- `enterprise CSS.Blazor` - Data grids, Kanban
 - `Microsoft.AspNetCore.Components` - Blazor framework
 - Bootstrap Icons - UI icons
 
@@ -636,7 +636,7 @@ For questions about the implementation:
 1. Review the inline code comments
 2. Check `WORKBENCH_IMPLEMENTATION_GUIDE.md`
 3. Refer to `WORKBENCH_QUICK_REFERENCE.md`
-4. Review Syncfusion documentation for component details
+4. Review enterprise CSS documentation for component details
 
 ---
 

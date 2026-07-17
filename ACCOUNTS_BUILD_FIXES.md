@@ -38,7 +38,7 @@ Breadcrumbs.Set(breadcrumbs);
 ```
 
 ### 3. **ChangeEventArgs Ambiguity**
-- **Problem**: `ChangeEventArgs` exists in both `Microsoft.AspNetCore.Components` and `Syncfusion.Blazor.Layouts`
+- **Problem**: `ChangeEventArgs` exists in both `Microsoft.AspNetCore.Components` and `Microsoft.AspNetCore.Components`
 - **Solution**: Fully qualify the type
 
 ```csharp
@@ -71,10 +71,10 @@ var response = await Http.PostAsJsonAsync("/api/accounts", _form);
 
 ```csharp
 // ❌ Wrong
-<SfDropDownList @bind-Value="_selectedFilter" ValueChanged="ApplyFilter" />
+<select class="form-select" @bind="_selectedFilter"></select>
 
 // ✅ Correct
-<SfDropDownList @bind-Value="_selectedFilter" />
+<select class="form-select" @bind="_selectedFilter"></select>
 ```
 
 ### 6. **CSS File Association**

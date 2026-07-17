@@ -200,7 +200,7 @@ To connect to real backend, update:
 
 ## Performance Notes
 
-- Grid displays 15 leads (pageable via Syncfusion grid)
+- Grid displays 15 leads (pageable via enterprise CSS grid)
 - All filtering is client-side (suitable for <1000 records)
 - Mock data loads in 300ms (simulated API delay)
 - For large datasets, implement server-side filtering

@@ -182,7 +182,7 @@ Execute the SQL script in your SQL Server:
 ## Architecture Alignment
 
 The implementation follows your existing patterns:
-- ✅ Uses Syncfusion components (SfToast, SfDropDownList)
+- ✅ Uses Enterprise native components (enterprise toast, native select)
 - ✅ Follows your CSS variable naming
 - ✅ Integrates with ApiClient
 - ✅ Uses breadcrumb service
