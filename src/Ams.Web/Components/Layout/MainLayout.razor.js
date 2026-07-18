@@ -10,6 +10,7 @@ function applyRouteClasses() {
     const path = window.location.pathname || '';
     const lowerPath = path.toLowerCase();
     document.documentElement.classList.toggle('ams-crm-route', lowerPath.startsWith('/crm'));
+    document.documentElement.classList.toggle('ams-client-route', lowerPath.startsWith('/client'));
     document.documentElement.classList.toggle('ams-tenant-route', lowerPath.startsWith('/tenant'));
 }
 
