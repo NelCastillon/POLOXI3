@@ -244,6 +244,9 @@ public sealed partial class DatabaseMigrator
         new("0206_CRM_OpportunityConversionLaunchActions", Migration0206_CrmOpportunityConversionLaunchActions),
         new("0207_CRM_OpportunityForecastCategory_Config", Migration0207_CrmOpportunityForecastCategoryConfig),
         new("0208_CRM_OpportunityMultiLineEnterprise", Migration0208_CrmOpportunityMultiLineEnterprise),
+        new("0209_Submissions_PostCreateAutomation_Schema", Migration0209_SubmissionsPostCreateAutomationSchema),
+        new("0210_Submissions_SubmitToMarketDispatch", Migration0210_SubmissionsSubmitToMarketDispatch),
+        new("0211_Submissions_CurrentMarketCarrierSeed", Migration0211_SubmissionsCurrentMarketCarrierSeed),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16640,6 +16643,637 @@ INNER JOIN CRM.OpportunityLine line ON line.OpportunityId = s.OpportunityId AND 
 WHERE s.IsDeleted = 0
   AND (s.LineOfBusiness = line.LineOfBusiness OR NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine exactLine WHERE exactLine.OpportunityId = s.OpportunityId AND exactLine.IsDeleted = 0 AND exactLine.LineOfBusiness = s.LineOfBusiness))
   AND NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine existing WHERE existing.SubmissionId = s.SubmissionId AND existing.OpportunityLineId = line.OpportunityLineId AND existing.IsDeleted = 0);
+""";
+
+    private const string Migration0209_SubmissionsPostCreateAutomationSchema = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'OPS') EXEC(N'CREATE SCHEMA OPS');
+
+IF OBJECT_ID(N'Submissions.SubmissionAutomationRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionAutomationRule
+    (
+        AutomationRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionAutomationRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RuleCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        AutoCreateDocuments BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateDocuments DEFAULT 1,
+        AutoSelectMarkets BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSelectMarkets DEFAULT 1,
+        AutoSubmitToMarket BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSubmitToMarket DEFAULT 1,
+        AutoAssignOwner BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoAssignOwner DEFAULT 1,
+        AutoCreateFollowUpTask BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateFollowUpTask DEFAULT 1,
+        DefaultOwnerStrategy NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_DefaultOwnerStrategy DEFAULT N'SubmissionOrOpportunityOwner',
+        FollowUpTaskTitle NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTitle DEFAULT N'Follow up on submission',
+        FollowUpTaskDescription NVARCHAR(1000) NULL,
+        FollowUpTaskTypeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTypeCode DEFAULT N'SubmissionFollowUp',
+        FollowUpTaskStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStageCode DEFAULT N'Open',
+        FollowUpTaskStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStatusCode DEFAULT N'Open',
+        FollowUpTaskPriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpPriority DEFAULT N'Normal',
+        FollowUpTaskDueDays INT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpDueDays DEFAULT 3,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionAutomationRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoCreateDocuments') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoCreateDocuments BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateDocuments_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoSelectMarkets') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoSelectMarkets BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSelectMarkets_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoSubmitToMarket') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoSubmitToMarket BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSubmitToMarket_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoAssignOwner') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoAssignOwner BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoAssignOwner_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoCreateFollowUpTask') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoCreateFollowUpTask BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateFollowUpTask_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'DefaultOwnerStrategy') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD DefaultOwnerStrategy NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_DefaultOwnerStrategy_0209 DEFAULT N'SubmissionOrOpportunityOwner';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskTitle') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskTitle NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTitle_0209 DEFAULT N'Follow up on submission';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskDescription') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskDescription NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskTypeCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskTypeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTypeCode_0209 DEFAULT N'SubmissionFollowUp';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskStageCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStageCode_0209 DEFAULT N'Open';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskStatusCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStatusCode_0209 DEFAULT N'Open';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskPriorityCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskPriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpPriority_0209 DEFAULT N'Normal';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskDueDays') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskDueDays INT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpDueDays_0209 DEFAULT 3;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsActive_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionAutomationRule_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionAutomationRule') AND name = N'UX_SubmissionAutomationRule_Tenant_Lob_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionAutomationRule_Tenant_Lob_Code ON Submissions.SubmissionAutomationRule(TenantId, LineOfBusiness, RuleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketRule
+    (
+        MarketRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketRule PRIMARY KEY DEFAULT NEWID(),
+        AutomationRuleId UNIQUEIDENTIFIER NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RuleCode NVARCHAR(100) NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SortOrder DEFAULT 0,
+        AppetiteScore INT NOT NULL CONSTRAINT DF_SubmissionMarketRule_AppetiteScore DEFAULT 80,
+        IsRecommended BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsRecommended DEFAULT 0,
+        SubmitByDefault BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SubmitByDefault DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'AutomationRuleId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD AutomationRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'SubmitByDefault') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD SubmitByDefault BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SubmitByDefault_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsActive_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketRule_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketRule') AND name = N'UX_SubmissionMarketRule_Tenant_Lob_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketRule_Tenant_Lob_Carrier ON Submissions.SubmissionMarketRule(TenantId, LineOfBusiness, CarrierId, RuleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionDocumentChecklist', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionDocumentChecklist
+    (
+        DocumentChecklistId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionDocumentChecklist PRIMARY KEY DEFAULT NEWID(),
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentRequirementId UNIQUEIDENTIFIER NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsRequired DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_StatusCode DEFAULT N'Needed',
+        DocumentId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'DocumentRequirementId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD DocumentRequirementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'DocumentId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD DocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionDocumentChecklist') AND name = N'UX_SubmissionDocumentChecklist_Submission_Category')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionDocumentChecklist_Submission_Category ON Submissions.SubmissionDocumentChecklist(SubmissionId, CategoryCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketDocument
+    (
+        SubmissionMarketDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketDocument PRIMARY KEY DEFAULT NEWID(),
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDocument_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDocument_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDocument') AND name = N'UX_SubmissionMarketDocument_Market_Document')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketDocument_Market_Document ON Submissions.SubmissionMarketDocument(SubmissionMarketId, DocumentId) WHERE IsDeleted = 0;');
+
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD TenantId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ReasonCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ReasonCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'NextActionDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD NextActionDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+EXEC(N'
+UPDATE sm
+SET TenantId = s.TenantId
+FROM Submissions.SubmissionMarket sm
+INNER JOIN Submissions.Submission s ON s.SubmissionId = sm.SubmissionId
+WHERE sm.TenantId IS NULL;
+');
+
+EXEC(N'
+;WITH RankedMarkets AS
+(
+    SELECT sm.SubmissionMarketId,
+           ROW_NUMBER() OVER
+           (
+               PARTITION BY sm.SubmissionId, sm.CarrierId
+               ORDER BY
+                   CASE WHEN sm.Status = N''Submitted'' THEN 0 WHEN sm.Status = N''Quoted'' THEN 1 WHEN sm.Status = N''Pending'' THEN 2 ELSE 3 END,
+                   sm.IsRecommended DESC,
+                   sm.AppetiteScore DESC,
+                   sm.AddedDateUtc DESC,
+                   sm.SubmissionMarketId
+           ) AS RowNumber
+    FROM Submissions.SubmissionMarket sm
+    WHERE sm.IsDeleted = 0
+)
+UPDATE sm
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.SubmissionMarket sm
+INNER JOIN RankedMarkets ranked ON ranked.SubmissionMarketId = sm.SubmissionMarketId
+WHERE ranked.RowNumber > 1;
+');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarket') AND name = N'UX_SubmissionMarket_Submission_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarket_Submission_Carrier ON Submissions.SubmissionMarket(SubmissionId, CarrierId) WHERE IsDeleted = 0;');
+
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityName') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ActionSource') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ActionSource NVARCHAR(50) NULL;
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.Document
+    (
+        DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_Document_0209 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTypeCode NVARCHAR(100) NOT NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        EntityName NVARCHAR(100) NULL,
+        EntityId UNIQUEIDENTIFIER NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        StoragePath NVARCHAR(500) NOT NULL,
+        ContentType NVARCHAR(150) NULL,
+        FileSizeBytes BIGINT NULL,
+        VersionNumber INT NOT NULL CONSTRAINT DF_DMS_Document_VersionNumber_0209 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_DMS_Document_StatusCode_Create_0209 DEFAULT N'Active',
+        RetentionDate DATE NULL,
+        Description NVARCHAR(1000) NULL,
+        Tags NVARCHAR(500) NULL,
+        UploadedByName NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_Document_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_Document_IsDeleted_Create_0209 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'DMS.Document', N'EntityName') IS NULL ALTER TABLE DMS.Document ADD EntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'DMS.Document', N'EntityId') IS NULL ALTER TABLE DMS.Document ADD EntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'StatusCode') IS NULL ALTER TABLE DMS.Document ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_DMS_Document_StatusCode_0209 DEFAULT N'Active';
+IF COL_LENGTH(N'DMS.Document', N'Description') IS NULL ALTER TABLE DMS.Document ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'DMS.Document', N'CreatedByUserId') IS NULL ALTER TABLE DMS.Document ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'ModifiedDateUtc') IS NULL ALTER TABLE DMS.Document ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'DMS.Document', N'ModifiedByUserId') IS NULL ALTER TABLE DMS.Document ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'IsDeleted') IS NULL ALTER TABLE DMS.Document ADD IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_Document_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.Document') AND name = N'IX_DMS_Document_SubmissionEntity')
+    EXEC(N'CREATE INDEX IX_DMS_Document_SubmissionEntity ON DMS.Document(TenantId, EntityName, EntityId, IsDeleted, CategoryCode);');
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'OPS.TaskItem', N'RelatedEntityName') IS NULL ALTER TABLE OPS.TaskItem ADD RelatedEntityName NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'OPS.TaskItem', N'RelatedEntityId') IS NULL ALTER TABLE OPS.TaskItem ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'OPS.TaskItem', N'AccountId') IS NULL ALTER TABLE OPS.TaskItem ADD AccountId UNIQUEIDENTIFIER NULL;
+END;
+
+DECLARE @SubmissionAutomationTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmissionAutomationTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @SubmissionAutomationTenants)
+    INSERT INTO @SubmissionAutomationTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @SubmissionAutomationLines TABLE
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    PRIMARY KEY (TenantId, LineOfBusiness)
+);
+
+IF OBJECT_ID(N'Agency.LineOfBusiness', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT lob.TenantId,
+               LEFT(LTRIM(RTRIM(lob.LobName)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY lob.TenantId, LEFT(LTRIM(RTRIM(lob.LobName)), 100) ORDER BY lob.LobId) AS RowNumber
+        FROM Agency.LineOfBusiness lob
+        WHERE lob.IsDeleted = 0
+          AND lob.IsActive = 1
+          AND NULLIF(LTRIM(RTRIM(lob.LobName)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+END;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+BEGIN
+    DECLARE @SubmissionLineSource TABLE
+    (
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        PRIMARY KEY (TenantId, LineOfBusiness)
+    );
+
+    INSERT INTO @SubmissionLineSource (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT s.TenantId,
+               LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY s.TenantId, LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) ORDER BY s.CreatedDateUtc DESC, s.SubmissionId) AS RowNumber
+        FROM Submissions.Submission s
+        WHERE s.IsDeleted = 0
+          AND NULLIF(LTRIM(RTRIM(s.LineOfBusiness)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+
+    INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM @SubmissionLineSource source
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM @SubmissionAutomationLines existing
+        WHERE existing.TenantId = source.TenantId
+          AND existing.LineOfBusiness = source.LineOfBusiness
+    );
+END;
+
+INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+SELECT t.TenantId, v.LineOfBusiness
+FROM @SubmissionAutomationTenants t
+CROSS JOIN (VALUES (N'General Liability'), (N'Property'), (N'Workers Compensation'), (N'Commercial Auto'), (N'Cyber Liability')) v(LineOfBusiness)
+WHERE NOT EXISTS (SELECT 1 FROM @SubmissionAutomationLines existing WHERE existing.TenantId = t.TenantId AND existing.LineOfBusiness = v.LineOfBusiness);
+
+INSERT INTO Submissions.SubmissionAutomationRule
+    (AutomationRuleId, TenantId, LineOfBusiness, RuleCode, DisplayName, AutoCreateDocuments, AutoSelectMarkets, AutoSubmitToMarket, AutoAssignOwner, AutoCreateFollowUpTask,
+     DefaultOwnerStrategy, FollowUpTaskTitle, FollowUpTaskDescription, FollowUpTaskTypeCode, FollowUpTaskStageCode, FollowUpTaskStatusCode, FollowUpTaskPriorityCode, FollowUpTaskDueDays, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, N'DEFAULT_POST_CREATE', CONCAT(l.LineOfBusiness, N' post-create automation'), 1, 1, 1, 1, 1,
+       N'SubmissionOrOpportunityOwner', N'Follow up on submission markets', N'Review automated document checklist, market submissions, and carrier responses.', N'SubmissionFollowUp', N'Open', N'Open', N'Normal', 3, 1, SYSUTCDATETIME(), 0
+FROM @SubmissionAutomationLines l
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionAutomationRule r
+    WHERE r.TenantId = l.TenantId
+      AND r.LineOfBusiness = l.LineOfBusiness
+      AND r.RuleCode = N'DEFAULT_POST_CREATE'
+      AND r.IsDeleted = 0
+);
+
+INSERT INTO Submissions.SubmissionDocumentRequirement
+    (DocumentRequirementId, TenantId, LineOfBusiness, CategoryCode, DisplayName, IsRequired, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, d.CategoryCode, d.DisplayName, d.IsRequired, d.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM @SubmissionAutomationLines l
+CROSS JOIN
+(
+    VALUES
+        (N'Application', N'Application', CAST(1 AS bit), 10),
+        (N'LossRuns', N'Loss runs', CAST(1 AS bit), 20),
+        (N'ExposureSchedules', N'Exposure schedules', CAST(1 AS bit), 30),
+        (N'PriorPolicies', N'Prior policies', CAST(0 AS bit), 40),
+        (N'Financials', N'Financials', CAST(0 AS bit), 50),
+        (N'ACORD', N'ACORD forms', CAST(0 AS bit), 60)
+) d(CategoryCode, DisplayName, IsRequired, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionDocumentRequirement existing
+    WHERE existing.TenantId = l.TenantId
+      AND existing.LineOfBusiness = l.LineOfBusiness
+      AND existing.CategoryCode = d.CategoryCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    DECLARE @RankedCarrier TABLE
+    (
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        rn INT NOT NULL
+    );
+
+    INSERT INTO @RankedCarrier (TenantId, CarrierId, rn)
+    EXEC(N'
+    SELECT c.TenantId,
+           c.CarrierId,
+           ROW_NUMBER() OVER (PARTITION BY c.TenantId ORDER BY CASE WHEN c.CarrierName IN (N''Travelers'', N''Chubb'', N''Hartford'') THEN 0 ELSE 1 END, c.CarrierName) AS rn
+    FROM Core.Carrier c
+    WHERE c.IsDeleted = 0
+      AND c.IsActive = 1;');
+
+    INSERT INTO Submissions.SubmissionMarketRule
+        (MarketRuleId, AutomationRuleId, TenantId, LineOfBusiness, RuleCode, CarrierId, SortOrder, AppetiteScore, IsRecommended, SubmitByDefault, Notes, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), r.AutomationRuleId, l.TenantId, l.LineOfBusiness, N'DEFAULT_MARKET', c.CarrierId, c.rn * 10,
+           CASE c.rn WHEN 1 THEN 95 WHEN 2 THEN 88 ELSE 80 END,
+           CASE WHEN c.rn = 1 THEN 1 ELSE 0 END,
+           1,
+           N'Default seeded market rule for automated post-create submission workflow.',
+           1, SYSUTCDATETIME(), 0
+    FROM @SubmissionAutomationLines l
+    INNER JOIN Submissions.SubmissionAutomationRule r ON r.TenantId = l.TenantId AND r.LineOfBusiness = l.LineOfBusiness AND r.RuleCode = N'DEFAULT_POST_CREATE' AND r.IsDeleted = 0
+    INNER JOIN @RankedCarrier c ON c.TenantId = l.TenantId AND c.rn <= 3
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionMarketRule existing
+        WHERE existing.TenantId = l.TenantId
+          AND existing.LineOfBusiness = l.LineOfBusiness
+          AND existing.CarrierId = c.CarrierId
+          AND existing.RuleCode = N'DEFAULT_MARKET'
+          AND existing.IsDeleted = 0
+    );
+END;
+""";
+
+    private const string Migration0210_SubmissionsSubmitToMarketDispatch = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketDispatch
+    (
+        SubmissionMarketDispatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketDispatch PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel DEFAULT N'InternalQueue',
+        DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status DEFAULT N'Pending',
+        Recipient NVARCHAR(500) NULL,
+        Subject NVARCHAR(300) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload DEFAULT N'{}',
+        AttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_AttemptCount DEFAULT 0,
+        MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount DEFAULT 3,
+        NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt DEFAULT SYSUTCDATETIME(),
+        LockedDateUtc DATETIME2 NULL,
+        LockedBy NVARCHAR(120) NULL,
+        LastAttemptDateUtc DATETIME2 NULL,
+        CompletedDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchChannelCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel_0210 DEFAULT N'InternalQueue';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchStatusCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status_0210 DEFAULT N'Pending';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'Recipient') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD Recipient NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'Subject') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD Subject NVARCHAR(300) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'PayloadJson') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload_0210 DEFAULT N'{}';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'AttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD AttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_AttemptCount_0210 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'MaxAttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount_0210 DEFAULT 3;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'NextAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt_0210 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LockedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LockedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LockedBy') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LockedBy NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastAttemptDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CompletedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CompletedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastError') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastError NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Created_0210 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_IsDeleted_0210 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'UX_SubmissionMarketDispatch_Market')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketDispatch_Market ON Submissions.SubmissionMarketDispatch(SubmissionMarketId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'IX_SubmissionMarketDispatch_Status')
+    EXEC(N'CREATE INDEX IX_SubmissionMarketDispatch_Status ON Submissions.SubmissionMarketDispatch(TenantId, DispatchStatusCode, IsDeleted, NextAttemptDateUtc, CreatedDateUtc);');
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0210 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0210 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0210 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0210 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0210 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0210 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0210 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0210 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0210 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0210 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0210 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'UX_CarrierSetting_Tenant_Code_Carrier_0210')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierSetting_Tenant_Code_Carrier_0210 ON Agency.CarrierSetting(TenantId, SettingCode, CarrierId) WHERE IsDeleted = 0;');
+
+DECLARE @SubmitToMarketTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmitToMarketTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @SubmitToMarketTenants)
+    INSERT INTO @SubmitToMarketTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @SubmitToMarketSettings TABLE
+(
+    SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+    SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+    AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+);
+
+INSERT INTO @SubmitToMarketSettings VALUES
+(N'SUBMIT_TO_MARKET_DISPATCH_ENABLED', N'Submit-to-Market Dispatch Enabled', N'SubmissionDispatch', N'Tenant', N'Boolean', N'true', N'true', N'Enables the worker to process submitted market dispatch queue records.', N'{""required"":true}', N'{""control"":""toggle""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 10),
+(N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default dispatch channel when no carrier-specific channel is configured. Supported values: InternalQueue, Email, CarrierApi, ExternalConnector.', N'{""maxLength"":50}', N'{""control"":""select"",""options"": [""InternalQueue"",""Email"",""CarrierApi"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
+(N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT', N'Submit-to-Market Default Recipient', N'SubmissionDispatch', N'Tenant', N'Text', NULL, NULL, N'Optional default mailbox or endpoint identifier used by dispatch channels that require a recipient.', N'{""maxLength"":500}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 30),
+(N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE', N'Submit-to-Market Subject Template', N'SubmissionDispatch', N'Tenant', N'Text', N'Submission {SubmissionNumber} ready for market review', N'Submission {SubmissionNumber} ready for market review', N'Subject template for queued submit-to-market dispatch payloads.', N'{""maxLength"":300}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 40),
+(N'SUBMIT_TO_MARKET_MAX_ATTEMPTS', N'Submit-to-Market Max Attempts', N'SubmissionDispatch', N'Tenant', N'Number', N'3', N'3', N'Max worker attempts before a pending dispatch is no longer selected.', N'{""min"":1,""max"":10}', N'{""control"":""number""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 50),
+(N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'[""InternalQueue""]', N'[""InternalQueue""]', N'Channels that this worker may mark completed without an external connector.', N'{""type"":""array""}', N'{""control"":""multi-select"",""options"": [""InternalQueue"",""Email"",""CarrierApi"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
+(N'SUBMIT_TO_MARKET_API_ENDPOINT', N'Submit-to-Market API Endpoint', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier API endpoint. When configured, the worker marks the queue item ready for an external connector to send.', N'{""maxLength"":1000}', N'{""control"":""url""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 70),
+(N'SUBMIT_TO_MARKET_EMAIL', N'Submit-to-Market Email', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier-specific email recipient. When configured, the worker marks the queue item ready for an email connector to send.', N'{""maxLength"":500}', N'{""control"":""email""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 80),
+(N'SUBMIT_TO_MARKET_SECRET_REFERENCE', N'Submit-to-Market Secret Reference', N'SubmissionDispatch', N'Carrier', N'Secret', NULL, NULL, N'Optional Key Vault or secret reference for carrier submit-to-market API credentials.', N'{""maxLength"":500}', N'{""control"":""secret""}', N'SubmitToMarketDispatchWorkerService', 0, 1, 90);
+
+INSERT INTO Agency.CarrierSetting
+(CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM @SubmitToMarketTenants t
+CROSS JOIN @SubmitToMarketSettings s
+WHERE s.ScopeCode = N'Tenant'
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM Agency.CarrierSetting existing
+      WHERE existing.TenantId = t.TenantId
+        AND existing.CarrierId IS NULL
+        AND existing.SettingCode = s.SettingCode
+        AND existing.IsDeleted = 0
+  );
+""";
+
+    private const string Migration0211_SubmissionsCurrentMarketCarrierSeed = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core') EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.Carrier
+    (
+        CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_Carrier PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierCode NVARCHAR(50) NULL,
+        CarrierName NVARCHAR(200) NOT NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsActive_0211 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Carrier_Created_0211 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsDeleted_0211 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Core.Carrier', N'TenantId') IS NULL ALTER TABLE Core.Carrier ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_Carrier_TenantId_0211 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Core.Carrier', N'CarrierCode') IS NULL ALTER TABLE Core.Carrier ADD CarrierCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Core.Carrier', N'CarrierName') IS NULL ALTER TABLE Core.Carrier ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_Core_Carrier_Name_0211 DEFAULT N'Carrier';
+IF COL_LENGTH(N'Core.Carrier', N'IsActive') IS NULL ALTER TABLE Core.Carrier ADD IsActive BIT NOT NULL CONSTRAINT DF_Core_Carrier_Active_0211 DEFAULT 1;
+IF COL_LENGTH(N'Core.Carrier', N'CreatedDateUtc') IS NULL ALTER TABLE Core.Carrier ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Carrier_CreatedDate_0211 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Core.Carrier', N'CreatedByUserId') IS NULL ALTER TABLE Core.Carrier ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Core.Carrier', N'ModifiedDateUtc') IS NULL ALTER TABLE Core.Carrier ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Core.Carrier', N'ModifiedByUserId') IS NULL ALTER TABLE Core.Carrier ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Core.Carrier', N'IsDeleted') IS NULL ALTER TABLE Core.Carrier ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsDeletedB_0211 DEFAULT 0;
+
+DECLARE @CurrentMarketTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @CurrentMarketTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @CurrentMarketTenants)
+    INSERT INTO @CurrentMarketTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @CurrentMarkets TABLE
+(
+    CarrierCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    CarrierName NVARCHAR(200) NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @CurrentMarkets (CarrierCode, CarrierName, SortOrder) VALUES
+(N'TRV', N'Travelers', 10),
+(N'CHB', N'Chubb', 20),
+(N'HFD', N'The Hartford', 30),
+(N'LIB', N'Liberty Mutual', 40),
+(N'CNA', N'CNA', 50),
+(N'ZUR', N'Zurich', 60),
+(N'AIG', N'AIG', 70),
+(N'NAT', N'Nationwide', 80),
+(N'AMT', N'AmTrust', 90),
+(N'BRK', N'Berkshire Hathaway GUARD', 100),
+(N'HAN', N'The Hanover', 110),
+(N'SEL', N'Selective', 120),
+(N'AUT', N'Auto-Owners', 130),
+(N'CIN', N'Cincinnati Insurance', 140),
+(N'MKL', N'Markel', 150),
+(N'PHL', N'Philadelphia Insurance Companies', 160),
+(N'GRA', N'Great American Insurance Group', 170),
+(N'TMH', N'Tokio Marine HCC', 180),
+(N'HIS', N'Hiscox', 190),
+(N'AXL', N'AXA XL', 200);
+
+INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, m.CarrierCode, m.CarrierName, 1, SYSUTCDATETIME(), 0
+FROM @CurrentMarketTenants t
+CROSS JOIN @CurrentMarkets m
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Core.Carrier existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.IsDeleted = 0
+      AND (existing.CarrierCode = m.CarrierCode OR existing.CarrierName = m.CarrierName)
+);
+
+UPDATE existing
+SET IsActive = 1,
+    CarrierCode = COALESCE(NULLIF(existing.CarrierCode, N''), m.CarrierCode),
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Core.Carrier existing
+INNER JOIN @CurrentMarkets m ON existing.CarrierName = m.CarrierName OR existing.CarrierCode = m.CarrierCode
+WHERE existing.IsDeleted = 0
+  AND existing.IsActive = 0;
 """;
 
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """

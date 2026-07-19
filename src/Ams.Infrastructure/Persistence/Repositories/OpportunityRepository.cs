@@ -1052,56 +1052,43 @@ SELECT @ActivityId;";
 
     public async Task<Guid> UpsertSubmissionAsync(UpsertOpportunitySubmissionRequest request, CancellationToken cancellationToken = default)
     {
+        const string schemaSql = @"
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NULL OR COL_LENGTH(N'Submissions.Submission', N'IsDeleted') IS NULL
+    THROW 51010, 'Submissions schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'CRM.OpportunitySubmissionLine', N'U') IS NULL OR COL_LENGTH(N'CRM.OpportunitySubmissionLine', N'IsDeleted') IS NULL
+    THROW 51011, 'Opportunity submission line schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL OR COL_LENGTH(N'Submissions.SubmissionLine', N'IsDeleted') IS NULL
+    THROW 51012, 'Canonical submission line schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionAutomationRule', N'U') IS NULL
+    THROW 51013, 'Submission automation schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskTypeCode') IS NULL
+    THROW 51019, 'Submission automation rule columns are not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketRule', N'U') IS NULL
+    THROW 51014, 'Submission market automation schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionDocumentChecklist', N'U') IS NULL
+    THROW 51015, 'Submission document checklist schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NULL
+    THROW 51016, 'Document schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDocument', N'U') IS NULL
+    THROW 51017, 'Submission market document schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NULL
+    THROW 51018, 'Submit-to-market dispatch schema is not normalized. Run database migrations before creating submissions.', 1;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+    THROW 51020, 'Carrier submit-to-market settings schema is not normalized. Run database migrations before creating submissions.', 1;
+
+";
+
         const string sql = @"
-IF OBJECT_ID(N'CRM.OpportunitySubmissionLine', N'U') IS NULL
-BEGIN
-    CREATE TABLE CRM.OpportunitySubmissionLine
-    (
-        OpportunitySubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunitySubmissionLine PRIMARY KEY DEFAULT NEWID(),
-        TenantId UNIQUEIDENTIFIER NOT NULL,
-        SubmissionId UNIQUEIDENTIFIER NOT NULL,
-        OpportunityId UNIQUEIDENTIFIER NOT NULL,
-        OpportunityLineId UNIQUEIDENTIFIER NOT NULL,
-        LineOfBusiness NVARCHAR(100) NOT NULL,
-        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_TargetPremium_Runtime DEFAULT 0,
-        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_CreatedDateUtc_Runtime DEFAULT SYSUTCDATETIME(),
-        CreatedByUserId UNIQUEIDENTIFIER NULL,
-        ModifiedDateUtc DATETIME2 NULL,
-        ModifiedByUserId UNIQUEIDENTIFIER NULL,
-        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_IsDeleted_Runtime DEFAULT 0
-    );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'UX_OpportunitySubmissionLine_Submission_Line')
-    EXEC(N'CREATE UNIQUE INDEX UX_OpportunitySubmissionLine_Submission_Line ON CRM.OpportunitySubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0;');
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'IX_OpportunitySubmissionLine_Opportunity')
-    EXEC(N'CREATE INDEX IX_OpportunitySubmissionLine_Opportunity ON CRM.OpportunitySubmissionLine(OpportunityId, IsDeleted, SubmissionId);');
-
-IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL
-BEGIN
-    CREATE TABLE Submissions.SubmissionLine
-    (
-        SubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionLine PRIMARY KEY DEFAULT NEWID(),
-        TenantId UNIQUEIDENTIFIER NOT NULL,
-        SubmissionId UNIQUEIDENTIFIER NOT NULL,
-        OpportunityId UNIQUEIDENTIFIER NULL,
-        OpportunityLineId UNIQUEIDENTIFIER NULL,
-        LineOfBusiness NVARCHAR(100) NOT NULL,
-        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionLine_TargetPremium_Runtime DEFAULT 0,
-        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionLine_CreatedDateUtc_Runtime DEFAULT SYSUTCDATETIME(),
-        CreatedByUserId UNIQUEIDENTIFIER NULL,
-        ModifiedDateUtc DATETIME2 NULL,
-        ModifiedByUserId UNIQUEIDENTIFIER NULL,
-        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionLine_IsDeleted_Runtime DEFAULT 0
-    );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'UX_SubmissionLine_Submission_Line')
-    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionLine_Submission_Line ON Submissions.SubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0 AND OpportunityLineId IS NOT NULL;');
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'IX_SubmissionLine_Submission')
-    EXEC(N'CREATE INDEX IX_SubmissionLine_Submission ON Submissions.SubmissionLine(SubmissionId, IsDeleted, LineOfBusiness);');
 
 DECLARE @Number NVARCHAR(50) = NULLIF(LTRIM(RTRIM(@SubmissionNumber)), N'');
 DECLARE @AccountId UNIQUEIDENTIFIER;
@@ -1135,8 +1122,10 @@ SET @ExpirationDate = DATEADD(year, 1, @EffectiveDate);
 IF @Number IS NULL
 BEGIN
     DECLARE @NumberLockResult INT;
+    DECLARE @NumberLockResource NVARCHAR(255) = CONCAT(N'OpportunitySubmissionNumber:', CONVERT(NVARCHAR(36), @TenantId));
+
     EXEC @NumberLockResult = sys.sp_getapplock
-        @Resource = CONCAT(N'OpportunitySubmissionNumber:', CONVERT(NVARCHAR(36), @TenantId)),
+        @Resource = @NumberLockResource,
         @LockMode = N'Exclusive',
         @LockOwner = N'Transaction',
         @LockTimeout = 10000;
@@ -1148,7 +1137,7 @@ BEGIN
     SET @Number = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', FORMAT(@NextNumber, N'00000'));
 
     WHILE EXISTS (SELECT 1 FROM CRM.OpportunitySubmission WHERE TenantId = @TenantId AND SubmissionNumber = @Number AND IsDeleted = 0)
-       OR EXISTS (SELECT 1 FROM Submissions.Submission WHERE TenantId = @TenantId AND SubmissionNumber = @Number AND IsDeleted = 0)
+       OR EXISTS (SELECT 1 FROM Submissions.Submission WHERE TenantId = @TenantId AND SubmissionNumber = @Number)
     BEGIN
         SET @NextNumber += 1;
         SET @Number = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', FORMAT(@NextNumber, N'00000'));
@@ -1161,19 +1150,19 @@ BEGIN
     INSERT INTO CRM.OpportunitySubmission (SubmissionId, TenantId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, TargetPremium, CreatedByUserId, CreatedDateUtc, IsDeleted)
     VALUES (@SubmissionId, @TenantId, @OpportunityId, @Number, @LineOfBusiness, @Status, @TargetPremium, @UserId, SYSUTCDATETIME(), 0);
 
-    IF NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+    IF NOT EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId)
     BEGIN
         INSERT INTO Submissions.Submission
         (
             SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness,
             Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium,
-            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted
+            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId
         )
         VALUES
         (
             @SubmissionId, @TenantId, @AccountId, @OpportunityId, @Number, @LineOfBusiness,
             @Status, N'Normal', @OwnerUserId, @EffectiveDate, @ExpirationDate, @TargetPremium,
-            0, 0, SYSUTCDATETIME(), @UserId, 0
+            0, 0, SYSUTCDATETIME(), @UserId
         );
     END
 END
@@ -1187,7 +1176,7 @@ BEGIN
         ModifiedDateUtc = SYSUTCDATETIME()
     WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
 
-    IF EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+    IF EXISTS (SELECT 1 FROM Submissions.Submission WHERE SubmissionId = @SubmissionId)
     BEGIN
         UPDATE Submissions.Submission
         SET LineOfBusiness = @LineOfBusiness,
@@ -1197,7 +1186,7 @@ BEGIN
             ExpirationDate = COALESCE(ExpirationDate, @ExpirationDate),
             ModifiedByUserId = @UserId,
             ModifiedDateUtc = SYSUTCDATETIME()
-        WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+        WHERE SubmissionId = @SubmissionId;
     END
     ELSE
     BEGIN
@@ -1205,13 +1194,13 @@ BEGIN
         (
             SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness,
             Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium,
-            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted
+            MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId
         )
         VALUES
         (
             @SubmissionId, @TenantId, @AccountId, @OpportunityId, @Number, @LineOfBusiness,
             @Status, N'Normal', @OwnerUserId, @EffectiveDate, @ExpirationDate, @TargetPremium,
-            0, 0, SYSUTCDATETIME(), @UserId, 0
+            0, 0, SYSUTCDATETIME(), @UserId
         );
     END
 END
@@ -1220,7 +1209,6 @@ SELECT TOP 1 @SubmissionStageId = OpportunityStageId
 FROM CRM.OpportunityStage
 WHERE TenantId = @TenantId
   AND IsActive = 1
-  AND IsDeleted = 0
   AND (StageCode IN (N'SUBMISSION', N'MARKETING', N'PROPOSAL') OR StageName IN (N'Submission', N'Marketing', N'Proposal'))
 ORDER BY CASE
     WHEN StageCode = N'SUBMISSION' OR StageName = N'Submission' THEN 0
@@ -1255,8 +1243,11 @@ SELECT @SubmissionId;";
         using var tx = cn.BeginTransaction();
         try
         {
+            await cn.ExecuteAsync(new CommandDefinition(schemaSql, transaction: tx, cancellationToken: cancellationToken));
             var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.SubmissionId, request.TenantId, request.OpportunityId, request.SubmissionNumber, request.LineOfBusiness, request.Status, request.TargetPremium, request.UserId, OpportunityLineIds = requestedLineIds }, tx, cancellationToken: cancellationToken));
             await SyncOpportunitySubmissionLinesAsync(cn, request, id, tx, cancellationToken);
+            if (isNew)
+                await SyncSubmissionPostCreateAutomationAsync(cn, id, request.TenantId, request.OpportunityId, request.UserId, tx, cancellationToken);
             await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "Submission" : "SubmissionUpdated", isNew ? "Submission created" : "Submission updated", $"{request.LineOfBusiness} submission is {request.Status} with target premium {request.TargetPremium:C0}.", "Submission", id, request.UserId, tx, cancellationToken);
             tx.Commit();
             return id;
@@ -1487,6 +1478,349 @@ WHERE Submissions.Submission.SubmissionId = crm.SubmissionId
   AND Submissions.Submission.IsDeleted = 0;";
 
         await cn.ExecuteAsync(new CommandDefinition(canonicalLineSyncSql, new { SubmissionId = submissionId, OpportunityLineIds = requestedLineIds, request.UserId }, transaction, cancellationToken: cancellationToken));
+    }
+
+    private static async Task SyncSubmissionPostCreateAutomationAsync(IDbConnection cn, Guid submissionId, Guid tenantId, Guid opportunityId, Guid? userId, IDbTransaction transaction, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+DECLARE @LineOfBusiness NVARCHAR(100);
+DECLARE @SubmissionNumber NVARCHAR(50);
+DECLARE @AccountId UNIQUEIDENTIFIER;
+DECLARE @AssignedToUserId UNIQUEIDENTIFIER;
+DECLARE @OpportunityOwnerUserId UNIQUEIDENTIFIER;
+DECLARE @CreatedByUserId UNIQUEIDENTIFIER;
+
+SELECT @LineOfBusiness = s.LineOfBusiness,
+       @SubmissionNumber = s.SubmissionNumber,
+       @AccountId = s.AccountId,
+       @AssignedToUserId = s.AssignedToUserId,
+       @CreatedByUserId = s.CreatedByUserId
+FROM Submissions.Submission s
+WHERE s.SubmissionId = @SubmissionId
+  AND s.TenantId = @TenantId
+  AND s.IsDeleted = 0;
+
+SELECT @OpportunityOwnerUserId = o.OwnerUserId
+FROM CRM.Opportunity o
+WHERE o.OpportunityId = @OpportunityId
+  AND o.TenantId = @TenantId
+  AND o.IsDeleted = 0;
+
+IF @LineOfBusiness IS NULL
+    RETURN;
+
+DECLARE @Rule TABLE
+(
+    AutomationRuleId UNIQUEIDENTIFIER NOT NULL,
+    AutoCreateDocuments BIT NOT NULL,
+    AutoSelectMarkets BIT NOT NULL,
+    AutoSubmitToMarket BIT NOT NULL,
+    AutoAssignOwner BIT NOT NULL,
+    AutoCreateFollowUpTask BIT NOT NULL,
+    DefaultOwnerStrategy NVARCHAR(80) NOT NULL,
+    FollowUpTaskTitle NVARCHAR(200) NOT NULL,
+    FollowUpTaskDescription NVARCHAR(1000) NULL,
+    FollowUpTaskTypeCode NVARCHAR(80) NOT NULL,
+    FollowUpTaskStageCode NVARCHAR(50) NOT NULL,
+    FollowUpTaskStatusCode NVARCHAR(50) NOT NULL,
+    FollowUpTaskPriorityCode NVARCHAR(50) NOT NULL,
+    FollowUpTaskDueDays INT NOT NULL
+);
+
+INSERT INTO @Rule
+SELECT TOP 1 r.AutomationRuleId,
+       r.AutoCreateDocuments,
+       r.AutoSelectMarkets,
+       r.AutoSubmitToMarket,
+       r.AutoAssignOwner,
+       r.AutoCreateFollowUpTask,
+       r.DefaultOwnerStrategy,
+       r.FollowUpTaskTitle,
+       r.FollowUpTaskDescription,
+       r.FollowUpTaskTypeCode,
+       r.FollowUpTaskStageCode,
+       r.FollowUpTaskStatusCode,
+       r.FollowUpTaskPriorityCode,
+       r.FollowUpTaskDueDays
+FROM Submissions.SubmissionAutomationRule r
+WHERE r.TenantId = @TenantId
+  AND r.IsDeleted = 0
+  AND r.IsActive = 1
+  AND (r.LineOfBusiness = @LineOfBusiness OR r.LineOfBusiness = N'*')
+ORDER BY CASE WHEN r.LineOfBusiness = @LineOfBusiness THEN 0 ELSE 1 END,
+         CASE WHEN r.RuleCode = N'DEFAULT_POST_CREATE' THEN 0 ELSE 1 END,
+         r.CreatedDateUtc DESC;
+
+IF NOT EXISTS (SELECT 1 FROM @Rule)
+    RETURN;
+
+DECLARE @ResolvedOwnerUserId UNIQUEIDENTIFIER = COALESCE(@AssignedToUserId, @OpportunityOwnerUserId, @UserId, @CreatedByUserId);
+
+IF EXISTS (SELECT 1 FROM @Rule WHERE AutoAssignOwner = 1) AND @ResolvedOwnerUserId IS NOT NULL
+BEGIN
+    UPDATE Submissions.Submission
+    SET AssignedToUserId = COALESCE(AssignedToUserId, @ResolvedOwnerUserId),
+        ModifiedByUserId = @UserId,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE SubmissionId = @SubmissionId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0;
+
+    IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmission') AND name = N'AssignedToUserId')
+    BEGIN
+        EXEC sp_executesql N'
+        UPDATE CRM.OpportunitySubmission
+        SET AssignedToUserId = COALESCE(AssignedToUserId, @ResolvedOwnerUserId),
+            ModifiedByUserId = @UserId,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE SubmissionId = @SubmissionId
+          AND TenantId = @TenantId
+          AND IsDeleted = 0;',
+        N'@SubmissionId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @ResolvedOwnerUserId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER',
+        @SubmissionId = @SubmissionId, @TenantId = @TenantId, @ResolvedOwnerUserId = @ResolvedOwnerUserId, @UserId = @UserId;
+    END;
+END;
+
+IF EXISTS (SELECT 1 FROM @Rule WHERE AutoCreateDocuments = 1)
+BEGIN
+    INSERT INTO Submissions.SubmissionDocumentChecklist
+        (DocumentChecklistId, SubmissionId, TenantId, DocumentRequirementId, CategoryCode, DisplayName, IsRequired, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @SubmissionId, @TenantId, req.DocumentRequirementId, req.CategoryCode, req.DisplayName, req.IsRequired, N'Needed', SYSUTCDATETIME(), @UserId, 0
+    FROM Submissions.SubmissionDocumentRequirement req
+    WHERE req.TenantId = @TenantId
+      AND req.IsDeleted = 0
+      AND req.IsActive = 1
+      AND (req.LineOfBusiness = @LineOfBusiness OR req.LineOfBusiness = N'*')
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionDocumentChecklist existing
+          WHERE existing.SubmissionId = @SubmissionId
+            AND existing.CategoryCode = req.CategoryCode
+            AND existing.IsDeleted = 0
+      );
+
+    INSERT INTO DMS.Document
+        (DocumentId, TenantId, DocumentTypeCode, CategoryCode, EntityName, EntityId, FileName, StoragePath, ContentType, FileSizeBytes, VersionNumber, StatusCode, Description, Tags, UploadedByName, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, N'SubmissionRequirement', c.CategoryCode, N'Submission', @SubmissionId,
+           LEFT(CONCAT(@SubmissionNumber, N' - ', c.DisplayName, N'.placeholder'), 260),
+           N'', NULL, 0, 1, N'Needed', CONCAT(N'Placeholder generated from submission document requirement: ', c.DisplayName), N'Submission,Required', N'System', SYSUTCDATETIME(), @UserId, 0
+    FROM Submissions.SubmissionDocumentChecklist c
+    WHERE c.SubmissionId = @SubmissionId
+      AND c.TenantId = @TenantId
+      AND c.IsDeleted = 0
+      AND c.DocumentId IS NULL
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM DMS.Document existing
+          WHERE existing.TenantId = @TenantId
+            AND existing.EntityName = N'Submission'
+            AND existing.EntityId = @SubmissionId
+            AND existing.CategoryCode = c.CategoryCode
+            AND existing.IsDeleted = 0
+      );
+
+    UPDATE c
+    SET DocumentId = d.DocumentId,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @UserId
+    FROM Submissions.SubmissionDocumentChecklist c
+    INNER JOIN DMS.Document d ON d.TenantId = c.TenantId
+        AND d.EntityName = N'Submission'
+        AND d.EntityId = c.SubmissionId
+        AND d.CategoryCode = c.CategoryCode
+        AND d.IsDeleted = 0
+    WHERE c.SubmissionId = @SubmissionId
+      AND c.TenantId = @TenantId
+      AND c.IsDeleted = 0
+      AND c.DocumentId IS NULL;
+END;
+
+IF EXISTS (SELECT 1 FROM @Rule WHERE AutoSelectMarkets = 1)
+BEGIN
+    INSERT INTO Submissions.SubmissionMarket
+        (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, IsDeleted, TenantId, Notes, NextActionDateUtc, SubmittedDateUtc, SubmittedByUserId, CreatedByUserId)
+    SELECT NEWID(), @SubmissionId, mr.CarrierId,
+           CASE WHEN automationRule.AutoSubmitToMarket = 1 AND mr.SubmitByDefault = 1 THEN N'Submitted' ELSE N'Pending' END,
+           mr.AppetiteScore,
+           mr.IsRecommended,
+           SYSUTCDATETIME(),
+           0,
+           @TenantId,
+           mr.Notes,
+           DATEADD(day, 3, SYSUTCDATETIME()),
+           CASE WHEN automationRule.AutoSubmitToMarket = 1 AND mr.SubmitByDefault = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+           CASE WHEN automationRule.AutoSubmitToMarket = 1 AND mr.SubmitByDefault = 1 THEN @UserId ELSE NULL END,
+           @UserId
+    FROM Submissions.SubmissionMarketRule mr
+    CROSS JOIN @Rule automationRule
+    WHERE mr.TenantId = @TenantId
+      AND mr.IsDeleted = 0
+      AND mr.IsActive = 1
+      AND (mr.LineOfBusiness = @LineOfBusiness OR mr.LineOfBusiness = N'*')
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionMarket existing
+          WHERE existing.SubmissionId = @SubmissionId
+            AND existing.CarrierId = mr.CarrierId
+            AND existing.IsDeleted = 0
+      );
+
+    UPDATE s
+    SET MarketCount = marketSummary.MarketCount,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @UserId
+    FROM Submissions.Submission s
+    CROSS APPLY (SELECT COUNT(1) AS MarketCount FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0) marketSummary
+    WHERE s.SubmissionId = @SubmissionId
+      AND s.TenantId = @TenantId;
+END;
+
+IF EXISTS (SELECT 1 FROM @Rule WHERE AutoCreateDocuments = 1)
+BEGIN
+    INSERT INTO Submissions.SubmissionMarketDocument
+        (SubmissionMarketDocumentId, SubmissionMarketId, SubmissionId, TenantId, DocumentId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), sm.SubmissionMarketId, @SubmissionId, @TenantId, d.DocumentId, SYSUTCDATETIME(), @UserId, 0
+    FROM Submissions.SubmissionMarket sm
+    INNER JOIN DMS.Document d ON d.TenantId = @TenantId AND d.EntityName = N'Submission' AND d.EntityId = @SubmissionId AND d.IsDeleted = 0
+    WHERE sm.SubmissionId = @SubmissionId
+      AND sm.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionMarketDocument existing
+          WHERE existing.SubmissionMarketId = sm.SubmissionMarketId
+            AND existing.DocumentId = d.DocumentId
+            AND existing.IsDeleted = 0
+      );
+END;
+
+IF EXISTS (SELECT 1 FROM @Rule WHERE AutoSubmitToMarket = 1)
+BEGIN
+    IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+    BEGIN
+        EXEC sp_executesql N'
+        INSERT INTO Submissions.SubmissionActionLog
+            (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource)
+        SELECT NEWID(), @SubmissionId, @TenantId, N''SubmitToMarket'', CONCAT(N''Automatically submitted to '', COALESCE(c.CarrierName, N''selected market''), N'' from post-create automation.''), SYSUTCDATETIME(), 0, @UserId, N''SubmissionMarket'', sm.SubmissionMarketId, N''PostCreateAutomation''
+        FROM Submissions.SubmissionMarket sm
+        LEFT JOIN Core.Carrier c ON c.CarrierId = sm.CarrierId
+        WHERE sm.SubmissionId = @SubmissionId
+          AND sm.IsDeleted = 0
+          AND sm.Status = N''Submitted''
+          AND NOT EXISTS
+          (
+              SELECT 1
+              FROM Submissions.SubmissionActionLog existing
+              WHERE existing.SubmissionId = @SubmissionId
+                AND existing.ActionCode = N''SubmitToMarket''
+                AND existing.RelatedEntityId = sm.SubmissionMarketId
+                AND existing.IsDeleted = 0
+          );',
+        N'@SubmissionId UNIQUEIDENTIFIER, @TenantId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER',
+        @SubmissionId = @SubmissionId, @TenantId = @TenantId, @UserId = @UserId;
+    END
+    ELSE
+    BEGIN
+        INSERT INTO Submissions.SubmissionActionLog
+            (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource)
+        SELECT NEWID(), @SubmissionId, @TenantId, N'SubmitToMarket', N'Automatically submitted to selected market from post-create automation.', SYSUTCDATETIME(), 0, @UserId, N'SubmissionMarket', sm.SubmissionMarketId, N'PostCreateAutomation'
+        FROM Submissions.SubmissionMarket sm
+        WHERE sm.SubmissionId = @SubmissionId
+          AND sm.IsDeleted = 0
+          AND sm.Status = N'Submitted'
+          AND NOT EXISTS
+          (
+              SELECT 1
+              FROM Submissions.SubmissionActionLog existing
+              WHERE existing.SubmissionId = @SubmissionId
+                AND existing.ActionCode = N'SubmitToMarket'
+                AND existing.RelatedEntityId = sm.SubmissionMarketId
+                AND existing.IsDeleted = 0
+          );
+    END;
+
+    INSERT INTO Submissions.SubmissionMarketDispatch
+        (SubmissionMarketDispatchId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, DispatchChannelCode, DispatchStatusCode, Recipient, Subject, PayloadJson, AttemptCount, MaxAttemptCount, NextAttemptDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, @SubmissionId, sm.SubmissionMarketId, sm.CarrierId,
+           COALESCE(NULLIF(carrierChannel.SettingValue, N''), NULLIF(defaultChannel.SettingValue, N''), N'InternalQueue'),
+           N'Pending',
+           COALESCE(NULLIF(carrierEmail.SettingValue, N''), NULLIF(defaultRecipient.SettingValue, N'')),
+           LEFT(REPLACE(COALESCE(NULLIF(subjectTemplate.SettingValue, N''), N'Submission {SubmissionNumber} ready for market review'), N'{SubmissionNumber}', COALESCE(@SubmissionNumber, N'')), 300),
+           CONCAT(N'{',
+               N'""tenantId"":""', CONVERT(NVARCHAR(36), @TenantId), N'"",',
+               N'""submissionId"":""', CONVERT(NVARCHAR(36), @SubmissionId), N'"",',
+               N'""submissionMarketId"":""', CONVERT(NVARCHAR(36), sm.SubmissionMarketId), N'"",',
+               N'""carrierId"":""', CONVERT(NVARCHAR(36), sm.CarrierId), N'"",',
+               N'""submissionNumber"":""', STRING_ESCAPE(COALESCE(@SubmissionNumber, N''), 'json'), N'"",',
+               N'""lineOfBusiness"":""', STRING_ESCAPE(COALESCE(@LineOfBusiness, N''), 'json'), N'"",',
+               N'""documentIds"":', COALESCE(documentPayload.DocumentIdsJson, N'[]'),
+           N'}'),
+           0, COALESCE(TRY_CONVERT(INT, maxAttempts.SettingValue), 3), SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0
+    FROM Submissions.SubmissionMarket sm
+    OUTER APPLY
+    (
+        SELECT CONCAT(N'[', STRING_AGG(CONCAT(N'""', CONVERT(NVARCHAR(36), d.DocumentId), N'""'), N','), N']') AS DocumentIdsJson
+        FROM Submissions.SubmissionMarketDocument d
+        WHERE d.SubmissionMarketId = sm.SubmissionMarketId
+          AND d.IsDeleted = 0
+    ) documentPayload
+    LEFT JOIN Agency.CarrierSetting carrierChannel ON carrierChannel.TenantId = @TenantId AND carrierChannel.CarrierId = sm.CarrierId AND carrierChannel.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND carrierChannel.IsActive = 1 AND carrierChannel.IsDeleted = 0
+    LEFT JOIN Agency.CarrierSetting defaultChannel ON defaultChannel.TenantId = @TenantId AND defaultChannel.CarrierId IS NULL AND defaultChannel.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND defaultChannel.IsActive = 1 AND defaultChannel.IsDeleted = 0
+    LEFT JOIN Agency.CarrierSetting carrierEmail ON carrierEmail.TenantId = @TenantId AND carrierEmail.CarrierId = sm.CarrierId AND carrierEmail.SettingCode = N'SUBMIT_TO_MARKET_EMAIL' AND carrierEmail.IsActive = 1 AND carrierEmail.IsDeleted = 0
+    LEFT JOIN Agency.CarrierSetting defaultRecipient ON defaultRecipient.TenantId = @TenantId AND defaultRecipient.CarrierId IS NULL AND defaultRecipient.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT' AND defaultRecipient.IsActive = 1 AND defaultRecipient.IsDeleted = 0
+    LEFT JOIN Agency.CarrierSetting subjectTemplate ON subjectTemplate.TenantId = @TenantId AND subjectTemplate.CarrierId IS NULL AND subjectTemplate.SettingCode = N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE' AND subjectTemplate.IsActive = 1 AND subjectTemplate.IsDeleted = 0
+    LEFT JOIN Agency.CarrierSetting maxAttempts ON maxAttempts.TenantId = @TenantId AND maxAttempts.CarrierId IS NULL AND maxAttempts.SettingCode = N'SUBMIT_TO_MARKET_MAX_ATTEMPTS' AND maxAttempts.IsActive = 1 AND maxAttempts.IsDeleted = 0
+    WHERE sm.SubmissionId = @SubmissionId
+      AND sm.IsDeleted = 0
+      AND sm.Status = N'Submitted'
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionMarketDispatch existing
+          WHERE existing.SubmissionMarketId = sm.SubmissionMarketId
+            AND existing.IsDeleted = 0
+      );
+END;
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL AND EXISTS (SELECT 1 FROM @Rule WHERE AutoCreateFollowUpTask = 1)
+BEGIN
+    DECLARE @TaskNumber NVARCHAR(50) = CONCAT(N'TASK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMddHHmmss'), N'-', RIGHT(CONVERT(NVARCHAR(36), @SubmissionId), 6));
+
+    INSERT INTO OPS.TaskItem
+        (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, AssignedToUserId, DueDate, CompletedDate, CreatedDateUtc, CreatedByUserId, ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, @TaskNumber, automationRule.FollowUpTaskTitle,
+           COALESCE(automationRule.FollowUpTaskDescription, CONCAT(N'Follow up on submission ', @SubmissionNumber, N'.')),
+           automationRule.FollowUpTaskTypeCode, automationRule.FollowUpTaskStageCode, automationRule.FollowUpTaskPriorityCode, automationRule.FollowUpTaskStatusCode, N'Submission', @SubmissionId, @AccountId, @ResolvedOwnerUserId,
+           DATEADD(day, automationRule.FollowUpTaskDueDays, CAST(SYSUTCDATETIME() AS date)), NULL, SYSUTCDATETIME(), @UserId, NULL, NULL, 0
+    FROM @Rule automationRule
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM OPS.TaskItem existing
+        WHERE existing.TenantId = @TenantId
+          AND existing.RelatedEntityName = N'Submission'
+          AND existing.RelatedEntityId = @SubmissionId
+          AND existing.TaskTypeCode = automationRule.FollowUpTaskTypeCode
+          AND existing.IsDeleted = 0
+    );
+END;
+
+INSERT INTO Submissions.SubmissionActionLog
+    (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource)
+SELECT NEWID(), @SubmissionId, @TenantId, N'PostCreateAutomation', N'Post-create automation synchronized documents, markets, submit-to-market actions, owner assignment, and follow-up work from database configuration.', SYSUTCDATETIME(), 0, @UserId, N'Submission', @SubmissionId, N'PostCreateAutomation'
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionActionLog existing
+    WHERE existing.SubmissionId = @SubmissionId
+      AND existing.ActionCode = N'PostCreateAutomation'
+      AND existing.IsDeleted = 0
+);";
+
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId, OpportunityId = opportunityId, UserId = userId }, transaction, cancellationToken: cancellationToken));
     }
 
     private static bool IsLaunchActionAvailable(string actionCode, OpportunityConversionLaunchDto launch)

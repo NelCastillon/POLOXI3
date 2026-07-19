@@ -2,6 +2,7 @@ using Ams.Infrastructure.DependencyInjection;
 using Ams.Worker.Automation;
 using Ams.Worker.Automation.Executors;
 using Ams.Worker.Payments;
+using Ams.Worker.Submissions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -17,6 +18,7 @@ builder.Services.AddScoped<IJobStepExecutor, CarrierDownloadApplyUpdatesStepExec
 builder.Services.AddScoped<IJobStepExecutor, NotificationStepExecutor>();
 builder.Services.AddHostedService<AutomationWorkerService>();
 builder.Services.AddHostedService<PaymentPlatformWorkerService>();
+builder.Services.AddHostedService<SubmitToMarketDispatchWorkerService>();
 
 var host = builder.Build();
 host.Run();

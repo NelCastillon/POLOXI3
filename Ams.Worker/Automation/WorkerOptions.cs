@@ -9,4 +9,6 @@ public sealed class WorkerOptions
     public int PaymentPollIntervalSeconds { get; set; } = 60;
     public int MaxPaymentRetriesPerPoll { get; set; } = 50;
     public int MaxPaymentSettlementCredentialsPerPoll { get; set; } = 25;
+    public int SubmitToMarketPollIntervalSeconds { get; set; } = 30;
+    public int MaxSubmitToMarketDispatchesPerPoll { get; set; } = 25;
 }

@@ -758,6 +758,14 @@ SELECT @MarketId;";
 DECLARE @CarrierId UNIQUEIDENTIFIER = COALESCE(@CarrierIdIn, (SELECT TOP 1 CarrierId FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 ORDER BY IsRecommended DESC, AddedDateUtc DESC), (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND IsDeleted = 0 ORDER BY CarrierName));
 IF @CarrierId IS NULL THROW 52001, 'No carrier is available for quote request.', 1;
 
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND CarrierId = @CarrierId AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Submissions.SubmissionMarket
+        (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, IsDeleted, TenantId, Notes)
+    VALUES
+        (NEWID(), @SubmissionId, @CarrierId, N'In Review', 65, 0, SYSUTCDATETIME(), 0, @TenantId, N'Added from current market quote request.');
+END;
+
 DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
 DECLARE @Premium DECIMAL(18,2) = COALESCE(@AnnualPremium, (SELECT NULLIF(TargetPremium, 0) FROM Submissions.Submission WHERE SubmissionId = @SubmissionId), 50000);
 
@@ -887,16 +895,91 @@ ORDER BY sm.AppetiteScore DESC;";
     public async Task<IReadOnlyList<SubmissionMarketDto>> GetMarketSuggestionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT c.CarrierId, c.CarrierName, s.LineOfBusiness,
-       ar.AppetiteScore, 1 AS IsRecommended, NULL AS DeclineReason,
-       GETUTCDATE() AS AddedDateUtc, NULL AS RespondedDateUtc,
-       NEWID() AS SubmissionMarketId, @SubmissionId AS SubmissionId, 'Suggested' AS Status
-FROM   Submissions.Submission s
-JOIN   Core.AppetiteRule      ar ON ar.LineOfBusiness = s.LineOfBusiness AND ar.IsDeleted = 0
-JOIN   Core.Carrier           c  ON c.CarrierId       = ar.CarrierId     AND c.IsDeleted  = 0
-WHERE  s.SubmissionId = @SubmissionId AND s.IsDeleted = 0
-  AND  ar.AppetiteScore >= 60
-ORDER BY ar.AppetiteScore DESC;";
+DECLARE @HasAppetiteRule BIT = CASE WHEN OBJECT_ID(N'Core.AppetiteRule', N'U') IS NOT NULL THEN 1 ELSE 0 END;
+
+DECLARE @Appetite TABLE
+(
+    CarrierId UNIQUEIDENTIFIER NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    AppetiteScore INT NOT NULL
+);
+
+IF @HasAppetiteRule = 1
+BEGIN
+    INSERT INTO @Appetite (CarrierId, LineOfBusiness, AppetiteScore)
+    EXEC(N'
+        SELECT CarrierId, LineOfBusiness, AppetiteScore
+        FROM Core.AppetiteRule
+        WHERE IsDeleted = 0;');
+END;
+
+;WITH SubmissionContext AS
+(
+    SELECT SubmissionId, TenantId, LineOfBusiness
+    FROM Submissions.Submission
+    WHERE SubmissionId = @SubmissionId
+      AND IsDeleted = 0
+),
+CarrierMarkets AS
+(
+    SELECT c.CarrierId,
+           c.CarrierName,
+           s.LineOfBusiness,
+           COALESCE(MAX(ar.AppetiteScore), 65) AS AppetiteScore,
+           CAST(CASE WHEN COALESCE(MAX(ar.AppetiteScore), 65) >= 60 THEN 1 ELSE 0 END AS bit) AS IsRecommended,
+           MIN(CASE c.CarrierName
+               WHEN N'Travelers' THEN 10
+               WHEN N'Chubb' THEN 20
+               WHEN N'The Hartford' THEN 30
+               WHEN N'Hartford' THEN 30
+               WHEN N'Liberty Mutual' THEN 40
+               WHEN N'CNA' THEN 50
+               WHEN N'Zurich' THEN 60
+               WHEN N'AIG' THEN 70
+               WHEN N'Nationwide' THEN 80
+               WHEN N'AmTrust' THEN 90
+               WHEN N'Berkshire Hathaway GUARD' THEN 100
+               WHEN N'The Hanover' THEN 110
+               WHEN N'Selective' THEN 120
+               WHEN N'Auto-Owners' THEN 130
+               WHEN N'Cincinnati Insurance' THEN 140
+               WHEN N'Markel' THEN 150
+               WHEN N'Philadelphia Insurance Companies' THEN 160
+               WHEN N'Great American Insurance Group' THEN 170
+               WHEN N'Tokio Marine HCC' THEN 180
+               WHEN N'Hiscox' THEN 190
+               WHEN N'AXA XL' THEN 200
+               ELSE 500
+           END) AS SortOrder
+    FROM SubmissionContext s
+    INNER JOIN Core.Carrier c ON c.TenantId = s.TenantId
+        AND c.IsDeleted = 0
+        AND c.IsActive = 1
+    LEFT JOIN @Appetite ar ON ar.CarrierId = c.CarrierId
+        AND ar.LineOfBusiness = s.LineOfBusiness
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionMarket existing
+        WHERE existing.SubmissionId = s.SubmissionId
+          AND existing.CarrierId = c.CarrierId
+          AND existing.IsDeleted = 0
+    )
+    GROUP BY c.CarrierId, c.CarrierName, s.LineOfBusiness
+)
+SELECT TOP 10 CarrierId,
+       CarrierName,
+       LineOfBusiness,
+       AppetiteScore,
+       IsRecommended,
+       CAST(NULL AS NVARCHAR(500)) AS DeclineReason,
+       SYSUTCDATETIME() AS AddedDateUtc,
+       CAST(NULL AS DATETIME2) AS RespondedDateUtc,
+       NEWID() AS SubmissionMarketId,
+       @SubmissionId AS SubmissionId,
+       N'Current Market' AS Status
+FROM CarrierMarkets
+ORDER BY IsRecommended DESC, AppetiteScore DESC, SortOrder, CarrierName;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return (await cn.QueryAsync<SubmissionMarketDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
     }

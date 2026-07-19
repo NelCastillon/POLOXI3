@@ -141,7 +141,10 @@ else
                                 <div class="sdd-detail-list">
                                     @foreach (var line in _lines)
                                     {
-                                        <div><span>@line.LineOfBusiness</span><strong>@line.TargetPremium.ToString("C0")</strong></div>
+                                        <button type="button" class="sdd-coverage-line-row" @onclick="() => OpenCoverageLineDetail(line)" title="View coverage line details">
+                                            <span><i class="bi bi-shield-check" aria-hidden="true"></i>@line.LineOfBusiness</span>
+                                            <strong>@line.TargetPremium.ToString("C0")<i class="bi bi-chevron-right" aria-hidden="true"></i></strong>
+                                        </button>
                                     }
                                     @if (!_lines.Any())
                                     {
@@ -173,6 +176,13 @@ else
                     }
                     else if (_activeTab == 1)
                     {
+                        @if (_marketFocusCoverageLine is not null)
+                        {
+                            <section class="sdd-market-focus" aria-label="Coverage line market focus">
+                                <div><span><i class="bi bi-crosshair" aria-hidden="true"></i> Market workflow focus</span><strong>@_marketFocusCoverageLine.LineOfBusiness</strong><small>Review attached markets, request quote terms, update status, or add DB-backed recommendations for this coverage context.</small></div>
+                                <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="ClearMarketFocus"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Focus</button>
+                            </section>
+                        }
                         <section class="sdd-market-grid">
                             @foreach (var market in VisibleMarkets)
                             {
@@ -203,7 +213,7 @@ else
                             }
                             @if (!VisibleMarkets.Any())
                             {
-                                <div class="sdd-empty"><i class="bi bi-bank" aria-hidden="true"></i><strong>No markets attached</strong><span>Load suggestions or submit to market to create market rows.</span></div>
+                                <div class="sdd-empty"><i class="bi bi-bank" aria-hidden="true"></i><strong>No markets attached</strong><span>Load DB-backed current market recommendations or submit to market to create market rows.</span><button type="button" class="sdd-btn sdd-btn--primary" @onclick="LoadSuggestionsAsync"><i class="bi bi-stars" aria-hidden="true"></i> Load Recommended Markets</button></div>
                             }
                         </section>
                     }
@@ -362,6 +372,50 @@ else
     </div>
 }
 
+@if (_selectedCoverageLine is not null && _submission is not null)
+{
+    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseCoverageLineDetail">
+        <div class="sdd-modal sdd-coverage-modal" role="dialog" aria-modal="true" aria-labelledby="sdd-coverage-title" @onclick:stopPropagation="true">
+            <div class="sdd-modal__header">
+                <i class="bi bi-shield-check" aria-hidden="true"></i>
+                <span id="sdd-coverage-title">Coverage line detail</span>
+                <button type="button" class="sdd-icon-btn sdd-icon-btn--light" @onclick="CloseCoverageLineDetail"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="sdd-coverage-hero">
+                <div class="sdd-coverage-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></div>
+                <div>
+                    <span>Enterprise coverage profile</span>
+                    <h3>@_selectedCoverageLine.LineOfBusiness</h3>
+                    <p>@_submission.SubmissionNumber - @_submission.AccountName</p>
+                </div>
+                @if (_selectedCoverageLine.IsPrimary)
+                {
+                    <strong class="sdd-coverage-primary"><i class="bi bi-star-fill" aria-hidden="true"></i> Primary</strong>
+                }
+            </div>
+            <div class="sdd-coverage-metrics">
+                <div><span>Target premium</span><strong>@_selectedCoverageLine.TargetPremium.ToString("C0")</strong></div>
+                <div><span>Carrier</span><strong>@Safe(_selectedCoverageLine.Carrier, "Not assigned")</strong></div>
+                <div><span>Priority</span><strong>@Safe(_selectedCoverageLine.Priority, _submission.Priority)</strong></div>
+                <div><span>Target effective</span><strong>@(_selectedCoverageLine.TargetEffectiveDate?.ToString("MMM d, yyyy") ?? _submission.EffectiveDate.ToString("MMM d, yyyy"))</strong></div>
+            </div>
+            <div class="sdd-coverage-detail-grid">
+                <div><span>Coverage</span><strong>@_selectedCoverageLine.LineOfBusiness</strong></div>
+                <div><span>Line role</span><strong>@(_selectedCoverageLine.IsPrimary ? "Primary coverage line" : "Package coverage line")</strong></div>
+                <div><span>Submission</span><strong>@_submission.SubmissionNumber</strong></div>
+                <div><span>Opportunity</span><strong>@Safe(_submission.OpportunityName, "Not linked")</strong></div>
+                <div><span>Policy period</span><strong>@_submission.EffectiveDate.ToString("MMM d, yyyy") - @_submission.ExpirationDate.ToString("MMM d, yyyy")</strong></div>
+                <div><span>Markets attached</span><strong>@_markets.Count</strong></div>
+            </div>
+            <div class="sdd-coverage-note"><i class="bi bi-info-circle" aria-hidden="true"></i><span>This detail is loaded from the submission coverage line record and related submission workflow data.</span></div>
+            <div class="sdd-modal__footer">
+                <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="CloseCoverageLineDetail">Close</button>
+                <button type="button" class="sdd-btn sdd-btn--primary" @onclick="ViewMarketsForCoverageLine"><i class="bi bi-bank" aria-hidden="true"></i> View Markets</button>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_showActionDialog && _submission is not null)
 {
     <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
@@ -381,12 +435,30 @@ else
                             <label class="sdd-field">
                                 <span>Carrier Market</span>
                                 <InputSelect class="form-select" @bind-Value="_actionForm.CarrierId">
-                                    <option value="">Default market</option>
-                                    @foreach (var market in _markets)
+                                    <option value="">Auto-select best market</option>
+                                    @if (AttachedMarketOptions.Any())
                                     {
-                                        <option value="@market.CarrierId">@market.CarrierName</option>
+                                        <optgroup label="Attached markets">
+                                            @foreach (var market in AttachedMarketOptions)
+                                            {
+                                                <option value="@market.CarrierId">@market.CarrierName - @market.Status</option>
+                                            }
+                                        </optgroup>
+                                    }
+                                    @if (RecommendedCurrentMarketOptions.Any())
+                                    {
+                                        <optgroup label="Recommended current markets">
+                                            @foreach (var market in RecommendedCurrentMarketOptions)
+                                            {
+                                                <option value="@market.CarrierId">@market.CarrierName</option>
+                                            }
+                                        </optgroup>
                                     }
                                 </InputSelect>
+                                @if (_actionMode == "quote")
+                                {
+                                    <small class="sdd-field-help">Uses the recommended market first, then auto-selects from attached/current markets.</small>
+                                }
                             </label>
                         }
                         @if (_actionMode is "quote" or "policy")
@@ -620,6 +692,8 @@ else
      SubmissionReadinessDto? _readiness;
      SubmissionMarketDto? _selectedMarket;
      QuoteComparisonDto? _selectedQuote;
+     SubmissionLineDto? _selectedCoverageLine;
+     SubmissionLineDto? _marketFocusCoverageLine;
      readonly string[] _marketStatuses = ["Draft", "Selected", "Sent", "In Review", "Blocked", "Declined", "Quoted", "Bound", "Not Selected"];
      readonly string[] _quoteStatuses = ["Requested", "Received", "Presented", "Accepted", "Rejected", "Expired", "Bound", "Withdrawn"];
 
@@ -661,7 +735,7 @@ else
     string ActionHelpText => _actionMode switch
     {
         "submit" => "Submit the package to a carrier market using the existing submit-to-market workflow.",
-        "quote" => "Request quote terms using the existing quote request workflow.",
+            "quote" => "Request quote terms using the existing quote request workflow. Choose a current market or let AMS auto-select the best recommended market.",
         "policy" => "Create a bound policy from a selected or generated quote using existing policy workflow.",
         "proposal" => "Generate a proposal record from available quotes.",
         "decline" => "Decline this submission and all eligible market rows with a required reason.",
@@ -693,6 +767,9 @@ else
 
             _markets.Clear();
             _markets.AddRange(await Api.GetSubmissionMarketsAsync(SubmissionId) ?? []);
+
+            _suggestedMarkets.Clear();
+            _suggestedMarkets.AddRange(await Api.GetSubmissionMarketSuggestionsAsync(SubmissionId) ?? []);
 
             _quotes.Clear();
             _quotes.AddRange(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? []);
@@ -794,6 +871,46 @@ else
     RenderFragment StatusBadge(string status) => @<strong class="sdd-status @StatusClass(status)">@status</strong>;
     RenderFragment MarketStatusBadge(string status) => @<strong class="sdd-market-status @MarketStatusClass(status)">@status</strong>;
 
+    void OpenCoverageLineDetail(SubmissionLineDto line) => _selectedCoverageLine = line;
+    void CloseCoverageLineDetail() => _selectedCoverageLine = null;
+
+    async Task ViewMarketsForCoverageLine()
+    {
+        if (_selectedCoverageLine is null) return;
+
+        _marketFocusCoverageLine = _selectedCoverageLine;
+        CloseCoverageLineDetail();
+        SetKpi("markets", 1);
+
+        if (!_markets.Any())
+        {
+            await LoadSuggestionsAsync();
+        }
+        else
+        {
+            ShowToast($"Viewing markets for {_marketFocusCoverageLine.LineOfBusiness}.");
+        }
+    }
+
+    void ClearMarketFocus()
+    {
+        _marketFocusCoverageLine = null;
+        ShowToast("Market focus cleared.");
+    }
+
+    private IEnumerable<SubmissionMarketDto> AttachedMarketOptions => _markets
+        .OrderByDescending(m => m.IsRecommended)
+        .ThenByDescending(m => m.AppetiteScore)
+        .ThenBy(m => m.CarrierName);
+
+    private IEnumerable<SubmissionMarketDto> RecommendedCurrentMarketOptions => _suggestedMarkets
+        .GroupBy(m => m.CarrierId)
+        .Select(g => g.OrderByDescending(m => m.IsRecommended).ThenByDescending(m => m.AppetiteScore).First())
+        .OrderByDescending(m => m.IsRecommended)
+        .ThenByDescending(m => m.AppetiteScore)
+        .ThenBy(m => m.CarrierName)
+        .Take(10);
+
     void OpenActionDialog(string mode)
     {
         _actionMode = mode;
@@ -889,7 +1006,7 @@ else
         _confirmMessage = _actionMode switch
         {
             "submit" => "Submit this package to the selected or default market?",
-            "quote" => "Request quote terms for this submission?",
+            "quote" => "Request quote terms for this submission? If no carrier was selected, AMS will use the recommended market first, then auto-select from attached/current markets.",
             "policy" => "Create a bound policy from the selected quote or generated quote?",
             "proposal" => "Generate a proposal from the available quote options?",
             "decline" => "Decline this submission? This updates the submission status and market rows.",

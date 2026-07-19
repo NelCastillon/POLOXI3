@@ -745,7 +745,7 @@ else
 {
     <div class="od-modal-backdrop" role="presentation" @onclick="CloseSubmissionDialog"><div class="od-modal od-modal-sm" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
         <div class="um-modal-header"><i class="bi bi-send" aria-hidden="true"></i><span>@(_editingSubmission is null ? "New Submission" : "Edit Submission")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSubmissionDialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-        <EditForm Model="_submissionForm" OnValidSubmit="CommitSubmissionAsync">
+        <EditForm Model="_submissionForm" OnValidSubmit="SubmitSubmissionFormAsync">
             <DataAnnotationsValidator />
             <div class="um-modal-body"><div class="um-form-grid">
                 <div class="um-field um-field--full">
@@ -772,6 +772,34 @@ else
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSubmissionDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingAction"><i class="bi bi-check-lg" aria-hidden="true"></i> @(_editingSubmission is null ? "Create" : "Save")</button></div>
         </EditForm>
+    </div></div>
+}
+
+@if (_showSubmissionConfirm)
+{
+    <div class="od-modal-backdrop od-modal-backdrop-nested" role="presentation" @onclick="CancelSubmissionConfirm"><div class="od-confirm-modal od-submission-confirm" role="dialog" aria-modal="true" aria-labelledby="submission-confirm-title" @onclick:stopPropagation="true">
+        <div class="od-submission-confirm-hero">
+            <div class="od-submission-confirm-icon"><i class="bi bi-send-check-fill" aria-hidden="true"></i></div>
+            <div>
+                <span class="od-submission-confirm-eyebrow">Enterprise submission launch</span>
+                <h2 id="submission-confirm-title">Create this submission package?</h2>
+                <p>Confirming will persist the submission and start the database-backed post-create workflow for the selected coverage lines.</p>
+            </div>
+        </div>
+        <div class="od-submission-confirm-summary" aria-label="Submission summary">
+            <div><span>Opportunity</span><strong>@Safe(_opp?.Name, "Opportunity")</strong></div>
+            <div><span>Coverage</span><strong>@SubmissionConfirmLineLabel</strong></div>
+            <div><span>Target premium</span><strong>@SubmissionConfirmTargetPremium.ToString("C0")</strong></div>
+            <div><span>Initial status</span><strong>@_submissionForm.Status</strong></div>
+        </div>
+        <div class="od-submission-expectations">
+            <div class="od-submission-expectation"><i class="bi bi-database-check" aria-hidden="true"></i><span><strong>Canonical record</strong><small>A submission will be created and synchronized to the submissions workflow.</small></span></div>
+            <div class="od-submission-expectation"><i class="bi bi-folder-check" aria-hidden="true"></i><span><strong>Document readiness</strong><small>DB-backed checklist and placeholder document records will be prepared when automation rules are active.</small></span></div>
+            <div class="od-submission-expectation"><i class="bi bi-bank" aria-hidden="true"></i><span><strong>Market workflow</strong><small>Configured carrier markets may be selected and queued using tenant/carrier settings.</small></span></div>
+            <div class="od-submission-expectation"><i class="bi bi-list-check" aria-hidden="true"></i><span><strong>Follow-up ownership</strong><small>Owner assignment, action logs, and follow-up tasks are created from database configuration.</small></span></div>
+        </div>
+        <div class="od-submission-confirm-note"><i class="bi bi-info-circle" aria-hidden="true"></i><span>External carrier delivery is not faked. Dispatch items are queued for the configured connector path.</span></div>
+        <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelSubmissionConfirm" disabled="@_savingAction">Review Details</button><button type="button" class="um-btn um-btn-primary" @onclick="ConfirmCreateSubmissionAsync" disabled="@_savingAction"><i class="bi bi-check2-circle" aria-hidden="true"></i> Yes, Create Submission</button></div>
     </div></div>
 }
 
@@ -859,6 +887,7 @@ else
     private bool   _showAddComp     = false;
     private bool   _showDeleteConfirm = false;
     private bool   _showSubmission = false;
+    private bool   _showSubmissionConfirm = false;
     private bool   _showLine = false;
     private SubmissionRow? _postCreateSubmission;
 
@@ -1338,7 +1367,34 @@ else
         }
         _showSubmission = true;
     }
-    private void CloseSubmissionDialog() { _showSubmission = false; _editingSubmission = null; _submissionForm = new(); }
+    private void CloseSubmissionDialog() { _showSubmission = false; _showSubmissionConfirm = false; _editingSubmission = null; _submissionForm = new(); }
+
+    private async Task SubmitSubmissionFormAsync()
+    {
+        if (_editingSubmission is null)
+        {
+            var selectedLines = _lines.Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId)).ToList();
+            if (selectedLines.Count == 0)
+            {
+                await ShowToast("Select at least one coverage line for the submission.", "enterprise-toast-danger");
+                return;
+            }
+
+            SyncSubmissionTargetPremium();
+            _showSubmissionConfirm = true;
+            return;
+        }
+
+        await CommitSubmissionAsync();
+    }
+
+    private async Task ConfirmCreateSubmissionAsync()
+    {
+        _showSubmissionConfirm = false;
+        await CommitSubmissionAsync();
+    }
+
+    private void CancelSubmissionConfirm() => _showSubmissionConfirm = false;
 
     private async Task CommitSubmissionAsync()
     {
@@ -1412,6 +1468,10 @@ else
             .Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId))
             .Sum(l => l.EstPremium);
     }
+
+    private List<OppLine> SubmissionConfirmLines => _lines.Where(l => _submissionForm.OpportunityLineIds.Contains(l.OpportunityLineId)).ToList();
+    private string SubmissionConfirmLineLabel => SubmissionConfirmLines.Count == 1 ? SubmissionConfirmLines[0].LineOfBusiness : $"{SubmissionConfirmLines.Count} line package";
+    private decimal SubmissionConfirmTargetPremium => SubmissionConfirmLines.Sum(l => l.EstPremium);
 
     private void ConfirmDeleteActivity(ActivityRow row) => ConfirmDelete("Delete Activity", $"Delete activity {row.Subject}?", async () => { await Api.DeleteOpportunityActivityAsync(row.ActivityId, _currentUserId); await LoadAsync(); await ShowToast("Activity deleted."); });
     private void ConfirmDeleteLine(OppLine row) => ConfirmDelete("Delete Coverage Line", $"Delete {row.LineOfBusiness} from this opportunity?", async () => { await Api.DeleteOpportunityLineAsync(row.OpportunityLineId, _currentUserId); await LoadAsync(); await ShowToast("Coverage line deleted."); });
