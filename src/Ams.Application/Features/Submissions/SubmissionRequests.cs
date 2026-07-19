@@ -131,7 +131,7 @@ public sealed record ProposalDecisionRequest(
 public sealed record SubmitSubmissionToMarketRequest(
     Guid TenantId,
     Guid? CarrierId,
-    [property: StringLength(500)]
+    [StringLength(500)]
     string? Notes);
 
 public sealed record RequestSubmissionQuoteRequest(

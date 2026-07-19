@@ -712,13 +712,13 @@ DECLARE @MarketId UNIQUEIDENTIFIER = (SELECT TOP 1 SubmissionMarketId FROM Submi
 IF @MarketId IS NULL
 BEGIN
     SET @MarketId = NEWID();
-    INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, DeclineReason, AddedDateUtc, RespondedDateUtc, IsDeleted)
-    VALUES (@MarketId, @SubmissionId, @CarrierId, N'Sent', 80, 1, NULL, SYSUTCDATETIME(), NULL, 0);
+    INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, DeclineReason, AddedDateUtc, RespondedDateUtc, TenantId, IsDeleted)
+    VALUES (@MarketId, @SubmissionId, @CarrierId, N'Submitted', 80, 1, NULL, SYSUTCDATETIME(), NULL, @TenantId, 0);
 END
 ELSE
 BEGIN
     UPDATE Submissions.SubmissionMarket
-    SET Status = N'Sent', DeclineReason = NULL, RespondedDateUtc = NULL
+    SET Status = N'Submitted', DeclineReason = NULL, RespondedDateUtc = NULL, TenantId = COALESCE(TenantId, @TenantId)
     WHERE SubmissionMarketId = @MarketId;
 END
 
@@ -734,6 +734,66 @@ SELECT NEWID(), @MarketId, @SubmissionId, @TenantId, d.DocumentId, SYSUTCDATETIM
 FROM DMS.Document d
 WHERE d.TenantId = @TenantId AND d.EntityName = N'Submission' AND d.EntityId = @SubmissionId AND d.IsDeleted = 0
   AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarketDocument md WHERE md.SubmissionMarketId = @MarketId AND md.DocumentId = d.DocumentId AND md.IsDeleted = 0);
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NOT NULL
+BEGIN
+    DECLARE @DispatchChannelCode NVARCHAR(50) = N'InternalQueue';
+    DECLARE @DispatchRecipient NVARCHAR(500) = NULL;
+    DECLARE @DispatchSubjectTemplate NVARCHAR(300) = N'Submission {SubmissionNumber} ready for market review';
+    DECLARE @DispatchMaxAttempts INT = 3;
+
+    IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL
+    BEGIN
+        SELECT @DispatchChannelCode = COALESCE(NULLIF(carrierChannel.SettingValue, N''), NULLIF(defaultChannel.SettingValue, N''), @DispatchChannelCode),
+               @DispatchRecipient = COALESCE(NULLIF(carrierEmail.SettingValue, N''), NULLIF(defaultRecipient.SettingValue, N'')),
+               @DispatchSubjectTemplate = COALESCE(NULLIF(subjectTemplate.SettingValue, N''), @DispatchSubjectTemplate),
+               @DispatchMaxAttempts = COALESCE(TRY_CONVERT(INT, maxAttempts.SettingValue), @DispatchMaxAttempts)
+        FROM (SELECT 1 AS Seed) seed
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = @CarrierId AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND IsActive = 1 AND IsDeleted = 0) carrierChannel
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND IsActive = 1 AND IsDeleted = 0) defaultChannel
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = @CarrierId AND SettingCode = N'SUBMIT_TO_MARKET_EMAIL' AND IsActive = 1 AND IsDeleted = 0) carrierEmail
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT' AND IsActive = 1 AND IsDeleted = 0) defaultRecipient
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE' AND IsActive = 1 AND IsDeleted = 0) subjectTemplate
+        OUTER APPLY (SELECT TOP 1 SettingValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_MAX_ATTEMPTS' AND IsActive = 1 AND IsDeleted = 0) maxAttempts;
+    END;
+
+    INSERT INTO Submissions.SubmissionMarketDispatch
+        (SubmissionMarketDispatchId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, DispatchChannelCode, DispatchStatusCode, Recipient, Subject, PayloadJson, AttemptCount, MaxAttemptCount, NextAttemptDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, @SubmissionId, @MarketId, @CarrierId,
+           @DispatchChannelCode,
+           N'Pending',
+           @DispatchRecipient,
+           LEFT(REPLACE(@DispatchSubjectTemplate, N'{SubmissionNumber}', COALESCE(submission.SubmissionNumber, N'')), 300),
+           CONCAT(N'{',
+               N'""tenantId"":""', CONVERT(NVARCHAR(36), @TenantId), N'"",',
+               N'""submissionId"":""', CONVERT(NVARCHAR(36), @SubmissionId), N'"",',
+               N'""submissionMarketId"":""', CONVERT(NVARCHAR(36), @MarketId), N'"",',
+               N'""carrierId"":""', CONVERT(NVARCHAR(36), @CarrierId), N'"",',
+               N'""submissionNumber"":""', STRING_ESCAPE(COALESCE(submission.SubmissionNumber, N''), 'json'), N'"",',
+               N'""lineOfBusiness"":""', STRING_ESCAPE(COALESCE(submission.LineOfBusiness, N''), 'json'), N'"",',
+               N'""notes"":""', STRING_ESCAPE(COALESCE(@Notes, N''), 'json'), N'"",',
+               N'""documentIds"":', COALESCE(documentPayload.DocumentIdsJson, N'[]'),
+           N'}'),
+           0, @DispatchMaxAttempts, SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 0
+    FROM Submissions.Submission submission
+    OUTER APPLY
+    (
+        SELECT CONCAT(N'[', STRING_AGG(CONCAT(N'""', CONVERT(NVARCHAR(36), d.DocumentId), N'""'), N','), N']') AS DocumentIdsJson
+        FROM Submissions.SubmissionMarketDocument d
+        WHERE d.SubmissionMarketId = @MarketId
+          AND d.IsDeleted = 0
+    ) documentPayload
+    WHERE submission.SubmissionId = @SubmissionId
+      AND submission.TenantId = @TenantId
+      AND submission.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionMarketDispatch existing
+          WHERE existing.SubmissionMarketId = @MarketId
+            AND existing.IsDeleted = 0
+      );
+END;
 
 UPDATE Submissions.Submission
 SET Status = CASE WHEN Status IN (N'Bound', N'Declined', N'Withdrawn') THEN Status ELSE N'Marketing' END,

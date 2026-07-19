@@ -60,34 +60,32 @@ BEGIN
     RETURN;
 END;
 
-IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
-BEGIN
-    SELECT 0;
-    RETURN;
-END;
-
 DECLARE @WorkerId NVARCHAR(120) = CONCAT(HOST_NAME(), N':SubmitToMarketDispatch');
 DECLARE @Batch TABLE (SubmissionMarketDispatchId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+DECLARE @HasCarrierSetting BIT = CASE WHEN OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL THEN 0 ELSE 1 END;
 
 ;WITH NextBatch AS
 (
     SELECT TOP (@MaxDispatches) d.SubmissionMarketDispatchId
     FROM Submissions.SubmissionMarketDispatch d WITH (READPAST, UPDLOCK, ROWLOCK)
-    OUTER APPLY
-    (
-        SELECT TOP 1 enabled.SettingValue
-        FROM Agency.CarrierSetting enabled
-        WHERE enabled.TenantId = d.TenantId
-          AND enabled.CarrierId IS NULL
-          AND enabled.SettingCode = N'SUBMIT_TO_MARKET_DISPATCH_ENABLED'
-          AND enabled.IsActive = 1
-          AND enabled.IsDeleted = 0
-    ) enabled
     WHERE d.IsDeleted = 0
       AND d.DispatchStatusCode IN (N'Pending', N'Failed')
       AND d.AttemptCount < d.MaxAttemptCount
       AND d.NextAttemptDateUtc <= SYSUTCDATETIME()
-      AND COALESCE(enabled.SettingValue, N'true') = N'true'
+      AND (
+          @HasCarrierSetting = 0
+          OR NOT EXISTS
+          (
+              SELECT 1
+              FROM Agency.CarrierSetting disabled
+              WHERE disabled.TenantId = d.TenantId
+                AND disabled.CarrierId IS NULL
+                AND disabled.SettingCode = N'SUBMIT_TO_MARKET_DISPATCH_ENABLED'
+                AND disabled.SettingValue = N'false'
+                AND disabled.IsActive = 1
+                AND disabled.IsDeleted = 0
+          )
+      )
     ORDER BY d.NextAttemptDateUtc, d.CreatedDateUtc
 )
 UPDATE d
@@ -103,10 +101,14 @@ INNER JOIN NextBatch b ON b.SubmissionMarketDispatchId = d.SubmissionMarketDispa
 
 UPDATE d
 SET DispatchStatusCode = CASE
+        WHEN @HasCarrierSetting = 0 AND d.DispatchChannelCode = N'InternalQueue' THEN N'Completed'
         WHEN completable.SettingValue IS NOT NULL AND CHARINDEX(CONCAT(N'""', d.DispatchChannelCode, N'""'), completable.SettingValue) > 0 THEN N'Completed'
         ELSE N'ReadyForExternalConnector'
     END,
-    CompletedDateUtc = CASE WHEN completable.SettingValue IS NOT NULL AND CHARINDEX(CONCAT(N'""', d.DispatchChannelCode, N'""'), completable.SettingValue) > 0 THEN SYSUTCDATETIME() ELSE NULL END,
+    CompletedDateUtc = CASE
+        WHEN @HasCarrierSetting = 0 AND d.DispatchChannelCode = N'InternalQueue' THEN SYSUTCDATETIME()
+        WHEN completable.SettingValue IS NOT NULL AND CHARINDEX(CONCAT(N'""', d.DispatchChannelCode, N'""'), completable.SettingValue) > 0 THEN SYSUTCDATETIME()
+        ELSE NULL END,
     LockedDateUtc = NULL,
     LockedBy = NULL,
     LastError = NULL,
@@ -116,7 +118,8 @@ OUTER APPLY
 (
     SELECT TOP 1 setting.SettingValue
     FROM Agency.CarrierSetting setting
-    WHERE setting.TenantId = d.TenantId
+    WHERE @HasCarrierSetting = 1
+      AND setting.TenantId = d.TenantId
       AND setting.CarrierId IS NULL
       AND setting.SettingCode = N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS'
       AND setting.IsActive = 1
