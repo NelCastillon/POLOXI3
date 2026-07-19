@@ -1,6 +1,7 @@
 @page "/crm/opportunities/{OpportunityId:guid}"
 @namespace Ams.Web.Components.Pages.Crm
 @using Ams.Application.Features.Opportunities
+@using Ams.Application.Features.Documents
 @using System.ComponentModel.DataAnnotations
 @using System.Security.Claims
 @inject ApiClient Api
@@ -45,7 +46,7 @@ else
                     <h1>@_opp.Name</h1>
                     <span><i class="bi bi-hash" aria-hidden="true"></i> @_opp.OppNumber</span>
                 </div>
-                <p>@_opp.AccountName ? @_opp.Owner ? Close @FormatDate(_opp.CloseDate)</p>
+                <p>@Safe(_opp.AccountName, "Account pending") <span aria-hidden="true">&bull;</span> @Safe(_opp.Owner, "Unassigned") <span aria-hidden="true">&bull;</span> Close @FormatDate(_opp.CloseDate)</p>
             </div>
         </div>
         <div class="od-hero-actions">
@@ -325,7 +326,7 @@ else
                                     <div class="od-table-wrap"><table class="od-table"><thead><tr><th>File</th><th>Category</th><th class="text-end">Size</th><th>Uploaded By</th><th>Date</th><th class="text-end">Actions</th></tr></thead><tbody>
                                         @foreach (var d in _documents)
                                         {
-                                            <tr><td data-label="File"><span class="od-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></td><td data-label="Category">@d.Category</td><td data-label="Size" class="text-end od-mono">@d.SizeKb KB</td><td data-label="Uploaded By">@d.UploadedBy</td><td data-label="Date" class="od-mono">@d.UploadedAt.ToString("d")</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
+                                            <tr><td data-label="File"><span class="od-doc-name"><i class="bi @DocIcon(d.Extension)" aria-hidden="true"></i> @d.FileName</span></td><td data-label="Category">@d.Category</td><td data-label="Size" class="text-end od-mono">@d.SizeKb KB</td><td data-label="Uploaded By">@d.UploadedBy</td><td data-label="Date" class="od-mono">@d.UploadedAt.ToString("d")</td><td data-label="Actions" class="text-end"><div class="od-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit document" @onclick="() => OpenEditDocument(d)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download document" @onclick="() => DownloadDocumentAsync(d)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteDocument(d)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
                                         }
                                     </tbody></table></div>
                                 }
@@ -574,6 +575,67 @@ else
                 <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showUpload = false">Cancel</button>
                 <button type="submit" class="um-btn um-btn-primary" disabled="@_savingUpload">
                     @if (_savingUpload) { <span class="um-spinner-sm"></span> } Upload
+                </button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+
+@if (_showDocumentEdit)
+{
+    <div class="od-modal-backdrop" role="presentation" @onclick="CloseDocumentEditDialog"><div class="od-modal" role="dialog" aria-modal="true" aria-labelledby="document-edit-title" @onclick:stopPropagation="true">
+        <div class="um-modal-header">
+            <i class="bi bi-file-earmark-text" aria-hidden="true"></i>
+            <span id="document-edit-title">Edit Opportunity Document</span>
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDocumentEditDialog" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <EditForm Model="_documentEditForm" OnValidSubmit="SaveDocumentEditAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <div class="od-document-edit-summary">
+                    <i class="bi @DocIcon(_documentEditForm.Extension)" aria-hidden="true"></i>
+                    <div>
+                        <strong>@Safe(_editingDocument?.FileName, "Document")</strong>
+                        <span>@Safe(_documentEditForm.Category, "Uncategorized") · @_documentEditForm.SizeKb KB · Uploaded @_documentEditForm.UploadedAt.ToString("d")</span>
+                    </div>
+                </div>
+                <div class="um-form-grid">
+                    <div class="um-field um-field--full">
+                        <label>Document Name <span class="text-danger">*</span></label>
+                        <InputText class="um-input" @bind-Value="_documentEditForm.FileName" />
+                        <ValidationMessage For="() => _documentEditForm.FileName" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Category <span class="text-danger">*</span></label>
+                        <InputSelect class="um-input" @bind-Value="_documentEditForm.Category">
+                            <option value="">Select category</option>
+                            @foreach (var category in DocumentCategoryOptions)
+                            {
+                                <option value="@category.Value">@category.Label</option>
+                            }
+                        </InputSelect>
+                        <ValidationMessage For="() => _documentEditForm.Category" class="text-danger" />
+                    </div>
+                    <div class="um-field">
+                        <label>Retention Date</label>
+                        <InputDate class="um-input" @bind-Value="_documentEditForm.RetentionDate" />
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label>Description</label>
+                        <InputTextArea class="um-input" rows="3" @bind-Value="_documentEditForm.Description" placeholder="Add purpose, context, or handling notes for this opportunity document." />
+                        <ValidationMessage For="() => _documentEditForm.Description" class="text-danger" />
+                    </div>
+                    <div class="um-field um-field--full">
+                        <label>Tags</label>
+                        <InputText class="um-input" @bind-Value="_documentEditForm.Tags" placeholder="proposal, carrier-submission, correspondence" />
+                        <ValidationMessage For="() => _documentEditForm.Tags" class="text-danger" />
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDocumentEditDialog">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_savingDocumentEdit">
+                    @if (_savingDocumentEdit) { <span class="um-spinner-sm"></span> } Save Changes
                 </button>
             </div>
         </EditForm>
@@ -913,6 +975,10 @@ else
     private string? _uploadFileError;
     private string _uploadedByName = "Current user";
     private bool _savingUpload;
+    private bool _showDocumentEdit;
+    private bool _savingDocumentEdit;
+    private DocRow? _editingDocument;
+    private DocumentEditForm _documentEditForm = new();
     private const long MaxUploadBytes = 104_857_600;
     private static readonly HashSet<string> AllowedUploadExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -1176,6 +1242,76 @@ else
         _uploadForm = new();
         _selectedUploadFile = null;
         _uploadFileError = null;
+    }
+
+    private void OpenEditDocument(DocRow row)
+    {
+        _editingDocument = row;
+        _documentEditForm = new()
+        {
+            DocumentId = row.DocumentId,
+            FileName = row.FileName,
+            Extension = row.Extension,
+            Category = row.Category,
+            Description = row.Description,
+            Tags = row.Tags,
+            RetentionDate = row.RetentionDate,
+            SizeKb = row.SizeKb,
+            UploadedAt = row.UploadedAt
+        };
+        _showDocumentEdit = true;
+    }
+
+    private void CloseDocumentEditDialog()
+    {
+        if (_savingDocumentEdit) return;
+        _showDocumentEdit = false;
+        _editingDocument = null;
+        _documentEditForm = new();
+    }
+
+    private async Task SaveDocumentEditAsync()
+    {
+        if (_editingDocument is null) return;
+
+        _savingDocumentEdit = true;
+        try
+        {
+            var originalName = _editingDocument.FileName;
+            var newName = _documentEditForm.FileName.Trim();
+            if (!string.Equals(originalName, newName, StringComparison.Ordinal))
+            {
+                await Api.RenameDocumentAsync(new RenameDocumentRequest
+                {
+                    DocumentId = _editingDocument.DocumentId,
+                    NewFileName = newName,
+                    ModifiedByUserId = _currentUserId
+                });
+            }
+
+            await Api.UpdateDocumentMetadataAsync(new UpdateDocumentMetadataRequest
+            {
+                DocumentId = _editingDocument.DocumentId,
+                Description = Normalize(_documentEditForm.Description),
+                Tags = Normalize(_documentEditForm.Tags),
+                RetentionDate = _documentEditForm.RetentionDate,
+                ModifiedByUserId = _currentUserId
+            });
+
+            _showDocumentEdit = false;
+            _editingDocument = null;
+            _documentEditForm = new();
+            await LoadOpportunityDocumentsAsync();
+            await ShowToast("Document updated.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Document update failed: {ex.Message}", "enterprise-toast-danger");
+        }
+        finally
+        {
+            _savingDocumentEdit = false;
+        }
     }
 
     private void CreateSubmission()
@@ -1621,7 +1757,7 @@ else
         IsActive = dto.IsActive
     };
     private static CompetitorRow MapCompetitor(OpportunityCompetitorDto dto) => new() { CompetitorId = dto.CompetitorId, Name = dto.Name, Strength = dto.Strength };
-    private static DocRow MapDocument(DocumentDto dto) => new() { DocumentId = dto.DocumentId, FileName = dto.FileName, Extension = Path.GetExtension(dto.FileName), Category = dto.CategoryCode, SizeKb = ToSizeKb(dto.FileSizeBytes ?? 0), UploadedBy = dto.UploadedByName ?? "System", UploadedAt = dto.CreatedDateUtc };
+    private static DocRow MapDocument(DocumentDto dto) => new() { DocumentId = dto.DocumentId, FileName = dto.FileName, Extension = Path.GetExtension(dto.FileName), Category = dto.CategoryCode, Description = dto.Description, Tags = dto.Tags, RetentionDate = dto.RetentionDate, SizeKb = ToSizeKb(dto.FileSizeBytes ?? 0), UploadedBy = dto.UploadedByName ?? "System", UploadedAt = dto.CreatedDateUtc };
     private static WorkflowEventRow MapWorkflowEvent(OpportunityWorkflowEventDto dto) => new() { WorkflowEventId = dto.WorkflowEventId, EventType = dto.EventType, EventTitle = dto.EventTitle, EventDetail = dto.EventDetail, RelatedEntityName = dto.RelatedEntityName, RelatedEntityId = dto.RelatedEntityId, EventDateUtc = dto.EventDateUtc };
 
     // -- Helpers ---------------------------------------------------------------
@@ -1819,7 +1955,7 @@ else
     private sealed class ActivityRow { public Guid ActivityId { get; set; } public string Type { get; set; }=string.Empty; public string Subject { get; set; }=string.Empty; public string? Notes { get; set; } public string By { get; set; }=string.Empty; public DateTime OccurredAt { get; set; }=DateTime.UtcNow; }
     private sealed class QuoteRow    { public Guid QuoteId { get; set; }=Guid.NewGuid(); public string QuoteNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Pending"; public DateTime ExpiresAt { get; set; }=DateTime.UtcNow.AddDays(30); }
     private sealed class CurrentPolicyRow { public Guid PolicyId { get; set; } public Guid SubmissionId { get; set; } public Guid QuoteId { get; set; } public string PolicyNumber { get; set; }=string.Empty; public string CarrierName { get; set; }=string.Empty; public string Status { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Priority { get; set; }=string.Empty; public decimal AnnualPremium { get; set; } public decimal WrittenPremium { get; set; } public DateTime EffectiveDate { get; set; } public DateTime ExpirationDate { get; set; } public DateTime BoundDateUtc { get; set; } public string? AssignedToUserName { get; set; } public string ProducerName { get; set; }=string.Empty; public string CsrName { get; set; }=string.Empty; public int DocumentCount { get; set; } public int ActivityCount { get; set; } public int EndorsementCount { get; set; } public string RenewalStage { get; set; }=string.Empty; public string LastAction { get; set; }=string.Empty; public int DaysToExpiration { get; set; } public bool IsActive { get; set; } }
-    private sealed class DocRow      { public Guid DocumentId { get; set; } public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
+    private sealed class DocRow      { public Guid DocumentId { get; set; } public string FileName { get; set; }=string.Empty; public string Extension { get; set; }=string.Empty; public string Category { get; set; }=string.Empty; public string? Description { get; set; } public string? Tags { get; set; } public DateOnly? RetentionDate { get; set; } public int SizeKb { get; set; } public string UploadedBy { get; set; }=string.Empty; public DateTime UploadedAt { get; set; }=DateTime.UtcNow; }
     private sealed class WorkflowEventRow { public Guid WorkflowEventId { get; set; } public string EventType { get; set; }=string.Empty; public string EventTitle { get; set; }=string.Empty; public string? EventDetail { get; set; } public string? RelatedEntityName { get; set; } public Guid? RelatedEntityId { get; set; } public DateTime EventDateUtc { get; set; }=DateTime.UtcNow; }
     private sealed class UploadDocumentForm
     {
@@ -1827,6 +1963,18 @@ else
         [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
         [Required, StringLength(20)] public string Extension { get; set; } = string.Empty;
         [Range(0, int.MaxValue)] public int SizeKb { get; set; }
+    }
+    private sealed class DocumentEditForm
+    {
+        public Guid DocumentId { get; set; }
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string Category { get; set; } = string.Empty;
+        [StringLength(20)] public string Extension { get; set; } = string.Empty;
+        [StringLength(1000)] public string? Description { get; set; }
+        [StringLength(500)] public string? Tags { get; set; }
+        public DateOnly? RetentionDate { get; set; }
+        [Range(0, int.MaxValue)] public int SizeKb { get; set; }
+        public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
     }
     private sealed class CompetitorRow { public Guid CompetitorId { get; set; } public string Name { get; set; }=string.Empty; public string Strength { get; set; }="Moderate"; }
     private sealed record LV(string Value, string Label);
