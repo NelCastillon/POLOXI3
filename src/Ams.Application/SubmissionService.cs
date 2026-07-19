@@ -88,6 +88,15 @@ public sealed class SubmissionService : ISubmissionService
     public Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetMetricsAsync(tenantId, cancellationToken);
 
+    public Task<IReadOnlyList<PolicyCreationSourceDto>> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyCreationSourcesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyBindStatusesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken);
+
     public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
         => _repository.SubmitToMarketAsync(id, request, cancellationToken);
 
@@ -184,12 +193,17 @@ public sealed class SubmissionService : ISubmissionService
     {
         // Enterprise rule: binding a policy must trace back to a real submission within the
         // same tenant and the same account so the Policy is never orphaned or cross-tenant.
-        if (request.SubmissionId == Guid.Empty)
+        if (!request.SubmissionId.HasValue || request.SubmissionId.Value == Guid.Empty)
         {
-            throw new InvalidOperationException("Binding a policy requires a parent Submission. SubmissionId was not supplied.");
+            if (request.AccountId == Guid.Empty)
+            {
+                throw new InvalidOperationException("Direct policy binding requires an Account when no parent Submission is supplied.");
+            }
+
+            return await _repository.BindPolicyAsync(request, cancellationToken);
         }
 
-        var submission = await _repository.GetByIdAsync(request.SubmissionId, cancellationToken)
+        var submission = await _repository.GetByIdAsync(request.SubmissionId.Value, cancellationToken)
             ?? throw new InvalidOperationException($"Parent submission '{request.SubmissionId}' was not found.");
 
         if (request.TenantId != Guid.Empty && submission.TenantId != request.TenantId)
@@ -202,7 +216,19 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent submission is not linked to the supplied account; the bind chain is inconsistent.");
         }
 
-        return await _repository.BindPolicyAsync(request, cancellationToken);
+        var result = await CreatePolicyAsync(request.SubmissionId.Value, new CreatePolicyFromSubmissionRequest(
+            TenantId: request.TenantId,
+            QuoteId: request.QuoteId.HasValue && request.QuoteId.Value != Guid.Empty ? request.QuoteId : null,
+            CarrierId: request.CarrierId,
+            AnnualPremium: request.AnnualPremium,
+            EffectiveDate: request.EffectiveDate,
+            ExpirationDate: request.ExpirationDate,
+            PolicyNumber: request.PolicyNumber,
+            PolicySourceCode: request.PolicySourceCode,
+            PolicySourceReason: request.PolicySourceReason,
+            PolicySourceNotes: request.PolicySourceNotes), cancellationToken);
+
+        return result.Id;
     }
 }
 

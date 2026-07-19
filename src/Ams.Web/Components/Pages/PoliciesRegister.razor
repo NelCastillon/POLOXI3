@@ -51,6 +51,15 @@
                             </InputSelect>
                         </div>
                         <div class="um-field">
+                            <label>Policy Source <span class="text-danger">*</span></label>
+                            <InputSelect TValue="string" class="form-select" Value="@_policyForm.PolicySourceCode" ValueChanged="@((string value) => OnPolicySourceChanged(value))" ValueExpression="@(() => _policyForm.PolicySourceCode)">
+                                @foreach (var source in DirectPolicySources)
+                                {
+                                    <option value="@source.SourceCode">@source.SourceName</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
                             <label>Line of Business <span class="text-danger">*</span></label>
                             <InputSelect class="form-select" @bind-Value="_policyForm.Lob">
                                 <option value="">Select LOB</option>
@@ -167,6 +176,14 @@
                             <label>Notes</label>
                             <InputTextArea class="form-control" rows="3" @bind-Value="_policyForm.Notes" />
                         </div>
+                        @if (SelectedPolicySource?.RequiresReason == true)
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Policy Source Reason <span class="text-danger">*</span></label>
+                                <InputTextArea class="form-control" rows="3" @bind-Value="_policyForm.PolicySourceReason" placeholder="Explain why this policy is being entered without quote-bound workflow." />
+                                <ValidationMessage For="() => _policyForm.PolicySourceReason" class="text-danger" />
+                            </div>
+                        }
                     </div>
                 </div>
                 <div class="um-modal-footer">
@@ -440,6 +457,7 @@
                             <th>LOB</th>
                             <th>Carrier</th>
                             <th>Status</th>
+                            <th>Source</th>
                             <th>Effective</th>
                             <th>Expires</th>
                             <th class="pr-num">Premium</th>
@@ -467,6 +485,7 @@
                                 <td>@LobChip(row.Lob)</td>
                                 <td>@row.Carrier</td>
                                 <td>@StatusChip(row.Status)</td>
+                                <td>@SourceChip(row)</td>
                                 <td>@row.EffDate.ToString("MM/dd/yyyy")</td>
                                 <td>@ExpiryCell(row.ExpDate)</td>
                                 <td class="pr-num">@PremiumCell(row.WrittenPremium)</td>
@@ -513,9 +532,18 @@
                         <div><span>LOB</span><strong>@_selected.Lob</strong></div>
                         <div><span>Premium</span><strong>@_selected.WrittenPremium.ToString("C0")</strong></div>
                         <div><span>Expires</span><strong>@_selected.ExpDate.ToString("MM/dd/yyyy")</strong></div>
+                        <div><span>Source</span><strong>@_selected.PolicySourceName</strong></div>
+                        <div><span>Bind status</span><strong>@_selected.BindStatusName</strong></div>
                         <div><span>Producer</span><strong>@_selected.Producer</strong></div>
                         <div><span>CSR</span><strong>@_selected.Csr</strong></div>
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(_selected.PolicySourceReason))
+                    {
+                        <div class="pr-work-card">
+                            <span>Source reason</span>
+                            <strong>@_selected.PolicySourceReason</strong>
+                        </div>
+                    }
                     <div class="pr-work-card">
                         <span>Last action</span>
                         <strong>@_selected.LastAction</strong>
@@ -570,6 +598,7 @@
 
     readonly List<PolicyRow> _rows = [];
     readonly List<AccountOption> _accountOptions = [];
+    readonly List<PolicyCreationSourceDto> _policyCreationSources = [];
 
     static readonly string[] PolicyStatuses = ["Active", "Pending", "Cancelled", "Expired", "Non-Renewed"];
     static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
@@ -628,6 +657,8 @@
     IEnumerable<PolicyRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
     IEnumerable<string> CarrierOptions => _rows.Select(r => r.Carrier).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
     IEnumerable<string> BranchOptions => _rows.Select(r => r.Branch).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).DefaultIfEmpty("HQ").OrderBy(x => x);
+    IEnumerable<PolicyCreationSourceDto> DirectPolicySources => _policyCreationSources.Where(x => x.IsActive && x.AllowsDirectPolicyEntry && !x.RequiresQuote).OrderBy(x => x.SortOrder).ThenBy(x => x.SourceName);
+    PolicyCreationSourceDto? SelectedPolicySource => _policyCreationSources.FirstOrDefault(x => string.Equals(x.SourceCode, _policyForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
     IEnumerable<AccountOption> FilteredAccountOptions
     {
         get
@@ -688,8 +719,11 @@
         {
             var result = await Api.SearchPolicyRegisterAsync(_tenantId, pageSize: 250);
             var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 250);
+            var sources = await Api.GetPolicyCreationSourcesAsync(_tenantId);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Select(MapRegisterPolicy));
+            _policyCreationSources.Clear();
+            _policyCreationSources.AddRange((sources ?? []).Where(s => s.IsActive).OrderBy(s => s.SortOrder).ThenBy(s => s.SourceName));
             BuildAccountOptions(accounts?.Items ?? []);
             BuildAccountOptionsFromRows();
             RefreshSelectedPolicy();
@@ -754,7 +788,12 @@
         Activities = Math.Max(1, p.ActivityCount),
         Endorsements = Math.Max(0, p.EndorsementCount),
         RenewalStage = string.IsNullOrWhiteSpace(p.RenewalStage) ? "Not Started" : p.RenewalStage,
-        LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction
+        LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction,
+        PolicySourceCode = p.PolicySourceCode,
+        PolicySourceName = p.PolicySourceName,
+        PolicySourceReason = p.PolicySourceReason,
+        BindStatusCode = p.BindStatusCode,
+        BindStatusName = p.BindStatusName
     };
 
     void RefreshSelectedPolicy()
@@ -783,6 +822,11 @@
                 || Contains(r.Carrier, term)
                 || Contains(r.Lob, term)
                 || Contains(r.Status, term)
+                || Contains(r.PolicySourceCode, term)
+                || Contains(r.PolicySourceName, term)
+                || Contains(r.PolicySourceReason, term)
+                || Contains(r.BindStatusCode, term)
+                || Contains(r.BindStatusName, term)
                 || Contains(r.EffDate.ToString("MM/dd/yyyy"), term)
                 || Contains(r.EffDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.ExpDate.ToString("MM/dd/yyyy"), term)
@@ -895,9 +939,10 @@
     void OpenNewPolicy()
     {
         var firstAccount = _accountOptions.FirstOrDefault();
+        var defaultSource = DirectPolicySources.FirstOrDefault(x => string.Equals(x.SourceCode, "ManualEntry", StringComparison.OrdinalIgnoreCase)) ?? DirectPolicySources.FirstOrDefault();
         _policyForm = new PolicyForm
         {
-            PolicyNumber = $"POL-{DateTime.Today:yyyy}-{_rows.Count + 1:D4}",
+            PolicyNumber = string.Empty,
             EffDate = DateTime.Today,
             ExpDate = DateTime.Today.AddYears(1),
             Status = "Active",
@@ -905,6 +950,9 @@
             Carrier = CarrierOptions.FirstOrDefault() ?? string.Empty,
             Branch = BranchOptions.FirstOrDefault() ?? "HQ",
             RenewalStage = "Not Started",
+            PolicySourceCode = defaultSource?.SourceCode ?? "ManualEntry",
+            PolicySourceReason = string.Empty,
+            PolicySourceRequiresReason = defaultSource?.RequiresReason == true,
             AccountId = firstAccount?.Id ?? Guid.Empty,
             Account = firstAccount?.Name ?? string.Empty,
             AccountType = firstAccount?.Type ?? "Commercial"
@@ -990,6 +1038,8 @@
         AccountName = form.Account.Trim(),
         AccountType = form.AccountType.Trim(),
         CarrierName = form.Carrier.Trim(),
+        PolicySourceCode = form.PolicySourceCode.Trim(),
+        PolicySourceReason = form.PolicySourceReason,
         LineOfBusiness = form.Lob.Trim(),
         Status = form.Status.Trim(),
         EffectiveDate = form.EffDate,
@@ -1003,6 +1053,20 @@
         Notes = form.Notes,
         ModifiedByUserId = _tenantAdminUserId
     };
+
+    Task OnPolicySourceChanged(string value)
+    {
+        _policyForm.PolicySourceCode = value;
+        _policyForm.PolicySourceRequiresReason = SelectedSourceRequiresReason(value);
+        if (!_policyForm.PolicySourceRequiresReason)
+        {
+            _policyForm.PolicySourceReason = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    bool SelectedSourceRequiresReason(string? sourceCode) => _policyCreationSources.Any(x => x.IsActive && x.RequiresReason && string.Equals(x.SourceCode, sourceCode, StringComparison.OrdinalIgnoreCase));
 
     Task NotifyFormValidationAsync()
     {
@@ -1027,6 +1091,7 @@
                 break;
             case "Edit":
                 _policyForm = PolicyForm.From(_selected);
+                _policyForm.PolicySourceRequiresReason = SelectedSourceRequiresReason(_policyForm.PolicySourceCode);
                 _accountSearchText = _policyForm.Account;
                 _accountDropdownOpen = false;
                 _showForm = true;
@@ -1165,6 +1230,9 @@
     RenderFragment StatusChip(string status) =>
         @<span class="pr-status pr-status-@status.ToLowerInvariant().Replace(" ", "-")">@status</span>;
 
+    RenderFragment SourceChip(PolicyRow row) =>
+        @<span class="pr-lob-chip" title="Bind status: @row.BindStatusName">@row.PolicySourceName</span>;
+
     RenderFragment PremiumCell(decimal premium) =>
         premium <= 0 ? @<span class="pr-prem-none">-</span> : @<span class="pr-prem">@premium.ToString("C0")</span>;
 
@@ -1237,8 +1305,8 @@
     sealed class PolicyRow
     {
         public Guid Id { get; set; }
-        public Guid SubmissionId { get; set; }
-        public Guid QuoteId { get; set; }
+        public Guid? SubmissionId { get; set; }
+        public Guid? QuoteId { get; set; }
         public string PolicyNumber { get; set; } = string.Empty;
         public string Account { get; set; } = string.Empty;
         public string AccountType { get; set; } = "Commercial";
@@ -1259,6 +1327,11 @@
         public string RenewalStage { get; set; } = "Not Started";
         public string LastAction { get; set; } = string.Empty;
         public string Notes { get; set; } = string.Empty;
+        public string PolicySourceCode { get; set; } = "ManualEntry";
+        public string PolicySourceName { get; set; } = "Manual Policy Entry";
+        public string? PolicySourceReason { get; set; }
+        public string BindStatusCode { get; set; } = "Bound";
+        public string BindStatusName { get; set; } = "Bound";
 
     }
 
@@ -1272,6 +1345,9 @@
         [Required, StringLength(120)] public string Carrier { get; set; } = string.Empty;
         [Required, StringLength(80)] public string Lob { get; set; } = string.Empty;
         [Required, StringLength(40)] public string Status { get; set; } = "Active";
+        [Required, StringLength(50)] public string PolicySourceCode { get; set; } = "ManualEntry";
+        [StringLength(500)] public string? PolicySourceReason { get; set; }
+        public bool PolicySourceRequiresReason { get; set; }
         [Required] public DateTime EffDate { get; set; } = DateTime.Today;
         [Required] public DateTime ExpDate { get; set; } = DateTime.Today.AddYears(1);
         [Range(0, 100000000)] public decimal WrittenPremium { get; set; }
@@ -1300,6 +1376,8 @@
             Csr = row.Csr,
             Branch = row.Branch,
             RenewalStage = row.RenewalStage,
+            PolicySourceCode = row.PolicySourceCode,
+            PolicySourceReason = row.PolicySourceReason,
             Notes = row.Notes
         };
 
@@ -1309,6 +1387,10 @@
                 yield return new ValidationResult("Expiration date must be after effective date.", [nameof(ExpDate)]);
             if (AccountId == Guid.Empty)
                 yield return new ValidationResult("Select an account from the account list.", [nameof(Account)]);
+            if (string.IsNullOrWhiteSpace(PolicySourceCode))
+                yield return new ValidationResult("Policy source is required.", [nameof(PolicySourceCode)]);
+            if (PolicySourceRequiresReason && string.IsNullOrWhiteSpace(PolicySourceReason))
+                yield return new ValidationResult("Policy source reason is required.", [nameof(PolicySourceReason)]);
         }
     }
 

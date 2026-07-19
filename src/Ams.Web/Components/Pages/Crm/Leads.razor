@@ -83,9 +83,18 @@
                             <label>Last name</label>
                             <InputText class="ld-input" @bind-Value="_leadForm.LastName" placeholder="Last name" />
                         </div>
+                        <div class="ld-field">
+                            <label>Lead type</label>
+                            <InputSelect class="ld-input" @bind-Value="_leadForm.LeadTypeCode">
+                                @foreach (var type in _leadTypeOptions)
+                                {
+                                    <option value="@type.Value">@type.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
                         <div class="ld-field ld-field-wide">
-                            <label>Company</label>
-                            <InputText class="ld-input" @bind-Value="_leadForm.Company" placeholder="Company or account name" />
+                            <label>Company / account context @if (SelectedLeadTypeRequiresCompany) { <span>*</span> }</label>
+                            <InputText class="ld-input" @bind-Value="_leadForm.Company" placeholder="Company for commercial leads; optional for personal leads" />
                         </div>
                         <div class="ld-field">
                             <label>Email</label>
@@ -472,15 +481,17 @@
     private List<LeadImportRow> _importPreview = [];
     private List<string> _importErrors = [];
     private List<LabelValue> _ownerOptions = [];
+    private List<LeadTypeDto> _leadTypes = [];
+    private List<LabelValue> _leadTypeOptions = [];
+    private List<LabelValue> _stageOptions = [];
+    private List<LabelValue> _sourceOptions = [];
+    private List<LabelValue> _ratingOptions = [];
     private List<SourceRow> _sourceFunnel = [];
     private List<ProducerRow> _producerRows = [];
     private LeadKpi _kpi = new();
 
     private static readonly List<ViewDef> _views = [new("table", "Table", "bi-table"), new("board", "Board", "bi-kanban"), new("funnel", "Funnel", "bi-funnel"), new("producer", "Producer", "bi-person-badge")];
     private static readonly string[] _boardStages = ["New", "Contacted", "Qualified", "Proposal", "Negotiation", "Converted", "Lost"];
-    private static readonly List<LabelValue> _stageOptions = [new("New", "New"), new("Contacted", "Contacted"), new("Qualified", "Qualified"), new("Proposal", "Proposal"), new("Negotiation", "Negotiation"), new("Converted", "Converted"), new("Lost", "Lost")];
-    private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
-    private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
     private static readonly List<LabelValue> _campaignOptions = [new("c1", "Q3 Commercial BOP Drip"), new("c2", "Renewal Win-Back 2025"), new("c3", "Mid-Market Cyber Awareness"), new("c4", "New Business Referral Series")];
 
     private int TotalPages => Math.Max(1, (int)Math.Ceiling(_filtered.Count / (double)PageSize));
@@ -489,6 +500,8 @@
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
     private string PhoneStatusText => IsPhoneValid(_leadForm.Phone) ? $"Phone formatted as {NormalizePhone(_leadForm.Phone)}" : "Enter a valid 10-digit phone number.";
     private string PhoneHintClass => IsPhoneValid(_leadForm.Phone) ? "ld-field-hint ld-hint-good" : "ld-field-hint ld-hint-bad";
+    private bool SelectedLeadTypeRequiresCompany => _leadTypes.FirstOrDefault(x => string.Equals(x.TypeCode, _leadForm.LeadTypeCode, StringComparison.OrdinalIgnoreCase))?.RequiresCompany == true;
+    private bool RequiredLeadOptionsMissing => _leadTypeOptions.Count == 0 || _sourceOptions.Count == 0 || _ownerOptions.Count == 0;
     private bool ImportDisabled => _importPreview.Count == 0 || _importErrors.Count > 0;
     private bool AssignDisabled => string.IsNullOrWhiteSpace(_assignBulkForm.OwnerId);
     private bool MergeDisabled => string.IsNullOrWhiteSpace(_mergeTarget) || _selected.Count < 2;
@@ -562,12 +575,21 @@
 
             var leadsTask = Api.SearchLeadsAsync(_tenantId);
             var usersTask = Api.SearchUsersAsync(_tenantId);
-            await Task.WhenAll(leadsTask, usersTask);
+            var leadTypesTask = Api.GetLeadTypesAsync(_tenantId);
+            var sourcesTask = Api.SearchLeadSourcesAsync(_tenantId, pageSize: 250);
+            var statusesTask = Api.SearchLeadStatusesAsync(_tenantId, pageSize: 250);
+            var prioritiesTask = Api.GetLeadEngagementOptionsAsync(_tenantId, "Priority");
+            await Task.WhenAll(leadsTask, usersTask, leadTypesTask, sourcesTask, statusesTask, prioritiesTask);
 
             var users = usersTask.Result?.Items?.ToList() ?? [];
             var ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
             _ownerOptions = users.Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)).Where(x => !string.IsNullOrWhiteSpace(x.Label)).OrderBy(x => x.Label).ToList();
             EnsureCurrentUserOwnerOption(ownerLookup);
+            _leadTypes = leadTypesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName).ToList() ?? [];
+            _leadTypeOptions = _leadTypes.Select(x => new LabelValue(x.TypeCode, x.TypeName)).ToList();
+            _sourceOptions = sourcesTask.Result?.Items?.Where(x => x.IsActive).OrderBy(x => x.SourceName).Select(x => new LabelValue(x.SourceCode, x.SourceName)).ToList() ?? [];
+            _stageOptions = statusesTask.Result?.Items?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.StatusName).Select(x => new LabelValue(x.StatusCode, x.StatusName)).ToList() ?? [];
+            _ratingOptions = prioritiesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Label).Select(x => new LabelValue(x.Code, x.Label)).ToList() ?? [];
             _leads = leadsTask.Result?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
             RebuildDerived();
             _detail = LeadId.HasValue
@@ -597,6 +619,7 @@
             AssignedToUserId = dto.AssignedToUserId,
             FirstName = dto.FirstName,
             LastName = dto.LastName,
+            LeadTypeCode = dto.LeadTypeCode,
             FullName = $"{dto.FirstName} {dto.LastName}".Trim(),
             CompanyName = dto.AccountName ?? string.Empty,
             Email = dto.Email ?? string.Empty,
@@ -665,8 +688,8 @@
     private void OnOwnerFilterChanged(BlazorChangeEventArgs e) { _filterOwner = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
     private void OnRatingFilterChanged(BlazorChangeEventArgs e) { _filterRating = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
 
-    private void OnNewLeadClick() { _editingId = Guid.Empty; EnsureCurrentUserOwnerOption(); _leadForm = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = CurrentUserOwnerValue }; _showLeadModal = true; }
-    private void OpenEdit(LeadRow lead) { _editingId = lead.LeadId; _leadForm = new LeadFormModel { FirstName = lead.FirstName, LastName = lead.LastName, Company = lead.CompanyName, Email = lead.Email, Phone = lead.Phone, Source = lead.Source, Stage = lead.Stage, Priority = lead.Rating, Owner = lead.AssignedToUserId?.ToString() ?? string.Empty, EstPremium = lead.EstPremium, Score = lead.Score, Notes = lead.Notes ?? string.Empty }; _showLeadModal = true; }
+    private void OnNewLeadClick() { _editingId = Guid.Empty; EnsureCurrentUserOwnerOption(); _leadForm = new LeadFormModel { LeadTypeCode = _leadTypeOptions.FirstOrDefault()?.Value ?? "Personal", Source = _sourceOptions.FirstOrDefault()?.Value ?? string.Empty, Stage = _stageOptions.FirstOrDefault(x => string.Equals(x.Value, "New", StringComparison.OrdinalIgnoreCase))?.Value ?? _stageOptions.FirstOrDefault()?.Value ?? string.Empty, Priority = _ratingOptions.FirstOrDefault()?.Value ?? string.Empty, Score = 50, Owner = CurrentUserOwnerValue }; _showLeadModal = true; }
+    private void OpenEdit(LeadRow lead) { _editingId = lead.LeadId; _leadForm = new LeadFormModel { FirstName = lead.FirstName, LastName = lead.LastName, LeadTypeCode = string.IsNullOrWhiteSpace(lead.LeadTypeCode) ? _leadTypeOptions.FirstOrDefault()?.Value ?? "Personal" : lead.LeadTypeCode, Company = lead.CompanyName, Email = lead.Email, Phone = lead.Phone, Source = lead.Source, Stage = lead.Stage, Priority = lead.Rating, Owner = lead.AssignedToUserId?.ToString() ?? string.Empty, EstPremium = lead.EstPremium, Score = lead.Score, Notes = lead.Notes ?? string.Empty }; _showLeadModal = true; }
     private Task CloseLeadModal() => CloseLeadModalAsync();
     private Task CloseLeadModalAsync(bool force = false) { if (!_savingLead || force) { _showLeadModal = false; StateHasChanged(); } return Task.CompletedTask; }
     private void OpenImport() => _showImport = true;
@@ -699,12 +722,12 @@
                 : Guid.TryParse(_leadForm.Owner, out var ownerId) ? ownerId : (Guid?)null;
             if (_editingId == Guid.Empty)
             {
-                await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}", AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, AssignedToUserId = assignedToUserId, CreatedByUserId = TenantAdminUserId });
+                await Api.CreateLeadAsync(new CreateLeadRequest { TenantId = _tenantId, LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}", AccountName = string.IsNullOrWhiteSpace(_leadForm.Company) ? null : _leadForm.Company.Trim(), LeadTypeCode = _leadForm.LeadTypeCode, FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, AssignedToUserId = assignedToUserId, CreatedByUserId = TenantAdminUserId });
                 ShowToast("Lead created.", "success");
             }
             else
             {
-                await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest { LeadId = _editingId, AccountName = _leadForm.Company.Trim(), FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, StatusCode = StageToStatusCode(_leadForm.Stage), AssignedToUserId = assignedToUserId, UpdatedByUserId = TenantAdminUserId });
+                await Api.UpdateLeadAsync(_editingId, new UpdateLeadRequest { LeadId = _editingId, AccountName = string.IsNullOrWhiteSpace(_leadForm.Company) ? null : _leadForm.Company.Trim(), LeadTypeCode = _leadForm.LeadTypeCode, FirstName = _leadForm.FirstName.Trim(), LastName = _leadForm.LastName.Trim(), Email = _leadForm.Email.Trim(), Phone = NormalizePhone(_leadForm.Phone), InterestedService = _leadForm.Notes, AnnualRevenue = _leadForm.EstPremium, Score = _leadForm.Score, PriorityCode = _leadForm.Priority, SourceCode = _leadForm.Source, NurturingStageCode = _leadForm.Stage, StatusCode = StageToStatusCode(_leadForm.Stage), AssignedToUserId = assignedToUserId, UpdatedByUserId = TenantAdminUserId });
                 ShowToast("Lead saved.", "success");
             }
             await CloseLeadModalAsync(force: true);
@@ -745,7 +768,9 @@
 
     private bool ValidateLeadForm()
     {
-        if (string.IsNullOrWhiteSpace(_leadForm.FirstName) || string.IsNullOrWhiteSpace(_leadForm.LastName) || string.IsNullOrWhiteSpace(_leadForm.Company) || string.IsNullOrWhiteSpace(_leadForm.Email) || string.IsNullOrWhiteSpace(_leadForm.Source) || string.IsNullOrWhiteSpace(_leadForm.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (RequiredLeadOptionsMissing) { _ = ShowToastAsync("Lead type, source, and owner settings must be configured before creating a lead.", "warning"); return false; }
+        if (string.IsNullOrWhiteSpace(_leadForm.FirstName) || string.IsNullOrWhiteSpace(_leadForm.LastName) || string.IsNullOrWhiteSpace(_leadForm.LeadTypeCode) || string.IsNullOrWhiteSpace(_leadForm.Email) || string.IsNullOrWhiteSpace(_leadForm.Source) || string.IsNullOrWhiteSpace(_leadForm.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (SelectedLeadTypeRequiresCompany && string.IsNullOrWhiteSpace(_leadForm.Company)) { _ = ShowToastAsync("Company is required for this lead type.", "warning"); return false; }
         if (!new EmailAddressAttribute().IsValid(_leadForm.Email)) { _ = ShowToastAsync("Enter a valid email address.", "warning"); return false; }
         if (!IsPhoneValid(_leadForm.Phone)) { _ = ShowToastAsync("Enter a valid phone number.", "warning"); return false; }
         return true;
@@ -1008,7 +1033,7 @@
     private sealed record SourceRow(string Source, int Total, int Converted, int AvgScore, decimal AvgPremium, decimal TotalPipeline, double WidthPercent) { public double ConvPct => Total == 0 ? 0 : (double)Converted / Total * 100; }
     private sealed record ProducerRow(string Owner, int Total, int Converted, decimal Pipeline, double WidthPercent) { public double ConvPct => Total == 0 ? 0 : (double)Converted / Total * 100; }
     private sealed class LeadKpi { public double ConversionRate { get; set; } }
-    private sealed class LeadRow { public Guid LeadId { get; set; } public Guid? AssignedToUserId { get; set; } public string FirstName { get; set; } = string.Empty; public string LastName { get; set; } = string.Empty; public string FullName { get; set; } = string.Empty; public string CompanyName { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Stage { get; set; } = "New"; public string Source { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string Rating { get; set; } = "Cold"; public int Score { get; set; } public decimal EstPremium { get; set; } public DateTime CreatedAt { get; set; } public DateTime? LastActivity { get; set; } public int DaysSinceActivity => LastActivity.HasValue ? (int)(DateTime.UtcNow - LastActivity.Value).TotalDays : 999; public string? Notes { get; set; } }
+    private sealed class LeadRow { public Guid LeadId { get; set; } public Guid? AssignedToUserId { get; set; } public string FirstName { get; set; } = string.Empty; public string LastName { get; set; } = string.Empty; public string LeadTypeCode { get; set; } = "Personal"; public string FullName { get; set; } = string.Empty; public string CompanyName { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Stage { get; set; } = "New"; public string Source { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string Rating { get; set; } = "Cold"; public int Score { get; set; } public decimal EstPremium { get; set; } public DateTime CreatedAt { get; set; } public DateTime? LastActivity { get; set; } public int DaysSinceActivity => LastActivity.HasValue ? (int)(DateTime.UtcNow - LastActivity.Value).TotalDays : 999; public string? Notes { get; set; } }
     private sealed class LeadImportRow { public string FirstName { get; set; } = string.Empty; public string LastName { get; set; } = string.Empty; public string FullName => $"{FirstName} {LastName}".Trim(); public string CompanyName { get; set; } = string.Empty; public string Email { get; set; } = string.Empty; public string Source { get; set; } = string.Empty; public string Phone { get; set; } = string.Empty; public string Owner { get; set; } = string.Empty; public string PremiumText { get; set; } = string.Empty; public string Notes { get; set; } = string.Empty; }
     private sealed class BulkAssignForm
     {
@@ -1026,7 +1051,8 @@
     {
         [Required, StringLength(100)] public string FirstName { get; set; } = string.Empty;
         [Required, StringLength(100)] public string LastName { get; set; } = string.Empty;
-        [Required, StringLength(200)] public string Company { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string LeadTypeCode { get; set; } = "Personal";
+        [StringLength(200)] public string Company { get; set; } = string.Empty;
         [Required, AmsEmailAddress, StringLength(200)] public string Email { get; set; } = string.Empty;
         [AmsPhone, StringLength(30)] public string Phone { get; set; } = string.Empty;
         [Required, StringLength(50)] public string Source { get; set; } = string.Empty;

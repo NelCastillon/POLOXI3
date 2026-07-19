@@ -1055,6 +1055,9 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<LeadEngagementOptionDto>?> GetLeadEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadEngagementOptionDto>>($"api/leads/engagement-options?tenantId={tenantId}&optionType={Uri.EscapeDataString(optionType ?? string.Empty)}", cancellationToken);
 
+    public Task<IReadOnlyList<LeadTypeDto>?> GetLeadTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadTypeDto>>($"api/leads/types?tenantId={tenantId}", cancellationToken);
+
     public Task<IReadOnlyList<LeadCampaignOptionDto>?> GetLeadCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadCampaignOptionDto>>($"api/leads/campaign-options?tenantId={tenantId}", cancellationToken);
 
@@ -2622,6 +2625,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<PolicyRegisterDto>?> SearchPolicyRegisterAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lineOfBusiness = null, int pageNumber = 1, int pageSize = 250, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PolicyRegisterDto>>($"api/submissions/policies?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<IReadOnlyList<PolicyCreationSourceDto>?> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyCreationSourceDto>>($"api/submissions/policy-creation-sources?tenantId={tenantId}", cancellationToken);
+
     public Task<PolicyRegisterDto?> GetPolicyRegisterByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyRegisterDto>($"api/submissions/policies/{policyId}", cancellationToken);
 
@@ -2804,6 +2810,20 @@ public sealed partial class ApiClient
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/create-policy", request, cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return (await response.Content.ReadFromJsonAsync<SubmissionActionResult>(cancellationToken: cancellationToken))!;
+    }
+
+    public Task<IReadOnlyList<PolicyBindStatusDto>?> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyBindStatusDto>>($"api/submissions/policy-bind-statuses?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<PolicyBindTransactionDto>?> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyBindTransactionDto>>($"api/submissions/{submissionId}/policy-bind-transactions", cancellationToken);
+
+    public async Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/policies/bind", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
     }
 
     public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)

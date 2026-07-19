@@ -698,6 +698,189 @@ WHERE TenantId = @TenantId AND IsDeleted = 0 AND TaskTypeCode = N'BindRequest' A
         };
     }
 
+    public async Task<IReadOnlyList<PolicyCreationSourceDto>> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NULL
+BEGIN
+    SELECT CAST(N'00000000-0000-0000-0000-000000000001' AS UNIQUEIDENTIFIER) AS PolicyCreationSourceId,
+           @TenantId AS TenantId,
+           N'QuoteBound' AS SourceCode,
+           N'Quote Bound' AS SourceName,
+           N'Policy is created from an accepted or selected quote.' AS Description,
+           CAST(1 AS bit) AS RequiresQuote,
+           CAST(1 AS bit) AS RequiresSubmission,
+           CAST(1 AS bit) AS RequiresAccount,
+           CAST(0 AS bit) AS RequiresReason,
+           CAST(0 AS bit) AS RequiresPolicyNumber,
+           CAST(0 AS bit) AS AllowsDirectPolicyEntry,
+           CAST(0 AS bit) AS IsImportSource,
+           CAST(0 AS bit) AS IsConversionSource,
+           CAST(1 AS bit) AS IsDefault,
+           CAST(1 AS bit) AS IsActive,
+           10 AS SortOrder
+    UNION ALL
+    SELECT CAST(N'00000000-0000-0000-0000-000000000002' AS UNIQUEIDENTIFIER),
+           @TenantId,
+           N'AlreadyBound',
+           N'Already Bound Outside System',
+           N'Carrier or broker already bound coverage outside the platform.',
+           CAST(0 AS bit),
+           CAST(0 AS bit),
+           CAST(1 AS bit),
+           CAST(1 AS bit),
+           CAST(1 AS bit),
+           CAST(1 AS bit),
+           CAST(0 AS bit),
+           CAST(0 AS bit),
+           CAST(0 AS bit),
+           CAST(1 AS bit),
+           20;
+    RETURN;
+END;
+
+SELECT PolicyCreationSourceId,
+       TenantId,
+       SourceCode,
+       SourceName,
+       Description,
+       RequiresQuote,
+       RequiresSubmission,
+       RequiresAccount,
+       RequiresReason,
+       RequiresPolicyNumber,
+       AllowsDirectPolicyEntry,
+       IsImportSource,
+       IsConversionSource,
+       IsDefault,
+       IsActive,
+       SortOrder
+FROM Submissions.PolicyCreationSource
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND IsActive = 1
+ORDER BY SortOrder, SourceName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<PolicyCreationSourceDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF OBJECT_ID(N'Submissions.PolicyBindStatus', N'U') IS NULL
+BEGIN
+    SELECT CAST(N'00000000-0000-0000-0000-000000000004' AS UNIQUEIDENTIFIER) AS PolicyBindStatusId,
+           @TenantId AS TenantId,
+           N'Bound' AS StatusCode,
+           N'Bound' AS StatusName,
+           N'Bind transaction created the policy and completed the bind workflow.' AS Description,
+           CAST(1 AS bit) AS IsTerminal,
+           CAST(1 AS bit) AS CreatesPolicy,
+           CAST(0 AS bit) AS IsDefault,
+           CAST(1 AS bit) AS IsActive,
+           40 AS SortOrder;
+    RETURN;
+END;
+
+SELECT PolicyBindStatusId,
+       TenantId,
+       StatusCode,
+       StatusName,
+       Description,
+       IsTerminal,
+       CreatesPolicy,
+       IsDefault,
+       IsActive,
+       SortOrder
+FROM Submissions.PolicyBindStatus
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND IsActive = 1
+ORDER BY SortOrder, StatusName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<PolicyBindStatusDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NULL
+BEGIN
+    SELECT TOP 0
+           CAST(NULL AS UNIQUEIDENTIFIER) AS PolicyBindTransactionId,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS TenantId,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS SubmissionId,
+           CAST(N'' AS NVARCHAR(50)) AS SubmissionNumber,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS QuoteId,
+           CAST(NULL AS NVARCHAR(80)) AS QuoteNumber,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS PolicyId,
+           CAST(NULL AS NVARCHAR(80)) AS PolicyNumber,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS AccountId,
+           CAST(N'' AS NVARCHAR(200)) AS AccountName,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS CarrierId,
+           CAST(N'' AS NVARCHAR(200)) AS CarrierName,
+           CAST(N'' AS NVARCHAR(50)) AS PolicySourceCode,
+           CAST(N'' AS NVARCHAR(100)) AS PolicySourceName,
+           CAST(N'' AS NVARCHAR(50)) AS BindStatusCode,
+           CAST(N'' AS NVARCHAR(100)) AS BindStatusName,
+           CAST(NULL AS NVARCHAR(500)) AS BindReason,
+           CAST(NULL AS NVARCHAR(1000)) AS Notes,
+           CAST(0 AS DECIMAL(18,2)) AS AnnualPremium,
+           CAST(SYSUTCDATETIME() AS DATETIME2) AS EffectiveDate,
+           CAST(SYSUTCDATETIME() AS DATETIME2) AS ExpirationDate,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS RequestedByUserId,
+           CAST(SYSUTCDATETIME() AS DATETIME2) AS RequestedDateUtc,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS ApprovedByUserId,
+           CAST(NULL AS DATETIME2) AS ApprovedDateUtc,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS BoundByUserId,
+           CAST(NULL AS DATETIME2) AS BoundDateUtc,
+           CAST(SYSUTCDATETIME() AS DATETIME2) AS CreatedDateUtc;
+    RETURN;
+END;
+
+SELECT pbt.PolicyBindTransactionId,
+       pbt.TenantId,
+       pbt.SubmissionId,
+       s.SubmissionNumber,
+       pbt.QuoteId,
+       q.QuoteNumber,
+       pbt.PolicyId,
+       COALESCE(bp.PolicyNumber, pbt.PolicyNumber) AS PolicyNumber,
+       pbt.AccountId,
+        COALESCE(a.AccountName, s.SubmissionNumber, N'Account') AS AccountName,
+       pbt.CarrierId,
+       COALESCE(c.CarrierName, N'Carrier') AS CarrierName,
+       pbt.PolicySourceCode,
+       COALESCE(pcs.SourceName, pbt.PolicySourceCode) AS PolicySourceName,
+       pbt.BindStatusCode,
+       COALESCE(pbs.StatusName, pbt.BindStatusCode) AS BindStatusName,
+       pbt.BindReason,
+       pbt.Notes,
+       pbt.AnnualPremium,
+       CAST(pbt.EffectiveDate AS DATETIME2) AS EffectiveDate,
+       CAST(pbt.ExpirationDate AS DATETIME2) AS ExpirationDate,
+       pbt.RequestedByUserId,
+       pbt.RequestedDateUtc,
+       pbt.ApprovedByUserId,
+       pbt.ApprovedDateUtc,
+       pbt.BoundByUserId,
+       pbt.BoundDateUtc,
+       pbt.CreatedDateUtc
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId
+LEFT JOIN Submissions.Quote q ON q.QuoteId = pbt.QuoteId AND q.IsDeleted = 0
+LEFT JOIN Submissions.BoundPolicy bp ON bp.PolicyId = pbt.PolicyId AND bp.IsDeleted = 0
+LEFT JOIN Client.Account a ON a.AccountId = pbt.AccountId
+LEFT JOIN Core.Carrier c ON c.CarrierId = pbt.CarrierId
+LEFT JOIN Submissions.PolicyCreationSource pcs ON pcs.TenantId = pbt.TenantId AND pcs.SourceCode = pbt.PolicySourceCode AND pcs.IsDeleted = 0
+LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = pbt.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsDeleted = 0
+WHERE pbt.SubmissionId = @SubmissionId
+  AND pbt.IsDeleted = 0
+ORDER BY pbt.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<PolicyBindTransactionDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
     {
         var readiness = await GetReadinessAsync(id, request.TenantId, cancellationToken);
@@ -915,24 +1098,256 @@ SELECT @SubmissionId;";
     public async Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default)
     {
         var submission = await GetByIdAsync(id, cancellationToken) ?? throw new InvalidOperationException("Submission was not found for policy creation.");
-        var quote = request.QuoteId.HasValue ? await GetQuoteByIdAsync(request.QuoteId.Value, cancellationToken) : null;
-        if (quote is null)
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        await EnsurePolicyCreationSourceSchemaAsync(cn, request.TenantId, cancellationToken);
+
+        var source = await GetPolicyCreationSourceSettingsAsync(cn, request.TenantId, request.PolicySourceCode, cancellationToken);
+        var sourceCode = source.SourceCode;
+        var sourceReason = Normalize(request.PolicySourceReason);
+        var sourceNotes = Normalize(request.PolicySourceNotes);
+        var policyNumber = Normalize(request.PolicyNumber);
+        var effectiveDate = request.EffectiveDate ?? submission.EffectiveDate;
+        var expirationDate = request.ExpirationDate ?? submission.ExpirationDate;
+        if (expirationDate <= effectiveDate)
+        {
+            throw new InvalidOperationException("Policy expiration date must be after the effective date.");
+        }
+
+        if (source.RequiresReason && string.IsNullOrWhiteSpace(sourceReason))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a reason.");
+        }
+
+        if (source.RequiresPolicyNumber && string.IsNullOrWhiteSpace(policyNumber))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a policy number.");
+        }
+
+        QuoteComparisonDto? quote = null;
+        if (request.QuoteId.HasValue)
+        {
+            quote = await GetQuoteByIdAsync(request.QuoteId.Value, cancellationToken);
+            if (quote is null || quote.SubmissionId != id)
+            {
+                throw new InvalidOperationException("Selected quote was not found for this submission.");
+            }
+        }
+        else if (source.RequiresQuote)
         {
             var quotes = await GetQuoteComparisonAsync(id, cancellationToken);
-            quote = quotes.OrderByDescending(q => q.AnnualPremium).FirstOrDefault();
+            quote = quotes
+                .Where(q => q.Status is "Accepted" or "Presented" or "Selected" or "Bound")
+                .OrderByDescending(q => q.Status == "Accepted")
+                .ThenByDescending(q => q.IsSelected)
+                .ThenByDescending(q => q.AnnualPremium)
+                .FirstOrDefault();
+
+            if (quote is null)
+            {
+                throw new InvalidOperationException("Create Policy with Quote Bound requires an accepted, selected, or presented quote. Use a non-quote policy source and provide a reason for direct policy creation.");
+            }
         }
 
-        if (quote is null)
+        var carrierId = request.CarrierId ?? quote?.CarrierId;
+        if (!carrierId.HasValue)
         {
-            var quoteResult = await RequestQuoteAsync(id, new RequestSubmissionQuoteRequest(request.TenantId, request.CarrierId, request.AnnualPremium, null, null, "Quote generated for policy creation."), cancellationToken);
-            quote = await GetQuoteByIdAsync(quoteResult.Id, cancellationToken);
+            carrierId = await cn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 CarrierId
+FROM Submissions.SubmissionMarket
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0
+ORDER BY IsRecommended DESC, AddedDateUtc DESC;", new { SubmissionId = id }, cancellationToken: cancellationToken));
         }
 
-        if (quote is null)
-            throw new InvalidOperationException("Unable to create or resolve a quote for policy creation.");
+        if (!carrierId.HasValue)
+        {
+            throw new InvalidOperationException("Create Policy requires a carrier. Select a carrier market or add a market before creating the policy.");
+        }
 
-        var policyId = await BindPolicyAsync(new BindPolicyRequest(id, quote.QuoteId, request.TenantId, submission.AccountId, request.CarrierId ?? quote.CarrierId, request.AnnualPremium ?? quote.AnnualPremium, request.EffectiveDate ?? submission.EffectiveDate, request.ExpirationDate ?? submission.ExpirationDate), cancellationToken);
-        return new SubmissionActionResult(policyId, "Policy created from submission.");
+        var annualPremium = request.AnnualPremium ?? quote?.AnnualPremium ?? submission.TargetPremium;
+        if (annualPremium is null or <= 0)
+        {
+            throw new InvalidOperationException("Create Policy requires an annual premium greater than zero.");
+        }
+
+        var quoteId = quote?.QuoteId ?? Guid.Empty;
+        var policyId = await BindPolicyAsync(new BindPolicyRequest(id, quoteId, request.TenantId, submission.AccountId, carrierId.Value, annualPremium.Value, effectiveDate, expirationDate, policyNumber, sourceCode, sourceReason, sourceNotes), cancellationToken);
+        var message = source.RequiresQuote ? "Policy created from selected quote." : $"Policy created using {source.SourceName}.";
+        return new SubmissionActionResult(policyId, message);
+    }
+
+    private sealed record PolicyCreationSourceSettings(string SourceCode, string SourceName, bool RequiresQuote, bool RequiresSubmission, bool RequiresAccount, bool RequiresReason, bool RequiresPolicyNumber, bool AllowsDirectPolicyEntry, bool IsImportSource, bool IsConversionSource);
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static async Task EnsurePolicyCreationSourceSchemaAsync(System.Data.IDbConnection connection, Guid tenantId, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(@"
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_PolicySourceCode_Runtime DEFAULT N'QuoteBound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceReason') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceReason NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceNotes') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyBindTransactionId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyBindTransactionId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyCreationSource
+    (
+        PolicyCreationSourceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyCreationSource_Runtime PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SourceCode NVARCHAR(50) NOT NULL,
+        SourceName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        RequiresQuote BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresQuote_Runtime DEFAULT 0,
+        RequiresSubmission BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresSubmission_Runtime DEFAULT 0,
+        RequiresAccount BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresAccount_Runtime DEFAULT 1,
+        RequiresReason BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresReason_Runtime DEFAULT 1,
+        RequiresPolicyNumber BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresPolicyNumber_Runtime DEFAULT 1,
+        AllowsDirectPolicyEntry BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_AllowsDirect_Runtime DEFAULT 1,
+        IsImportSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsImport_Runtime DEFAULT 0,
+        IsConversionSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsConversion_Runtime DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDefault_Runtime DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsActive_Runtime DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyCreationSource_SortOrder_Runtime DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCreationSource_Created_Runtime DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresSubmission') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresSubmission BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresSubmission_RuntimeB DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresAccount') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresAccount BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresAccount_RuntimeB DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'AllowsDirectPolicyEntry') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD AllowsDirectPolicyEntry BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_AllowsDirect_RuntimeB DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsImportSource') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsImportSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsImport_RuntimeB DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsConversionSource') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsConversionSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsConversion_RuntimeB DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'QuoteBound' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'QuoteBound', N'Quote Bound', N'Policy is created from an accepted or selected quote.', 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 10, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'AlreadyBound' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'AlreadyBound', N'Already Bound Outside System', N'Carrier or broker already bound coverage outside the platform.', 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 20, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'ManualEntry' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'ManualEntry', N'Manual Policy Entry', N'Policy is manually entered with required audit reason and policy details.', 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 30, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'Imported' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'Imported', N'Imported Policy', N'Policy is imported from a carrier, conversion, or data migration source.', 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 40, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'BOR' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'BOR', N'Broker of Record / Takeover', N'Policy is entered after a broker-of-record or book-of-business takeover.', 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 50, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyCreationSource WHERE TenantId = @TenantId AND SourceCode = N'RenewalImport' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyCreationSource (TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'RenewalImport', N'Renewal Import', N'Renewal policy was imported from carrier, prior AMS, or external renewal file.', 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 60, SYSUTCDATETIME(), 0);
+
+UPDATE Submissions.PolicyCreationSource
+SET SourceName = N'Renewal Import',
+    Description = N'Renewal policy was imported from carrier, prior AMS, or external renewal file.',
+    RequiresQuote = 0,
+    RequiresSubmission = 0,
+    RequiresAccount = 1,
+    RequiresReason = 1,
+    RequiresPolicyNumber = 1,
+    AllowsDirectPolicyEntry = 1,
+    IsImportSource = 1,
+    IsConversionSource = 1,
+    IsDefault = 0,
+    IsActive = 1,
+    SortOrder = 60,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId
+  AND SourceCode = N'RenewalImport'
+  AND IsDeleted = 0;", new { TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<PolicyCreationSourceSettings> GetPolicyCreationSourceSettingsAsync(System.Data.IDbConnection connection, Guid tenantId, string? sourceCode, CancellationToken cancellationToken)
+    {
+        var requestedCode = Normalize(sourceCode) ?? "QuoteBound";
+        var settings = await connection.QuerySingleOrDefaultAsync<PolicyCreationSourceSettings>(new CommandDefinition(@"
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NULL
+BEGIN
+    SELECT @SourceCode AS SourceCode, @SourceCode AS SourceName, CAST(CASE WHEN @SourceCode = N'QuoteBound' THEN 1 ELSE 0 END AS bit) AS RequiresQuote, CAST(CASE WHEN @SourceCode = N'QuoteBound' THEN 1 ELSE 0 END AS bit) AS RequiresSubmission, CAST(1 AS bit) AS RequiresAccount, CAST(CASE WHEN @SourceCode = N'QuoteBound' THEN 0 ELSE 1 END AS bit) AS RequiresReason, CAST(CASE WHEN @SourceCode = N'QuoteBound' THEN 0 ELSE 1 END AS bit) AS RequiresPolicyNumber, CAST(CASE WHEN @SourceCode = N'QuoteBound' THEN 0 ELSE 1 END AS bit) AS AllowsDirectPolicyEntry, CAST(0 AS bit) AS IsImportSource, CAST(0 AS bit) AS IsConversionSource;
+    RETURN;
+END;
+
+SELECT TOP 1 SourceCode, SourceName, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource
+FROM Submissions.PolicyCreationSource
+WHERE TenantId = @TenantId AND SourceCode = @SourceCode AND IsDeleted = 0 AND IsActive = 1;", new { TenantId = tenantId, SourceCode = requestedCode }, cancellationToken: cancellationToken));
+
+        return settings ?? new PolicyCreationSourceSettings("QuoteBound", "Quote Bound", true, true, true, false, false, false, false, false);
+    }
+
+    private static async Task EnsurePolicyBindTransactionSchemaAsync(System.Data.IDbConnection connection, Guid tenantId, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(@"
+IF OBJECT_ID(N'Submissions.PolicyBindStatus', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyBindStatus
+    (
+        PolicyBindStatusId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyBindStatus_Runtime PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        StatusName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsTerminal BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsTerminal_Runtime DEFAULT 0,
+        CreatesPolicy BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_CreatesPolicy_Runtime DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDefault_Runtime DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsActive_Runtime DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyBindStatus_SortOrder_Runtime DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindStatus_Created_Runtime DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyBindTransaction
+    (
+        PolicyBindTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyBindTransaction_Runtime PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_QuoteId_Runtime DEFAULT '00000000-0000-0000-0000-000000000000',
+        PolicyId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Source_Runtime DEFAULT N'QuoteBound',
+        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_Runtime DEFAULT N'Bound',
+        PolicyNumber NVARCHAR(80) NULL,
+        AnnualPremium DECIMAL(18,2) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        BindReason NVARCHAR(500) NULL,
+        Notes NVARCHAR(1000) NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_Requested_Runtime DEFAULT SYSUTCDATETIME(),
+        ApprovedByUserId UNIQUEIDENTIFIER NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        BoundByUserId UNIQUEIDENTIFIER NULL,
+        BoundDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_Created_Runtime DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL AND COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyBindTransactionId') IS NULL
+    ALTER TABLE Submissions.BoundPolicy ADD PolicyBindTransactionId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = N'Draft' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyBindStatus (TenantId, StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'Draft', N'Draft', N'Bind transaction has been started but not submitted for execution.', 0, 0, 1, 1, 10, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = N'PendingApproval' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyBindStatus (TenantId, StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'PendingApproval', N'Pending Approval', N'Bind transaction requires internal approval before policy creation.', 0, 0, 0, 1, 20, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = N'ReadyToBind' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyBindStatus (TenantId, StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'ReadyToBind', N'Ready to Bind', N'Bind transaction passed validation and is ready to create the policy.', 0, 0, 0, 1, 30, SYSUTCDATETIME(), 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = N'Bound' AND IsDeleted = 0)
+    INSERT INTO Submissions.PolicyBindStatus (TenantId, StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    VALUES (@TenantId, N'Bound', N'Bound', N'Bind transaction created the policy and completed the bind workflow.', 1, 1, 0, 1, 40, SYSUTCDATETIME(), 0);", new { TenantId = tenantId }, cancellationToken: cancellationToken));
     }
 
     // ── Markets ───────────────────────────────────────────────────────
@@ -1489,6 +1904,13 @@ ORDER BY ar.AppetiteScore DESC;";
            p.EffectiveDate,
            p.ExpirationDate,
            p.BoundDateUtc,
+             COALESCE(NULLIF(p.PolicySourceCode, N''), N'ManualEntry') AS PolicySourceCode,
+             COALESCE(pcs.SourceName, p.PolicySourceCode, N'Manual Entry') AS PolicySourceName,
+             p.PolicySourceReason,
+             p.PolicySourceNotes,
+             p.PolicyBindTransactionId,
+             COALESCE(pbt.BindStatusCode, N'Bound') AS BindStatusCode,
+             COALESCE(pbs.StatusName, pbt.BindStatusCode, N'Bound') AS BindStatusName,
            s.AssignedToUserId,
            COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS AssignedToUserName,
            COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS ProducerName,
@@ -1502,11 +1924,14 @@ ORDER BY ar.AppetiteScore DESC;";
                 WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
                 ELSE N'Not Started'
             END) AS RenewalStage,
-            COALESCE(lastAction.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N''))) AS LastAction
+            COALESCE(lastAction.Notes, pbt.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), CASE WHEN s.SubmissionNumber IS NULL THEN N' from account policy intake' ELSE CONCAT(N' from submission ', s.SubmissionNumber) END)) AS LastAction
     FROM   Submissions.BoundPolicy p
     LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
     LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
     LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+    LEFT JOIN Submissions.PolicyBindTransaction pbt ON pbt.PolicyBindTransactionId = p.PolicyBindTransactionId AND pbt.IsDeleted = 0
+    LEFT JOIN Submissions.PolicyCreationSource pcs ON pcs.TenantId = p.TenantId AND pcs.SourceCode = p.PolicySourceCode AND pcs.IsDeleted = 0
+    LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = p.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsDeleted = 0
     LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
     OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 ORDER BY al.CreatedDateUtc DESC) lastAction
     OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N'RenewalStage' ORDER BY al.CreatedDateUtc DESC) lastRenewal
@@ -1583,6 +2008,13 @@ SELECT TOP 1 p.PolicyId,
        p.EffectiveDate,
        p.ExpirationDate,
        p.BoundDateUtc,
+        COALESCE(NULLIF(p.PolicySourceCode, N''), N'ManualEntry') AS PolicySourceCode,
+        COALESCE(pcs.SourceName, p.PolicySourceCode, N'Manual Entry') AS PolicySourceName,
+        p.PolicySourceReason,
+        p.PolicySourceNotes,
+        p.PolicyBindTransactionId,
+        COALESCE(pbt.BindStatusCode, N'Bound') AS BindStatusCode,
+        COALESCE(pbs.StatusName, pbt.BindStatusCode, N'Bound') AS BindStatusName,
        s.AssignedToUserId,
        COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS AssignedToUserName,
        COALESCE(u.FullName, u.DisplayName, u.UserName, N'Tenant Admin') AS ProducerName,
@@ -1596,11 +2028,14 @@ SELECT TOP 1 p.PolicyId,
            WHEN p.ExpirationDate < SYSUTCDATETIME() THEN N'Expired'
            ELSE N'Not Started'
        END) AS RenewalStage,
-       COALESCE(lastAction.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), N' from submission ', COALESCE(s.SubmissionNumber, N''))) AS LastAction
+       COALESCE(lastAction.Notes, pbt.Notes, CONCAT(N'Policy bound ', CONVERT(nvarchar(10), p.BoundDateUtc, 101), CASE WHEN s.SubmissionNumber IS NULL THEN N' from account policy intake' ELSE CONCAT(N' from submission ', s.SubmissionNumber) END)) AS LastAction
 FROM Submissions.BoundPolicy p
 LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
 LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
 LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
+LEFT JOIN Submissions.PolicyBindTransaction pbt ON pbt.PolicyBindTransactionId = p.PolicyBindTransactionId AND pbt.IsDeleted = 0
+LEFT JOIN Submissions.PolicyCreationSource pcs ON pcs.TenantId = p.TenantId AND pcs.SourceCode = p.PolicySourceCode AND pcs.IsDeleted = 0
+LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = p.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsDeleted = 0
 LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
 OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 ORDER BY al.CreatedDateUtc DESC) lastAction
 OUTER APPLY (SELECT TOP 1 al.Notes FROM Submissions.SubmissionActionLog al WHERE al.TenantId = p.TenantId AND al.SubmissionId = p.SubmissionId AND al.IsDeleted = 0 AND al.ActionCode = N'RenewalStage' ORDER BY al.CreatedDateUtc DESC) lastRenewal
@@ -1611,7 +2046,50 @@ WHERE p.PolicyId = @PolicyId AND p.IsDeleted = 0;";
 
     public async Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
     {
-        const string sql = @"
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsurePolicyCreationSourceSchemaAsync(cn, request.TenantId, cancellationToken);
+        await EnsurePolicyBindTransactionSchemaAsync(cn, request.TenantId, cancellationToken);
+
+        var source = await GetPolicyCreationSourceSettingsAsync(cn, request.TenantId, request.PolicySourceCode, cancellationToken);
+        var sourceReason = Normalize(request.PolicySourceReason);
+        var sourceNotes = Normalize(request.Notes);
+
+        if (source.RequiresQuote)
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires quote-bound submission workflow. Use Create Policy from a submission quote.");
+        }
+
+        if (source.RequiresSubmission && (!request.SubmissionId.HasValue || request.SubmissionId.Value == Guid.Empty))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a parent submission.");
+        }
+
+        if (source.RequiresAccount && request.AccountId == Guid.Empty)
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires an account.");
+        }
+
+        if (source.RequiresReason && string.IsNullOrWhiteSpace(sourceReason))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a reason.");
+        }
+
+        if (source.RequiresPolicyNumber && string.IsNullOrWhiteSpace(request.PolicyNumber))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a policy number.");
+        }
+
+        if (request.ExpirationDate <= request.EffectiveDate)
+        {
+            throw new InvalidOperationException("Policy expiration date must be after the effective date.");
+        }
+
+        if (request.AnnualPremium <= 0)
+        {
+            throw new InvalidOperationException("Policy annual premium must be greater than zero.");
+        }
+
+        const string carrierSql = @"
 DECLARE @CarrierId UNIQUEIDENTIFIER = (SELECT TOP 1 CarrierId FROM Core.Carrier WHERE TenantId = @TenantId AND CarrierName = @CarrierName AND IsDeleted = 0 ORDER BY CreatedDateUtc);
 IF @CarrierId IS NULL
 BEGIN
@@ -1619,45 +2097,31 @@ BEGIN
     INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
     VALUES (@CarrierId, @TenantId, LEFT(REPLACE(UPPER(@CarrierName), N' ', N''), 50), @CarrierName, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0);
 END;
-
-DECLARE @SubmissionId UNIQUEIDENTIFIER = NEWID();
-DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
-DECLARE @SubmissionNumber NVARCHAR(50) = CONCAT(N'SUB-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS VARCHAR), 5));
-
-INSERT INTO Submissions.Submission
-    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
-VALUES
-    (@SubmissionId, @TenantId, @AccountId, NULL, @SubmissionNumber, @LineOfBusiness, CASE WHEN @Status IN (N'Active', N'Bound') THEN N'Bound' ELSE @Status END, N'Normal', @ModifiedByUserId, @EffectiveDate, @ExpirationDate, NULLIF(@AnnualPremium, 0), 0, 1, SYSUTCDATETIME(), @ModifiedByUserId, 0);
-
-INSERT INTO Submissions.Quote
-    (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
-VALUES
-    (@QuoteId, @SubmissionId, @CarrierId, CONCAT(N'QT-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @PolicyId), N'-', N''), 6)), N'Presented', @AnnualPremium, NULL, NULL, @Notes, SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
-
-INSERT INTO Submissions.BoundPolicy
-    (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
-VALUES
-    (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId, @PolicyNumber, CASE WHEN @Status = N'Active' THEN N'Bound' ELSE @Status END, @AnnualPremium, @EffectiveDate, @ExpirationDate, SYSUTCDATETIME(), 0);
-
-INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, N'PolicyCreated', CONCAT(N'Policy created from register. ', COALESCE(@Notes, N'')), SYSUTCDATETIME(), 0);";
-        var id = Guid.NewGuid();
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+SELECT @CarrierId;";
+        var carrierId = request.CarrierId ?? await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(carrierSql, new
         {
-            PolicyId = id,
             request.TenantId,
-            request.AccountId,
-            request.PolicyNumber,
             request.CarrierName,
-            request.LineOfBusiness,
-            request.Status,
-            request.EffectiveDate,
-            request.ExpirationDate,
-            request.AnnualPremium,
-            request.Notes,
             request.ModifiedByUserId,
         }, cancellationToken: cancellationToken));
+
+        var id = await BindPolicyAsync(new BindPolicyRequest(
+            SubmissionId: request.SubmissionId,
+            QuoteId: request.QuoteId,
+            TenantId: request.TenantId,
+            AccountId: request.AccountId,
+            CarrierId: carrierId,
+            AnnualPremium: request.AnnualPremium,
+            EffectiveDate: request.EffectiveDate,
+            ExpirationDate: request.ExpirationDate,
+            PolicyNumber: request.PolicyNumber,
+            PolicySourceCode: source.SourceCode,
+            PolicySourceReason: sourceReason ?? "Policy created from policy register.",
+            PolicySourceNotes: sourceNotes,
+            RequestedByUserId: request.ModifiedByUserId,
+            ApprovedByUserId: request.ModifiedByUserId,
+            BoundByUserId: request.ModifiedByUserId), cancellationToken);
+
         return id;
     }
 
@@ -1746,7 +2210,7 @@ LEFT JOIN Client.Account a ON a.AccountId = p.AccountId
 LEFT JOIN Core.Carrier c ON c.CarrierId = p.CarrierId
 WHERE p.PolicyId = @PolicyId AND p.TenantId = @TenantId AND p.IsDeleted = 0;
 
-IF @SubmissionId IS NULL THROW 51000, 'Policy was not found.', 1;
+IF @PolicyNumber IS NULL THROW 51000, 'Policy was not found.', 1;
 
 DECLARE @ActionCode NVARCHAR(80) = REPLACE(@Action, N' ', N'');
 DECLARE @Message NVARCHAR(500) = CONCAT(@Action, N' completed for ', @PolicyNumber, N'.');
@@ -1761,13 +2225,55 @@ END
 ELSE IF @Action = N'Renew'
 BEGIN
     DECLARE @RenewalPolicyId UNIQUEIDENTIFIER = NEWID();
-    DECLARE @RenewalQuoteId UNIQUEIDENTIFIER = NEWID();
     DECLARE @RenewalEffective DATETIME2 = COALESCE(@ActionDate, @ExpirationDate);
     DECLARE @RenewalPremium DECIMAL(18,2) = COALESCE(NULLIF(@Premium, 0), @AnnualPremium);
-    INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
-    VALUES (@RenewalQuoteId, @SubmissionId, @CarrierId, CONCAT(N'QT-REN-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @RenewalPolicyId), N'-', N''), 6)), N'Presented', @RenewalPremium, @Notes, SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
-    INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
-    VALUES (@RenewalPolicyId, @SubmissionId, @RenewalQuoteId, @TenantId, @AccountId, @CarrierId, CONCAT(@PolicyNumber, N'-REN-', FORMAT(GETUTCDATE(), 'yyMMdd')), N'Pending', @RenewalPremium, @RenewalEffective, DATEADD(year, 1, @RenewalEffective), SYSUTCDATETIME(), 0);
+
+    IF @SubmissionId IS NULL
+    BEGIN
+        DECLARE @RenewalSourceCode NVARCHAR(50) = N'RenewalImport';
+        DECLARE @RenewalPolicyNumber NVARCHAR(80) = CONCAT(@PolicyNumber, N'-REN-', FORMAT(GETUTCDATE(), 'yyMMdd'));
+        DECLARE @RenewalReason NVARCHAR(500) = LEFT(COALESCE(NULLIF(@Notes, N''), CONCAT(N'Direct account-origin renewal created from ', @PolicyNumber, N'.')), 500);
+        DECLARE @RenewalBindTransactionId UNIQUEIDENTIFIER = NEWID();
+
+        IF NOT EXISTS
+        (
+            SELECT 1
+            FROM Submissions.PolicyCreationSource
+            WHERE TenantId = @TenantId
+              AND SourceCode = @RenewalSourceCode
+              AND RequiresQuote = 0
+              AND RequiresSubmission = 0
+              AND AllowsDirectPolicyEntry = 1
+              AND IsActive = 1
+              AND IsDeleted = 0
+        )
+            THROW 51000, 'Direct policy renewal source configuration is missing or inactive.', 1;
+
+        INSERT INTO Submissions.PolicyBindTransaction
+            (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, PolicyId, AccountId, CarrierId,
+             PolicySourceCode, BindStatusCode, PolicyNumber, AnnualPremium, EffectiveDate, ExpirationDate,
+             BindReason, Notes, RequestedByUserId, RequestedDateUtc, ApprovedByUserId, ApprovedDateUtc,
+             BoundByUserId, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES
+            (@RenewalBindTransactionId, @TenantId, NULL, NULL, @RenewalPolicyId, @AccountId, @CarrierId,
+             @RenewalSourceCode, N'Bound', @RenewalPolicyNumber, @RenewalPremium, @RenewalEffective, DATEADD(year, 1, @RenewalEffective),
+             @RenewalReason, @Notes, @ModifiedByUserId, SYSUTCDATETIME(), @ModifiedByUserId, SYSUTCDATETIME(),
+             @ModifiedByUserId, SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+        INSERT INTO Submissions.BoundPolicy
+            (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, PolicySourceCode, PolicySourceReason, PolicySourceNotes, PolicyBindTransactionId, IsDeleted)
+        VALUES
+            (@RenewalPolicyId, NULL, NULL, @TenantId, @AccountId, @CarrierId, @RenewalPolicyNumber, N'Bound', @RenewalPremium, @RenewalEffective, DATEADD(year, 1, @RenewalEffective), SYSUTCDATETIME(), @RenewalSourceCode, @RenewalReason, @Notes, @RenewalBindTransactionId, 0);
+    END
+    ELSE
+    BEGIN
+        DECLARE @RenewalQuoteId UNIQUEIDENTIFIER = NEWID();
+        INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+        VALUES (@RenewalQuoteId, @SubmissionId, @CarrierId, CONCAT(N'QT-REN-', FORMAT(GETUTCDATE(), 'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @RenewalPolicyId), N'-', N''), 6)), N'Presented', @RenewalPremium, @Notes, SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+        INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+        VALUES (@RenewalPolicyId, @SubmissionId, @RenewalQuoteId, @TenantId, @AccountId, @CarrierId, CONCAT(@PolicyNumber, N'-REN-', FORMAT(GETUTCDATE(), 'yyMMdd')), N'Pending', @RenewalPremium, @RenewalEffective, DATEADD(year, 1, @RenewalEffective), SYSUTCDATETIME(), 0);
+    END
+
     SET @Message = CONCAT(N'Renewal policy created for ', @PolicyNumber, N'.');
 END
 ELSE IF @Action = N'Endorse'
@@ -1782,10 +2288,13 @@ BEGIN
 END
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, @ActionCode, COALESCE(NULLIF(@Notes, N''), @Message), SYSUTCDATETIME(), 0);
+SELECT NEWID(), @SubmissionId, @TenantId, @ActionCode, COALESCE(NULLIF(@Notes, N''), @Message), SYSUTCDATETIME(), 0
+WHERE @SubmissionId IS NOT NULL;
 
 SELECT @Message;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsurePolicyCreationSourceSchemaAsync(cn, request.TenantId, cancellationToken);
+        await EnsurePolicyBindTransactionSchemaAsync(cn, request.TenantId, cancellationToken);
         var message = await cn.QuerySingleAsync<string>(new CommandDefinition(sql, new
         {
             PolicyId = policyId,
@@ -1813,57 +2322,133 @@ WHERE  SubmissionId = @SubmissionId AND IsDeleted = 0;";
 
     public async Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default)
     {
+        var submissionId = request.SubmissionId is { } sid && sid != Guid.Empty ? sid : (Guid?)null;
+        var quoteId = request.QuoteId is { } qid && qid != Guid.Empty ? qid : (Guid?)null;
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        await EnsurePolicyCreationSourceSchemaAsync(cn, request.TenantId, cancellationToken);
+        await EnsurePolicyBindTransactionSchemaAsync(cn, request.TenantId, cancellationToken);
+
+        var source = await GetPolicyCreationSourceSettingsAsync(cn, request.TenantId, request.PolicySourceCode, cancellationToken);
+        if (source.RequiresAccount && request.AccountId == Guid.Empty)
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires an account.");
+        }
+
+        if (source.RequiresSubmission && !submissionId.HasValue)
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a parent submission.");
+        }
+
+        if (source.RequiresQuote && !quoteId.HasValue)
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a quote.");
+        }
+
+        if (source.RequiresReason && string.IsNullOrWhiteSpace(request.PolicySourceReason))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a reason.");
+        }
+
+        if (source.RequiresPolicyNumber && string.IsNullOrWhiteSpace(request.PolicyNumber))
+        {
+            throw new InvalidOperationException($"Policy source '{source.SourceName}' requires a policy number.");
+        }
+
+        if (request.ExpirationDate <= request.EffectiveDate)
+        {
+            throw new InvalidOperationException("Policy expiration date must be after the effective date.");
+        }
+
+        if (request.AnnualPremium <= 0)
+        {
+            throw new InvalidOperationException("Policy annual premium must be greater than zero.");
+        }
+
         const string sql = @"
+DECLARE @PolicyBindTransactionId UNIQUEIDENTIFIER = NEWID();
+DECLARE @RequestedDateUtc DATETIME2 = SYSUTCDATETIME();
+DECLARE @BoundDateUtc DATETIME2 = SYSUTCDATETIME();
+
+INSERT INTO Submissions.PolicyBindTransaction
+    (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, PolicyId, AccountId, CarrierId,
+     PolicySourceCode, BindStatusCode, PolicyNumber, AnnualPremium, EffectiveDate, ExpirationDate,
+     BindReason, Notes, RequestedByUserId, RequestedDateUtc, ApprovedByUserId, ApprovedDateUtc,
+     BoundByUserId, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (@PolicyBindTransactionId, @TenantId, @SubmissionId, @QuoteId, @PolicyId, @AccountId, @CarrierId,
+     @PolicySourceCode, @BindStatusCode, @PolicyNumber, @AnnualPremium, @EffectiveDate, @ExpirationDate,
+     @PolicySourceReason, @PolicySourceNotes, @RequestedByUserId, @RequestedDateUtc, @ApprovedByUserId,
+     CASE WHEN @ApprovedByUserId IS NULL THEN NULL ELSE @RequestedDateUtc END,
+     @BoundByUserId, CASE WHEN @BindStatusCode = N'Bound' THEN @BoundDateUtc ELSE NULL END, @RequestedDateUtc, @RequestedByUserId, 0);
+
 INSERT INTO Submissions.BoundPolicy
     (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId,
-     PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
+     PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, PolicySourceCode, PolicySourceReason, PolicySourceNotes, PolicyBindTransactionId, IsDeleted)
 VALUES
     (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId,
-     'POL-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS VARCHAR), 5),
-     'Bound', @AnnualPremium, @EffectiveDate, @ExpirationDate, GETUTCDATE(), 0);
+     COALESCE(NULLIF(@PolicyNumber, N''), 'POL-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS VARCHAR), 5)),
+     'Bound', @AnnualPremium, @EffectiveDate, @ExpirationDate, @BoundDateUtc, @PolicySourceCode, @PolicySourceReason, @PolicySourceNotes, @PolicyBindTransactionId, 0);
+
+UPDATE pbt
+SET PolicyNumber = bp.PolicyNumber,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN Submissions.BoundPolicy bp ON bp.PolicyId = pbt.PolicyId
+WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId;
 
 UPDATE Submissions.Submission
 SET    Status          = 'Bound',
        ModifiedDateUtc = GETUTCDATE()
-WHERE  SubmissionId = @SubmissionId;";
+WHERE  SubmissionId = @SubmissionId AND @SubmissionId IS NOT NULL;";
         const string postBindSql = @"
 UPDATE Submissions.Quote
 SET Status = CASE WHEN QuoteId = @QuoteId THEN N'Bound' ELSE N'Rejected' END,
     IsSelected = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
     IsRecommended = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
     ModifiedDateUtc = SYSUTCDATETIME()
-WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 AND @SubmissionId IS NOT NULL AND @QuoteId IS NOT NULL AND @QuoteId <> '00000000-0000-0000-0000-000000000000';
 
 UPDATE Submissions.SubmissionMarket
 SET Status = CASE WHEN CarrierId = @CarrierId THEN N'Bound' ELSE CASE WHEN Status IN (N'Declined', N'Blocked') THEN Status ELSE N'Not Selected' END END,
     RespondedDateUtc = COALESCE(RespondedDateUtc, SYSUTCDATETIME()),
     ModifiedDateUtc = SYSUTCDATETIME()
-WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 AND @SubmissionId IS NOT NULL;
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, N'PolicyBound', N'Policy bound from selected quote.', SYSUTCDATETIME(), N'Quote', @QuoteId, N'User', 0);
+SELECT NEWID(), @SubmissionId, @TenantId, N'PolicyBound', CONCAT(N'Policy created. Source: ', @PolicySourceCode, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), SYSUTCDATETIME(), CASE WHEN @QuoteId IS NULL OR @QuoteId = '00000000-0000-0000-0000-000000000000' THEN N'Policy' ELSE N'Quote' END, CASE WHEN @QuoteId IS NULL OR @QuoteId = '00000000-0000-0000-0000-000000000000' THEN @PolicyId ELSE @QuoteId END, N'User', 0
+WHERE @SubmissionId IS NOT NULL;
 
 INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, DueDate, CreatedDateUtc, IsDeleted)
 SELECT NEWID(), @TenantId, CONCAT(N'TASK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 6)),
-       v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', N'Submission', @SubmissionId, @AccountId, DATEADD(day, 7, CONVERT(date, SYSUTCDATETIME())), SYSUTCDATETIME(), 0
+       v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', CASE WHEN @SubmissionId IS NULL THEN N'Policy' ELSE N'Submission' END, COALESCE(@SubmissionId, @PolicyId), @AccountId, DATEADD(day, 7, CONVERT(date, SYSUTCDATETIME())), SYSUTCDATETIME(), 0
 FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect policy', N'Attach issued policy.'), (N'Collect invoice', N'Attach invoice.'), (N'Collect certificates', N'Attach certificates.'), (N'Collect evidence of insurance', N'Attach evidence of insurance.'), (N'Collect endorsements', N'Attach required endorsements.')) v(Title, Description);";
         var id = Guid.NewGuid();
-        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
             PolicyId       = id,
-            request.SubmissionId,
-            request.QuoteId,
+            SubmissionId = submissionId,
+            QuoteId = quoteId,
             request.TenantId,
             request.AccountId,
             request.CarrierId,
             request.AnnualPremium,
             request.EffectiveDate,
             request.ExpirationDate,
+            request.PolicyNumber,
+            PolicySourceCode = source.SourceCode,
+            request.PolicySourceReason,
+            request.PolicySourceNotes,
+            request.RequestedByUserId,
+            request.ApprovedByUserId,
+            request.BoundByUserId,
+            request.BindStatusCode,
         }, cancellationToken: cancellationToken));
-        await cn.ExecuteAsync(new CommandDefinition(postBindSql, new { request.SubmissionId, request.QuoteId, request.TenantId, request.AccountId, request.CarrierId }, cancellationToken: cancellationToken));
-        await RecordOpportunityWorkflowAsync(cn, request.SubmissionId, request.TenantId, "Won", "Policy Bound", "Policy Bound", "Policy bound from selected quote.", "BoundPolicy", id, null, cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(postBindSql, new { SubmissionId = submissionId, QuoteId = quoteId, request.TenantId, request.AccountId, request.CarrierId }, cancellationToken: cancellationToken));
+        if (submissionId.HasValue)
+        {
+            await RecordOpportunityWorkflowAsync(cn, submissionId.Value, request.TenantId, "Won", "Policy Bound", "Policy Bound", "Policy bound from selected quote.", "BoundPolicy", id, null, cancellationToken);
+        }
         return id;
     }
 }

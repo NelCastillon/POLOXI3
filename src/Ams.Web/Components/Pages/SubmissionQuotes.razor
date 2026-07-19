@@ -47,13 +47,18 @@
         </div>
     }
 
-    <section class="qde-kpi-strip" aria-label="Quote KPIs">
-        @KpiCard("all", "Total Quotes", TotalQuoteCount.ToString(), "All quote options in the register", "bi-stack", "blue")
-        @KpiCard("priority", "Priority", PriorityQuoteCount.ToString(), "Expiring, high-premium, pending, or accepted quotes", "bi-exclamation-octagon", "red")
-        @KpiCard("pending", "Pending", PendingQuoteCount.ToString(), "Quotes awaiting review or client decision", "bi-hourglass-split", "amber")
-        @KpiCard("accepted", "Accepted", AcceptedQuoteCount.ToString(), "Selected quote options ready for bind", "bi-check-circle", "green")
-        @KpiCard("expiring", "Expiring Soon", ExpiringQuoteCount.ToString(), "Quote options expiring within seven days", "bi-clock-history", "orange")
-        @KpiCard("premium", "Quoted Premium", QuotedPremium.ToString("C0"), "Total premium across visible quote options", "bi-cash-stack", "emerald")
+    <section class="quote-kpi-strip" aria-label="Quote KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="() => SetKpi(metric.Filter)">
+                <span class="quote-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="quote-kpi__body">
+                    <span class="quote-kpi__val">@metric.Value</span>
+                    <span class="quote-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
     </section>
 
     <section class="qde-workflows" aria-label="Quote workflows">
@@ -557,6 +562,15 @@
     int PendingQuoteCount => _rows.Count(r => r.Status == "Pending");
     int AcceptedQuoteCount => _rows.Count(r => r.Status == "Accepted");
     int ExpiringQuoteCount => ExpiringRows.Count();
+    IEnumerable<QuoteMetric> Metrics =>
+    [
+        new("blue", "all", "bi-stack", "Total Quotes", TotalQuoteCount.ToString(), "All quote options", "All quote options in the register"),
+        new("red", "priority", "bi-exclamation-octagon", "Priority", PriorityQuoteCount.ToString(), "High-importance quotes", "Expiring, high-premium, pending, or accepted quotes"),
+        new("amber", "pending", "bi-hourglass-split", "Pending", PendingQuoteCount.ToString(), "Awaiting decision", "Quotes awaiting review or client decision"),
+        new("green", "accepted", "bi-check-circle", "Accepted", AcceptedQuoteCount.ToString(), "Ready for bind", "Selected quote options ready for bind"),
+        new("orange", "expiring", "bi-clock-history", "Expiring Soon", ExpiringQuoteCount.ToString(), "Within seven days", "Quote options expiring within seven days"),
+        new("slate", "premium", "bi-cash-stack", "Quoted Premium", QuotedPremium.ToString("C0"), "Visible premium", "Total premium across visible quote options")
+    ];
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_carrierFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
@@ -1042,7 +1056,7 @@
             {
             "Accept Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes ?? "Quote accepted from quote command center.")),
             "Request Revision" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes)),
-            "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(_tenantId, _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
+            "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(TenantId: _tenantId, QuoteId: _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, CarrierId: _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _actionForm.EffectiveDate, ExpirationDate: _actionForm.EffectiveDate?.AddYears(1), PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null)),
             "Decline Quote" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}.")),
                 "Download PDF" => await GenerateProposalAsync(),
                 _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
@@ -1089,19 +1103,9 @@
 
     string RowClass(QuoteRow row) => _selected?.QuoteId == row.QuoteId ? "qde-row qde-row--selected" : "qde-row";
 
-    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "qde-menu-item qde-menu-item--danger" : "qde-menu-item";
+    string MetricCardClass(QuoteMetric metric) => $"quote-kpi quote-kpi--{metric.Tone} {(_activeKpi == metric.Filter ? "quote-kpi--active" : string.Empty)}";
 
-    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
-    {
-        var active = _activeKpi == key;
-        var cardClass = active ? $"qde-kpi qde-kpi--{tone} qde-kpi--active" : $"qde-kpi qde-kpi--{tone}";
-        var title = active ? "Clear KPI filter" : subtitle;
-        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
-            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
-            <strong>@value</strong>
-            <small>@subtitle</small>
-        </button>;
-    }
+    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "qde-menu-item qde-menu-item--danger" : "qde-menu-item";
 
     RenderFragment WorkflowButton(string title, string description, string icon, System.Action callback) => @<button type="button" class="qde-workflow" @onclick="() => callback()">
         <i class="bi @icon" aria-hidden="true"></i>
@@ -1186,6 +1190,7 @@
         public DateTime QuotedDateUtc { get; set; }
     }
 
+    sealed record QuoteMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
     sealed record GroupSummary(string Name, int Count, decimal Premium, int Accepted, int Expiring, int Percent);

@@ -48,9 +48,18 @@
                             <label>Last name <span>*</span></label>
                             <InputText class="ld-input" @bind-Value="_form.LastName" placeholder="Last name" />
                         </div>
+                        <div class="ld-field">
+                            <label>Lead type <span>*</span></label>
+                            <InputSelect class="ld-input" @bind-Value="_form.LeadTypeCode">
+                                @foreach (var type in _leadTypeOptions)
+                                {
+                                    <option value="@type.Value">@type.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
                         <div class="ld-field ld-field-wide">
-                            <label>Company <span>*</span></label>
-                            <InputText class="ld-input" @bind-Value="_form.Company" placeholder="Company or account name" />
+                            <label>Company / account context @if (SelectedLeadTypeRequiresCompany) { <span>*</span> }</label>
+                            <InputText class="ld-input" @bind-Value="_form.Company" placeholder="Company for commercial leads; optional for personal leads" />
                         </div>
                         <div class="ld-field">
                             <label>Email <span>*</span></label>
@@ -144,27 +153,32 @@
     private bool _visible;
     private bool _saving;
     private bool _ownersLoaded;
+    private bool _optionsLoaded;
     private Guid _tenantId;
+    private Guid _optionsTenantId;
     private Guid? _createdByUserId;
     private Guid? _requestTenantId;
     private Guid? _requestCreatedByUserId;
     private Func<Task>? _requestOnLeadCreated;
     private LeadFormModel _form = new();
     private List<LabelValue> _ownerOptions = [];
+    private List<LeadTypeDto> _leadTypes = [];
+    private List<LabelValue> _leadTypeOptions = [];
+    private List<LabelValue> _stageOptions = [];
+    private List<LabelValue> _sourceOptions = [];
+    private List<LabelValue> _ratingOptions = [];
 
     private bool _toastVisible;
     private string _toastMessage = string.Empty;
     private string _toastKind = "info";
     private System.Threading.CancellationTokenSource? _toastCts;
 
-    private static readonly List<LabelValue> _stageOptions = [new("New", "New"), new("Contacted", "Contacted"), new("Qualified", "Qualified"), new("Proposal", "Proposal"), new("Negotiation", "Negotiation"), new("Converted", "Converted"), new("Lost", "Lost")];
-    private static readonly List<LabelValue> _sourceOptions = [new("Referral", "Referral"), new("Website", "Website"), new("Cold Call", "Cold Call"), new("Social", "Social"), new("Email", "Email"), new("Event", "Event"), new("Partner", "Partner"), new("Inbound", "Inbound")];
-    private static readonly List<LabelValue> _ratingOptions = [new("Hot", "Hot"), new("Warm", "Warm"), new("Cold", "Cold")];
-
     private string ToastCssClass => $"ld-dialog-alert ld-dialog-alert-{_toastKind}{(_toastVisible ? string.Empty : " ld-dialog-alert-hidden")}";
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-octagon", "warning" => "bi-exclamation-triangle", "success" => "bi-check2-circle", _ => "bi-info-circle" };
     private string PhoneStatusText => IsPhoneValid(_form.Phone) ? $"Phone formatted as {NormalizePhone(_form.Phone)}" : "Enter a valid 10-digit phone number.";
     private string PhoneHintClass => IsPhoneValid(_form.Phone) ? "ld-field-hint ld-hint-good" : "ld-field-hint ld-hint-bad";
+    private bool SelectedLeadTypeRequiresCompany => _leadTypes.FirstOrDefault(x => string.Equals(x.TypeCode, _form.LeadTypeCode, StringComparison.OrdinalIgnoreCase))?.RequiresCompany == true;
+    private bool RequiredOptionsMissing => _leadTypeOptions.Count == 0 || _sourceOptions.Count == 0 || _ownerOptions.Count == 0;
 
     protected override void OnInitialized()
     {
@@ -184,9 +198,45 @@
     {
         await EnsureContextAsync();
         await EnsureOwnersLoadedAsync();
-        _form = new LeadFormModel { Source = "Referral", Stage = "New", Priority = "Warm", Score = 50, Owner = string.Empty };
+        await EnsureOptionsLoadedAsync();
+        _form = new LeadFormModel
+        {
+            LeadTypeCode = _leadTypeOptions.FirstOrDefault()?.Value ?? "Personal",
+            Source = _sourceOptions.FirstOrDefault()?.Value ?? string.Empty,
+            Stage = _stageOptions.FirstOrDefault(x => string.Equals(x.Value, "New", StringComparison.OrdinalIgnoreCase))?.Value ?? _stageOptions.FirstOrDefault()?.Value ?? string.Empty,
+            Priority = _ratingOptions.FirstOrDefault()?.Value ?? string.Empty,
+            Score = 50,
+            Owner = string.Empty
+        };
         _visible = true;
         StateHasChanged();
+    }
+
+    private async Task EnsureOptionsLoadedAsync()
+    {
+        if (_optionsLoaded && _optionsTenantId == _tenantId) return;
+        if (_tenantId == Guid.Empty) return;
+        try
+        {
+            _leadTypes = (await Api.GetLeadTypesAsync(_tenantId))?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName).ToList() ?? [];
+            _leadTypeOptions = _leadTypes.Select(x => new LabelValue(x.TypeCode, x.TypeName)).ToList();
+
+            var sources = (await Api.SearchLeadSourcesAsync(_tenantId, pageSize: 250))?.Items?.ToList() ?? [];
+            _sourceOptions = sources.Where(x => x.IsActive).OrderBy(x => x.SourceName).Select(x => new LabelValue(x.SourceCode, x.SourceName)).ToList();
+
+            var statuses = (await Api.SearchLeadStatusesAsync(_tenantId, pageSize: 250))?.Items?.ToList() ?? [];
+            _stageOptions = statuses.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.StatusName).Select(x => new LabelValue(x.StatusCode, x.StatusName)).ToList();
+
+            var priorities = (await Api.GetLeadEngagementOptionsAsync(_tenantId, "Priority"))?.ToList() ?? [];
+            _ratingOptions = priorities.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Label).Select(x => new LabelValue(x.Code, x.Label)).ToList();
+
+            _optionsLoaded = true;
+            _optionsTenantId = _tenantId;
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync($"Unable to load lead options: {ex.Message}", "warning");
+        }
     }
 
     private Task CloseAsync()
@@ -250,7 +300,8 @@
             {
                 TenantId = _tenantId,
                 LeadNumber = $"LD-{DateTime.UtcNow:yyyyMMddHHmmss}",
-                AccountName = _form.Company.Trim(),
+                AccountName = string.IsNullOrWhiteSpace(_form.Company) ? null : _form.Company.Trim(),
+                LeadTypeCode = _form.LeadTypeCode,
                 FirstName = _form.FirstName.Trim(),
                 LastName = _form.LastName.Trim(),
                 Email = _form.Email.Trim(),
@@ -275,7 +326,9 @@
 
     private bool ValidateForm()
     {
-        if (string.IsNullOrWhiteSpace(_form.FirstName) || string.IsNullOrWhiteSpace(_form.LastName) || string.IsNullOrWhiteSpace(_form.Company) || string.IsNullOrWhiteSpace(_form.Email) || string.IsNullOrWhiteSpace(_form.Source) || string.IsNullOrWhiteSpace(_form.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (RequiredOptionsMissing) { _ = ShowToastAsync("Lead type, source, and owner settings must be configured before creating a lead.", "warning"); return false; }
+        if (string.IsNullOrWhiteSpace(_form.FirstName) || string.IsNullOrWhiteSpace(_form.LastName) || string.IsNullOrWhiteSpace(_form.LeadTypeCode) || string.IsNullOrWhiteSpace(_form.Email) || string.IsNullOrWhiteSpace(_form.Source) || string.IsNullOrWhiteSpace(_form.Owner)) { _ = ShowToastAsync("Complete required lead fields.", "warning"); return false; }
+        if (SelectedLeadTypeRequiresCompany && string.IsNullOrWhiteSpace(_form.Company)) { _ = ShowToastAsync("Company is required for this lead type.", "warning"); return false; }
         if (!new EmailAddressAttribute().IsValid(_form.Email)) { _ = ShowToastAsync("Enter a valid email address.", "warning"); return false; }
         if (!IsPhoneValid(_form.Phone)) { _ = ShowToastAsync("Enter a valid phone number.", "warning"); return false; }
         return true;
@@ -322,7 +375,8 @@
     {
         [Required, StringLength(100)] public string FirstName { get; set; } = string.Empty;
         [Required, StringLength(100)] public string LastName { get; set; } = string.Empty;
-        [Required, StringLength(200)] public string Company { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string LeadTypeCode { get; set; } = "Personal";
+        [StringLength(200)] public string Company { get; set; } = string.Empty;
         [Required, AmsEmailAddress, StringLength(200)] public string Email { get; set; } = string.Empty;
         [AmsPhone, StringLength(30)] public string Phone { get; set; } = string.Empty;
         [Required, StringLength(50)] public string Source { get; set; } = string.Empty;

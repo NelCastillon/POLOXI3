@@ -22,22 +22,30 @@ public sealed class LeadRepository : ILeadRepository
         const string sql = @"
 INSERT INTO CRM.Lead
 (
-    LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone,
+    LeadId, TenantId, LeadNumber, AccountName, LeadTypeCode, FirstName, LastName, Email, Phone,
     InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, AssignedToUserId,
     StatusCodeId, CreatedDateUtc, CreatedByUserId, IsDeleted
 )
 VALUES
 (
-    @LeadId, @TenantId, @LeadNumber, @AccountName, @FirstName, @LastName, @Email, @Phone,
+    @LeadId, @TenantId, @LeadNumber, @AccountName, @LeadTypeCode, @FirstName, @LastName, @Email, @Phone,
     @InterestedService, @AnnualRevenue, @Score, @PriorityCode, @SourceCode, @NurturingStageCode, @AssignedToUserId,
     1, SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
+        var leadType = await GetLeadTypeSettingsAsync(cn, null, request.TenantId, request.LeadTypeCode, cancellationToken);
+        var accountName = Clean(request.AccountName);
+        if (leadType.RequiresCompany && string.IsNullOrWhiteSpace(accountName))
+        {
+            throw new InvalidOperationException($"Company is required for {leadType.TypeName} leads.");
+        }
+
         var calculatedScore = await CalculateLeadScoreAsync(cn, new LeadScoringInput(
             request.TenantId,
-            request.AccountName,
+            accountName,
             request.FirstName,
             request.LastName,
             request.Email,
@@ -52,7 +60,8 @@ VALUES
             LeadId = id,
             request.TenantId,
             request.LeadNumber,
-            request.AccountName,
+            AccountName = accountName,
+            LeadTypeCode = leadType.TypeCode,
             request.FirstName,
             request.LastName,
             request.Email,
@@ -67,14 +76,16 @@ VALUES
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
 
+        await SyncPrimaryLeadContactAsync(cn, null, request.TenantId, id, request.FirstName, request.LastName, request.Email, request.Phone, request.CreatedByUserId, cancellationToken);
+
         return id;
     }
 
     public async Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
+        const string sql = @"SELECT LeadId, TenantId, LeadNumber, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc FROM CRM.Lead WHERE LeadId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
         var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(
             new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
 
@@ -90,13 +101,13 @@ VALUES
     {
         var sql = RepositorySql.BuildPagedSearchSql(
             "CRM.Lead",
-            "LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
+            "LeadId, TenantId, LeadNumber, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
             "FirstName LIKE '%' + @SearchTerm + '%' OR LastName LIKE '%' + @SearchTerm + '%' OR Email LIKE '%' + @SearchTerm + '%' OR AccountName LIKE '%' + @SearchTerm + '%' OR LeadNumber LIKE '%' + @SearchTerm + '%'",
             "CreatedDateUtc DESC",
             true);
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
         using var multi = await cn.QueryMultipleAsync(
             new CommandDefinition(sql, new
             {
@@ -124,8 +135,9 @@ VALUES
 
     public async Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default)
     {
-        const string sql = @"SELECT LeadId, TenantId, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, SourceCode, CreatedDateUtc FROM CRM.Lead WHERE LeadId = @LeadId AND IsDeleted = 0;";
+        const string sql = @"SELECT LeadId, TenantId, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, SourceCode, CreatedDateUtc FROM CRM.Lead WHERE LeadId = @LeadId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
         var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(new CommandDefinition(sql, new { LeadId = leadId }, cancellationToken: cancellationToken));
         if (lead is null)
         {
@@ -206,6 +218,23 @@ FROM CRM.LeadEngagementOption
 WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1 AND (@OptionType IS NULL OR OptionType = @OptionType)
 ORDER BY OptionType, SortOrder, Label;", new { TenantId = tenantId, OptionType = EmptyToNull(optionType) }, cancellationToken);
 
+    public async Task<IReadOnlyList<LeadTypeDto>> GetLeadTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<LeadTypeDto>(new CommandDefinition(@"
+IF OBJECT_ID(N'CRM.LeadType', N'U') IS NULL
+BEGIN
+    SELECT CAST('00000000-0000-0000-0000-000000000000' AS UNIQUEIDENTIFIER) AS LeadTypeId, @TenantId AS TenantId, N'Personal' AS TypeCode, N'Personal / Individual' AS TypeName, CAST(NULL AS NVARCHAR(500)) AS Description, N'Personal' AS AccountTypeCode, CAST(0 AS bit) AS RequiresCompany, CAST(1 AS bit) AS PersonAccountFallback, CAST(1 AS bit) AS IsActive, 10 AS SortOrder
+    UNION ALL SELECT CAST('00000000-0000-0000-0000-000000000001' AS UNIQUEIDENTIFIER), @TenantId, N'Commercial', N'Commercial / Business', NULL, N'Commercial', CAST(1 AS bit), CAST(0 AS bit), CAST(1 AS bit), 20;
+    RETURN;
+END;
+
+SELECT LeadTypeId, TenantId, TypeCode, TypeName, Description, AccountTypeCode, RequiresCompany, PersonAccountFallback, IsActive, SortOrder
+FROM CRM.LeadType
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1
+ORDER BY SortOrder, TypeName;", new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public Task<IReadOnlyList<LeadCampaignOptionDto>> GetCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadCampaignOptionDto>(@"
 SELECT CampaignId, TenantId, Name, Type, Status, Segment, StartDate, Reached, OpenRate, Conversions, Revenue
@@ -218,6 +247,7 @@ ORDER BY CASE WHEN Status = N'Active' THEN 0 WHEN Status = N'Scheduled' THEN 1 E
         const string sql = @"
 UPDATE CRM.Lead
 SET AccountName = COALESCE(@AccountName, AccountName),
+    LeadTypeCode = COALESCE(@LeadTypeCode, LeadTypeCode),
     FirstName = COALESCE(@FirstName, FirstName),
     LastName = COALESCE(@LastName, LastName),
     Email = @Email,
@@ -237,12 +267,21 @@ SET AccountName = COALESCE(@AccountName, AccountName),
 WHERE LeadId = @LeadId AND IsDeleted = 0;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
         const string currentSql = @"
-SELECT LeadId, TenantId, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, SourceCode, CreatedDateUtc
+SELECT LeadId, TenantId, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, SourceCode, CreatedDateUtc
 FROM CRM.Lead
 WHERE LeadId = @LeadId AND IsDeleted = 0;";
         var current = await cn.QuerySingleOrDefaultAsync<LeadDto>(new CommandDefinition(currentSql, new { request.LeadId }, cancellationToken: cancellationToken));
+        if (current is not null && !string.IsNullOrWhiteSpace(request.LeadTypeCode))
+        {
+            var leadType = await GetLeadTypeSettingsAsync(cn, null, current.TenantId, request.LeadTypeCode, cancellationToken);
+            var accountName = Clean(request.AccountName) ?? Clean(current.AccountName);
+            if (leadType.RequiresCompany && string.IsNullOrWhiteSpace(accountName))
+            {
+                throw new InvalidOperationException($"Company is required for {leadType.TypeName} leads.");
+            }
+        }
 
         var merged = new LeadScoringInput(
             current?.TenantId ?? Guid.Empty,
@@ -263,6 +302,7 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
         {
             request.LeadId,
             request.AccountName,
+            request.LeadTypeCode,
             request.FirstName,
             request.LastName,
             request.Email,
@@ -279,6 +319,21 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
             request.AssignedToUserId,
             request.UpdatedByUserId
         }, cancellationToken: cancellationToken));
+
+        if (current is not null)
+        {
+            await SyncPrimaryLeadContactAsync(
+                cn,
+                null,
+                current.TenantId,
+                request.LeadId,
+                request.FirstName ?? current.FirstName,
+                request.LastName ?? current.LastName,
+                request.Email,
+                request.Phone,
+                request.UpdatedByUserId,
+                cancellationToken);
+        }
     }
 
     public async Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default)
@@ -299,13 +354,13 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
         }
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureLeadAccountIdColumnAsync(cn, cancellationToken);
+        await EnsureLeadContextColumnsAsync(cn, cancellationToken);
         using var tx = cn.BeginTransaction();
 
         try
         {
             var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(new CommandDefinition(@"
-SELECT LeadId, TenantId, LeadNumber, AccountName, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc
+SELECT LeadId, TenantId, LeadNumber, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc
 FROM CRM.Lead WITH (UPDLOCK, HOLDLOCK)
 WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { request.LeadId, request.TenantId }, transaction: tx, cancellationToken: cancellationToken));
 
@@ -357,7 +412,15 @@ WHERE LeadConversionId = @LeadConversionId AND IsDeleted = 0;", new
             }
 
             var ownerUserId = request.OwnerUserId ?? lead.AssignedToUserId ?? request.ConvertedByUserId;
-            var accountName = Clean(request.AccountName) ?? Clean(lead.AccountName) ?? Clean($"{lead.FirstName} {lead.LastName}") ?? $"Converted Lead {lead.LeadNumber}";
+            var leadType = await GetLeadTypeSettingsAsync(cn, tx, request.TenantId, lead.LeadTypeCode, cancellationToken);
+            var personAccountName = Clean($"{lead.FirstName} {lead.LastName}");
+            var companyAccountName = Clean(request.AccountName) ?? Clean(lead.AccountName);
+            if (leadType.RequiresCompany && string.IsNullOrWhiteSpace(companyAccountName))
+            {
+                throw new InvalidOperationException($"Company is required to convert {leadType.TypeName} leads.");
+            }
+
+            var accountName = companyAccountName ?? (leadType.PersonAccountFallback ? personAccountName : null) ?? personAccountName ?? $"Converted Lead {lead.LeadNumber}";
             var lineOfBusiness = Clean(request.LineOfBusiness) ?? await GetPrimaryLeadLineOfBusinessAsync(cn, tx, lead.LeadId, cancellationToken) ?? Clean(lead.InterestedService);
             var estimatedAmount = request.EstimatedAmount ?? await GetPrimaryLeadEstimatedPremiumAsync(cn, tx, lead.LeadId, cancellationToken) ?? lead.AnnualRevenue ?? 0m;
             var opportunityName = Clean(request.OpportunityName) ?? $"{accountName} - {Clean(lineOfBusiness) ?? "Opportunity"}";
@@ -401,7 +464,7 @@ ORDER BY CASE WHEN AccountName = @AccountName THEN 0 ELSE 1 END, CreatedDateUtc 
                 {
                     accountId = Guid.NewGuid();
                     var accountNumber = await GenerateAccountNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
-                    var accountDefaults = await GetConvertedAccountDefaultsAsync(cn, tx, request.TenantId, cancellationToken);
+                    var accountDefaults = await GetConvertedAccountDefaultsAsync(cn, tx, request.TenantId, leadType, cancellationToken);
                     await cn.ExecuteAsync(new CommandDefinition(@"
 INSERT INTO Client.Account
 (AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode, MainEmail, MainPhone, StatusCode, StatusCodeId, SegmentCode, OwnerUserId, LifecycleStageCode, Industry, AnnualRevenue, CreatedDateUtc, CreatedByUserId, IsDeleted)
@@ -427,8 +490,10 @@ VALUES
                 }
             }
 
-            var contactId = await UpsertConvertedContactAsync(cn, tx, request.TenantId, accountId.Value, lead, request.ConvertedByUserId, cancellationToken);
-            contactId = await CopyLeadContactsToAccountAsync(cn, tx, request.TenantId, lead.LeadId, accountId.Value, request.ConvertedByUserId, contactId, cancellationToken) ?? contactId;
+            var relationshipTypeCode = leadType.RequiresCompany || !string.IsNullOrWhiteSpace(companyAccountName) ? "BusinessOwner" : "PrimaryInsured";
+            var relationshipName = relationshipTypeCode == "BusinessOwner" ? "Business Owner" : "Primary Insured";
+            var contactId = await UpsertConvertedContactAsync(cn, tx, request.TenantId, accountId.Value, lead, request.ConvertedByUserId, relationshipTypeCode, relationshipName, cancellationToken);
+            contactId = await CopyLeadContactsToAccountAsync(cn, tx, request.TenantId, lead.LeadId, accountId.Value, request.ConvertedByUserId, contactId, relationshipTypeCode, relationshipName, cancellationToken) ?? contactId;
             var opportunityId = Guid.NewGuid();
             var opportunityNumber = await GenerateOpportunityNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
             var opportunityStage = await GetInitialOpportunityStageAsync(cn, tx, request.TenantId, cancellationToken);
@@ -540,12 +605,61 @@ VALUES
         }
     }
 
-    private static Task EnsureLeadAccountIdColumnAsync(IDbConnection connection, CancellationToken cancellationToken)
+    private static Task EnsureLeadContextColumnsAsync(IDbConnection connection, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(@"
 IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
 AND COL_LENGTH('CRM.Lead', 'AccountId') IS NULL
-    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;",
+    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
+
+IF EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('CRM.Lead'))
+AND COL_LENGTH('CRM.Lead', 'LeadTypeCode') IS NULL
+    ALTER TABLE CRM.Lead ADD LeadTypeCode NVARCHAR(50) NULL;",
             cancellationToken: cancellationToken));
+
+    private static Task EnsureLeadAccountIdColumnAsync(IDbConnection connection, CancellationToken cancellationToken)
+        => EnsureLeadContextColumnsAsync(connection, cancellationToken);
+
+    private static async Task<LeadTypeSettings> GetLeadTypeSettingsAsync(IDbConnection connection, IDbTransaction? transaction, Guid tenantId, string? leadTypeCode, CancellationToken cancellationToken)
+    {
+        var requestedCode = Clean(leadTypeCode) ?? "Personal";
+        var settings = await connection.QuerySingleOrDefaultAsync<LeadTypeSettings>(new CommandDefinition(@"
+IF OBJECT_ID(N'CRM.LeadType', N'U') IS NULL
+BEGIN
+    SELECT @TypeCode AS TypeCode, @TypeCode AS TypeName, @TypeCode AS AccountTypeCode, CAST(CASE WHEN @TypeCode IN (N'Commercial', N'Business') THEN 1 ELSE 0 END AS bit) AS RequiresCompany, CAST(CASE WHEN @TypeCode IN (N'Commercial', N'Business') THEN 0 ELSE 1 END AS bit) AS PersonAccountFallback;
+    RETURN;
+END;
+
+SELECT TOP 1 TypeCode, TypeName, AccountTypeCode, RequiresCompany, PersonAccountFallback
+FROM CRM.LeadType
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND IsActive = 1
+  AND TypeCode = @TypeCode
+ORDER BY SortOrder, TypeName;", new { TenantId = tenantId, TypeCode = requestedCode }, transaction: transaction, cancellationToken: cancellationToken));
+
+        if (settings is not null)
+        {
+            return settings;
+        }
+
+        settings = await connection.QuerySingleOrDefaultAsync<LeadTypeSettings>(new CommandDefinition(@"
+IF OBJECT_ID(N'CRM.LeadType', N'U') IS NULL
+BEGIN
+    SELECT N'Personal' AS TypeCode, N'Personal / Individual' AS TypeName, N'Personal' AS AccountTypeCode, CAST(0 AS bit) AS RequiresCompany, CAST(1 AS bit) AS PersonAccountFallback;
+    RETURN;
+END;
+
+SELECT TOP 1 TypeCode, TypeName, AccountTypeCode, RequiresCompany, PersonAccountFallback
+FROM CRM.LeadType
+WHERE TenantId = @TenantId
+  AND IsDeleted = 0
+  AND IsActive = 1
+ORDER BY CASE WHEN TypeCode = N'Personal' THEN 0 ELSE 1 END, SortOrder, TypeName;", new { TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        return settings ?? new LeadTypeSettings("Personal", "Personal / Individual", "Personal", false, true);
+    }
+
+    private sealed record LeadTypeSettings(string TypeCode, string TypeName, string AccountTypeCode, bool RequiresCompany, bool PersonAccountFallback);
 
     private static async Task<string> BuildLeadConversionInsertSqlAsync(IDbConnection connection, IDbTransaction transaction, CancellationToken cancellationToken)
     {
@@ -695,6 +809,52 @@ END;", new
 
     public Task<IReadOnlyList<LeadContactDto>> GetContactsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadContactDto>("SELECT ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadContact WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY IsPrimary DESC, CreatedDateUtc DESC;", new { LeadId = leadId }, cancellationToken);
+
+    private static async Task SyncPrimaryLeadContactAsync(IDbConnection connection, IDbTransaction? transaction, Guid tenantId, Guid leadId, string firstName, string lastName, string? email, string? phone, Guid? userId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(firstName) && string.IsNullOrWhiteSpace(lastName)) return;
+
+        await connection.ExecuteAsync(new CommandDefinition(@"
+IF OBJECT_ID(N'CRM.LeadContact', N'U') IS NULL
+    RETURN;
+
+DECLARE @ContactId UNIQUEIDENTIFIER;
+SELECT TOP 1 @ContactId = ContactId
+FROM CRM.LeadContact
+WHERE TenantId = @TenantId
+  AND LeadId = @LeadId
+  AND IsDeleted = 0
+ORDER BY IsPrimary DESC, CreatedDateUtc;
+
+IF @ContactId IS NULL
+BEGIN
+    INSERT INTO CRM.LeadContact
+    (ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedByUserId, CreatedDateUtc, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, @LeadId, @FirstName, @LastName, NULL, @Email, @Phone, 1, @UserId, SYSUTCDATETIME(), 0);
+END
+ELSE
+BEGIN
+    UPDATE CRM.LeadContact
+    SET FirstName = @FirstName,
+        LastName = @LastName,
+        Email = @Email,
+        Phone = @Phone,
+        IsPrimary = 1,
+        ModifiedByUserId = @UserId,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE ContactId = @ContactId;
+END;", new
+        {
+            TenantId = tenantId,
+            LeadId = leadId,
+            FirstName = Clean(firstName) ?? string.Empty,
+            LastName = Clean(lastName) ?? string.Empty,
+            Email = Clean(email),
+            Phone = Clean(phone),
+            UserId = userId
+        }, transaction: transaction, cancellationToken: cancellationToken));
+    }
 
     public async Task<Guid> CreateContactAsync(CreateLeadContactRequest request, CancellationToken cancellationToken = default)
     {
@@ -1348,11 +1508,13 @@ SELECT COUNT(1) FROM CRM.Opportunity WHERE OpportunityNumber = @Candidate AND Is
         return $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static async Task<ConvertedAccountDefaults> GetConvertedAccountDefaultsAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, CancellationToken cancellationToken)
+    private static async Task<ConvertedAccountDefaults> GetConvertedAccountDefaultsAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, LeadTypeSettings leadType, CancellationToken cancellationToken)
     {
         var defaults = await connection.QuerySingleAsync<ConvertedAccountDefaults>(new CommandDefinition(@"
 SELECT
     AccountTypeCode = COALESCE(
+        (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode = @PreferredAccountTypeCode ORDER BY CreatedDateUtc DESC),
+        @PreferredAccountTypeCode,
         (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL AND UPPER(AccountTypeCode) IN (N'PROSPECT', N'CLIENT', N'CUSTOMER') ORDER BY CASE UPPER(AccountTypeCode) WHEN N'PROSPECT' THEN 0 WHEN N'CLIENT' THEN 1 WHEN N'CUSTOMER' THEN 2 ELSE 3 END, CreatedDateUtc DESC),
         (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL ORDER BY CreatedDateUtc DESC),
         (SELECT TOP 1 AccountTypeCode FROM Client.Account WHERE IsDeleted = 0 AND AccountTypeCode IS NOT NULL AND UPPER(AccountTypeCode) IN (N'PROSPECT', N'CLIENT', N'CUSTOMER') ORDER BY CASE UPPER(AccountTypeCode) WHEN N'PROSPECT' THEN 0 WHEN N'CLIENT' THEN 1 WHEN N'CUSTOMER' THEN 2 ELSE 3 END, CreatedDateUtc DESC),
@@ -1375,7 +1537,7 @@ SELECT
         (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE TenantId = @TenantId AND IsDeleted = 0 AND LifecycleStageCode IS NOT NULL ORDER BY CreatedDateUtc DESC),
         (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE IsDeleted = 0 AND LifecycleStageCode IS NOT NULL AND UPPER(LifecycleStageCode) IN (N'PROSPECT', N'LEAD') ORDER BY CASE UPPER(LifecycleStageCode) WHEN N'PROSPECT' THEN 0 WHEN N'LEAD' THEN 1 ELSE 2 END, CreatedDateUtc DESC),
         (SELECT TOP 1 LifecycleStageCode FROM Client.Account WHERE IsDeleted = 0 AND LifecycleStageCode IS NOT NULL ORDER BY CreatedDateUtc DESC)
-    );", new { TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken));
+    );", new { TenantId = tenantId, PreferredAccountTypeCode = Clean(leadType.AccountTypeCode) }, transaction: transaction, cancellationToken: cancellationToken));
 
         if (string.IsNullOrWhiteSpace(defaults.AccountTypeCode))
         {
@@ -1420,7 +1582,7 @@ ORDER BY SortOrder, StageName;", new { TenantId = tenantId }, transaction: trans
 
     private sealed record ConvertedOpportunityStage(Guid OpportunityStageId, string StageName);
 
-    private static async Task<Guid?> UpsertConvertedContactAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, LeadDto lead, Guid convertedByUserId, CancellationToken cancellationToken)
+    private static async Task<Guid?> UpsertConvertedContactAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, LeadDto lead, Guid convertedByUserId, string relationshipTypeCode, string relationshipName, CancellationToken cancellationToken)
     {
         var firstName = Clean(lead.FirstName);
         var lastName = Clean(lead.LastName);
@@ -1434,11 +1596,16 @@ ORDER BY SortOrder, StageName;", new { TenantId = tenantId }, transaction: trans
         var existing = await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
 SELECT TOP 1 ContactId
 FROM Client.Contact
-WHERE TenantId = @TenantId AND AccountId = @AccountId AND IsDeleted = 0
-  AND ((@Email IS NOT NULL AND Email = @Email) OR (@Phone IS NOT NULL AND Phone = @Phone))
-ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone }, transaction: transaction, cancellationToken: cancellationToken));
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (
+       (@Email IS NOT NULL AND Email = @Email)
+       OR (@Phone IS NOT NULL AND Phone = @Phone)
+       OR (@Email IS NULL AND @Phone IS NULL AND FirstName = @FirstName AND LastName = @LastName)
+  )
+ORDER BY CASE WHEN AccountId = @AccountId THEN 0 ELSE 1 END, CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone, FirstName = firstName, LastName = lastName }, transaction: transaction, cancellationToken: cancellationToken));
         if (existing.HasValue)
         {
+            await SyncAccountContactAsync(connection, transaction, tenantId, accountId, existing.Value, relationshipTypeCode, relationshipName, true, convertedByUserId, "CRM.Lead", lead.LeadId, cancellationToken);
             return existing.Value;
         }
 
@@ -1461,10 +1628,12 @@ VALUES
             CreatedByUserId = convertedByUserId
         }, transaction: transaction, cancellationToken: cancellationToken));
 
+        await SyncAccountContactAsync(connection, transaction, tenantId, accountId, contactId, relationshipTypeCode, relationshipName, true, convertedByUserId, "CRM.Lead", lead.LeadId, cancellationToken);
+
         return contactId;
     }
 
-    private static async Task<Guid?> CopyLeadContactsToAccountAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid accountId, Guid convertedByUserId, Guid? currentPrimaryContactId, CancellationToken cancellationToken)
+    private static async Task<Guid?> CopyLeadContactsToAccountAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid accountId, Guid convertedByUserId, Guid? currentPrimaryContactId, string relationshipTypeCode, string relationshipName, CancellationToken cancellationToken)
     {
         var contacts = (await connection.QueryAsync<LeadContactDto>(new CommandDefinition(@"
 SELECT ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedDateUtc, ModifiedDateUtc
@@ -1480,9 +1649,13 @@ ORDER BY IsPrimary DESC, CreatedDateUtc;", new { TenantId = tenantId, LeadId = l
             var existingContactId = await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(@"
 SELECT TOP 1 ContactId
 FROM Client.Contact
-WHERE TenantId = @TenantId AND AccountId = @AccountId AND IsDeleted = 0
-  AND ((@Email IS NOT NULL AND Email = @Email) OR (@Phone IS NOT NULL AND Phone = @Phone))
-ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone }, transaction: transaction, cancellationToken: cancellationToken));
+WHERE TenantId = @TenantId AND IsDeleted = 0
+  AND (
+       (@Email IS NOT NULL AND Email = @Email)
+       OR (@Phone IS NOT NULL AND Phone = @Phone)
+       OR (@Email IS NULL AND @Phone IS NULL AND FirstName = @FirstName AND LastName = @LastName)
+  )
+ORDER BY CASE WHEN AccountId = @AccountId THEN 0 ELSE 1 END, CreatedDateUtc DESC;", new { TenantId = tenantId, AccountId = accountId, Email = email, Phone = phone, FirstName = Clean(leadContact.FirstName), LastName = Clean(leadContact.LastName) }, transaction: transaction, cancellationToken: cancellationToken));
 
             var contactId = existingContactId ?? Guid.NewGuid();
             if (!existingContactId.HasValue)
@@ -1512,9 +1685,73 @@ VALUES
             {
                 primaryContactId = contactId;
             }
+
+            await SyncAccountContactAsync(connection, transaction, tenantId, accountId, contactId, leadContact.IsPrimary ? relationshipTypeCode : "ServiceContact", leadContact.IsPrimary ? relationshipName : "Service Contact", leadContact.IsPrimary, convertedByUserId, "CRM.LeadContact", leadContact.ContactId, cancellationToken);
         }
 
         return primaryContactId;
+    }
+
+    private static async Task SyncAccountContactAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid accountId, Guid contactId, string relationshipTypeCode, string relationshipName, bool isPrimary, Guid userId, string sourceEntityName, Guid sourceEntityId, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(@"
+IF OBJECT_ID(N'Client.AccountContact', N'U') IS NULL
+    RETURN;
+
+IF COL_LENGTH(N'Client.AccountContact', N'RelationshipRoleCode') IS NULL
+BEGIN
+    ALTER TABLE Client.AccountContact ADD RelationshipRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Client_AccountContact_RelRoleCode_Runtime DEFAULT N'PrimaryInsured';
+END;
+
+DECLARE @ExistingId UNIQUEIDENTIFIER;
+SELECT TOP 1 @ExistingId = AccountContactId
+FROM Client.AccountContact
+WHERE TenantId = @TenantId
+  AND AccountId = @AccountId
+  AND ContactId = @ContactId
+  AND RelationshipTypeCode = @RelationshipTypeCode
+  AND IsDeleted = 0;
+
+IF @ExistingId IS NULL
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO Client.AccountContact
+    (AccountContactId, TenantId, AccountId, ContactId, RelationshipTypeCode, RelationshipRoleCode, RelationshipName, IsPrimary, IsDecisionMaker, IsBillingContact, IsServiceContact, SourceEntityName, SourceEntityId, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, @AccountId, @ContactId, @RelationshipTypeCode, @RelationshipTypeCode, @RelationshipName, @IsPrimary, @IsDecisionMaker, @IsBillingContact, @IsServiceContact, @SourceEntityName, @SourceEntityId, 1, SYSUTCDATETIME(), @UserId, 0);',
+    N'@TenantId UNIQUEIDENTIFIER, @AccountId UNIQUEIDENTIFIER, @ContactId UNIQUEIDENTIFIER, @RelationshipTypeCode NVARCHAR(50), @RelationshipName NVARCHAR(100), @IsPrimary BIT, @IsDecisionMaker BIT, @IsBillingContact BIT, @IsServiceContact BIT, @SourceEntityName NVARCHAR(100), @SourceEntityId UNIQUEIDENTIFIER, @UserId UNIQUEIDENTIFIER',
+    @TenantId, @AccountId, @ContactId, @RelationshipTypeCode, @RelationshipName, @IsPrimary, @IsDecisionMaker, @IsBillingContact, @IsServiceContact, @SourceEntityName, @SourceEntityId, @UserId;
+END
+ELSE
+BEGIN
+    UPDATE Client.AccountContact
+    SET RelationshipName = @RelationshipName,
+        RelationshipRoleCode = @RelationshipTypeCode,
+        IsPrimary = CASE WHEN @IsPrimary = 1 THEN 1 ELSE IsPrimary END,
+        IsDecisionMaker = CASE WHEN @IsDecisionMaker = 1 THEN 1 ELSE IsDecisionMaker END,
+        IsBillingContact = CASE WHEN @IsBillingContact = 1 THEN 1 ELSE IsBillingContact END,
+        IsServiceContact = CASE WHEN @IsServiceContact = 1 THEN 1 ELSE IsServiceContact END,
+        SourceEntityName = COALESCE(SourceEntityName, @SourceEntityName),
+        SourceEntityId = COALESCE(SourceEntityId, @SourceEntityId),
+        IsActive = 1,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @UserId
+    WHERE AccountContactId = @ExistingId;
+END;", new
+        {
+            TenantId = tenantId,
+            AccountId = accountId,
+            ContactId = contactId,
+            RelationshipTypeCode = relationshipTypeCode,
+            RelationshipName = relationshipName,
+            IsPrimary = isPrimary,
+            IsDecisionMaker = relationshipTypeCode is "BusinessOwner" or "DecisionMaker",
+            IsBillingContact = relationshipTypeCode == "BillingContact",
+            IsServiceContact = relationshipTypeCode == "ServiceContact" || isPrimary,
+            SourceEntityName = sourceEntityName,
+            SourceEntityId = sourceEntityId,
+            UserId = userId
+        }, transaction: transaction, cancellationToken: cancellationToken));
     }
 
     private static async Task CreateOpportunityLinesFromLeadAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid opportunityId, Guid createdByUserId, string? fallbackLineOfBusiness, decimal fallbackEstimatedAmount, CancellationToken cancellationToken)

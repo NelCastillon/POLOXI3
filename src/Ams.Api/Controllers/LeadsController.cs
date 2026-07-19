@@ -55,6 +55,13 @@ public sealed class LeadsController : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("types")]
+    public async Task<IActionResult> GetLeadTypes([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetLeadTypesAsync(tenantId, cancellationToken);
+        return Ok(items);
+    }
+
     [HttpGet("campaign-options")]
     public async Task<IActionResult> GetCampaignOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {

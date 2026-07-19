@@ -166,7 +166,15 @@ public sealed record CreatePolicyFromSubmissionRequest(
     [property: Range(0, 999999999999)]
     decimal? AnnualPremium,
     DateTime? EffectiveDate,
-    DateTime? ExpirationDate);
+    DateTime? ExpirationDate,
+    [property: StringLength(80)]
+    string? PolicyNumber,
+    [property: Required, StringLength(50)]
+    string PolicySourceCode = "QuoteBound",
+    [property: StringLength(500)]
+    string? PolicySourceReason = null,
+    [property: StringLength(1000)]
+    string? PolicySourceNotes = null);
 
 public sealed record AddSubmissionMarketRequest(
     Guid SubmissionId,
@@ -220,14 +228,22 @@ public sealed record AppetiteSearchRequest(
     string[] AdditionalCriteria);
 
 public sealed record BindPolicyRequest(
-    Guid SubmissionId,
-    Guid QuoteId,
+    Guid? SubmissionId,
+    Guid? QuoteId,
     Guid TenantId,
     Guid AccountId,
     Guid CarrierId,
     decimal AnnualPremium,
     DateTime EffectiveDate,
-    DateTime ExpirationDate);
+    DateTime ExpirationDate,
+    string? PolicyNumber = null,
+    string PolicySourceCode = "QuoteBound",
+    string? PolicySourceReason = null,
+    string? PolicySourceNotes = null,
+    Guid? RequestedByUserId = null,
+    Guid? ApprovedByUserId = null,
+    Guid? BoundByUserId = null,
+    string BindStatusCode = "Bound");
 
 public sealed class UpsertPolicyRegisterRequest
 {
@@ -240,6 +256,10 @@ public sealed class UpsertPolicyRegisterRequest
     [Required]
     public Guid AccountId { get; set; }
 
+    public Guid? SubmissionId { get; set; }
+
+    public Guid? QuoteId { get; set; }
+
     [Required, StringLength(200)]
     public string AccountName { get; set; } = string.Empty;
 
@@ -248,6 +268,14 @@ public sealed class UpsertPolicyRegisterRequest
 
     [Required, StringLength(160)]
     public string CarrierName { get; set; } = string.Empty;
+
+    public Guid? CarrierId { get; set; }
+
+    [Required, StringLength(50)]
+    public string PolicySourceCode { get; set; } = "ManualEntry";
+
+    [StringLength(500)]
+    public string? PolicySourceReason { get; set; }
 
     [Required, StringLength(100)]
     public string LineOfBusiness { get; set; } = string.Empty;

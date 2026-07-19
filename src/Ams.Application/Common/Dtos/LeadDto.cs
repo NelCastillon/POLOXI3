@@ -7,6 +7,7 @@ public sealed class LeadDto
     public Guid? AccountId { get; set; }
     public string LeadNumber { get; set; } = string.Empty;
     public string? AccountName { get; set; }
+    public string LeadTypeCode { get; set; } = "Personal";
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? Email { get; set; }

@@ -63,7 +63,7 @@ else
         <section class="sdd-kpi-strip" aria-label="Submission detail KPIs">
             @KpiCard("overview", "Importance", ImportanceLabel, "Priority based on premium, timing, quotes, markets, and status", "bi-lightning-charge", "blue", 0)
             @KpiCard("markets", "Markets", _markets.Count.ToString(), "Carrier markets attached to this submission", "bi-bank", "cyan", 1)
-            @KpiCard("quotes", "Quotes", _quotes.Count.ToString(), "Quote options received or requested", "bi-journal-text", "emerald", 2)
+            @KpiCard("quotes", "Quotes", _quotes.Count.ToString(), $"Quote options and {_bindTransactions.Count} bind transaction(s)", "bi-journal-text", "emerald", 2)
             @KpiCard("readiness", "Readiness", $"{ReadinessPercent}%", "Underwriting packet readiness score", "bi-clipboard2-check", "amber", 3)
             @KpiCard("premium", "Target Premium", PremiumDisplay, "Target or quoted premium value", "bi-cash-stack", "green", 2)
             @KpiCard("timeline", "Activity", _activity.Count.ToString(), "Workflow activity and communication events", "bi-activity", "purple", 6)
@@ -73,7 +73,7 @@ else
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i><span><strong>Submit to market</strong><small>Send package to a selected carrier</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i><span><strong>Request quote</strong><small>Generate a quote workflow request</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("proposal")'><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal</strong><small>Create proposal from available quotes</small></span></button>
-            <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Create policy</strong><small>Bind and issue from selected quote</small></span></button>
+            <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Create policy</strong><small>Quote-bound or direct policy source</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("copy")'><i class="bi bi-copy" aria-hidden="true"></i><span><strong>Copy / remarket</strong><small>Create renewal or remarketing copy</small></span></button>
         </section>
 
@@ -220,6 +220,23 @@ else
                     else if (_activeTab == 2)
                     {
                         <section class="sdd-quote-grid">
+                            @if (_bindTransactions.Any())
+                            {
+                                <div class="sdd-quote-card sdd-quote-card--selected">
+                                    <div class="sdd-quote-banner"><i class="bi bi-shield-check" aria-hidden="true"></i> Bind transaction audit</div>
+                                    @foreach (var bind in _bindTransactions)
+                                    {
+                                        <div class="sdd-activity-row">
+                                            <i class="bi bi-shield-check" aria-hidden="true"></i>
+                                            <div>
+                                                <strong>@bind.BindStatusName - @bind.PolicySourceName</strong>
+                                                <small>@Safe(bind.PolicyNumber, "Policy pending") - @bind.AnnualPremium.ToString("C0") - @bind.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
+                                                <p>@Safe(bind.BindReason, Safe(bind.Notes, $"Carrier: {bind.CarrierName}. Quote: {Safe(bind.QuoteNumber, "Direct policy")}"))</p>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
                             @foreach (var quote in VisibleQuotes)
                             {
                                 <div class="sdd-quote-card @(quote.QuoteId == _selectedQuoteId ? "sdd-quote-card--selected" : string.Empty)">
@@ -468,6 +485,32 @@ else
                                 <InputNumber class="form-control" @bind-Value="_actionForm.AnnualPremium" />
                             </label>
                         }
+                        @if (_actionMode == "policy")
+                        {
+                            <label class="sdd-field">
+                                <span>Policy Source <em>*</em></span>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.PolicySourceCode">
+                                    @foreach (var source in _policyCreationSources)
+                                    {
+                                        <option value="@source.SourceCode">@source.SourceName</option>
+                                    }
+                                </InputSelect>
+                            </label>
+                            @if (SelectedPolicyCreationSource?.RequiresPolicyNumber == true)
+                            {
+                                <label class="sdd-field">
+                                    <span>Policy Number <em>*</em></span>
+                                    <InputText class="form-control" @bind-Value="_actionForm.PolicyNumber" placeholder="Carrier-issued policy number" />
+                                </label>
+                            }
+                            @if (SelectedPolicyCreationSource?.RequiresReason == true)
+                            {
+                                <label class="sdd-field sdd-field--full">
+                                    <span>Policy Creation Reason <em>*</em></span>
+                                    <InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.PolicySourceReason" placeholder="Explain why this policy is being created without first binding a quote in AMS." />
+                                </label>
+                            }
+                        }
                         @if (_actionMode == "copy")
                         {
                             <label class="sdd-field">
@@ -686,6 +729,9 @@ else
     readonly List<SubmissionActivityDto> _activity = [];
     readonly List<SubmissionTaskDto> _tasks = [];
     readonly List<UserDto> _users = [];
+    readonly List<PolicyCreationSourceDto> _policyCreationSources = [];
+    readonly List<PolicyBindStatusDto> _policyBindStatuses = [];
+    readonly List<PolicyBindTransactionDto> _bindTransactions = [];
     readonly List<CommItem> _communications = [];
     readonly List<ToastMessage> _toasts = [];
     readonly ActionForm _actionForm = new();
@@ -736,7 +782,7 @@ else
     {
         "submit" => "Submit the package to a carrier market using the existing submit-to-market workflow.",
             "quote" => "Request quote terms using the existing quote request workflow. Choose a current market or let AMS auto-select the best recommended market.",
-        "policy" => "Create a bound policy from a selected or generated quote using existing policy workflow.",
+        "policy" => "Create a quote-bound or direct policy using database-backed source rules and persisted audit context.",
         "proposal" => "Generate a proposal record from available quotes.",
         "decline" => "Decline this submission and all eligible market rows with a required reason.",
         "copy" => "Create a new copied submission for renewal or remarketing.",
@@ -800,6 +846,15 @@ else
 
             _tasks.Clear();
             _tasks.AddRange(await Api.GetSubmissionTasksAsync(SubmissionId, _submission.TenantId) ?? []);
+
+            _policyCreationSources.Clear();
+            _policyCreationSources.AddRange((await Api.GetPolicyCreationSourcesAsync(_submission.TenantId) ?? []).Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.SourceName));
+
+            _policyBindStatuses.Clear();
+            _policyBindStatuses.AddRange((await Api.GetPolicyBindStatusesAsync(_submission.TenantId) ?? []).Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.StatusName));
+
+            _bindTransactions.Clear();
+            _bindTransactions.AddRange(await Api.GetPolicyBindTransactionsAsync(SubmissionId) ?? []);
 
             BuildDerivedDashboardData();
         }
@@ -911,6 +966,8 @@ else
         .ThenBy(m => m.CarrierName)
         .Take(10);
 
+    private PolicyCreationSourceDto? SelectedPolicyCreationSource => _policyCreationSources.FirstOrDefault(x => string.Equals(x.SourceCode, _actionForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
+
     void OpenActionDialog(string mode)
     {
         _actionMode = mode;
@@ -950,6 +1007,12 @@ else
         };
         _actionButtonText = mode switch { "decline" => "Decline", "assign" => "Assign", "task" => "Create Task", "document" => "Upload", "note" => "Add Note", "market-package" => "Save Package", "quote-review" => "Save Quote", "proposal-delivery" => "Save Proposal", _ => "Continue" };
         _actionForm.Reset(_submission);
+        if (mode == "policy")
+        {
+            _actionForm.PolicySourceCode = _policyCreationSources.FirstOrDefault(x => x.IsDefault)?.SourceCode
+                ?? _policyCreationSources.FirstOrDefault()?.SourceCode
+                ?? "AlreadyBound";
+        }
         if (_taskTemplates.Count > 0)
         {
             _actionForm.TaskTypeCode = _taskTemplates[0].TaskTypeCode;
@@ -1002,12 +1065,33 @@ else
 
     void OpenConfirmDialog()
     {
+        if (_actionMode == "policy")
+        {
+            if (string.IsNullOrWhiteSpace(_actionForm.PolicySourceCode))
+            {
+                ShowToast("Policy source is required.", true);
+                return;
+            }
+
+            if (SelectedPolicyCreationSource?.RequiresPolicyNumber == true && string.IsNullOrWhiteSpace(_actionForm.PolicyNumber))
+            {
+                ShowToast("Policy number is required for the selected policy source.", true);
+                return;
+            }
+
+            if (SelectedPolicyCreationSource?.RequiresReason == true && string.IsNullOrWhiteSpace(_actionForm.PolicySourceReason))
+            {
+                ShowToast("Policy creation reason is required for the selected policy source.", true);
+                return;
+            }
+        }
+
         _confirmTitle = _actionTitle;
         _confirmMessage = _actionMode switch
         {
             "submit" => "Submit this package to the selected or default market?",
             "quote" => "Request quote terms for this submission? If no carrier was selected, AMS will use the recommended market first, then auto-select from attached/current markets.",
-            "policy" => "Create a bound policy from the selected quote or generated quote?",
+            "policy" => "Create this policy using the selected policy source and persist the source context for audit?",
             "proposal" => "Generate a proposal from the available quote options?",
             "decline" => "Decline this submission? This updates the submission status and market rows.",
             "copy" => "Create a copied submission for remarketing or renewal?",
@@ -1049,8 +1133,9 @@ else
             }
             else if (_actionMode == "policy")
             {
-                var quoteId = _selectedQuoteId ?? _quotes.OrderBy(q => q.AnnualPremium).FirstOrDefault()?.QuoteId;
-                await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(_submission.TenantId, quoteId, _actionForm.CarrierId, _actionForm.AnnualPremium, _submission.EffectiveDate, _submission.ExpirationDate));
+                var requiresQuote = SelectedPolicyCreationSource?.RequiresQuote == true;
+                var quoteId = requiresQuote ? _selectedQuoteId ?? _quotes.OrderBy(q => q.AnnualPremium).FirstOrDefault()?.QuoteId : null;
+                await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _submission.TenantId, QuoteId: quoteId, CarrierId: _actionForm.CarrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _submission.EffectiveDate, ExpirationDate: _submission.ExpirationDate, PolicyNumber: _actionForm.PolicyNumber, PolicySourceCode: _actionForm.PolicySourceCode, PolicySourceReason: _actionForm.PolicySourceReason, PolicySourceNotes: _actionForm.Notes));
                 ShowToast("Policy created from submission.");
             }
             else if (_actionMode == "proposal")
@@ -1151,7 +1236,7 @@ else
         if (_submission is null) return;
         try
         {
-            await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(_submission.TenantId, quote.QuoteId, quote.CarrierId, quote.AnnualPremium, _submission.EffectiveDate, _submission.ExpirationDate));
+            await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _submission.TenantId, QuoteId: quote.QuoteId, CarrierId: quote.CarrierId, AnnualPremium: quote.AnnualPremium, EffectiveDate: _submission.EffectiveDate, ExpirationDate: _submission.ExpirationDate, PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null));
             await LoadAsync();
             ShowToast($"Policy created from {quote.QuoteNumber}.");
         }
@@ -1336,6 +1421,15 @@ else
 
         public DateTime? EffectiveDate { get; set; }
 
+        [StringLength(80)]
+        public string? PolicyNumber { get; set; }
+
+        [Required, StringLength(50)]
+        public string PolicySourceCode { get; set; } = "QuoteBound";
+
+        [StringLength(500)]
+        public string? PolicySourceReason { get; set; }
+
         [StringLength(50)]
         public string? Priority { get; set; }
 
@@ -1399,6 +1493,9 @@ else
             CarrierId = null;
             AnnualPremium = submission?.TargetPremium;
             EffectiveDate = submission?.EffectiveDate.AddYears(1);
+            PolicyNumber = null;
+            PolicySourceCode = "QuoteBound";
+            PolicySourceReason = null;
             Priority = submission?.Priority;
             AssignedToUserId = submission?.AssignedToUserId;
             ProposalId = null;

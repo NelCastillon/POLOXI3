@@ -389,6 +389,35 @@
                                 <ValidationMessage For="() => _actionForm.EffectiveDate" class="text-danger" />
                             </label>
                         }
+                        @if (_pendingAction is "Create Policy")
+                        {
+                            <label class="sde-field">
+                                <span>Policy Source <em>*</em></span>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.PolicySourceCode">
+                                    @foreach (var source in _policyCreationSources)
+                                    {
+                                        <option value="@source.SourceCode">@source.SourceName</option>
+                                    }
+                                </InputSelect>
+                                <ValidationMessage For="() => _actionForm.PolicySourceCode" class="text-danger" />
+                            </label>
+                            @if (SelectedPolicyCreationSource?.RequiresPolicyNumber == true)
+                            {
+                                <label class="sde-field">
+                                    <span>Policy Number <em>*</em></span>
+                                    <InputText class="form-control" @bind-Value="_actionForm.PolicyNumber" placeholder="Carrier-issued policy number" />
+                                    <ValidationMessage For="() => _actionForm.PolicyNumber" class="text-danger" />
+                                </label>
+                            }
+                            @if (SelectedPolicyCreationSource?.RequiresReason == true)
+                            {
+                                <label class="sde-field sde-field--full">
+                                    <span>Policy Creation Reason <em>*</em></span>
+                                    <InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.PolicySourceReason" placeholder="Explain why this policy is being created without first binding a quote in AMS." />
+                                    <ValidationMessage For="() => _actionForm.PolicySourceReason" class="text-danger" />
+                                </label>
+                            }
+                        }
                         @if (_pendingAction is "Copy")
                         {
                             <label class="sde-field">
@@ -504,6 +533,7 @@
     readonly List<ToastMessage> _toasts = new();
     List<SubmissionOption> _statusOptions = [];
     List<SubmissionOption> _lobOptions = [];
+    List<PolicyCreationSourceDto> _policyCreationSources = [];
 
     readonly TabDef[] _tabs =
     [
@@ -542,6 +572,7 @@
     string? LobFilter { get => _lobFilter; set { _lobFilter = value; _page = 1; } }
     string? ImportanceFilter { get => _importanceFilter; set { _importanceFilter = value; _page = 1; } }
     string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+    PolicyCreationSourceDto? SelectedPolicyCreationSource => _policyCreationSources.FirstOrDefault(x => string.Equals(x.SourceCode, _actionForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
 
     IEnumerable<string> StatusOptions => MergeOptions(_statusOptions.Select(o => o.Code), _rows.Select(r => NormalizeStatus(r.Status)));
     IEnumerable<string> LobOptions => MergeOptions(_lobOptions.Select(o => o.Code), _rows.Select(r => r.LineOfBusiness));
@@ -594,10 +625,14 @@
 
     async Task LoadReferenceDataAsync()
     {
-        var options = await Api.GetSubmissionReferenceOptionsAsync(_tenantId);
+        var optionsTask = Api.GetSubmissionReferenceOptionsAsync(_tenantId);
+        var policySourcesTask = Api.GetPolicyCreationSourcesAsync(_tenantId);
+        await Task.WhenAll(optionsTask, policySourcesTask);
+        var options = optionsTask.Result;
         var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
         _statusOptions = ToOptions(activeOptions, "SubmissionStatus");
         _lobOptions = ToOptions(activeOptions, "LineOfBusiness");
+        _policyCreationSources = policySourcesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.SourceName).ToList() ?? [];
     }
 
     async Task LoadAsync()
@@ -839,6 +874,12 @@
 
         _pendingAction = action;
         _actionForm.Reset(_selected, action);
+        if (action == "Create Policy")
+        {
+            _actionForm.PolicySourceCode = _policyCreationSources.FirstOrDefault(x => x.IsDefault)?.SourceCode
+                ?? _policyCreationSources.FirstOrDefault()?.SourceCode
+                ?? "AlreadyBound";
+        }
         (_actionTitle, _actionIcon, _actionButtonText) = action switch
         {
             "Submit to Market" => ($"Submit {_selected.SubmissionNumber} to Market", "bi-send", "Submit"),
@@ -855,7 +896,7 @@
             "Request Quote" => "Create a quote request with a valid annual premium and optional carrier targeting.",
             "Bind" => "Bind the selected submission into a policy using the entered premium and effective date.",
             "Copy" => "Create a new submission copy with a required effective date and line of business.",
-            "Create Policy" => "Create a policy from this submission after validating the premium and effective date.",
+            "Create Policy" => "Create a quote-bound or direct policy using the database-backed policy source rules.",
             "Decline" => "Record the decline reason before marking this submission declined.",
             _ => "Review the submission action details, complete required fields, and confirm before changes are applied."
         };
@@ -891,7 +932,7 @@
             "Request Quote" => ($"Request quote for {_selected.SubmissionNumber}?", "This will create a quote request and update submission quote progress.", "bi-file-earmark-text"),
             "Bind" => ($"Bind {_selected.SubmissionNumber}?", "This will create a bound policy from the selected submission workflow.", "bi-shield-check"),
             "Copy" => ($"Copy {_selected.SubmissionNumber}?", "This will create a new submission copy using the selected form values.", "bi-copy"),
-            "Create Policy" => ($"Create policy from {_selected.SubmissionNumber}?", "This will create or resolve a quote and bind a policy for this submission.", "bi-shield-plus"),
+            "Create Policy" => ($"Create policy from {_selected.SubmissionNumber}?", "This will create a policy using the selected policy source and persist the source context for audit.", "bi-shield-plus"),
             "Initiate Workflow" => ($"Initiate workflow for {_selected.SubmissionNumber}?", "This will start a workflow instance for the selected submission.", "bi-diagram-3"),
             "Decline" => ($"Decline {_selected.SubmissionNumber}?", "This will mark the submission and non-final market responses as declined.", "bi-exclamation-triangle"),
             _ => ("Confirm action", "Confirm this submission action?", "bi-question-circle")
@@ -929,7 +970,8 @@
             {
                 "Submit to Market" => await Api.SubmitSubmissionToMarketAsync(_selected.SubmissionId, new SubmitSubmissionToMarketRequest(_tenantId, carrierId, _actionForm.Notes)),
                 "Request Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubmissionId, new RequestSubmissionQuoteRequest(_tenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes)),
-                "Bind" or "Create Policy" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubmissionId, new CreatePolicyFromSubmissionRequest(_tenantId, null, carrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
+                "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _tenantId, QuoteId: null, CarrierId: carrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _actionForm.EffectiveDate, ExpirationDate: _actionForm.EffectiveDate?.AddYears(1), PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null)),
+                "Create Policy" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _tenantId, QuoteId: null, CarrierId: carrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _actionForm.EffectiveDate, ExpirationDate: _actionForm.EffectiveDate?.AddYears(1), PolicyNumber: _actionForm.PolicyNumber, PolicySourceCode: _actionForm.PolicySourceCode, PolicySourceReason: _actionForm.PolicySourceReason, PolicySourceNotes: _actionForm.Notes)),
                 "Copy" => await Api.CopySubmissionAsync(_selected.SubmissionId, new CopySubmissionRequest(_tenantId, _actionForm.EffectiveDate, _actionForm.LineOfBusiness, _selected.Priority)),
                 "Decline" => await Api.DeclineSubmissionAsync(_selected.SubmissionId, new DeclineSubmissionRequest(_tenantId, string.IsNullOrWhiteSpace(_actionForm.Notes) ? "Declined from submissions command center." : _actionForm.Notes)),
                 _ => new SubmissionActionResult(_selected.SubmissionId, "No action executed.")
@@ -1053,6 +1095,9 @@
         [Range(0, 999999999999)] public decimal? AnnualPremium { get; set; }
         public DateTime? EffectiveDate { get; set; }
         [StringLength(100)] public string? LineOfBusiness { get; set; }
+        [StringLength(80)] public string? PolicyNumber { get; set; }
+        [Required, StringLength(50)] public string PolicySourceCode { get; set; } = "QuoteBound";
+        [StringLength(500)] public string? PolicySourceReason { get; set; }
         [StringLength(1000)] public string? Notes { get; set; }
         string _action = string.Empty;
 
@@ -1064,6 +1109,9 @@
             EffectiveDate = row.EffectiveDate == default ? DateTime.Today.AddDays(30) : row.EffectiveDate;
             LineOfBusiness = row.LineOfBusiness;
             Notes = action == "Decline" ? "Carrier declined or account withdrawn." : string.Empty;
+            PolicyNumber = string.Empty;
+            PolicySourceReason = string.Empty;
+            PolicySourceCode = action == "Create Policy" ? "AlreadyBound" : "QuoteBound";
         }
 
         public Guid? TryGetCarrierId() => Guid.TryParse(CarrierIdText, out var carrierId) ? carrierId : null;
@@ -1080,6 +1128,18 @@
                     yield return new ValidationResult("Annual premium is required and must be greater than zero.", [nameof(AnnualPremium)]);
                 if (EffectiveDate is null)
                     yield return new ValidationResult("Effective date is required.", [nameof(EffectiveDate)]);
+            }
+            if (_action == "Create Policy")
+            {
+                if (string.IsNullOrWhiteSpace(PolicySourceCode))
+                    yield return new ValidationResult("Policy source is required.", [nameof(PolicySourceCode)]);
+                if (!string.Equals(PolicySourceCode, "QuoteBound", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(PolicyNumber))
+                        yield return new ValidationResult("Policy number is required for direct policy creation.", [nameof(PolicyNumber)]);
+                    if (string.IsNullOrWhiteSpace(PolicySourceReason))
+                        yield return new ValidationResult("Policy creation reason is required for direct policy creation.", [nameof(PolicySourceReason)]);
+                }
             }
             if (_action == "Copy")
             {

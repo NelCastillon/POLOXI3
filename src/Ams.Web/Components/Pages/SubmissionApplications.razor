@@ -47,13 +47,18 @@
         </div>
     }
 
-    <section class="sa-kpi-strip" aria-label="Application KPIs">
-        @KpiCard("all", "Total Apps", TotalApplicationCount.ToString(), "All application records from submission workflow", "bi-stack", "blue")
-        @KpiCard("priority", "Priority", PriorityApplicationCount.ToString(), "Incomplete, overdue, high-value, or requirement-heavy applications", "bi-exclamation-octagon", "red")
-        @KpiCard("submitted", "Submitted", SubmittedApplicationCount.ToString(), "Applications submitted or ready for carrier review", "bi-send", "cyan")
-        @KpiCard("requirements", "Requirements", RequirementsApplicationCount.ToString(), "Applications waiting on missing information", "bi-paperclip", "amber")
-        @KpiCard("approved", "Approved", ApprovedApplicationCount.ToString(), "Applications ready for quote workflow", "bi-check-circle", "green")
-        @KpiCard("complete", "Avg Complete", AverageCompletenessText, "Average application completeness", "bi-percent", "emerald")
+    <section class="app-kpi-strip" aria-label="Application KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="() => SetKpi(metric.Filter)">
+                <span class="app-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="app-kpi__body">
+                    <span class="app-kpi__val">@metric.Value</span>
+                    <span class="app-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
     </section>
 
     <section class="sa-workflows" aria-label="Application workflows">
@@ -519,6 +524,15 @@
     int RequirementsApplicationCount => _rows.Count(r => r.Status == "Requirements Pending");
     int ApprovedApplicationCount => _rows.Count(r => r.Status == "Approved");
     int CarrierCount => _rows.Select(r => Safe(r.Carrier, "Not Assigned")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    IEnumerable<AppMetric> Metrics =>
+    [
+        new("blue", "all", "bi-stack", "Total Apps", TotalApplicationCount.ToString(), "All applications", "All application records from submission workflow"),
+        new("red", "priority", "bi-exclamation-octagon", "Priority", PriorityApplicationCount.ToString(), "High-importance apps", "Incomplete, overdue, high-value, or requirement-heavy applications"),
+        new("cyan", "submitted", "bi-send", "Submitted", SubmittedApplicationCount.ToString(), "Carrier review ready", "Applications submitted or ready for carrier review"),
+        new("amber", "requirements", "bi-paperclip", "Requirements", RequirementsApplicationCount.ToString(), "Missing information", "Applications waiting on missing information"),
+        new("green", "approved", "bi-check-circle", "Approved", ApprovedApplicationCount.ToString(), "Ready for quote", "Applications ready for quote workflow"),
+        new("slate", "complete", "bi-percent", "Avg Complete", AverageCompletenessText, "Average complete", "Average application completeness")
+    ];
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_carrierFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
     string ConfirmIconClass => _pendingAction == "Reject" ? "sa-confirm-icon sa-confirm-icon--danger" : "sa-confirm-icon";
@@ -1039,20 +1053,9 @@
 
     string TabClass(string key) => _activeTab == key ? "sa-tab sa-tab--active" : "sa-tab";
     string RowClass(AppRow row) => _selected?.AppId == row.AppId ? "sa-row sa-row--selected" : "sa-row";
+    string MetricCardClass(AppMetric metric) => $"app-kpi app-kpi--{metric.Tone} {(_activeKpi == metric.Filter ? "app-kpi--active" : string.Empty)}";
     static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "sa-menu-item sa-menu-item--danger" : "sa-menu-item";
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
-
-    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
-    {
-        var active = _activeKpi == key;
-        var cardClass = active ? $"sa-kpi sa-kpi--{tone} sa-kpi--active" : $"sa-kpi sa-kpi--{tone}";
-        var title = active ? "Clear KPI filter" : subtitle;
-        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
-            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
-            <strong>@value</strong>
-            <small>@subtitle</small>
-        </button>;
-    }
 
     RenderFragment StatusBadge(string status) => @<span class="sa-status sa-status--@Slug(status)">@status</span>;
     RenderFragment ImportanceBadge(AppRow row) => @<span class="sa-importance sa-importance--@Slug(ImportanceLevel(row))">@ImportanceLevel(row)<small>@ImportanceScore(row)</small></span>;
@@ -1172,6 +1175,7 @@
         }
     }
 
+    sealed record AppMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
     sealed record GroupSummary(string Name, int Count, decimal Premium, int Priority, double AverageComplete, int Percent);

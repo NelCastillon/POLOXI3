@@ -101,6 +101,18 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> GetMetrics([FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetMetricsAsync(tenantId, cancellationToken));
 
+    [HttpGet("policy-creation-sources")]
+    public async Task<IActionResult> GetPolicyCreationSources([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetPolicyCreationSourcesAsync(tenantId, cancellationToken));
+
+    [HttpGet("policy-bind-statuses")]
+    public async Task<IActionResult> GetPolicyBindStatuses([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetPolicyBindStatusesAsync(tenantId, cancellationToken));
+
+    [HttpGet("{id:guid}/policy-bind-transactions")]
+    public async Task<IActionResult> GetPolicyBindTransactions(Guid id, CancellationToken cancellationToken)
+        => Ok(await _service.GetPolicyBindTransactionsAsync(id, cancellationToken));
+
     [HttpPost("{id:guid}/submit-to-market")]
     public async Task<IActionResult> SubmitToMarket(Guid id, [FromBody] SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken)
         => Ok(await _service.SubmitToMarketAsync(id, request, cancellationToken));
