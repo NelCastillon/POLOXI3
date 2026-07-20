@@ -2829,6 +2829,13 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes", cancellationToken);
 
+    public async Task<SubmissionActionResult> RecordSubmissionQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/quotes/response", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<SubmissionActionResult>(cancellationToken: cancellationToken))!;
+    }
+
     public async Task UpdateSubmissionQuoteAsync(Guid submissionId, Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PatchAsJsonAsync($"api/submissions/{submissionId}/quotes/{quoteId}", request, cancellationToken);

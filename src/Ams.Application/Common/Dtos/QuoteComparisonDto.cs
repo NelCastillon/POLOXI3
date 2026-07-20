@@ -4,13 +4,16 @@ public sealed class QuoteComparisonDto
 {
     public Guid QuoteId { get; set; }
     public Guid SubmissionId { get; set; }
+    public Guid? SubmissionMarketId { get; set; }
     public Guid CarrierId { get; set; }
     public string CarrierName { get; set; } = string.Empty;
     public string QuoteNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public decimal AnnualPremium { get; set; }
+    public DateTime? EffectiveDate { get; set; }
     public decimal? Deductible { get; set; }
     public decimal? Limit { get; set; }
+    public string? CoverageForms { get; set; }
     public decimal? CommissionPercent { get; set; }
     public string? Subjectivities { get; set; }
     public string? Exclusions { get; set; }
@@ -20,6 +23,7 @@ public sealed class QuoteComparisonDto
     public decimal? TaxesAndFees { get; set; }
     public decimal? BrokerFee { get; set; }
     public bool? TriaIncluded { get; set; }
+    public bool IsBindable { get; set; }
     public Guid? QuoteDocumentId { get; set; }
     public string? QuoteDocumentFileName { get; set; }
     public bool IsSelected { get; set; }
@@ -27,6 +31,13 @@ public sealed class QuoteComparisonDto
     public int RecommendationScore { get; set; }
     public string? RecommendationReason { get; set; }
     public string? CoverageNotes { get; set; }
+    public DateTime? QuoteRequestDateUtc { get; set; }
+    public DateTime? QuoteReceivedDateUtc { get; set; }
+    public int ResponseVersion { get; set; }
+    public string? ResponseSourceCode { get; set; }
+    public string? CarrierReferenceNumber { get; set; }
+    public Guid? RequestedByUserId { get; set; }
+    public Guid? ReceivedByUserId { get; set; }
     public DateTime QuotedDateUtc { get; set; }
     public DateTime ExpiresDateUtc { get; set; }
 }

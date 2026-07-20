@@ -147,6 +147,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteByIdAsync(quoteId, cancellationToken);
 
+    public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordQuoteResponseAsync(submissionId, request, cancellationToken);
+
     public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateQuoteAsync(quoteId, request, cancellationToken);
 

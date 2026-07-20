@@ -252,6 +252,10 @@ public sealed partial class DatabaseMigrator
         new("0214_Submissions_PolicyBindTransaction_Enterprise", Migration0214_SubmissionsPolicyBindTransactionEnterprise),
         new("0215_Submissions_DirectPolicyIntake_Enterprise", Migration0215_SubmissionsDirectPolicyIntakeEnterprise),
         new("0216_PolicyEndorsements_EnterpriseSchemaOptions", Migration0216_PolicyEndorsementsEnterpriseSchemaOptions),
+        new("0217_Submissions_QuoteMarketResponseLink", Migration0217_SubmissionsQuoteMarketResponseLink),
+        new("0218_Submissions_QuoteMarketResponseIntegrity", Migration0218_SubmissionsQuoteMarketResponseIntegrity),
+        new("0219_Submissions_EnterpriseMarketQuoteFields", Migration0219_SubmissionsEnterpriseMarketQuoteFields),
+        new("0220_Core_CarrierMarketSuggestionPreference", Migration0220_CoreCarrierMarketSuggestionPreference),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16838,6 +16842,239 @@ SET DisplayName = o.DisplayName,
 FROM Policy.PolicyEndorsementOption existing
 INNER JOIN #EndorsementOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
 WHERE existing.IsDeleted = 0;
+""";
+
+    private const string Migration0217_SubmissionsQuoteMarketResponseLink = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.Quote', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.Quote ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'QuoteRequestDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD QuoteRequestDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'QuoteReceivedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD QuoteReceivedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ResponseVersion') IS NULL ALTER TABLE Submissions.Quote ADD ResponseVersion INT NOT NULL CONSTRAINT DF_Submissions_Quote_ResponseVersion_0217 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.Quote', N'ResponseSourceCode') IS NULL ALTER TABLE Submissions.Quote ADD ResponseSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.Quote ADD CarrierReferenceNumber NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'RequestedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD RequestedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ReceivedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD ReceivedByUserId UNIQUEIDENTIFIER NULL;
+
+    IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+    BEGIN
+        EXEC(N'
+        UPDATE q
+        SET SubmissionMarketId = sm.SubmissionMarketId,
+            QuoteRequestDateUtc = COALESCE(q.QuoteRequestDateUtc, sm.SubmittedDateUtc, sm.AddedDateUtc, q.CreatedDateUtc),
+            QuoteReceivedDateUtc = COALESCE(q.QuoteReceivedDateUtc, CASE WHEN q.Status IN (N''Received'', N''Presented'', N''Accepted'', N''Bound'') THEN q.QuotedDateUtc ELSE NULL END),
+            ResponseSourceCode = COALESCE(NULLIF(q.ResponseSourceCode, N''''), CASE WHEN q.Status = N''Requested'' THEN N''RequestOnly'' ELSE N''ManualEntry'' END)
+        FROM Submissions.Quote q
+        INNER JOIN Submissions.SubmissionMarket sm ON sm.SubmissionId = q.SubmissionId AND sm.CarrierId = q.CarrierId AND sm.IsDeleted = 0
+        WHERE q.IsDeleted = 0
+          AND q.SubmissionMarketId IS NULL;');
+
+        EXEC(N'
+        UPDATE sm
+        SET Status = CASE
+                WHEN q.Status IN (N''Accepted'', N''Bound'') THEN N''Quoted''
+                WHEN q.Status IN (N''Received'', N''Presented'', N''Selected'') THEN N''Quoted''
+                WHEN q.Status = N''Requested'' AND sm.Status NOT IN (N''Bound'', N''Declined'', N''Quoted'') THEN N''In Review''
+                ELSE sm.Status
+            END,
+            RespondedDateUtc = CASE WHEN q.Status IN (N''Received'', N''Presented'', N''Accepted'', N''Bound'') THEN COALESCE(sm.RespondedDateUtc, q.QuoteReceivedDateUtc, q.QuotedDateUtc) ELSE sm.RespondedDateUtc END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        FROM Submissions.SubmissionMarket sm
+        INNER JOIN Submissions.Quote q ON q.SubmissionMarketId = sm.SubmissionMarketId AND q.IsDeleted = 0
+        WHERE sm.IsDeleted = 0;');
+    END;
+END;
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_SubmissionMarket')
+    EXEC(N'CREATE INDEX IX_Submissions_Quote_SubmissionMarket ON Submissions.Quote(SubmissionMarketId, IsDeleted, Status, QuoteReceivedDateUtc);');
+""";
+
+    private const string Migration0218_SubmissionsQuoteMarketResponseIntegrity = """
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE q
+    SET SubmissionMarketId = sm.SubmissionMarketId,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.Quote q
+    INNER JOIN Submissions.SubmissionMarket sm ON sm.SubmissionId = q.SubmissionId AND sm.CarrierId = q.CarrierId AND sm.IsDeleted = 0
+    WHERE q.IsDeleted = 0
+      AND q.SubmissionMarketId IS NULL;');
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.Quote q
+        LEFT JOIN Submissions.SubmissionMarket sm ON sm.SubmissionMarketId = q.SubmissionMarketId AND sm.IsDeleted = 0
+        WHERE q.IsDeleted = 0
+          AND q.SubmissionMarketId IS NOT NULL
+          AND sm.SubmissionMarketId IS NULL
+    )
+    AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Submissions_Quote_SubmissionMarket')
+    BEGIN
+        ALTER TABLE Submissions.Quote WITH CHECK ADD CONSTRAINT FK_Submissions_Quote_SubmissionMarket
+            FOREIGN KEY (SubmissionMarketId) REFERENCES Submissions.SubmissionMarket(SubmissionMarketId);
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_Submission_Market_Status')
+        EXEC(N'CREATE INDEX IX_Submissions_Quote_Submission_Market_Status ON Submissions.Quote(SubmissionId, SubmissionMarketId, Status, IsDeleted);');
+END;
+""";
+
+    private const string Migration0219_SubmissionsEnterpriseMarketQuoteFields = """
+IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterName') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterName NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterEmail') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterEmail NVARCHAR(320) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterPhone') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterPhone NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'DueDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD DueDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedCoverageSummary') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedCoverageSummary NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedLimits') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedLimits NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmissionMethodCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmissionMethodCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'FollowUpTaskId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD FollowUpTaskId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.Quote', N'EffectiveDate') IS NULL ALTER TABLE Submissions.Quote ADD EffectiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CoverageForms') IS NULL ALTER TABLE Submissions.Quote ADD CoverageForms NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'IsBindable') IS NULL ALTER TABLE Submissions.Quote ADD IsBindable BIT NOT NULL CONSTRAINT DF_Submissions_Quote_IsBindable_0219 DEFAULT 0;
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRevision
+    (
+        QuoteRevisionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRevision PRIMARY KEY DEFAULT NEWID(),
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ResponseVersion INT NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        AnnualPremium DECIMAL(18,2) NOT NULL,
+        Deductible DECIMAL(18,2) NULL,
+        [Limit] DECIMAL(18,2) NULL,
+        CommissionPercent DECIMAL(9,4) NULL,
+        TaxesAndFees DECIMAL(18,2) NULL,
+        BrokerFee DECIMAL(18,2) NULL,
+        MinimumEarnedPremium DECIMAL(18,2) NULL,
+        EffectiveDate DATETIME2 NULL,
+        ExpiresDateUtc DATETIME2 NOT NULL,
+        CoverageForms NVARCHAR(2000) NULL,
+        Subjectivities NVARCHAR(2000) NULL,
+        Exclusions NVARCHAR(2000) NULL,
+        CarrierRating NVARCHAR(80) NULL,
+        PaymentTerms NVARCHAR(200) NULL,
+        IsBindable BIT NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_IsBindable DEFAULT 0,
+        CoverageNotes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRevision') AND name = N'IX_Submissions_QuoteRevision_Quote_Version')
+    EXEC(N'CREATE INDEX IX_Submissions_QuoteRevision_Quote_Version ON Submissions.QuoteRevision(QuoteId, ResponseVersion DESC, IsDeleted);');
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Submissions_QuoteRevision_Quote')
+    ALTER TABLE Submissions.QuoteRevision WITH CHECK ADD CONSTRAINT FK_Submissions_QuoteRevision_Quote FOREIGN KEY (QuoteId) REFERENCES Submissions.Quote(QuoteId);
+""";
+
+    private const string Migration0220_CoreCarrierMarketSuggestionPreference = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core') EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.CarrierMarketSuggestionPreference
+    (
+        CarrierMarketSuggestionPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_CarrierMarketSuggestionPreference PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_SortOrder DEFAULT 500,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'TenantId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_TenantId_0220 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CarrierId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_CarrierId_0220 DEFAULT '00000000-0000-0000-0000-000000000000';
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'LineOfBusiness') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD LineOfBusiness NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'SortOrder') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD SortOrder INT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_SortOrder_0220 DEFAULT 500;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'IsActive') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD IsActive BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsActive_0220 DEFAULT 1;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CreatedDateUtc') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_Created_0220 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CreatedByUserId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'ModifiedDateUtc') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'ModifiedByUserId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'IsDeleted') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsDeleted_0220 DEFAULT 0;
+END;
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'UX_Core_CarrierMarketSuggestionPreference_Default')
+        EXEC(N'CREATE UNIQUE INDEX UX_Core_CarrierMarketSuggestionPreference_Default ON Core.CarrierMarketSuggestionPreference(TenantId, CarrierId) WHERE LineOfBusiness IS NULL AND IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'UX_Core_CarrierMarketSuggestionPreference_Line')
+        EXEC(N'CREATE UNIQUE INDEX UX_Core_CarrierMarketSuggestionPreference_Line ON Core.CarrierMarketSuggestionPreference(TenantId, CarrierId, LineOfBusiness) WHERE LineOfBusiness IS NOT NULL AND IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'IX_Core_CarrierMarketSuggestionPreference_Tenant_Sort')
+        EXEC(N'CREATE INDEX IX_Core_CarrierMarketSuggestionPreference_Tenant_Sort ON Core.CarrierMarketSuggestionPreference(TenantId, LineOfBusiness, IsActive, SortOrder, IsDeleted);');
+END;
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Core.CarrierMarketSuggestionPreference (TenantId, CarrierId, LineOfBusiness, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT c.TenantId,
+           c.CarrierId,
+           NULL,
+           COALESCE(p.SortOrder, 500 + ROW_NUMBER() OVER (PARTITION BY c.TenantId ORDER BY c.CarrierName)),
+           1,
+           SYSUTCDATETIME(),
+           0
+    FROM Core.Carrier c
+    LEFT JOIN (VALUES
+        (N'Travelers', 10),
+        (N'Chubb', 20),
+        (N'The Hartford', 30),
+        (N'Hartford', 30),
+        (N'Liberty Mutual', 40),
+        (N'CNA', 50),
+        (N'Zurich', 60),
+        (N'AIG', 70),
+        (N'Nationwide', 80),
+        (N'AmTrust', 90),
+        (N'Berkshire Hathaway GUARD', 100),
+        (N'The Hanover', 110),
+        (N'Selective', 120),
+        (N'Auto-Owners', 130),
+        (N'Cincinnati Insurance', 140),
+        (N'Markel', 150),
+        (N'Philadelphia Insurance Companies', 160),
+        (N'Great American Insurance Group', 170),
+        (N'Tokio Marine HCC', 180),
+        (N'Hiscox', 190),
+        (N'AXA XL', 200)
+    ) p(CarrierName, SortOrder) ON p.CarrierName = c.CarrierName
+    WHERE c.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Core.CarrierMarketSuggestionPreference existing
+          WHERE existing.TenantId = c.TenantId
+            AND existing.CarrierId = c.CarrierId
+            AND existing.LineOfBusiness IS NULL
+            AND existing.IsDeleted = 0
+      );
+END;
 """;
 
     private const string Migration0204_CrmLeadConversionEnterpriseWorkflow = """

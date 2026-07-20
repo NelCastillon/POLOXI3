@@ -522,6 +522,7 @@
     string _confirmTitle = "Confirm action";
     string _confirmMessage = "Confirm this quote action?";
     string _confirmIcon = "bi-question-circle";
+    Guid? _currentUserId;
 
     readonly List<QuoteRow> _rows = [];
     readonly List<QuoteRow> _compareRows = [];
@@ -699,13 +700,14 @@
                     Account = submission.AccountName,
                     Lob = submission.LineOfBusiness,
                     CarrierId = q.CarrierId,
+                    SubmissionMarketId = q.SubmissionMarketId,
                     Carrier = q.CarrierName,
                     Status = NormalizeQuoteStatus(q.Status, q.ExpiresDateUtc),
                     QuotedPremium = q.AnnualPremium,
                     Deductible = q.Deductible,
                     Limit = q.Limit,
                     CoverageNotes = q.CoverageNotes,
-                    QuotedDateUtc = q.QuotedDateUtc,
+                    QuotedDateUtc = q.QuoteReceivedDateUtc ?? q.QuotedDateUtc,
                     EffDate = submission.EffectiveDate,
                     ExpiryDate = q.ExpiresDateUtc,
                     Producer = submission.AssignedToUserName ?? "Unassigned"
@@ -717,26 +719,7 @@
             ShowToast($"Quote comparison unavailable for {submission.SubmissionNumber}: {ex.Message}", "qde-toast--danger");
         }
 
-        var x = ToQuoteRow(submission);
-        return
-        [
-            new QuoteRow
-            {
-                QuoteId = x.QuoteId,
-                QuoteNo = x.QuoteNo,
-                SubmissionNo = x.SubmissionNo,
-                SubId = x.SubId,
-                Account = x.Account,
-                Lob = x.Lob,
-                Carrier = x.Carrier,
-                Status = x.Status,
-                QuotedPremium = x.QuotedPremium,
-                EffDate = x.EffDate,
-                ExpiryDate = x.ExpiryDate,
-                Producer = x.Producer,
-                QuotedDateUtc = submission.ModifiedDateUtc ?? submission.CreatedDateUtc
-            }
-        ];
+        return [];
     }
 
     IEnumerable<QuoteRow> ApplyFilters(IEnumerable<QuoteRow> rows)
@@ -1052,15 +1035,34 @@
         _actionBusy = true;
         try
         {
-            var result = _pendingAction switch
+            SubmissionActionResult result;
+            if (_pendingAction == "Accept Quote")
             {
-            "Accept Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes ?? "Quote accepted from quote command center.")),
-            "Request Revision" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes)),
-            "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(TenantId: _tenantId, QuoteId: _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, CarrierId: _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _actionForm.EffectiveDate, ExpirationDate: _actionForm.EffectiveDate?.AddYears(1), PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null)),
-            "Decline Quote" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}.")),
-                "Download PDF" => await GenerateProposalAsync(),
-                _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
-            };
+                await Api.UpdateSubmissionQuoteAsync(_selected.SubId, _selected.QuoteId, new UpdateSubmissionQuoteRequest(_tenantId, "Received", _actionForm.AnnualPremium ?? _selected.QuotedPremium, _selected.Deductible, _selected.Limit, null, null, null, null, null, null, null, null, null, null, _actionForm.Notes ?? _selected.CoverageNotes, _selected.ExpiryDate, _currentUserId, "ManualEntry", null, _currentUserId, _selected.SubmissionMarketId));
+                await Api.SelectSubmissionQuoteAsync(_selected.SubId, new SelectSubmissionQuoteRequest(_tenantId, _selected.QuoteId, true, _actionForm.Notes ?? $"Accepted quote {_selected.QuoteNo} from quote command center.", _currentUserId));
+                result = new SubmissionActionResult(_selected.SubId, $"Quote {_selected.QuoteNo} accepted and selected.");
+            }
+            else if (_pendingAction == "Request Revision")
+            {
+                result = await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes, _currentUserId, null, _selected.SubmissionMarketId));
+            }
+            else if (_pendingAction == "Bind")
+            {
+                result = await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(TenantId: _tenantId, QuoteId: _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, CarrierId: _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _actionForm.EffectiveDate, ExpirationDate: _actionForm.EffectiveDate?.AddYears(1), PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null));
+            }
+            else if (_pendingAction == "Decline Quote")
+            {
+                await Api.UpdateSubmissionQuoteAsync(_selected.SubId, _selected.QuoteId, new UpdateSubmissionQuoteRequest(_tenantId, "Declined", _actionForm.AnnualPremium ?? _selected.QuotedPremium, _selected.Deductible, _selected.Limit, null, null, null, null, null, null, null, null, null, null, _actionForm.Notes ?? _selected.CoverageNotes, _selected.ExpiryDate, _currentUserId, "ManualEntry", null, _currentUserId, _selected.SubmissionMarketId));
+                result = await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}."));
+            }
+            else if (_pendingAction == "Download PDF")
+            {
+                result = await GenerateProposalAsync();
+            }
+            else
+            {
+                result = new SubmissionActionResult(_selected.SubId, "No action executed.");
+            }
 
             _showActionDialog = false;
             _showConfirmDialog = false;
@@ -1147,21 +1149,6 @@
     static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
     static IEnumerable<string> MergeOptions(IEnumerable<string> configured, IEnumerable<string> observed) => configured.Concat(observed).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     static List<SubmissionOption> ToOptions(IEnumerable<SubmissionReferenceOptionDto> options, string group) => options.Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new SubmissionOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList();
-    static QuoteRegisterRow ToQuoteRow(SubmissionDto dto) => new()
-    {
-        QuoteId = dto.SubmissionId,
-        QuoteNo = $"QUO-{dto.SubmissionNumber.Replace("SUB-", string.Empty)}",
-        SubmissionNo = dto.SubmissionNumber,
-        SubId = dto.SubmissionId,
-        Account = dto.AccountName,
-        Lob = dto.LineOfBusiness,
-        Carrier = dto.QuoteCount > 0 ? "Multiple Markets" : "Pending Market",
-        Status = dto.Status == "Bound" ? "Accepted" : dto.Status == "Declined" ? "Declined" : dto.QuoteCount > 0 ? "Pending" : "Expired",
-        QuotedPremium = dto.TargetPremium ?? 0,
-        EffDate = dto.EffectiveDate,
-        ExpiryDate = dto.ExpirationDate,
-        Producer = dto.AssignedToUserName ?? "Unassigned"
-    };
 
     sealed record SubmissionOption(string Code, string Name, bool IsDefault);
 
@@ -1183,6 +1170,7 @@
 
     sealed class QuoteRow : QuoteRegisterRow
     {
+        public Guid? SubmissionMarketId { get; set; }
         public Guid CarrierId { get; set; }
         public decimal? Deductible { get; set; }
         public decimal? Limit { get; set; }

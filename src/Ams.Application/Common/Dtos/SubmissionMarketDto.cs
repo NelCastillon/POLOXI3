@@ -10,6 +10,19 @@ public sealed class SubmissionMarketDto
     public int AppetiteScore { get; set; }
     public bool IsRecommended { get; set; }
     public string? DeclineReason { get; set; }
+    public string? UnderwriterName { get; set; }
+    public string? UnderwriterEmail { get; set; }
+    public string? UnderwriterPhone { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public string? RequestedCoverageSummary { get; set; }
+    public string? RequestedLimits { get; set; }
+    public string? SubmissionMethodCode { get; set; }
+    public Guid? FollowUpTaskId { get; set; }
+    public Guid? LatestQuoteId { get; set; }
+    public string? LatestQuoteNumber { get; set; }
+    public string? LatestQuoteStatus { get; set; }
+    public DateTime? LatestQuoteReceivedDateUtc { get; set; }
     public DateTime AddedDateUtc { get; set; }
+    public DateTime? SubmittedDateUtc { get; set; }
     public DateTime? RespondedDateUtc { get; set; }
 }

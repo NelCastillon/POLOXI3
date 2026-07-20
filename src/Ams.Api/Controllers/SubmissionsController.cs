@@ -213,6 +213,10 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> GetQuotes(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetQuoteComparisonAsync(id, cancellationToken));
 
+    [HttpPost("{id:guid}/quotes/response")]
+    public async Task<IActionResult> RecordQuoteResponse(Guid id, [FromBody] RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.RecordQuoteResponseAsync(id, request, cancellationToken));
+
     [HttpPatch("{id:guid}/quotes/{quoteId:guid}")]
     public async Task<IActionResult> UpdateQuote(Guid id, Guid quoteId, [FromBody] UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken)
     {

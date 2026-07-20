@@ -938,7 +938,7 @@
             "Submit to Carrier" => ($"Submit {_selected.AppNo} to carrier", "bi-send", "Submit Application"),
             "Add Requirements" => ($"Add requirements for {_selected.AppNo}", "bi-paperclip", "Add Requirements"),
             "Request Info" => ($"Request information for {_selected.AppNo}", "bi-question-circle", "Send Request"),
-            "Mark Approved" => ($"Approve {_selected.AppNo}", "bi-check-circle", "Mark Approved"),
+            "Mark Approved" => ($"Approve {_selected.AppNo}", "bi-check-circle", "Request Quote"),
             "Reject" => ($"Reject {_selected.AppNo}", "bi-x-circle", "Continue"),
             "Download App" => ($"Generate application packet for {_selected.AppNo}", "bi-file-earmark-pdf", "Generate Packet"),
             _ => ("Application Action", "bi-clipboard", "Continue")
@@ -948,7 +948,7 @@
             "Submit to Carrier" => "Send this completed application to the recommended or selected carrier market.",
             "Add Requirements" => "Capture outstanding requirements and due date for underwriting follow-up.",
             "Request Info" => "Create an information request for the producer, CSR, or insured before underwriting can continue.",
-            "Mark Approved" => "Create a quote approval record and move this application into the approved workflow stage.",
+            "Mark Approved" => "Mark the application ready and request quote terms from the related carrier market without recording synthetic carrier terms.",
             "Reject" => "Reject this application and move the related submission into declined status.",
             "Download App" => "Generate an application packet/proposal record for the current submission application.",
             _ => "Review the application action details and confirm before changes are applied."
@@ -984,7 +984,7 @@
             "Submit to Carrier" => ($"Submit {_selected.AppNo}?", "This will send the application to a carrier market and move the submission into review.", "bi-send"),
             "Add Requirements" => ($"Add requirements to {_selected.AppNo}?", "This will generate an application requirements packet for follow-up tracking.", "bi-paperclip"),
             "Request Info" => ($"Request more information for {_selected.AppNo}?", "This will generate an application information request packet for follow-up.", "bi-question-circle"),
-            "Mark Approved" => ($"Approve {_selected.AppNo}?", "This will create a quote request and move the related application to approved status.", "bi-check-circle"),
+            "Mark Approved" => ($"Approve {_selected.AppNo}?", "This will request quote terms from the related market. Carrier response terms must be recorded separately when received.", "bi-check-circle"),
             "Reject" => ($"Reject {_selected.AppNo}?", "This will decline the related submission and move the application to rejected status.", "bi-exclamation-triangle"),
             "Download App" => ($"Generate packet for {_selected.AppNo}?", "This will create an application packet/proposal record for the selected submission.", "bi-file-earmark-pdf"),
             _ => ("Confirm action", "Confirm this application action?", "bi-question-circle")
@@ -1010,7 +1010,7 @@
                 "Submit to Carrier" => await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(_tenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.Notes ?? "Application submitted to carrier from application command center.")),
                 "Add Requirements" => await GenerateApplicationPacketAsync("Application Requirements", _actionForm.Notes),
                 "Request Info" => await GenerateApplicationPacketAsync("Application Information Request", _actionForm.Notes),
-                "Mark Approved" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved from application command center.")),
+                "Mark Approved" => await RequestApprovedApplicationQuoteAsync(),
                 "Reject" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, _actionForm.Notes ?? $"Application rejected from command center: {_selected.AppNo}.")),
                 "Download App" => await GenerateApplicationPacketAsync("Application Packet", _actionForm.Notes),
                 _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
@@ -1036,6 +1036,22 @@
         if (_selected is null) return new SubmissionActionResult(Guid.Empty, "No application selected.");
         var proposalId = await Api.GenerateProposalAsync(new GenerateProposalRequest(_selected.SubId, _tenantId, $"{titlePrefix} - {_selected.AppNo}", [], notes));
         return new SubmissionActionResult(proposalId, $"{titlePrefix} generated.");
+    }
+
+    async Task<SubmissionActionResult> RequestApprovedApplicationQuoteAsync()
+    {
+        if (_selected is null) return new SubmissionActionResult(Guid.Empty, "No application selected.");
+
+        var carrierId = ParseCarrierId(_actionForm.CarrierIdText);
+        var markets = await Api.GetSubmissionMarketsAsync(_selected.SubId) ?? [];
+        var marketId = markets.FirstOrDefault(m => !carrierId.HasValue || m.CarrierId == carrierId.Value)?.SubmissionMarketId;
+        if (!marketId.HasValue)
+        {
+            var submitResult = await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(_tenantId, carrierId, _actionForm.Notes ?? "Application approved from application command center."));
+            marketId = submitResult.Id;
+        }
+
+        return await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved and quote requested from application command center.", null, null, marketId));
     }
 
     void ShowToast(string message, string cssClass)

@@ -69,7 +69,21 @@ public sealed record UpdateSubmissionMarketPackageRequest(
     string? Notes,
     DateTime? NextActionDateUtc,
     Guid[] DocumentIds,
-    Guid? ModifiedByUserId);
+    Guid? ModifiedByUserId,
+    [property: StringLength(200)]
+    string? UnderwriterName = null,
+    [property: StringLength(320)]
+    string? UnderwriterEmail = null,
+    [property: StringLength(50)]
+    string? UnderwriterPhone = null,
+    DateTime? DueDateUtc = null,
+    [property: StringLength(1000)]
+    string? RequestedCoverageSummary = null,
+    [property: StringLength(1000)]
+    string? RequestedLimits = null,
+    [property: StringLength(50)]
+    string? SubmissionMethodCode = null,
+    Guid? FollowUpTaskId = null);
 
 public sealed record UpdateSubmissionQuoteRequest(
     Guid TenantId,
@@ -102,7 +116,60 @@ public sealed record UpdateSubmissionQuoteRequest(
     [property: StringLength(1000)]
     string? CoverageNotes,
     DateTime ExpiresDateUtc,
-    Guid? ModifiedByUserId);
+    Guid? ModifiedByUserId,
+    [property: StringLength(50)]
+    string? ResponseSourceCode = null,
+    [property: StringLength(100)]
+    string? CarrierReferenceNumber = null,
+    Guid? ReceivedByUserId = null,
+    Guid? SubmissionMarketId = null,
+    DateTime? EffectiveDate = null,
+    [property: StringLength(2000)]
+    string? CoverageForms = null,
+    bool IsBindable = false);
+
+public sealed record RecordSubmissionQuoteResponseRequest(
+    Guid TenantId,
+    Guid SubmissionMarketId,
+    Guid? QuoteId,
+    [property: Required, StringLength(50)]
+    string Status,
+    [property: Range(0, 999999999999)]
+    decimal AnnualPremium,
+    [property: Range(0, 999999999999)]
+    decimal? Deductible,
+    [property: Range(0, 999999999999)]
+    decimal? Limit,
+    [property: Range(0, 100)]
+    decimal? CommissionPercent,
+    [property: StringLength(2000)]
+    string? Subjectivities,
+    [property: StringLength(2000)]
+    string? Exclusions,
+    [property: StringLength(80)]
+    string? CarrierRating,
+    [property: StringLength(200)]
+    string? PaymentTerms,
+    [property: Range(0, 999999999999)]
+    decimal? MinimumEarnedPremium,
+    [property: Range(0, 999999999999)]
+    decimal? TaxesAndFees,
+    [property: Range(0, 999999999999)]
+    decimal? BrokerFee,
+    bool? TriaIncluded,
+    Guid? QuoteDocumentId,
+    [property: StringLength(1000)]
+    string? CoverageNotes,
+    DateTime ExpiresDateUtc,
+    [property: StringLength(50)]
+    string? ResponseSourceCode,
+    [property: StringLength(100)]
+    string? CarrierReferenceNumber,
+    Guid? ReceivedByUserId,
+    DateTime? EffectiveDate = null,
+    [property: StringLength(2000)]
+    string? CoverageForms = null,
+    bool IsBindable = false);
 
 public sealed record SelectSubmissionQuoteRequest(
     Guid TenantId,
@@ -144,7 +211,11 @@ public sealed record RequestSubmissionQuoteRequest(
     [property: Range(0, 999999999999)]
     decimal? Limit,
     [property: StringLength(1000)]
-    string? CoverageNotes);
+    string? CoverageNotes,
+    Guid? RequestedByUserId = null,
+    [property: StringLength(100)]
+    string? CarrierReferenceNumber = null,
+    Guid? SubmissionMarketId = null);
 
 public sealed record CopySubmissionRequest(
     Guid TenantId,
