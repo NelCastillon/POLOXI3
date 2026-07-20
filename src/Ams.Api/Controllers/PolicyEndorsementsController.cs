@@ -16,6 +16,10 @@ public sealed class PolicyEndorsementsController : ControllerBase
     public async Task<IActionResult> GetCenter([FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetCenterAsync(tenantId, cancellationToken));
 
+    [HttpGet("options")]
+    public async Task<IActionResult> GetOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetOptionsAsync(tenantId, cancellationToken));
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetDetail(Guid id, CancellationToken cancellationToken)
     {

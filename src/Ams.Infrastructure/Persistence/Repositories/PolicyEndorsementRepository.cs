@@ -8,8 +8,14 @@ namespace Ams.Infrastructure.Persistence.Repositories;
 public sealed class PolicyEndorsementRepository : IPolicyEndorsementRepository
 {
     private const string EndorsementColumns = @"EndorsementId, TenantId, PolicyId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness,
-        Carrier, EndorsementType, Description, EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName,
-        AssignedToName, UnderwriterName, Reason, RequiredDocuments, WorkflowStage, DueDate, ApprovedDateUtc, IssuedDateUtc, IsUrgent, IsArchived";
+        Carrier, EndorsementType, RequestSourceCode, ChangeCategoryCode, Description, EffectiveDate, ExpirationDate, RetroactiveDate,
+        DiscoveryDate, RequestedDateUtc, PremiumDelta, TaxFeeDelta, TotalCostDelta, ProratedPremiumDelta, Status, Priority,
+        RequestedByName, RequestedByEmail, RequestedByPhone, ClientContactName, ClientContactEmail, ClientContactPhone,
+        AssignedToName, UnderwriterName, UnderwriterEmail, CarrierSubmissionDateUtc, CarrierResponseDueDate, CarrierReferenceNumber,
+        BrokerOfRecordRequired, AgentAuthorityCode, ApprovalLevelCode, ApprovedByName, IssuedByName, BillingImpactCode,
+        CommissionImpactCode, BillingInstruction, DocumentDeliveryCode, CertificateRequired, FormsRequired, AcordFormNumbers,
+        ExternalReferenceNumber, ComplianceReviewRequired, EoExposureNotes, InternalNotes, ClientFacingNotes, Reason,
+        RequiredDocuments, WorkflowStage, DueDate, ApprovedDateUtc, IssuedDateUtc, IsUrgent, IsArchived";
 
     private readonly ISqlConnectionFactory _connectionFactory;
 
@@ -17,10 +23,8 @@ public sealed class PolicyEndorsementRepository : IPolicyEndorsementRepository
 
     public async Task<PolicyEndorsementCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
-        const string sql = @"
-SELECT EndorsementId, TenantId, PolicyId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness,
-       Carrier, EndorsementType, Description, EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName,
-       AssignedToName, UnderwriterName, Reason, RequiredDocuments, WorkflowStage, DueDate, ApprovedDateUtc, IssuedDateUtc, IsUrgent, IsArchived
+        var sql = $@"
+SELECT {EndorsementColumns}
 FROM Policy.PolicyEndorsement
 WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsArchived = 0
 ORDER BY IsUrgent DESC, DueDate, RequestedDateUtc DESC;
@@ -33,15 +37,32 @@ ORDER BY ActivityDateUtc DESC;
 SELECT DeltaId, EndorsementId, TenantId, FieldName, BeforeValue, AfterValue, NumericDelta
 FROM Policy.PolicyEndorsementDelta
 WHERE TenantId = @TenantId AND IsDeleted = 0
-ORDER BY CreatedDateUtc;";
+ORDER BY CreatedDateUtc;
+
+SELECT OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder
+FROM Policy.PolicyEndorsementOption
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1
+ORDER BY OptionGroupCode, SortOrder, DisplayName;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
         return new PolicyEndorsementCenterDto
         {
             Endorsements = (await multi.ReadAsync<PolicyEndorsementDto>()).AsList(),
             Activities = (await multi.ReadAsync<PolicyEndorsementActivityDto>()).AsList(),
-            Deltas = (await multi.ReadAsync<PolicyEndorsementDeltaDto>()).AsList()
+            Deltas = (await multi.ReadAsync<PolicyEndorsementDeltaDto>()).AsList(),
+            Options = (await multi.ReadAsync<PolicyEndorsementOptionDto>()).AsList()
         };
+    }
+
+    public async Task<IReadOnlyList<PolicyEndorsementOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder
+FROM Policy.PolicyEndorsementOption
+WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1
+ORDER BY OptionGroupCode, SortOrder, DisplayName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<PolicyEndorsementOptionDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
 
     public async Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default)
@@ -81,12 +102,28 @@ DECLARE @EndorsementNumber NVARCHAR(50) = CONCAT(N'END-', FORMAT(SYSUTCDATETIME(
 
 INSERT INTO Policy.PolicyEndorsement
 (EndorsementId, TenantId, PolicyId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness, Carrier, EndorsementType,
- Description, EffectiveDate, RequestedDateUtc, PremiumDelta, Status, Priority, RequestedByName, AssignedToName, UnderwriterName, Reason,
+ RequestSourceCode, ChangeCategoryCode, Description, EffectiveDate, ExpirationDate, RetroactiveDate, DiscoveryDate, RequestedDateUtc,
+ PremiumDelta, TaxFeeDelta, TotalCostDelta, ProratedPremiumDelta, Status, Priority, RequestedByName, RequestedByEmail, RequestedByPhone,
+ ClientContactName, ClientContactEmail, ClientContactPhone, AssignedToName, UnderwriterName, UnderwriterEmail, CarrierSubmissionDateUtc,
+ CarrierResponseDueDate, CarrierReferenceNumber, BrokerOfRecordRequired, AgentAuthorityCode, ApprovalLevelCode, ApprovedByName,
+ IssuedByName, BillingImpactCode, CommissionImpactCode, BillingInstruction, DocumentDeliveryCode, CertificateRequired, FormsRequired,
+ AcordFormNumbers, ExternalReferenceNumber, ComplianceReviewRequired, EoExposureNotes, InternalNotes, ClientFacingNotes, Reason,
  RequiredDocuments, WorkflowStage, DueDate, IsUrgent, IsArchived, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
 (@EndorsementId, @TenantId, @PolicyId, @AccountId, @EndorsementNumber, @PolicyNumber, @AccountName, @LineOfBusiness, @Carrier, @EndorsementType,
- @Description, @EffectiveDate, SYSUTCDATETIME(), @PremiumDelta, N'Pending', @Priority, @RequestedByName, @AssignedToName, @UnderwriterName, @Reason,
- @RequiredDocuments, N'Intake', @DueDate, @IsUrgent, 0, SYSUTCDATETIME(), @CreatedByUserId, 0);
+ COALESCE(NULLIF(@RequestSourceCode, N''), N'AgencyRequest'), COALESCE(NULLIF(@ChangeCategoryCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NonPremium' ELSE N'PremiumBearing' END),
+ @Description, @EffectiveDate, @ExpirationDate, @RetroactiveDate, @DiscoveryDate, SYSUTCDATETIME(), @PremiumDelta, @TaxFeeDelta,
+ CASE WHEN @TotalCostDelta = 0 THEN @PremiumDelta + @TaxFeeDelta ELSE @TotalCostDelta END,
+ CASE WHEN @ProratedPremiumDelta = 0 THEN @PremiumDelta ELSE @ProratedPremiumDelta END,
+ N'Pending', @Priority, @RequestedByName, @RequestedByEmail, @RequestedByPhone, @ClientContactName, @ClientContactEmail,
+ @ClientContactPhone, @AssignedToName, @UnderwriterName, @UnderwriterEmail, @CarrierSubmissionDateUtc, @CarrierResponseDueDate,
+ @CarrierReferenceNumber, @BrokerOfRecordRequired, COALESCE(NULLIF(@AgentAuthorityCode, N''), N'CarrierApprovalRequired'),
+ COALESCE(NULLIF(@ApprovalLevelCode, N''), CASE WHEN ABS(@PremiumDelta) >= 5000 THEN N'ManagerApproval' ELSE N'StandardAuthority' END),
+ @ApprovedByName, @IssuedByName, COALESCE(NULLIF(@BillingImpactCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NoBillingImpact' ELSE N'BillInstallment' END),
+ COALESCE(NULLIF(@CommissionImpactCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NoCommissionImpact' ELSE N'RecalculateCommission' END),
+ @BillingInstruction, COALESCE(NULLIF(@DocumentDeliveryCode, N''), N'PortalEmail'), @CertificateRequired, @FormsRequired,
+ @AcordFormNumbers, @ExternalReferenceNumber, @ComplianceReviewRequired, @EoExposureNotes, @InternalNotes, @ClientFacingNotes,
+ @Reason, @RequiredDocuments, N'Intake', @DueDate, @IsUrgent, 0, SYSUTCDATETIME(), @CreatedByUserId, 0);
 
 INSERT INTO Policy.PolicyEndorsementActivity
 (ActivityId, EndorsementId, TenantId, ActivityType, Subject, Notes, CreatedByName, ActivityDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
@@ -110,13 +147,47 @@ VALUES
             request.LineOfBusiness,
             request.Carrier,
             request.EndorsementType,
+            request.RequestSourceCode,
+            request.ChangeCategoryCode,
             request.Description,
             request.EffectiveDate,
+            request.ExpirationDate,
+            request.RetroactiveDate,
+            request.DiscoveryDate,
             request.PremiumDelta,
+            request.TaxFeeDelta,
+            request.TotalCostDelta,
+            request.ProratedPremiumDelta,
             request.Priority,
             request.RequestedByName,
+            request.RequestedByEmail,
+            request.RequestedByPhone,
+            request.ClientContactName,
+            request.ClientContactEmail,
+            request.ClientContactPhone,
             request.AssignedToName,
             request.UnderwriterName,
+            request.UnderwriterEmail,
+            request.CarrierSubmissionDateUtc,
+            request.CarrierResponseDueDate,
+            request.CarrierReferenceNumber,
+            request.BrokerOfRecordRequired,
+            request.AgentAuthorityCode,
+            request.ApprovalLevelCode,
+            request.ApprovedByName,
+            request.IssuedByName,
+            request.BillingImpactCode,
+            request.CommissionImpactCode,
+            request.BillingInstruction,
+            request.DocumentDeliveryCode,
+            request.CertificateRequired,
+            request.FormsRequired,
+            request.AcordFormNumbers,
+            request.ExternalReferenceNumber,
+            request.ComplianceReviewRequired,
+            request.EoExposureNotes,
+            request.InternalNotes,
+            request.ClientFacingNotes,
             request.Reason,
             request.RequiredDocuments,
             request.DueDate,
@@ -131,12 +202,41 @@ VALUES
         const string sql = @"
 UPDATE Policy.PolicyEndorsement
 SET EndorsementType = @EndorsementType,
+    RequestSourceCode = COALESCE(NULLIF(@RequestSourceCode, N''), RequestSourceCode),
+    ChangeCategoryCode = COALESCE(NULLIF(@ChangeCategoryCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NonPremium' ELSE N'PremiumBearing' END),
     Description = @Description,
     EffectiveDate = @EffectiveDate,
+    ExpirationDate = @ExpirationDate,
+    RetroactiveDate = @RetroactiveDate,
+    DiscoveryDate = @DiscoveryDate,
     PremiumDelta = @PremiumDelta,
+    TaxFeeDelta = @TaxFeeDelta,
+    TotalCostDelta = CASE WHEN @TotalCostDelta = 0 THEN @PremiumDelta + @TaxFeeDelta ELSE @TotalCostDelta END,
+    ProratedPremiumDelta = CASE WHEN @ProratedPremiumDelta = 0 THEN @PremiumDelta ELSE @ProratedPremiumDelta END,
     Priority = @Priority,
     AssignedToName = @AssignedToName,
     UnderwriterName = @UnderwriterName,
+    UnderwriterEmail = @UnderwriterEmail,
+    CarrierSubmissionDateUtc = @CarrierSubmissionDateUtc,
+    CarrierResponseDueDate = @CarrierResponseDueDate,
+    CarrierReferenceNumber = @CarrierReferenceNumber,
+    BrokerOfRecordRequired = @BrokerOfRecordRequired,
+    AgentAuthorityCode = COALESCE(NULLIF(@AgentAuthorityCode, N''), AgentAuthorityCode),
+    ApprovalLevelCode = COALESCE(NULLIF(@ApprovalLevelCode, N''), CASE WHEN ABS(@PremiumDelta) >= 5000 THEN N'ManagerApproval' ELSE N'StandardAuthority' END),
+    ApprovedByName = @ApprovedByName,
+    IssuedByName = @IssuedByName,
+    BillingImpactCode = COALESCE(NULLIF(@BillingImpactCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NoBillingImpact' ELSE N'BillInstallment' END),
+    CommissionImpactCode = COALESCE(NULLIF(@CommissionImpactCode, N''), CASE WHEN @PremiumDelta = 0 THEN N'NoCommissionImpact' ELSE N'RecalculateCommission' END),
+    BillingInstruction = @BillingInstruction,
+    DocumentDeliveryCode = COALESCE(NULLIF(@DocumentDeliveryCode, N''), DocumentDeliveryCode),
+    CertificateRequired = @CertificateRequired,
+    FormsRequired = @FormsRequired,
+    AcordFormNumbers = @AcordFormNumbers,
+    ExternalReferenceNumber = @ExternalReferenceNumber,
+    ComplianceReviewRequired = @ComplianceReviewRequired,
+    EoExposureNotes = @EoExposureNotes,
+    InternalNotes = @InternalNotes,
+    ClientFacingNotes = @ClientFacingNotes,
     Reason = @Reason,
     RequiredDocuments = @RequiredDocuments,
     DueDate = @DueDate,
@@ -150,12 +250,41 @@ WHERE EndorsementId = @EndorsementId AND IsDeleted = 0;";
         {
             EndorsementId = endorsementId,
             request.EndorsementType,
+            request.RequestSourceCode,
+            request.ChangeCategoryCode,
             request.Description,
             request.EffectiveDate,
+            request.ExpirationDate,
+            request.RetroactiveDate,
+            request.DiscoveryDate,
             request.PremiumDelta,
+            request.TaxFeeDelta,
+            request.TotalCostDelta,
+            request.ProratedPremiumDelta,
             request.Priority,
             request.AssignedToName,
             request.UnderwriterName,
+            request.UnderwriterEmail,
+            request.CarrierSubmissionDateUtc,
+            request.CarrierResponseDueDate,
+            request.CarrierReferenceNumber,
+            request.BrokerOfRecordRequired,
+            request.AgentAuthorityCode,
+            request.ApprovalLevelCode,
+            request.ApprovedByName,
+            request.IssuedByName,
+            request.BillingImpactCode,
+            request.CommissionImpactCode,
+            request.BillingInstruction,
+            request.DocumentDeliveryCode,
+            request.CertificateRequired,
+            request.FormsRequired,
+            request.AcordFormNumbers,
+            request.ExternalReferenceNumber,
+            request.ComplianceReviewRequired,
+            request.EoExposureNotes,
+            request.InternalNotes,
+            request.ClientFacingNotes,
             request.Reason,
             request.RequiredDocuments,
             request.DueDate,

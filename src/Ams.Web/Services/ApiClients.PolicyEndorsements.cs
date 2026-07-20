@@ -10,6 +10,9 @@ public sealed partial class ApiClient
     public Task<PolicyEndorsementCenterDto?> GetPolicyEndorsementCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyEndorsementCenterDto>($"api/policy-endorsements/center?tenantId={tenantId}", cancellationToken);
 
+    public Task<IReadOnlyList<PolicyEndorsementOptionDto>?> GetPolicyEndorsementOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyEndorsementOptionDto>>($"api/policy-endorsements/options?tenantId={tenantId}", cancellationToken);
+
     public Task<PolicyEndorsementDetailDto?> GetPolicyEndorsementDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyEndorsementDetailDto>($"api/policy-endorsements/{endorsementId}", cancellationToken);
 

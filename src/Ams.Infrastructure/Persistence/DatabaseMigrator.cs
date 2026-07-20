@@ -251,6 +251,7 @@ public sealed partial class DatabaseMigrator
         new("0213_Submissions_PolicyCreationSource_FlexibleMode", Migration0213_SubmissionsPolicyCreationSourceFlexibleMode),
         new("0214_Submissions_PolicyBindTransaction_Enterprise", Migration0214_SubmissionsPolicyBindTransactionEnterprise),
         new("0215_Submissions_DirectPolicyIntake_Enterprise", Migration0215_SubmissionsDirectPolicyIntakeEnterprise),
+        new("0216_PolicyEndorsements_EnterpriseSchemaOptions", Migration0216_PolicyEndorsementsEnterpriseSchemaOptions),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16573,6 +16574,270 @@ BEGIN
     INNER JOIN #DirectPolicySources s ON s.SourceCode = existing.SourceCode
     WHERE existing.IsDeleted = 0;');
 END;
+""";
+
+    private const string Migration0216_PolicyEndorsementsEnterpriseSchemaOptions = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestSourceCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ChangeCategoryCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ChangeCategoryCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestedByEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestedByEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestedByPhone') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestedByPhone NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactPhone') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactPhone NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ExpirationDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ExpirationDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RetroactiveDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RetroactiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'DiscoveryDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD DiscoveryDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierSubmissionDateUtc') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierSubmissionDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierResponseDueDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierResponseDueDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierReferenceNumber') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierReferenceNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'UnderwriterEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD UnderwriterEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BrokerOfRecordRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BrokerOfRecordRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_BorRequired_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'AgentAuthorityCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD AgentAuthorityCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ApprovalLevelCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ApprovalLevelCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ApprovedByName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ApprovedByName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'IssuedByName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD IssuedByName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BillingImpactCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BillingImpactCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CommissionImpactCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CommissionImpactCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'TaxFeeDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD TaxFeeDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_TaxFeeDelta_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'TotalCostDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD TotalCostDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_TotalCostDelta_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ProratedPremiumDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ProratedPremiumDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_Proration_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BillingInstruction') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BillingInstruction NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'DocumentDeliveryCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD DocumentDeliveryCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CertificateRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CertificateRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_CertRequired_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'FormsRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD FormsRequired NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'AcordFormNumbers') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD AcordFormNumbers NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ExternalReferenceNumber') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ExternalReferenceNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ComplianceReviewRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ComplianceReviewRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_Compliance_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'EoExposureNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD EoExposureNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'InternalNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD InternalNotes NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientFacingNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientFacingNotes NVARCHAR(2000) NULL;
+
+    EXEC(N'
+    UPDATE Policy.PolicyEndorsement
+    SET RequestSourceCode = COALESCE(NULLIF(RequestSourceCode, N''''), N''AgencyRequest''),
+        ChangeCategoryCode = COALESCE(NULLIF(ChangeCategoryCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NonPremium'' ELSE N''PremiumBearing'' END),
+        ApprovalLevelCode = COALESCE(NULLIF(ApprovalLevelCode, N''''), CASE WHEN ABS(PremiumDelta) >= 5000 THEN N''ManagerApproval'' ELSE N''StandardAuthority'' END),
+        BillingImpactCode = COALESCE(NULLIF(BillingImpactCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NoBillingImpact'' ELSE N''BillInstallment'' END),
+        CommissionImpactCode = COALESCE(NULLIF(CommissionImpactCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NoCommissionImpact'' ELSE N''RecalculateCommission'' END),
+        DocumentDeliveryCode = COALESCE(NULLIF(DocumentDeliveryCode, N''''), N''PortalEmail''),
+        AgentAuthorityCode = COALESCE(NULLIF(AgentAuthorityCode, N''''), N''CarrierApprovalRequired''),
+        TotalCostDelta = CASE WHEN TotalCostDelta = 0 THEN PremiumDelta + TaxFeeDelta ELSE TotalCostDelta END,
+        ProratedPremiumDelta = CASE WHEN ProratedPremiumDelta = 0 THEN PremiumDelta ELSE ProratedPremiumDelta END
+    WHERE IsDeleted = 0;');
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsementOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyEndorsementOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyEndorsementOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(50) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsDefault DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsementOption_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsDeleted DEFAULT 0,
+        CONSTRAINT UQ_PolicyEndorsementOption_TenantGroupCode UNIQUE (TenantId, OptionGroupCode, OptionCode)
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyEndorsementOption') AND name = N'IX_PolicyEndorsementOption_TenantGroup')
+    CREATE INDEX IX_PolicyEndorsementOption_TenantGroup ON Policy.PolicyEndorsementOption(TenantId, OptionGroupCode, IsActive, IsDeleted, SortOrder);
+
+IF OBJECT_ID(N'tempdb..#EndorsementOptionTenants') IS NOT NULL DROP TABLE #EndorsementOptionTenants;
+CREATE TABLE #EndorsementOptionTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #EndorsementOptionTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #EndorsementOptionTenants)
+    INSERT INTO #EndorsementOptionTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'Policy.EndorsementType', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.EndorsementType
+    (
+        EndorsementTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_EndorsementType PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TypeCode NVARCHAR(50) NOT NULL,
+        TypeName NVARCHAR(120) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Policy_EndorsementType_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Policy_EndorsementType_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_IsDeleted DEFAULT 0,
+        CONSTRAINT UQ_Policy_EndorsementType_TenantCode UNIQUE (TenantId, TypeCode)
+    );
+END;
+
+IF OBJECT_ID(N'Policy.EndorsementType', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.EndorsementType', N'EndorsementTypeId') IS NULL ALTER TABLE Policy.EndorsementType ADD EndorsementTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Policy_EndorsementType_Id_0216 DEFAULT NEWID();
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TenantId') IS NULL ALTER TABLE Policy.EndorsementType ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Policy_EndorsementType_Tenant_0216 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TypeCode') IS NULL ALTER TABLE Policy.EndorsementType ADD TypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Policy_EndorsementType_Code_0216 DEFAULT N'Change';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TypeName') IS NULL ALTER TABLE Policy.EndorsementType ADD TypeName NVARCHAR(120) NOT NULL CONSTRAINT DF_Policy_EndorsementType_Name_0216 DEFAULT N'Policy Change';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'Description') IS NULL ALTER TABLE Policy.EndorsementType ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'IsActive') IS NULL ALTER TABLE Policy.EndorsementType ADD IsActive BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Active_0216 DEFAULT 1;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'SortOrder') IS NULL ALTER TABLE Policy.EndorsementType ADD SortOrder INT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Sort_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'CreatedDateUtc') IS NULL ALTER TABLE Policy.EndorsementType ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Policy_EndorsementType_Created_0216 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Policy.EndorsementType', N'IsDeleted') IS NULL ALTER TABLE Policy.EndorsementType ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Deleted_0216 DEFAULT 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.EndorsementType') AND name = N'IX_Policy_EndorsementType_TenantActive')
+    CREATE INDEX IX_Policy_EndorsementType_TenantActive ON Policy.EndorsementType(TenantId, IsActive, IsDeleted, SortOrder, TypeName);
+
+IF OBJECT_ID(N'tempdb..#EnterpriseEndorsementTypes') IS NOT NULL DROP TABLE #EnterpriseEndorsementTypes;
+CREATE TABLE #EnterpriseEndorsementTypes
+(
+    TypeCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    TypeName NVARCHAR(120) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #EnterpriseEndorsementTypes (TypeCode, TypeName, Description, SortOrder) VALUES
+(N'AddCoverage', N'Add Coverage', N'Add coverage, coverage part, form, or endorsement.', 10),
+(N'RemoveCoverage', N'Remove Coverage', N'Remove coverage, coverage part, form, or endorsement.', 20),
+(N'ChangeLimit', N'Change Limit / Deductible', N'Change limits, deductibles, retentions, or sublimits.', 30),
+(N'NamedInsured', N'Named Insured Change', N'Add, remove, or correct a named insured.', 40),
+(N'AdditionalInterest', N'Additional Interest / Lienholder', N'Add, remove, or revise additional insured, lienholder, lender, or loss payee information.', 50),
+(N'ExposureSchedule', N'Exposure / Schedule Change', N'Change vehicle, driver, property, location, payroll, sales, equipment, or other exposure schedules.', 60),
+(N'AddressContact', N'Address / Contact Change', N'Change mailing, location, contact, or communication information.', 70),
+(N'PremiumAdjustment', N'Premium Adjustment', N'Premium, tax, fee, or billing-impact endorsement.', 80),
+(N'WaiverSubrogation', N'Waiver of Subrogation', N'Add or revise waiver of subrogation wording.', 90),
+(N'CertificateRelated', N'Certificate-Related Change', N'Policy change required to support certificate issuance.', 100),
+(N'ClassCodeChange', N'Class Code Change', N'Change class code, rating basis, territory, or underwriting classification.', 110),
+(N'RewriteRequest', N'Rewrite Request', N'Rewrite policy coverage, terms, carrier, or structure.', 120);
+
+INSERT INTO Policy.EndorsementType
+(EndorsementTypeId, TenantId, TypeCode, TypeName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, et.TypeCode, et.TypeName, et.Description, 1, et.SortOrder, SYSUTCDATETIME(), 0
+FROM #EndorsementOptionTenants t
+CROSS JOIN #EnterpriseEndorsementTypes et
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.EndorsementType existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.TypeCode = et.TypeCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET TypeName = et.TypeName,
+    Description = et.Description,
+    IsActive = 1,
+    SortOrder = et.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.EndorsementType existing
+INNER JOIN #EnterpriseEndorsementTypes et ON et.TypeCode = existing.TypeCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'tempdb..#EndorsementOptions') IS NOT NULL DROP TABLE #EndorsementOptions;
+CREATE TABLE #EndorsementOptions
+(
+    OptionGroupCode NVARCHAR(50) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #EndorsementOptions (OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, SortOrder) VALUES
+(N'Status', N'Pending', N'Pending', N'Request received and pending intake.', 1, 10),
+(N'Status', N'In Review', N'In Review', N'Underwriting or service review is in progress.', 0, 20),
+(N'Status', N'Info Needed', N'Info Needed', N'Additional client or carrier information is required.', 0, 30),
+(N'Status', N'Approved', N'Approved', N'Approved and pending issuance.', 0, 40),
+(N'Status', N'Issued', N'Issued', N'Issued and attached to the policy.', 0, 50),
+(N'Status', N'Declined', N'Declined', N'Declined or withdrawn.', 0, 60),
+(N'Priority', N'Low', N'Low', N'Routine low urgency request.', 0, 10),
+(N'Priority', N'Normal', N'Normal', N'Standard service priority.', 1, 20),
+(N'Priority', N'High', N'High', N'Expedited service required.', 0, 30),
+(N'Priority', N'Critical', N'Critical', N'Immediate action required for coverage or compliance.', 0, 40),
+(N'RequestSource', N'AgencyRequest', N'Agency Request', N'Created by agency staff.', 1, 10),
+(N'RequestSource', N'ClientPortal', N'Client Portal', N'Request submitted by insured through portal.', 0, 20),
+(N'RequestSource', N'CarrierDownload', N'Carrier Download', N'Received from carrier download or transaction.', 0, 30),
+(N'RequestSource', N'Email', N'Email', N'Received by email.', 0, 40),
+(N'RequestSource', N'Phone', N'Phone', N'Received by phone.', 0, 50),
+(N'ChangeCategory', N'CoverageChange', N'Coverage Change', N'Coverage, form, limit, deductible, or exclusion change.', 0, 10),
+(N'ChangeCategory', N'NamedInsured', N'Named Insured / Additional Interest', N'Named insured, additional insured, lender, or loss payee change.', 0, 20),
+(N'ChangeCategory', N'ExposureSchedule', N'Exposure / Schedule Change', N'Vehicle, driver, property, location, payroll, sales, or equipment schedule change.', 0, 30),
+(N'ChangeCategory', N'Administrative', N'Administrative Change', N'Mailing address, contact, billing, or non-coverage administrative change.', 0, 40),
+(N'ChangeCategory', N'PremiumBearing', N'Premium Bearing', N'Change has premium, tax, fee, or commission impact.', 1, 50),
+(N'ChangeCategory', N'NonPremium', N'Non-Premium', N'Change does not affect premium.', 0, 60),
+(N'WorkflowStage', N'Intake', N'Intake', N'Request intake and validation.', 1, 10),
+(N'WorkflowStage', N'Underwriting Review', N'Underwriting Review', N'Carrier or underwriting review.', 0, 20),
+(N'WorkflowStage', N'Awaiting Information', N'Awaiting Information', N'Waiting on missing data or documents.', 0, 30),
+(N'WorkflowStage', N'Approved Pending Issue', N'Approved Pending Issue', N'Approved and waiting for issuance.', 0, 40),
+(N'WorkflowStage', N'Issued to Policy', N'Issued to Policy', N'Issued and attached to policy.', 0, 50),
+(N'WorkflowStage', N'Closed Declined', N'Closed Declined', N'Closed as declined or withdrawn.', 0, 60),
+(N'BillingImpact', N'NoBillingImpact', N'No Billing Impact', N'No billing transaction required.', 1, 10),
+(N'BillingImpact', N'BillInstallment', N'Bill on Installment Plan', N'Apply delta to existing installment plan.', 0, 20),
+(N'BillingImpact', N'InvoiceImmediately', N'Invoice Immediately', N'Create immediate invoice or agency bill item.', 0, 30),
+(N'BillingImpact', N'RefundCredit', N'Refund / Credit', N'Create refund, credit, or return premium workflow.', 0, 40),
+(N'CommissionImpact', N'NoCommissionImpact', N'No Commission Impact', N'No commission recalculation required.', 1, 10),
+(N'CommissionImpact', N'RecalculateCommission', N'Recalculate Commission', N'Recalculate commission from premium delta.', 0, 20),
+(N'CommissionImpact', N'ManualCommissionReview', N'Manual Commission Review', N'Accounting must review commission handling.', 0, 30),
+(N'DocumentDelivery', N'PortalEmail', N'Portal + Email', N'Deliver through portal and email notification.', 1, 10),
+(N'DocumentDelivery', N'EmailOnly', N'Email Only', N'Deliver by email only.', 0, 20),
+(N'DocumentDelivery', N'PrintMail', N'Print / Mail', N'Print and mail policy documents.', 0, 30),
+(N'DocumentDelivery', N'CarrierPortal', N'Carrier Portal', N'Available through carrier portal.', 0, 40),
+(N'ApprovalLevel', N'StandardAuthority', N'Standard Authority', N'CSR or account manager authority.', 1, 10),
+(N'ApprovalLevel', N'ManagerApproval', N'Manager Approval', N'Manager approval required.', 0, 20),
+(N'ApprovalLevel', N'ProducerApproval', N'Producer Approval', N'Producer approval required.', 0, 30),
+(N'ApprovalLevel', N'ExecutiveApproval', N'Executive Approval', N'Executive or compliance approval required.', 0, 40),
+(N'AgentAuthority', N'AgencyAuthority', N'Agency Authority', N'Agency may issue within authority.', 0, 10),
+(N'AgentAuthority', N'CarrierApprovalRequired', N'Carrier Approval Required', N'Carrier approval required before issuance.', 1, 20),
+(N'AgentAuthority', N'BrokerOfRecordRequired', N'Broker of Record Required', N'BOR or authorization document required.', 0, 30),
+(N'ActivityType', N'Created', N'Created', N'Endorsement created.', 1, 10),
+(N'ActivityType', N'Status', N'Status Change', N'Status or workflow stage changed.', 0, 20),
+(N'ActivityType', N'Note', N'Workflow Note', N'Workflow note added.', 0, 30),
+(N'ActivityType', N'Carrier', N'Carrier Follow-up', N'Carrier submission or follow-up activity.', 0, 40),
+(N'ActivityType', N'Document', N'Document Activity', N'Document request, receipt, or delivery.', 0, 50);
+
+INSERT INTO Policy.PolicyEndorsementOption
+(OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #EndorsementOptionTenants t
+CROSS JOIN #EndorsementOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.PolicyEndorsementOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.PolicyEndorsementOption existing
+INNER JOIN #EndorsementOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
 """;
 
     private const string Migration0204_CrmLeadConversionEnterpriseWorkflow = """

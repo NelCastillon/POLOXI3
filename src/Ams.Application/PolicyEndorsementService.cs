@@ -20,6 +20,9 @@ public sealed class PolicyEndorsementService : IPolicyEndorsementService
     public Task<PolicyEndorsementCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetCenterAsync(tenantId, cancellationToken);
 
+    public Task<IReadOnlyList<PolicyEndorsementOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetOptionsAsync(tenantId, cancellationToken);
+
     public Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default)
         => _repository.GetDetailAsync(endorsementId, cancellationToken);
 
