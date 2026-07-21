@@ -256,6 +256,13 @@ public sealed partial class DatabaseMigrator
         new("0218_Submissions_QuoteMarketResponseIntegrity", Migration0218_SubmissionsQuoteMarketResponseIntegrity),
         new("0219_Submissions_EnterpriseMarketQuoteFields", Migration0219_SubmissionsEnterpriseMarketQuoteFields),
         new("0220_Core_CarrierMarketSuggestionPreference", Migration0220_CoreCarrierMarketSuggestionPreference),
+        new("0221_Submissions_QuoteRequestScopeLines", Migration0221_SubmissionsQuoteRequestScopeLines),
+        new("0222_Submissions_CarrierExternalTransmission", Migration0222_SubmissionsCarrierExternalTransmission),
+        new("0223_Submissions_QuoteRequestWorkflow", Migration0223_SubmissionsQuoteRequestWorkflow),
+        new("0224_Submissions_ReadinessRequirements_Enterprise", Migration0224_SubmissionsReadinessRequirementsEnterprise),
+        new("0225_Submissions_MarketScopedReadiness_Enterprise", Migration0225_SubmissionsMarketScopedReadinessEnterprise),
+        new("0226_Submissions_SubmitToMarketDispatchCompletion", Migration0226_SubmissionsSubmitToMarketDispatchCompletion),
+        new("0227_Submissions_CommonExternalCarrierDeliverySettings", Migration0227_SubmissionsCommonExternalCarrierDeliverySettings),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -17077,6 +17084,296 @@ BEGIN
 END;
 """;
 
+    private const string Migration0221_SubmissionsQuoteRequestScopeLines = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedPremium') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedPremium DECIMAL(18,2) NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketLine
+    (
+        SubmissionMarketLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionMarketLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionLineId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionMarketLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketLine', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketLine') AND name = N'UX_SubmissionMarketLine_Market_Line')
+        EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketLine_Market_Line ON Submissions.SubmissionMarketLine(SubmissionMarketId, SubmissionLineId) WHERE IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketLine') AND name = N'IX_SubmissionMarketLine_Submission')
+        EXEC(N'CREATE INDEX IX_SubmissionMarketLine_Submission ON Submissions.SubmissionMarketLine(SubmissionId, TenantId, IsDeleted);');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT t.TenantId, 'QuoteRequestScope', v.Code, v.Name, v.Description, v.IsDefault, v.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0 UNION SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0) t
+    CROSS JOIN (VALUES
+        ('Package', 'Package / Multi-line', 'Request quote terms for the selected package of coverage lines.', CAST(1 AS bit), 10),
+        ('SingleLine', 'Single Line', 'Request quote terms for one selected coverage line.', CAST(0 AS bit), 20)
+    ) v(Code, Name, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = t.TenantId
+          AND existing.OptionGroup = 'QuoteRequestScope'
+          AND existing.OptionCode = v.Code
+          AND existing.IsDeleted = 0
+    );
+END;
+""";
+
+    private const string Migration0222_SubmissionsCarrierExternalTransmission = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierExternalConnector
+    (
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierExternalConnector PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        ConnectorCode NVARCHAR(100) NOT NULL,
+        ConnectorName NVARCHAR(200) NOT NULL,
+        ConnectorTypeCode NVARCHAR(50) NOT NULL,
+        ExecutionModeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Mode DEFAULT N'ExternalConnector',
+        EndpointUri NVARCHAR(1000) NULL,
+        DefaultChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Channel DEFAULT N'InternalQueue',
+        SupportsDocumentPackage BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_DocumentPackage DEFAULT 1,
+        SupportsDeliveryConfirmation BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Confirmation DEFAULT 1,
+        SupportsInboundResponse BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Inbound DEFAULT 1,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Config DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Ui DEFAULT N'{}',
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Sort DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierExternalConnector_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmission', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierTransmission
+    (
+        CarrierTransmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierTransmission PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketDispatchId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NULL,
+        TransmissionTypeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierTransmission_Status DEFAULT N'Queued',
+        Recipient NVARCHAR(500) NULL,
+        Subject NVARCHAR(300) NULL,
+        EndpointUri NVARCHAR(1000) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Payload DEFAULT N'{}',
+        DocumentPackageJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Docs DEFAULT N'[]',
+        ExternalReferenceNumber NVARCHAR(120) NULL,
+        AttemptCount INT NOT NULL CONSTRAINT DF_CarrierTransmission_Attempts DEFAULT 0,
+        LastAttemptDateUtc DATETIME2 NULL,
+        SentDateUtc DATETIME2 NULL,
+        ConfirmedDateUtc DATETIME2 NULL,
+        FailedDateUtc DATETIME2 NULL,
+        BounceDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierTransmission_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierTransmission_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmissionEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierTransmissionEvent
+    (
+        CarrierTransmissionEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierTransmissionEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierTransmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        EventCode NVARCHAR(80) NOT NULL,
+        EventMessage NVARCHAR(1000) NULL,
+        EventPayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_Payload DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierInboundResponse', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierInboundResponse
+    (
+        CarrierInboundResponseId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierInboundResponse PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        CarrierTransmissionId UNIQUEIDENTIFIER NULL,
+        SourceChannelCode NVARCHAR(50) NOT NULL,
+        ResponseTypeCode NVARCHAR(50) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierInboundResponse_Status DEFAULT N'Received',
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierInboundResponse_Payload DEFAULT N'{}',
+        ReceivedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierInboundResponse_Received DEFAULT SYSUTCDATETIME(),
+        ProcessedDateUtc DATETIME2 NULL,
+        ProcessingError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierInboundResponse_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierInboundResponse_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierExternalConnector') AND name = N'UX_CarrierExternalConnector_Tenant_Code_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierExternalConnector_Tenant_Code_Carrier ON Agency.CarrierExternalConnector(TenantId, ConnectorCode, CarrierId) WHERE IsDeleted = 0;');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmission') AND name = N'IX_CarrierTransmission_Market_Status')
+    EXEC(N'CREATE INDEX IX_CarrierTransmission_Market_Status ON Submissions.CarrierTransmission(SubmissionMarketId, StatusCode, IsDeleted, CreatedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmissionEvent') AND name = N'IX_CarrierTransmissionEvent_Transmission')
+    EXEC(N'CREATE INDEX IX_CarrierTransmissionEvent_Transmission ON Submissions.CarrierTransmissionEvent(CarrierTransmissionId, IsDeleted, CreatedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierInboundResponse') AND name = N'IX_CarrierInboundResponse_Status')
+    EXEC(N'CREATE INDEX IX_CarrierInboundResponse_Status ON Submissions.CarrierInboundResponse(TenantId, StatusCode, IsDeleted, ReceivedDateUtc);');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierExternalConnector
+        (TenantId, CarrierId, ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT t.TenantId, NULL, v.ConnectorCode, v.ConnectorName, v.ConnectorTypeCode, v.ExecutionModeCode, v.EndpointUri, v.DefaultChannelCode, v.SupportsDocumentPackage, v.SupportsDeliveryConfirmation, v.SupportsInboundResponse, v.ConfigurationJson, v.UiSchemaJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant t
+    CROSS JOIN (VALUES
+        (N'INTERNAL_QUEUE', N'Internal Queue Connector', N'InternalQueue', N'InternalQueue', NULL, N'InternalQueue', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"internal"}', N'{"icon":"bi-inbox","description":"Internal processing queue for market submissions and quote requests."}', 10),
+        (N'SANDBOX_EMAIL', N'Sandbox Email Connector', N'Email', N'Sandbox', N'mailbox://carrier-sandbox', N'Email', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"sandbox","requiresExternalCredentials":false}', N'{"icon":"bi-envelope-check","description":"DB-backed sandbox email connector for carrier delivery testing."}', 20),
+        (N'EXTERNAL_PORTAL', N'External Portal Handoff', N'Portal', N'ExternalConnector', NULL, N'Portal', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"handoff","requiresExternalCredentials":true}', N'{"icon":"bi-window-stack","description":"Carrier portal handoff connector requiring carrier-specific credentials."}', 30),
+        (N'EXTERNAL_API', N'External Carrier API Handoff', N'API', N'ExternalConnector', NULL, N'API', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"handoff","requiresExternalCredentials":true}', N'{"icon":"bi-plug","description":"Carrier API connector requiring configured endpoint and credentials."}', 40)
+    ) v(ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, SortOrder)
+    WHERE t.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierExternalConnector existing WHERE existing.TenantId = t.TenantId AND existing.ConnectorCode = v.ConnectorCode AND existing.CarrierId IS NULL AND existing.IsDeleted = 0);
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierSetting
+        (TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT t.TenantId, NULL, v.SettingCode, v.SettingName, N'CarrierTransmission', N'Tenant', v.DataTypeCode, v.SettingValue, v.DefaultValue, v.Description, v.ValidationJson, v.UiSchemaJson, N'CarrierExternalTransmission', v.IsRequired, v.IsSecret, 1, v.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant t
+    CROSS JOIN (VALUES
+        (N'CARRIER_TRANSMISSION_DEFAULT_CONNECTOR', N'Default Carrier Transmission Connector', N'Select', N'INTERNAL_QUEUE', N'INTERNAL_QUEUE', N'Default connector used for carrier market package transmission.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"component":"select","icon":"bi-diagram-3"}', CAST(1 AS bit), CAST(0 AS bit), 10),
+        (N'CARRIER_TRANSMISSION_SANDBOX_CONFIRMATION', N'Sandbox Delivery Confirmation', N'Boolean', N'true', N'true', N'Automatically create DB-backed sandbox delivery confirmations.', N'{}', N'{"component":"switch","icon":"bi-check-circle"}', CAST(0 AS bit), CAST(0 AS bit), 20),
+        (N'CARRIER_INBOUND_RESPONSE_MODE', N'Inbound Carrier Response Mode', N'Select', N'ManualQueue', N'ManualQueue', N'Controls how inbound carrier responses are ingested.', N'{"options":["ManualQueue","MailboxConnector","ApiConnector"]}', N'{"component":"select","icon":"bi-inbox"}', CAST(1 AS bit), CAST(0 AS bit), 30)
+    ) v(SettingCode, SettingName, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, IsRequired, IsSecret, SortOrder)
+    WHERE t.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.SettingCode = v.SettingCode AND existing.CarrierId IS NULL AND existing.IsDeleted = 0);
+END;
+""";
+
+    private const string Migration0223_SubmissionsQuoteRequestWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRequestHistory
+    (
+        QuoteRequestHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRequestHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        QuoteRequestActionCode NVARCHAR(50) NOT NULL,
+        QuoteRequestReasonCode NVARCHAR(80) NULL,
+        QuoteRequestScopeCode NVARCHAR(50) NULL,
+        RequestedPremium DECIMAL(18,2) NULL,
+        CoverageNotes NVARCHAR(1000) NULL,
+        RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestVersion DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequestHistory_Status DEFAULT N'Open',
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestedDateUtc DEFAULT SYSUTCDATETIME(),
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequestHistory_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequestHistory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestedPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestVersion') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestVersion_0223 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'StatusCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequestHistory_Status_0223 DEFAULT N'Open';
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Market_Open')
+        EXEC(N'CREATE INDEX IX_QuoteRequestHistory_Market_Open ON Submissions.QuoteRequestHistory(SubmissionMarketId, StatusCode, IsDeleted, RequestedDateUtc DESC);');
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Submission')
+        EXEC(N'CREATE INDEX IX_QuoteRequestHistory_Submission ON Submissions.QuoteRequestHistory(SubmissionId, TenantId, IsDeleted, RequestedDateUtc DESC);');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT tenants.TenantId, seed.OptionGroup, seed.OptionCode, seed.OptionName, seed.Description, seed.IsDefault, seed.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0 UNION SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0) tenants
+    CROSS JOIN (VALUES
+        (N'QuoteRequestAction', N'InitialRequest', N'Initial quote request', N'First request for quote terms from this market and coverage scope.', CAST(1 AS bit), 10),
+        (N'QuoteRequestAction', N'ResendUpdate', N'Resend / update request', N'Updates or resends an open quote request when underwriting context changes.', CAST(0 AS bit), 20),
+        (N'QuoteRequestAction', N'RequestRevision', N'Request quote revision', N'Requests revised quote terms after a carrier quote response has been received.', CAST(0 AS bit), 30),
+        (N'QuoteRequestReason', N'UpdatedUnderwritingInfo', N'Updated underwriting information', N'Updated application, exposure, loss, or underwriting information changed the request.', CAST(1 AS bit), 10),
+        (N'QuoteRequestReason', N'CoverageChange', N'Coverage or limit change', N'Coverage, limit, deductible, or line selection changed.', CAST(0 AS bit), 20),
+        (N'QuoteRequestReason', N'PremiumTargetChange', N'Premium target change', N'Target premium or pricing expectation changed.', CAST(0 AS bit), 30),
+        (N'QuoteRequestReason', N'CarrierClarification', N'Carrier clarification', N'Carrier requested clarification or additional information.', CAST(0 AS bit), 40),
+        (N'QuoteRequestReason', N'MissingInformation', N'Missing information supplied', N'Previously missing information or documents are now available.', CAST(0 AS bit), 50),
+        (N'QuoteRequestReason', N'Other', N'Other', N'Other documented business reason.', CAST(0 AS bit), 90),
+        (N'QuoteRequestOpenMarketStatus', N'In Review', N'In Review', N'Market has an open quote request workflow.', CAST(1 AS bit), 10),
+        (N'QuoteRequestOpenMarketStatus', N'Submitted', N'Submitted', N'Market submission has been sent and is awaiting quote activity.', CAST(0 AS bit), 20),
+        (N'QuoteRequestOpenMarketStatus', N'Awaiting Quote', N'Awaiting Quote', N'Market is awaiting carrier quote terms.', CAST(0 AS bit), 30),
+        (N'QuoteRequestOpenMarketStatus', N'Requested', N'Requested', N'Quote request is pending carrier response.', CAST(0 AS bit), 40),
+        (N'QuoteRequestBlockedStatus', N'Bound', N'Bound', N'Bound submissions or markets cannot request additional quotes.', CAST(1 AS bit), 10),
+        (N'QuoteRequestBlockedStatus', N'Declined', N'Declined', N'Declined submissions or markets are blocked from additional quote requests.', CAST(0 AS bit), 20),
+        (N'QuoteRequestBlockedStatus', N'Withdrawn', N'Withdrawn', N'Withdrawn submissions are blocked from quote requests.', CAST(0 AS bit), 30),
+        (N'QuoteRequestBlockedStatus', N'Closed', N'Closed', N'Closed submissions or markets are blocked from quote requests.', CAST(0 AS bit), 40),
+        (N'QuoteRequestBlockedStatus', N'Lost', N'Lost', N'Lost submissions or markets are blocked from quote requests.', CAST(0 AS bit), 50)
+    ) seed(OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = tenants.TenantId
+          AND existing.OptionGroup = seed.OptionGroup
+          AND existing.OptionCode = seed.OptionCode
+          AND existing.IsDeleted = 0
+    );
+END;
+""";
+
     private const string Migration0204_CrmLeadConversionEnterpriseWorkflow = """
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
 
@@ -18136,11 +18433,11 @@ DECLARE @SubmitToMarketSettings TABLE
 
 INSERT INTO @SubmitToMarketSettings VALUES
 (N'SUBMIT_TO_MARKET_DISPATCH_ENABLED', N'Submit-to-Market Dispatch Enabled', N'SubmissionDispatch', N'Tenant', N'Boolean', N'true', N'true', N'Enables the worker to process submitted market dispatch queue records.', N'{""required"":true}', N'{""control"":""toggle""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 10),
-(N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default dispatch channel when no carrier-specific channel is configured. Supported values: InternalQueue, Email, CarrierApi, ExternalConnector.', N'{""maxLength"":50}', N'{""control"":""select"",""options"": [""InternalQueue"",""Email"",""CarrierApi"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
+(N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default dispatch channel when no carrier-specific channel is configured. Supported values: InternalQueue, Manual, Portal, Email, API, ExternalConnector.', N'{""maxLength"":50}', N'{""control"":""select"",""options"": [""InternalQueue"",""Manual"",""Portal"",""Email"",""API"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
 (N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT', N'Submit-to-Market Default Recipient', N'SubmissionDispatch', N'Tenant', N'Text', NULL, NULL, N'Optional default mailbox or endpoint identifier used by dispatch channels that require a recipient.', N'{""maxLength"":500}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 30),
 (N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE', N'Submit-to-Market Subject Template', N'SubmissionDispatch', N'Tenant', N'Text', N'Submission {SubmissionNumber} ready for market review', N'Submission {SubmissionNumber} ready for market review', N'Subject template for queued submit-to-market dispatch payloads.', N'{""maxLength"":300}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 40),
 (N'SUBMIT_TO_MARKET_MAX_ATTEMPTS', N'Submit-to-Market Max Attempts', N'SubmissionDispatch', N'Tenant', N'Number', N'3', N'3', N'Max worker attempts before a pending dispatch is no longer selected.', N'{""min"":1,""max"":10}', N'{""control"":""number""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 50),
-(N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'[""InternalQueue""]', N'[""InternalQueue""]', N'Channels that this worker may mark completed without an external connector.', N'{""type"":""array""}', N'{""control"":""multi-select"",""options"": [""InternalQueue"",""Email"",""CarrierApi"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
+(N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'[""InternalQueue""]', N'[""InternalQueue""]', N'Channels that this worker may mark completed without an external connector.', N'{""type"":""array""}', N'{""control"":""multi-select"",""options"": [""InternalQueue"",""Manual"",""Portal"",""Email"",""API"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
 (N'SUBMIT_TO_MARKET_API_ENDPOINT', N'Submit-to-Market API Endpoint', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier API endpoint. When configured, the worker marks the queue item ready for an external connector to send.', N'{""maxLength"":1000}', N'{""control"":""url""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 70),
 (N'SUBMIT_TO_MARKET_EMAIL', N'Submit-to-Market Email', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier-specific email recipient. When configured, the worker marks the queue item ready for an email connector to send.', N'{""maxLength"":500}', N'{""control"":""email""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 80),
 (N'SUBMIT_TO_MARKET_SECRET_REFERENCE', N'Submit-to-Market Secret Reference', N'SubmissionDispatch', N'Carrier', N'Secret', NULL, NULL, N'Optional Key Vault or secret reference for carrier submit-to-market API credentials.', N'{""maxLength"":500}', N'{""control"":""secret""}', N'SubmitToMarketDispatchWorkerService', 0, 1, 90);
@@ -18508,6 +18805,430 @@ BEGIN
 END;
 """;
 
+    private const string Migration0225_SubmissionsMarketScopedReadinessEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessRequirement
+    (
+        ReadinessRequirementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessRequirement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequirementCode NVARCHAR(100) NOT NULL,
+        RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Type_0225 DEFAULT N'IntakeConfirmation',
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequired_0225 DEFAULT 1,
+        AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiver_0225 DEFAULT 1,
+        RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidence_0225 DEFAULT 0,
+        ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeight_0225 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrder_0225 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActive_0225 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Created_0225 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeleted_0225 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'StateCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD StateCode NVARCHAR(20) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ChannelCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ChannelCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ScopeCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Scope_0225 DEFAULT N'Submission';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'EvidencePrompt') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD EvidencePrompt NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ApprovalRoleCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ApprovalRoleCode NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'BlocksSubmit') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD BlocksSubmit BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_BlocksSubmit_0225 DEFAULT 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CarrierId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ScopeCode') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_Scope_0225 DEFAULT N'Submission';
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'BlocksSubmit') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD BlocksSubmit BIT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_BlocksSubmit_0225 DEFAULT 1;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessRequirement') AND name = N'IX_SubmissionReadinessRequirement_Scope')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessRequirement_Scope ON Submissions.SubmissionReadinessRequirement(TenantId, LineOfBusiness, CarrierId, StateCode, ChannelCode, IsActive, IsDeleted, SortOrder);');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'IX_SubmissionIntakeQuestion_MarketScope')
+    EXEC(N'CREATE INDEX IX_SubmissionIntakeQuestion_MarketScope ON Submissions.SubmissionIntakeQuestion(SubmissionId, SubmissionMarketId, CarrierId, ScopeCode, IsDeleted);');
+
+IF OBJECT_ID(N'tempdb..#ScopedCarrierRequirements') IS NOT NULL DROP TABLE #ScopedCarrierRequirements;
+CREATE TABLE #ScopedCarrierRequirements
+(
+    CarrierName NVARCHAR(200) NOT NULL,
+    RequirementCode NVARCHAR(100) NOT NULL,
+    DisplayName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(1000) NOT NULL,
+    EvidencePrompt NVARCHAR(500) NULL,
+    ScoreWeight INT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ScopedCarrierRequirements (CarrierName, RequirementCode, DisplayName, Description, EvidencePrompt, ScoreWeight, SortOrder) VALUES
+(N'AmTrust', N'Carrier-AmTrust-PayrollExposure', N'AmTrust payroll exposure validated', N'Validate payroll, class code, and state exposure detail before transmitting this package to AmTrust.', N'Link payroll schedule or workers compensation exposure support when available.', 20, 110),
+(N'Chubb', N'Carrier-Chubb-LossNarrative', N'Chubb loss narrative prepared', N'Confirm executive-quality loss narrative, risk controls, and claim explanations are ready for Chubb review.', N'Link loss runs or claim narrative document when available.', 20, 120),
+(N'Travelers', N'Carrier-Travelers-ApplicationPack', N'Travelers application package ready', N'Confirm application, coverage schedule, and target limits are packaged for Travelers submission workflow.', N'Link ACORD/application document when available.', 20, 130);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.SubmissionReadinessRequirement
+        (ReadinessRequirementId, TenantId, LineOfBusiness, CarrierId, RequirementCode, RequirementTypeCode, ScopeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, EvidencePrompt, ScoreWeight, SortOrder, BlocksSubmit, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), lines.TenantId, lines.LineOfBusiness, c.CarrierId, r.RequirementCode, N''CarrierConfirmation'', N''Market'', r.DisplayName, r.Description, 1, 1, 0, r.EvidencePrompt, r.ScoreWeight, r.SortOrder, 1, 1, SYSUTCDATETIME(), 0
+    FROM Core.Carrier c
+    INNER JOIN #ScopedCarrierRequirements r ON r.CarrierName = c.CarrierName
+    CROSS APPLY
+    (
+        SELECT DISTINCT s.TenantId, s.LineOfBusiness
+        FROM Submissions.Submission s
+        WHERE s.TenantId = c.TenantId
+          AND s.IsDeleted = 0
+          AND NULLIF(s.LineOfBusiness, N'''') IS NOT NULL
+        UNION
+        SELECT c.TenantId, v.LineOfBusiness
+        FROM (VALUES (N''General Liability''), (N''Property''), (N''Workers Compensation''), (N''Commercial Auto''), (N''Cyber Liability'')) v(LineOfBusiness)
+    ) lines
+    WHERE c.IsDeleted = 0
+      AND ISNULL(c.IsActive, 1) = 1
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessRequirement existing
+          WHERE existing.TenantId = lines.TenantId
+            AND existing.LineOfBusiness = lines.LineOfBusiness
+            AND existing.RequirementCode = r.RequirementCode
+            AND existing.CarrierId = c.CarrierId
+            AND existing.IsDeleted = 0
+      );');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE q
+    SET ScopeCode = COALESCE(q.ScopeCode, N''Submission''),
+        BlocksSubmit = CASE WHEN q.IsRequired = 1 THEN 1 ELSE q.BlocksSubmit END
+    FROM Submissions.SubmissionIntakeQuestion q
+    WHERE q.IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0226_SubmissionsSubmitToMarketDispatchCompletion = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchChannelCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel_0226 DEFAULT N'InternalQueue';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchStatusCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status_0226 DEFAULT N'Pending';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'PayloadJson') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload_0226 DEFAULT N'{}';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'MaxAttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount_0226 DEFAULT 3;
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'NextAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt_0226 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastError') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastError NVARCHAR(2000) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'IX_SubmissionMarketDispatch_WorkerQueue_0226')
+        EXEC(N'CREATE INDEX IX_SubmissionMarketDispatch_WorkerQueue_0226 ON Submissions.SubmissionMarketDispatch(DispatchStatusCode, IsDeleted, NextAttemptDateUtc, AttemptCount, MaxAttemptCount) INCLUDE (TenantId, SubmissionId, SubmissionMarketId, CarrierId, DispatchChannelCode);');
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmission', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.CarrierTransmission', N'DocumentPackageJson') IS NULL ALTER TABLE Submissions.CarrierTransmission ADD DocumentPackageJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Docs_0226 DEFAULT N'[]';
+    IF COL_LENGTH(N'Submissions.CarrierTransmission', N'LastError') IS NULL ALTER TABLE Submissions.CarrierTransmission ADD LastError NVARCHAR(2000) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmission') AND name = N'IX_CarrierTransmission_Dispatch_0226')
+        EXEC(N'CREATE INDEX IX_CarrierTransmission_Dispatch_0226 ON Submissions.CarrierTransmission(SubmissionMarketDispatchId, IsDeleted, CreatedDateUtc DESC);');
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0226 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0226 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0226 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0226 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0226 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0226 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0226 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0226 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0226 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0226 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0226 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'IX_CarrierSetting_SubmitDispatch_0226')
+        EXEC(N'CREATE INDEX IX_CarrierSetting_SubmitDispatch_0226 ON Agency.CarrierSetting(TenantId, CategoryCode, SettingCode, CarrierId, IsActive, IsDeleted);');
+
+    DECLARE @Tenants0226 TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+    IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+        INSERT INTO @Tenants0226 (TenantId) EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+    IF NOT EXISTS (SELECT 1 FROM @Tenants0226)
+        INSERT INTO @Tenants0226 (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+    DECLARE @Settings0226 TABLE
+    (
+        SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+        SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+        AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+    );
+
+    INSERT INTO @Settings0226 VALUES
+    (N'SUBMIT_TO_MARKET_DISPATCH_ENABLED', N'Submit-to-Market Dispatch Enabled', N'SubmissionDispatch', N'Tenant', N'Boolean', N'true', N'true', N'Enables DB-backed worker processing for pending submit-to-market dispatch records.', N'{"required":true}', N'{"control":"toggle","icon":"bi-send-check"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 10),
+    (N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default outbound channel when a carrier-specific channel is not configured. Common channels: InternalQueue, Manual, Portal, Email, API, ExternalConnector.', N'{"maxLength":50}', N'{"control":"select","options":["InternalQueue","Manual","Portal","Email","API","ExternalConnector"]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
+    (N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT', N'Submit-to-Market Default Recipient', N'SubmissionDispatch', N'Tenant', N'Text', NULL, NULL, N'Default carrier submission mailbox, portal queue, or endpoint alias used when carrier-specific settings are not configured.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-person-lines-fill"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 30),
+    (N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE', N'Submit-to-Market Subject Template', N'SubmissionDispatch', N'Tenant', N'Text', N'Submission {SubmissionNumber} ready for market review', N'Submission {SubmissionNumber} ready for market review', N'Carrier package subject template. Supports {SubmissionNumber}.', N'{"maxLength":300}', N'{"control":"text","icon":"bi-card-heading"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 40),
+    (N'SUBMIT_TO_MARKET_MAX_ATTEMPTS', N'Submit-to-Market Max Attempts', N'SubmissionDispatch', N'Tenant', N'Number', N'3', N'3', N'Maximum dispatch worker attempts before a queue item requires manual review.', N'{"min":1,"max":10}', N'{"control":"number","icon":"bi-arrow-repeat"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 50),
+    (N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'["InternalQueue","Manual","Portal"]', N'["InternalQueue","Manual","Portal"]', N'Channels the worker may complete internally without external connector credentials. Email/API should be completed only by an actual connector or sandbox mode.', N'{"type":"array"}', N'{"control":"multi-select","options":["InternalQueue","Manual","Portal","Email","API","ExternalConnector"]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
+    (N'SUBMIT_TO_MARKET_WORKER_POLL_SECONDS', N'Submit-to-Market Worker Poll Seconds', N'SubmissionDispatch', N'Tenant', N'Number', N'30', N'30', N'Preferred worker polling interval in seconds for submit-to-market dispatch processing.', N'{"min":10,"max":3600}', N'{"control":"number","icon":"bi-clock"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 70),
+    (N'SUBMIT_TO_MARKET_WORKER_BATCH_SIZE', N'Submit-to-Market Worker Batch Size', N'SubmissionDispatch', N'Tenant', N'Number', N'25', N'25', N'Maximum number of pending market dispatches processed per worker polling cycle.', N'{"min":1,"max":250}', N'{"control":"number","icon":"bi-stack"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 80),
+    (N'SUBMIT_TO_MARKET_API_ENDPOINT', N'Submit-to-Market API Endpoint', N'SubmissionDispatch', N'Carrier', N'Url', NULL, NULL, N'Carrier-specific API endpoint or external connector URL used for API-based market submissions.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 90),
+    (N'SUBMIT_TO_MARKET_EMAIL', N'Submit-to-Market Email', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Carrier-specific submit-to-market mailbox used by the email connector.', N'{"maxLength":500}', N'{"control":"email","icon":"bi-envelope"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 100),
+    (N'SUBMIT_TO_MARKET_PORTAL_URL', N'Submit-to-Market Portal URL', N'SubmissionDispatch', N'Carrier', N'Url', NULL, NULL, N'Carrier portal URL for manual or portal-handoff submissions.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-window-stack"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 110),
+    (N'SUBMIT_TO_MARKET_SECRET_REFERENCE', N'Submit-to-Market Secret Reference', N'SubmissionDispatch', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier submit-to-market credentials.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'SubmitToMarketDispatchWorkerService', 0, 1, 120);
+
+    INSERT INTO Agency.CarrierSetting
+        (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+    FROM @Tenants0226 t
+    CROSS JOIN @Settings0226 s
+    WHERE s.ScopeCode = N'Tenant'
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+
+    UPDATE existing
+    SET SettingName = s.SettingName,
+        CategoryCode = s.CategoryCode,
+        ScopeCode = s.ScopeCode,
+        DataTypeCode = s.DataTypeCode,
+        DefaultValue = s.DefaultValue,
+        Description = s.Description,
+        ValidationJson = s.ValidationJson,
+        UiSchemaJson = s.UiSchemaJson,
+        AppliesToExecutorType = s.AppliesToExecutorType,
+        IsRequired = s.IsRequired,
+        IsSecret = s.IsSecret,
+        SortOrder = s.SortOrder,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Agency.CarrierSetting existing
+    INNER JOIN @Settings0226 s ON s.SettingCode = existing.SettingCode
+    WHERE existing.CarrierId IS NULL
+      AND existing.IsDeleted = 0
+      AND (existing.CategoryCode <> s.CategoryCode
+        OR existing.ScopeCode <> s.ScopeCode
+        OR existing.DataTypeCode <> s.DataTypeCode
+        OR ISNULL(existing.DefaultValue, N'') <> ISNULL(s.DefaultValue, N'')
+        OR ISNULL(existing.Description, N'') <> ISNULL(s.Description, N'')
+        OR ISNULL(existing.ValidationJson, N'') <> ISNULL(s.ValidationJson, N'')
+        OR ISNULL(existing.UiSchemaJson, N'') <> ISNULL(s.UiSchemaJson, N'')
+        OR ISNULL(existing.AppliesToExecutorType, N'') <> ISNULL(s.AppliesToExecutorType, N'')
+        OR existing.IsRequired <> s.IsRequired
+        OR existing.IsSecret <> s.IsSecret
+        OR existing.SortOrder <> s.SortOrder);
+END;
+""";
+
+    private const string Migration0227_SubmissionsCommonExternalCarrierDeliverySettings = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierExternalConnector
+    (
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierExternalConnector_0227 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        ConnectorCode NVARCHAR(100) NOT NULL,
+        ConnectorName NVARCHAR(200) NOT NULL,
+        ConnectorTypeCode NVARCHAR(50) NOT NULL,
+        ExecutionModeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Mode_0227 DEFAULT N'ExternalConnector',
+        EndpointUri NVARCHAR(1000) NULL,
+        DefaultChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Channel_0227 DEFAULT N'InternalQueue',
+        SupportsDocumentPackage BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_DocumentPackage_0227 DEFAULT 1,
+        SupportsDeliveryConfirmation BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Confirmation_0227 DEFAULT 1,
+        SupportsInboundResponse BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Inbound_0227 DEFAULT 1,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Config_0227 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Ui_0227 DEFAULT N'{}',
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Active_0227 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Sort_0227 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierExternalConnector_Created_0227 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_IsDeleted_0227 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0227 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0227 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0227 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0227 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0227 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0227 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0227 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0227 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0227 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0227 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0227 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierExternalConnector') AND name = N'UX_CarrierExternalConnector_Tenant_Code_Carrier_0227')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierExternalConnector_Tenant_Code_Carrier_0227 ON Agency.CarrierExternalConnector(TenantId, ConnectorCode, CarrierId) WHERE IsDeleted = 0;');
+
+DECLARE @Tenants0227 TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO @Tenants0227 (TenantId) EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+IF NOT EXISTS (SELECT 1 FROM @Tenants0227)
+    INSERT INTO @Tenants0227 (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @Connectors0227 TABLE
+(
+    ConnectorCode NVARCHAR(100), ConnectorName NVARCHAR(200), ConnectorTypeCode NVARCHAR(50), ExecutionModeCode NVARCHAR(50), EndpointUri NVARCHAR(1000), DefaultChannelCode NVARCHAR(50),
+    SupportsDocumentPackage BIT, SupportsDeliveryConfirmation BIT, SupportsInboundResponse BIT, ConfigurationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX), SortOrder INT
+);
+
+INSERT INTO @Connectors0227 VALUES
+(N'EMAIL_SMTP_PACKAGE', N'Email Package Connector', N'Email', N'ExternalConnector', NULL, N'Email', 1, 1, 1, N'{"deliveryMode":"smtp","requiresSecretReference":true,"commonUse":"Send submission package to carrier underwriting mailbox"}', N'{"icon":"bi-envelope-at","description":"SMTP or email-service based carrier package delivery."}', 110),
+(N'MAILBOX_MONITORED_SUBMISSION', N'Monitored Mailbox Connector', N'Email', N'ExternalConnector', NULL, N'Email', 1, 1, 1, N'{"deliveryMode":"mailbox","requiresSecretReference":true,"commonUse":"Send and monitor carrier responses from a shared mailbox"}', N'{"icon":"bi-mailbox","description":"Shared mailbox delivery with inbound acknowledgement monitoring."}', 120),
+(N'PORTAL_MANUAL_HANDOFF', N'Carrier Portal Manual Handoff', N'Portal', N'ManualHandoff', NULL, N'Portal', 1, 0, 1, N'{"deliveryMode":"manualPortal","requiresPortalUrl":true,"requiresCredentials":true,"commonUse":"Top AMS workflow for carrier portals that do not expose APIs"}', N'{"icon":"bi-window-stack","description":"Manual upload checklist and portal URL handoff."}', 130),
+(N'API_JSON_SUBMISSION', N'Carrier API JSON Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"jsonApi","authModes":["OAuth2ClientCredentials","ApiKey","MutualTls"],"commonUse":"Modern carrier API quote intake"}', N'{"icon":"bi-braces","description":"JSON API submit-to-market connector template."}', 140),
+(N'API_ACORD_XML_SUBMISSION', N'Carrier API ACORD XML Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"acordXmlApi","payloadFormats":["ACORD_XML","SupplementalDocuments"],"commonUse":"Commercial lines carrier API/package exchange"}', N'{"icon":"bi-filetype-xml","description":"ACORD XML plus document package API connector template."}', 150),
+(N'WEBHOOK_SUBMISSION', N'Webhook Submission Connector', N'Webhook', N'ExternalConnector', NULL, N'Webhook', 1, 1, 1, N'{"deliveryMode":"webhook","requiresSigningSecret":true,"commonUse":"MGA/wholesaler or middleware webhook intake"}', N'{"icon":"bi-diagram-2","description":"Signed webhook package delivery template."}', 160),
+(N'SFTP_PACKAGE_DROP', N'SFTP Package Drop Connector', N'SFTP', N'ExternalConnector', NULL, N'SFTP', 1, 0, 1, N'{"deliveryMode":"sftp","requiresSecretReference":true,"commonUse":"Legacy or bulk package drop-off workflow"}', N'{"icon":"bi-folder-symlink","description":"SFTP package export/drop connector template."}', 170),
+(N'DOWNLOAD_PACKAGE_EXPORT', N'Download Package Export', N'Download', N'ManualHandoff', NULL, N'Download', 1, 0, 0, N'{"deliveryMode":"download","commonUse":"CSR/marketer downloads a carrier package for manual upload"}', N'{"icon":"bi-download","description":"Generate an outbound package for user-managed delivery."}', 180);
+
+INSERT INTO Agency.CarrierExternalConnector
+    (CarrierExternalConnectorId, TenantId, CarrierId, ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, c.ConnectorCode, c.ConnectorName, c.ConnectorTypeCode, c.ExecutionModeCode, c.EndpointUri, c.DefaultChannelCode, c.SupportsDocumentPackage, c.SupportsDeliveryConfirmation, c.SupportsInboundResponse, c.ConfigurationJson, c.UiSchemaJson, 1, c.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants0227 t
+CROSS JOIN @Connectors0227 c
+WHERE NOT EXISTS (SELECT 1 FROM Agency.CarrierExternalConnector existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.ConnectorCode = c.ConnectorCode AND existing.IsDeleted = 0);
+
+UPDATE existing
+SET ConnectorName = c.ConnectorName,
+    ConnectorTypeCode = c.ConnectorTypeCode,
+    ExecutionModeCode = c.ExecutionModeCode,
+    DefaultChannelCode = c.DefaultChannelCode,
+    SupportsDocumentPackage = c.SupportsDocumentPackage,
+    SupportsDeliveryConfirmation = c.SupportsDeliveryConfirmation,
+    SupportsInboundResponse = c.SupportsInboundResponse,
+    ConfigurationJson = c.ConfigurationJson,
+    UiSchemaJson = c.UiSchemaJson,
+    SortOrder = c.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Agency.CarrierExternalConnector existing
+INNER JOIN @Connectors0227 c ON c.ConnectorCode = existing.ConnectorCode
+WHERE existing.CarrierId IS NULL
+  AND existing.IsDeleted = 0;
+
+DECLARE @Settings0227 TABLE
+(
+    SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+    SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+    AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+);
+
+INSERT INTO @Settings0227 VALUES
+(N'CARRIER_DELIVERY_CONNECTOR_CODE', N'Carrier Delivery Connector Code', N'CarrierDelivery', N'Carrier', N'Select', NULL, N'EMAIL_SMTP_PACKAGE', N'Carrier-specific connector template used for external submit-to-market delivery.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"control":"select","icon":"bi-diagram-3"}', N'CarrierExternalTransmission', 0, 0, 10),
+(N'CARRIER_DELIVERY_CHANNEL_PRIORITY', N'Carrier Delivery Channel Priority', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["API","Email","Portal","Download"]', N'Preferred channel order for carrier package delivery when multiple channels are configured.', N'{"type":"array"}', N'{"control":"multi-select","options":["API","Email","Portal","Webhook","SFTP","Download","Manual"]}', N'CarrierExternalTransmission', 0, 0, 20),
+(N'CARRIER_DELIVERY_PACKAGE_FORMATS', N'Carrier Package Formats', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["PDF_PACKET","DOCUMENT_ATTACHMENTS","ACORD_XML"]', N'Package formats supported for this carrier or connector.', N'{"type":"array"}', N'{"control":"multi-select","options":["PDF_PACKET","DOCUMENT_ATTACHMENTS","ACORD_XML","JSON_PAYLOAD","CSV_SCHEDULES","ZIP_PACKAGE"]}', N'CarrierExternalTransmission', 0, 0, 30),
+(N'CARRIER_DELIVERY_EMAIL_TO', N'Carrier Submission Email To', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'Carrier underwriting mailbox for submission package delivery.', N'{"maxLength":500}', N'{"control":"email","icon":"bi-envelope-at"}', N'CarrierExternalTransmission', 0, 0, 40),
+(N'CARRIER_DELIVERY_EMAIL_CC', N'Carrier Submission Email CC', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'Optional CC recipients for submission package delivery.', N'{"maxLength":500}', N'{"control":"email-list","icon":"bi-envelope-plus"}', N'CarrierExternalTransmission', 0, 0, 50),
+(N'CARRIER_DELIVERY_EMAIL_SUBJECT_TEMPLATE', N'Carrier Email Subject Template', N'CarrierDelivery', N'Carrier', N'Text', NULL, N'Submission {SubmissionNumber} - {AccountName} - {LineOfBusiness}', N'Carrier-specific subject template. Common tokens: {SubmissionNumber}, {AccountName}, {LineOfBusiness}, {EffectiveDate}.', N'{"maxLength":300}', N'{"control":"text","icon":"bi-card-heading"}', N'CarrierExternalTransmission', 0, 0, 60),
+(N'CARRIER_DELIVERY_PORTAL_URL', N'Carrier Portal URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Carrier portal URL used for manual or semi-automated package uploads.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-window-stack"}', N'CarrierExternalTransmission', 0, 0, 70),
+(N'CARRIER_DELIVERY_PORTAL_USERNAME_REF', N'Carrier Portal Username Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier portal username.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-person-lock"}', N'CarrierExternalTransmission', 0, 1, 80),
+(N'CARRIER_DELIVERY_PORTAL_PASSWORD_REF', N'Carrier Portal Password Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier portal password.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'CarrierExternalTransmission', 0, 1, 90),
+(N'CARRIER_DELIVERY_API_ENDPOINT', N'Carrier API Endpoint', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Carrier API endpoint for submit-to-market package delivery.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'CarrierExternalTransmission', 0, 0, 100),
+(N'CARRIER_DELIVERY_API_AUTH_MODE', N'Carrier API Auth Mode', N'CarrierDelivery', N'Carrier', N'Select', NULL, N'OAuth2ClientCredentials', N'Authentication mode used by the carrier API connector.', N'{"options":["OAuth2ClientCredentials","ApiKey","Basic","MutualTls","SignedWebhook"]}', N'{"control":"select","icon":"bi-shield-lock"}', N'CarrierExternalTransmission', 0, 0, 110),
+(N'CARRIER_DELIVERY_API_KEY_REF', N'Carrier API Key Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier API key/client secret.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key-fill"}', N'CarrierExternalTransmission', 0, 1, 120),
+(N'CARRIER_DELIVERY_CLIENT_ID', N'Carrier API Client ID', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'OAuth client id or integration id provided by the carrier.', N'{"maxLength":250}', N'{"control":"text","icon":"bi-person-badge"}', N'CarrierExternalTransmission', 0, 0, 130),
+(N'CARRIER_DELIVERY_TOKEN_URL', N'Carrier API Token URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'OAuth token URL for carrier API authentication.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-shield-check"}', N'CarrierExternalTransmission', 0, 0, 140),
+(N'CARRIER_DELIVERY_WEBHOOK_URL', N'Carrier/MGA Webhook URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Webhook endpoint for MGA, wholesaler, or middleware submission intake.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-diagram-2"}', N'CarrierExternalTransmission', 0, 0, 150),
+(N'CARRIER_DELIVERY_WEBHOOK_SIGNING_SECRET_REF', N'Webhook Signing Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference used to sign webhook payloads.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-fingerprint"}', N'CarrierExternalTransmission', 0, 1, 160),
+(N'CARRIER_DELIVERY_SFTP_HOST', N'Carrier SFTP Host', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'SFTP host for package drop-off workflows.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-hdd-network"}', N'CarrierExternalTransmission', 0, 0, 170),
+(N'CARRIER_DELIVERY_SFTP_PATH', N'Carrier SFTP Drop Path', N'CarrierDelivery', N'Carrier', N'Text', NULL, N'/inbound/submissions', N'SFTP directory used for submission package drop-off.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-folder"}', N'CarrierExternalTransmission', 0, 0, 180),
+(N'CARRIER_DELIVERY_SFTP_SECRET_REF', N'Carrier SFTP Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for SFTP credentials or private key.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'CarrierExternalTransmission', 0, 1, 190),
+(N'CARRIER_DELIVERY_ACK_TIMEOUT_HOURS', N'Carrier Acknowledgement Timeout Hours', N'CarrierDelivery', N'Carrier', N'Number', NULL, N'24', N'Expected acknowledgement SLA before follow-up/exception handling.', N'{"min":1,"max":240}', N'{"control":"number","icon":"bi-clock-history"}', N'CarrierExternalTransmission', 0, 0, 200),
+(N'CARRIER_DELIVERY_RETRY_POLICY', N'Carrier Delivery Retry Policy', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'{"maxAttempts":3,"backoffMinutes":[5,15,60]}', N'Connector retry policy for transient delivery failures.', N'{"type":"object"}', N'{"control":"json","icon":"bi-arrow-repeat"}', N'CarrierExternalTransmission', 0, 0, 210),
+(N'CARRIER_DELIVERY_REQUIRED_DOCUMENT_GROUPS', N'Required Outbound Document Groups', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["Application","Loss Runs","Supplemental","Schedule"]', N'Document groups commonly expected in carrier submission packages.', N'{"type":"array"}', N'{"control":"multi-select","optionsGroup":"DMS.DocumentGroup"}', N'CarrierExternalTransmission', 0, 0, 220),
+(N'CARRIER_DELIVERY_REQUIRE_ACORD_XML', N'Require ACORD XML Payload', N'CarrierDelivery', N'Carrier', N'Boolean', NULL, N'false', N'Indicates whether this carrier connector expects ACORD XML in addition to documents.', N'{"required":false}', N'{"control":"toggle","icon":"bi-filetype-xml"}', N'CarrierExternalTransmission', 0, 0, 230),
+(N'CARRIER_DELIVERY_ENABLE_PACKAGE_DOWNLOAD', N'Enable Package Download Handoff', N'CarrierDelivery', N'Tenant', N'Boolean', N'true', N'true', N'Allows users to download a market package for carrier portal or manual delivery.', N'{"required":false}', N'{"control":"toggle","icon":"bi-download"}', N'CarrierExternalTransmission', 0, 0, 240),
+(N'CARRIER_DELIVERY_DEFAULT_FOLLOWUP_DAYS', N'Default Carrier Follow-up Days', N'CarrierDelivery', N'Tenant', N'Number', N'3', N'3', N'Default number of business days before carrier follow-up is due after package delivery.', N'{"min":1,"max":30}', N'{"control":"number","icon":"bi-calendar-check"}', N'CarrierExternalTransmission', 0, 0, 250);
+
+INSERT INTO Agency.CarrierSetting
+    (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants0227 t
+CROSS JOIN @Settings0227 s
+WHERE s.ScopeCode = N'Tenant'
+  AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierSetting
+        (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), c.TenantId, c.CarrierId, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Carrier c
+    CROSS JOIN @Settings0227 s
+    WHERE s.ScopeCode = N'Carrier'
+      AND c.IsDeleted = 0
+      AND ISNULL(c.IsActive, 1) = 1
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = c.TenantId AND existing.CarrierId = c.CarrierId AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+END;
+
+UPDATE existing
+SET SettingName = s.SettingName,
+    CategoryCode = s.CategoryCode,
+    ScopeCode = s.ScopeCode,
+    DataTypeCode = s.DataTypeCode,
+    DefaultValue = s.DefaultValue,
+    Description = s.Description,
+    ValidationJson = s.ValidationJson,
+    UiSchemaJson = s.UiSchemaJson,
+    AppliesToExecutorType = s.AppliesToExecutorType,
+    IsRequired = s.IsRequired,
+    IsSecret = s.IsSecret,
+    SortOrder = s.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Agency.CarrierSetting existing
+INNER JOIN @Settings0227 s ON s.SettingCode = existing.SettingCode
+WHERE existing.IsDeleted = 0;
+""";
+
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """
 IF OBJECT_ID(N'DMS.DocumentCategory', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
     RETURN;
@@ -18536,5 +19257,227 @@ WHERE g.CategoryId IS NOT NULL
 
 IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
     ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
+""";
+
+    private const string Migration0224_SubmissionsReadinessRequirementsEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessRequirement
+    (
+        ReadinessRequirementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessRequirement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequirementCode NVARCHAR(100) NOT NULL,
+        RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Type_0224 DEFAULT N'IntakeConfirmation',
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequired_0224 DEFAULT 1,
+        AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiver_0224 DEFAULT 1,
+        RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidence_0224 DEFAULT 0,
+        ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeight_0224 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrder_0224 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActive_0224 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Created_0224 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeleted_0224 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_TenantId_0224 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'LineOfBusiness') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_LineOfBusiness_0224 DEFAULT N'General Liability';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequirementCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequirementCode NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Code_0224 DEFAULT N'READINESS';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequirementTypeCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_TypeB_0224 DEFAULT N'IntakeConfirmation';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'DisplayName') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD DisplayName NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_DisplayName_0224 DEFAULT N'Readiness requirement';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'Description') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsRequired') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequiredB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'AllowsWaiver') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiverB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequiresEvidence') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidenceB_0224 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ScoreWeight') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeightB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'SortOrder') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrderB_0224 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActiveB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_CreatedB_0224 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeletedB_0224 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ReadinessRequirementId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ReadinessRequirementId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'StatusCode') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_StatusCode_0224 DEFAULT N'NeedsReview';
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'StatusReason') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD StatusReason NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'EvidenceDocumentId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD EvidenceDocumentId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaiverReason') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaiverReason NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaivedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaivedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaivedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaivedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CompletedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CompletedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CompletedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CompletedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ReviewDueDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ReviewDueDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ScoreWeight') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_ScoreWeight_0224 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'SortOrder') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD SortOrder INT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_SortOrder_0224 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessRequirement') AND name = N'UX_SubmissionReadinessRequirement_Tenant_Lob_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionReadinessRequirement_Tenant_Lob_Code ON Submissions.SubmissionReadinessRequirement(TenantId, LineOfBusiness, RequirementCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'IX_SubmissionIntakeQuestion_Requirement')
+    EXEC(N'CREATE INDEX IX_SubmissionIntakeQuestion_Requirement ON Submissions.SubmissionIntakeQuestion(TenantId, ReadinessRequirementId, StatusCode, IsDeleted);');
+
+IF OBJECT_ID(N'tempdb..#ReadinessTenants') IS NOT NULL DROP TABLE #ReadinessTenants;
+CREATE TABLE #ReadinessTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #ReadinessTenants)
+    INSERT INTO #ReadinessTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#ReadinessLines') IS NOT NULL DROP TABLE #ReadinessLines;
+CREATE TABLE #ReadinessLines
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    PRIMARY KEY (TenantId, LineOfBusiness)
+);
+
+IF OBJECT_ID(N'Agency.LineOfBusiness', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT lob.TenantId,
+               LEFT(LTRIM(RTRIM(lob.LobName)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY lob.TenantId, LEFT(LTRIM(RTRIM(lob.LobName)), 100) ORDER BY lob.LobId) AS RowNumber
+        FROM Agency.LineOfBusiness lob
+        WHERE ISNULL(lob.IsDeleted, 0) = 0
+          AND ISNULL(lob.IsActive, 1) = 1
+          AND NULLIF(LTRIM(RTRIM(lob.LobName)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+END;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT s.TenantId,
+               LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY s.TenantId, LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) ORDER BY s.CreatedDateUtc DESC, s.SubmissionId) AS RowNumber
+        FROM Submissions.Submission s
+        WHERE s.IsDeleted = 0
+          AND NULLIF(LTRIM(RTRIM(s.LineOfBusiness)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1
+      AND NOT EXISTS (SELECT 1 FROM #ReadinessLines existing WHERE existing.TenantId = source.TenantId AND existing.LineOfBusiness = source.LineOfBusiness);');
+END;
+
+INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+SELECT t.TenantId, v.LineOfBusiness
+FROM #ReadinessTenants t
+CROSS JOIN (VALUES (N'General Liability'), (N'Property'), (N'Workers Compensation'), (N'Commercial Auto'), (N'Cyber Liability')) v(LineOfBusiness)
+WHERE NOT EXISTS (SELECT 1 FROM #ReadinessLines existing WHERE existing.TenantId = t.TenantId AND existing.LineOfBusiness = v.LineOfBusiness);
+
+IF OBJECT_ID(N'tempdb..#ReadinessRequirements') IS NOT NULL DROP TABLE #ReadinessRequirements;
+CREATE TABLE #ReadinessRequirements
+(
+    RequirementCode NVARCHAR(100) NOT NULL PRIMARY KEY,
+    RequirementTypeCode NVARCHAR(50) NOT NULL,
+    DisplayName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(1000) NULL,
+    IsRequired BIT NOT NULL,
+    AllowsWaiver BIT NOT NULL,
+    RequiresEvidence BIT NOT NULL,
+    ScoreWeight INT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ReadinessRequirements (RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, ScoreWeight, SortOrder) VALUES
+(N'CoverageNeeds', N'IntakeConfirmation', N'Coverage needs confirmed', N'Confirm limits, deductibles, forms, requested coverage enhancements, and coverage intent before market submission.', 1, 1, 0, 25, 10),
+(N'ExposureDataValidated', N'IntakeConfirmation', N'Exposure data validated', N'Confirm schedules, payroll, sales, vehicles, properties, and other exposure bases are complete and current.', 1, 1, 0, 25, 20),
+(N'LossHistoryReviewed', N'IntakeConfirmation', N'Loss history reviewed', N'Confirm loss runs, claim explanations, and known risk-control context have been reviewed.', 1, 1, 0, 25, 30),
+(N'OperationsDescription', N'IntakeConfirmation', N'Operations description complete', N'Confirm operations, locations, exposures, risk narrative, and underwriting story are ready for carriers.', 1, 1, 0, 25, 40),
+(N'ProducerPreference', N'IntakeConfirmation', N'Producer preference documented', N'Capture producer or client preference that may influence market strategy and recommendation scoring.', 0, 1, 0, 5, 50);
+
+INSERT INTO Submissions.SubmissionReadinessRequirement
+    (ReadinessRequirementId, TenantId, LineOfBusiness, RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, ScoreWeight, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, r.RequirementCode, r.RequirementTypeCode, r.DisplayName, r.Description, r.IsRequired, r.AllowsWaiver, r.RequiresEvidence, r.ScoreWeight, r.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM #ReadinessLines l
+CROSS JOIN #ReadinessRequirements r
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionReadinessRequirement existing
+    WHERE existing.TenantId = l.TenantId
+      AND existing.LineOfBusiness = l.LineOfBusiness
+      AND existing.RequirementCode = r.RequirementCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET RequirementTypeCode = r.RequirementTypeCode,
+    DisplayName = r.DisplayName,
+    Description = r.Description,
+    IsRequired = r.IsRequired,
+    AllowsWaiver = r.AllowsWaiver,
+    RequiresEvidence = r.RequiresEvidence,
+    ScoreWeight = r.ScoreWeight,
+    SortOrder = r.SortOrder,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.SubmissionReadinessRequirement existing
+INNER JOIN #ReadinessRequirements r ON r.RequirementCode = existing.RequirementCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionIntakeQuestion
+        (IntakeQuestionId, SubmissionId, TenantId, ReadinessRequirementId, QuestionCode, QuestionText, HelpText, IsRequired, StatusCode, ScoreWeight, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), s.SubmissionId, s.TenantId, r.ReadinessRequirementId, r.RequirementCode, r.DisplayName, r.Description, r.IsRequired,
+           N'NeedsReview', r.ScoreWeight, r.SortOrder, SYSUTCDATETIME(), 0
+    FROM Submissions.Submission s
+    INNER JOIN Submissions.SubmissionReadinessRequirement r ON r.TenantId = s.TenantId AND r.LineOfBusiness = s.LineOfBusiness AND r.IsActive = 1 AND r.IsDeleted = 0
+    WHERE s.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionIntakeQuestion q
+          WHERE q.SubmissionId = s.SubmissionId
+            AND q.QuestionCode = r.RequirementCode
+            AND q.IsDeleted = 0
+      );
+
+    UPDATE q
+    SET ReadinessRequirementId = r.ReadinessRequirementId,
+        QuestionText = r.DisplayName,
+        HelpText = r.Description,
+        IsRequired = r.IsRequired,
+        ScoreWeight = r.ScoreWeight,
+        SortOrder = r.SortOrder,
+        StatusCode = CASE
+            WHEN q.IsAnswered = 1 AND q.StatusCode = N'NeedsReview' THEN N'Confirmed'
+            WHEN q.IsAnswered = 0 AND q.StatusCode = N'Confirmed' THEN N'NeedsReview'
+            ELSE q.StatusCode
+        END,
+        CompletedByUserId = CASE WHEN q.IsAnswered = 1 THEN COALESCE(q.CompletedByUserId, q.AnsweredByUserId) ELSE q.CompletedByUserId END,
+        CompletedDateUtc = CASE WHEN q.IsAnswered = 1 THEN COALESCE(q.CompletedDateUtc, q.AnsweredDateUtc) ELSE q.CompletedDateUtc END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.SubmissionIntakeQuestion q
+    INNER JOIN Submissions.Submission s ON s.SubmissionId = q.SubmissionId AND s.TenantId = q.TenantId AND s.IsDeleted = 0
+    INNER JOIN Submissions.SubmissionReadinessRequirement r ON r.TenantId = s.TenantId AND r.LineOfBusiness = s.LineOfBusiness AND r.RequirementCode = q.QuestionCode AND r.IsDeleted = 0
+    WHERE q.IsDeleted = 0;
+END;
 """;
 }

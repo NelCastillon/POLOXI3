@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.AccountNotes;
@@ -1012,13 +1013,39 @@ public sealed partial class ApiClient
             return;
         }
 
-        var detail = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(detail))
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(content))
         {
             response.EnsureSuccessStatusCode();
         }
 
+        var detail = ExtractProblemDetail(content);
         throw new HttpRequestException($"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}). {detail}", null, response.StatusCode);
+    }
+
+    private static string ExtractProblemDetail(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (document.RootElement.TryGetProperty("detail", out var detail) && detail.ValueKind == JsonValueKind.String)
+                {
+                    return detail.GetString() ?? content;
+                }
+
+                if (document.RootElement.TryGetProperty("title", out var title) && title.ValueKind == JsonValueKind.String)
+                {
+                    return title.GetString() ?? content;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return content;
     }
 
     public async Task DeleteLeadContactAsync(Guid contactId, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
@@ -2771,6 +2798,35 @@ public sealed partial class ApiClient
     public Task<SubmissionReadinessDto?> GetSubmissionReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<SubmissionReadinessDto>($"api/submissions/{submissionId}/readiness?tenantId={tenantId}", cancellationToken);
 
+    public Task<SubmissionReadinessDto?> GetSubmissionMarketReadinessAsync(Guid submissionId, Guid submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubmissionReadinessDto>($"api/submissions/{submissionId}/markets/{submissionMarketId}/readiness?tenantId={tenantId}", cancellationToken);
+
+    public Task<SubmissionPackagePreviewDto?> GetSubmissionPackagePreviewAsync(Guid submissionId, Guid tenantId, Guid? submissionMarketId = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<SubmissionPackagePreviewDto>($"api/submissions/{submissionId}/package-preview?tenantId={tenantId}&submissionMarketId={submissionMarketId}", cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionReadinessRequirementDto>?> GetSubmissionReadinessRequirementsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionReadinessRequirementDto>>($"api/submissions/readiness-requirements?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
+
+    public async Task<Guid> CreateSubmissionReadinessRequirementAsync(UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/submissions/readiness-requirements", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateSubmissionReadinessRequirementAsync(Guid requirementId, UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/submissions/readiness-requirements/{requirementId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DeleteSubmissionReadinessRequirementAsync(Guid requirementId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/submissions/readiness-requirements/{requirementId}?tenantId={tenantId}&modifiedByUserId={modifiedByUserId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<IReadOnlyList<SubmissionTaskTemplateDto>?> GetSubmissionTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionTaskTemplateDto>>($"api/submissions/task-templates?tenantId={tenantId}", cancellationToken);
 
@@ -2834,6 +2890,14 @@ public sealed partial class ApiClient
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/quotes/response", request, cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return (await response.Content.ReadFromJsonAsync<SubmissionActionResult>(cancellationToken: cancellationToken))!;
+    }
+
+    public async Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/carrier-inbound-responses", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
     }
 
     public async Task UpdateSubmissionQuoteAsync(Guid submissionId, Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)

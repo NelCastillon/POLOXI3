@@ -1745,10 +1745,10 @@ BEGIN
     INSERT INTO Submissions.SubmissionMarketDispatch
         (SubmissionMarketDispatchId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, DispatchChannelCode, DispatchStatusCode, Recipient, Subject, PayloadJson, AttemptCount, MaxAttemptCount, NextAttemptDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
     SELECT NEWID(), @TenantId, @SubmissionId, sm.SubmissionMarketId, sm.CarrierId,
-           COALESCE(NULLIF(carrierChannel.SettingValue, N''), NULLIF(defaultChannel.SettingValue, N''), N'InternalQueue'),
+           CASE WHEN COALESCE(NULLIF(sm.SubmissionMethodCode, N''), NULLIF(carrierChannel.SettingValue, N''), NULLIF(carrierChannel.DefaultValue, N''), deliveryChannel.ChannelCode, NULLIF(defaultChannel.SettingValue, N''), NULLIF(defaultChannel.DefaultValue, N''), N'InternalQueue') = N'CarrierApi' THEN N'API' ELSE COALESCE(NULLIF(sm.SubmissionMethodCode, N''), NULLIF(carrierChannel.SettingValue, N''), NULLIF(carrierChannel.DefaultValue, N''), deliveryChannel.ChannelCode, NULLIF(defaultChannel.SettingValue, N''), NULLIF(defaultChannel.DefaultValue, N''), N'InternalQueue') END,
            N'Pending',
-           COALESCE(NULLIF(carrierEmail.SettingValue, N''), NULLIF(defaultRecipient.SettingValue, N'')),
-           LEFT(REPLACE(COALESCE(NULLIF(subjectTemplate.SettingValue, N''), N'Submission {SubmissionNumber} ready for market review'), N'{SubmissionNumber}', COALESCE(@SubmissionNumber, N'')), 300),
+           COALESCE(NULLIF(carrierEmail.SettingValue, N''), NULLIF(carrierEmail.DefaultValue, N''), NULLIF(deliveryEmail.SettingValue, N''), NULLIF(deliveryEmail.DefaultValue, N''), NULLIF(carrierPortal.SettingValue, N''), NULLIF(carrierPortal.DefaultValue, N''), NULLIF(deliveryPortal.SettingValue, N''), NULLIF(deliveryPortal.DefaultValue, N''), NULLIF(defaultRecipient.SettingValue, N''), NULLIF(defaultRecipient.DefaultValue, N'')),
+           LEFT(REPLACE(COALESCE(NULLIF(deliverySubject.SettingValue, N''), NULLIF(deliverySubject.DefaultValue, N''), NULLIF(subjectTemplate.SettingValue, N''), NULLIF(subjectTemplate.DefaultValue, N''), N'Submission {SubmissionNumber} ready for market review'), N'{SubmissionNumber}', COALESCE(@SubmissionNumber, N'')), 300),
            CONCAT(N'{',
                N'""tenantId"":""', CONVERT(NVARCHAR(36), @TenantId), N'"",',
                N'""submissionId"":""', CONVERT(NVARCHAR(36), @SubmissionId), N'"",',
@@ -1758,7 +1758,7 @@ BEGIN
                N'""lineOfBusiness"":""', STRING_ESCAPE(COALESCE(@LineOfBusiness, N''), 'json'), N'"",',
                N'""documentIds"":', COALESCE(documentPayload.DocumentIdsJson, N'[]'),
            N'}'),
-           0, COALESCE(TRY_CONVERT(INT, maxAttempts.SettingValue), 3), SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0
+           0, COALESCE(TRY_CONVERT(INT, COALESCE(NULLIF(maxAttempts.SettingValue, N''), NULLIF(maxAttempts.DefaultValue, N''))), 3), SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0
     FROM Submissions.SubmissionMarket sm
     OUTER APPLY
     (
@@ -1767,12 +1767,17 @@ BEGIN
         WHERE d.SubmissionMarketId = sm.SubmissionMarketId
           AND d.IsDeleted = 0
     ) documentPayload
-    LEFT JOIN Agency.CarrierSetting carrierChannel ON carrierChannel.TenantId = @TenantId AND carrierChannel.CarrierId = sm.CarrierId AND carrierChannel.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND carrierChannel.IsActive = 1 AND carrierChannel.IsDeleted = 0
-    LEFT JOIN Agency.CarrierSetting defaultChannel ON defaultChannel.TenantId = @TenantId AND defaultChannel.CarrierId IS NULL AND defaultChannel.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND defaultChannel.IsActive = 1 AND defaultChannel.IsDeleted = 0
-    LEFT JOIN Agency.CarrierSetting carrierEmail ON carrierEmail.TenantId = @TenantId AND carrierEmail.CarrierId = sm.CarrierId AND carrierEmail.SettingCode = N'SUBMIT_TO_MARKET_EMAIL' AND carrierEmail.IsActive = 1 AND carrierEmail.IsDeleted = 0
-    LEFT JOIN Agency.CarrierSetting defaultRecipient ON defaultRecipient.TenantId = @TenantId AND defaultRecipient.CarrierId IS NULL AND defaultRecipient.SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT' AND defaultRecipient.IsActive = 1 AND defaultRecipient.IsDeleted = 0
-    LEFT JOIN Agency.CarrierSetting subjectTemplate ON subjectTemplate.TenantId = @TenantId AND subjectTemplate.CarrierId IS NULL AND subjectTemplate.SettingCode = N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE' AND subjectTemplate.IsActive = 1 AND subjectTemplate.IsDeleted = 0
-    LEFT JOIN Agency.CarrierSetting maxAttempts ON maxAttempts.TenantId = @TenantId AND maxAttempts.CarrierId IS NULL AND maxAttempts.SettingCode = N'SUBMIT_TO_MARKET_MAX_ATTEMPTS' AND maxAttempts.IsActive = 1 AND maxAttempts.IsDeleted = 0
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) carrierChannel
+    OUTER APPLY (SELECT TOP 1 ChannelCode = CASE WHEN ISJSON(COALESCE(SettingValue, DefaultValue)) = 1 AND JSON_VALUE(COALESCE(SettingValue, DefaultValue), '$[0]') IS NOT NULL THEN JSON_VALUE(COALESCE(SettingValue, DefaultValue), '$[0]') ELSE COALESCE(NULLIF(SettingValue, N''), NULLIF(DefaultValue, N'')) END FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'CARRIER_DELIVERY_CHANNEL_PRIORITY' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) deliveryChannel
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) defaultChannel
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'SUBMIT_TO_MARKET_EMAIL' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) carrierEmail
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'CARRIER_DELIVERY_EMAIL_TO' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) deliveryEmail
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'SUBMIT_TO_MARKET_PORTAL_URL' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) carrierPortal
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'CARRIER_DELIVERY_PORTAL_URL' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) deliveryPortal
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) defaultRecipient
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) subjectTemplate
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId = sm.CarrierId AND SettingCode = N'CARRIER_DELIVERY_EMAIL_SUBJECT_TEMPLATE' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) deliverySubject
+    OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_MAX_ATTEMPTS' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) maxAttempts
     WHERE sm.SubmissionId = @SubmissionId
       AND sm.IsDeleted = 0
       AND sm.Status = N'Submitted'

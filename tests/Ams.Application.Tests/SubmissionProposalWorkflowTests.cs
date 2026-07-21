@@ -110,6 +110,11 @@ public sealed class SubmissionProposalWorkflowTests
         public Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionDocumentChecklistDto>>([]);
         public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionReadinessDto { SubmissionId = submissionId, IsReadyForMarketing = true });
+        public Task<SubmissionReadinessDto> GetMarketReadinessAsync(Guid submissionId, Guid submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionReadinessDto { SubmissionId = submissionId, SubmissionMarketId = submissionMarketId, IsReadyForMarketing = true });
+        public Task<SubmissionPackagePreviewDto> GetSubmissionPackagePreviewAsync(Guid submissionId, Guid? submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionPackagePreviewDto { SubmissionId = submissionId, SubmissionMarketId = submissionMarketId });
+        public Task<IReadOnlyList<SubmissionReadinessRequirementDto>> GetReadinessRequirementsAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionReadinessRequirementDto>>([]);
+        public Task<Guid> UpsertReadinessRequirementAsync(Guid? readinessRequirementId, UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken = default) => Task.FromResult(readinessRequirementId ?? Guid.NewGuid());
+        public Task DeleteReadinessRequirementAsync(Guid readinessRequirementId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionTaskTemplateDto>>([]);
         public Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionMetricsDto());
         public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
@@ -126,9 +131,11 @@ public sealed class SubmissionProposalWorkflowTests
         public Task UpdateMarketStatusAsync(Guid submissionMarketId, UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<QuoteComparisonDto>>([]);
         public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default) => Task.FromResult<QuoteComparisonDto?>(null);
         public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default) => Task.FromResult<ProposalDto?>(null);

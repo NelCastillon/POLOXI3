@@ -1,0 +1,219 @@
+@page "/tenant/carriers/readiness-requirements"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Readiness Requirements - Carrier Configuration</PageTitle>
+
+<div class="crr-page">
+    <section class="crr-hero">
+        <div>
+            <span class="crr-kicker">Enterprise market readiness</span>
+            <h1>Carrier Readiness Requirements</h1>
+            <p>Configure DB-backed submission readiness gates by line of business, carrier, state, and channel before market submission.</p>
+        </div>
+        <div class="crr-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Requirement</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger crr-alert" style="border-left: 4px solid #dc3545; animation: crr-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+
+    <section class="crr-kpis" aria-label="Readiness requirement KPIs">
+        @Kpi("all", "Total", _items.Count.ToString(), "All readiness requirements")
+        @Kpi("market", "Market Scoped", _items.Count(x => !string.Equals(x.ScopeCode, "Submission", StringComparison.OrdinalIgnoreCase)).ToString(), "Carrier or market scoped requirements")
+        @Kpi("carrier", "Carrier Specific", _items.Count(x => x.CarrierId.HasValue).ToString(), "Requirements scoped to a carrier")
+        @Kpi("active", "Active", _items.Count(x => x.IsActive).ToString(), "Active requirements")
+    </section>
+
+    <section class="crr-filter um-search-filter-row">
+        <div class="um-search-box"><i class="bi bi-search" aria-hidden="true"></i><input class="um-search-input" type="search" placeholder="Search requirement, LOB, carrier, state, or channel..." value="@_searchTerm" @oninput="args => OnSearch(args.Value?.ToString())" /></div>
+        <label><span>LOB</span><select class="form-select" @bind="_lobFilter" @bind:after="ApplyFilters"><option value="">All LOB</option>@foreach (var lob in _lobOptions) { <option value="@lob">@lob</option> }</select></label>
+        <label><span>Carrier</span><select class="form-select" @bind="_carrierFilter" @bind:after="ApplyFilters"><option value="">All carriers</option>@foreach (var carrier in _carriers) { <option value="@carrier.CarrierId.ToString()">@carrier.CarrierName</option> }</select></label>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="um-search-result"><strong>@_filtered.Count</strong><span>requirements</span></div>
+    </section>
+
+    <main class="crr-grid">
+        @if (_loading)
+        {
+            <div class="crr-empty"><i class="bi bi-hourglass-split" aria-hidden="true"></i><strong>Loading requirements...</strong></div>
+        }
+        else if (!_filtered.Any())
+        {
+            <div class="crr-empty"><i class="bi bi-clipboard-x" aria-hidden="true"></i><strong>No readiness requirements found</strong><span>Adjust filters or add a requirement.</span></div>
+        }
+        else
+        {
+            @foreach (var item in _filtered)
+            {
+                <article class="crr-card">
+                    <div class="crr-card-head"><div><span>@item.ScopeCode</span><h2>@item.DisplayName</h2></div><strong class="@(item.IsActive ? "crr-pill crr-pill--green" : "crr-pill")">@(item.IsActive ? "Active" : "Inactive")</strong></div>
+                    <p>@item.Description</p>
+                    <dl><div><dt>LOB</dt><dd>@item.LineOfBusiness</dd></div><div><dt>Carrier</dt><dd>@(item.CarrierName ?? "All carriers")</dd></div><div><dt>Channel</dt><dd>@(item.ChannelCode ?? "Any")</dd></div><div><dt>Weight</dt><dd>@item.ScoreWeight</dd></div></dl>
+                    <div class="crr-card-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button><button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick="() => ConfirmDelete(item)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button></div>
+                </article>
+            }
+        }
+    </main>
+</div>
+
+@if (_showForm)
+{
+    <div class="crr-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="crr-form-title">
+        <div class="crr-modal">
+            <div class="um-modal-header"><i class="bi bi-clipboard2-check" aria-hidden="true"></i><span id="crr-form-title">@(_editId.HasValue ? "Edit Readiness Requirement" : "Add Readiness Requirement")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <label><span>Display name</span><InputText class="form-control" @bind-Value="_form.DisplayName" /><ValidationMessage For="() => _form.DisplayName" class="text-danger" /></label>
+                    <label><span>Requirement code</span><InputText class="form-control" @bind-Value="_form.RequirementCode" /><ValidationMessage For="() => _form.RequirementCode" class="text-danger" /></label>
+                    <label><span>Line of business</span><InputSelect class="form-select" @bind-Value="_form.LineOfBusiness"><option value="">Select LOB</option>@foreach (var lob in _lobOptions) { <option value="@lob">@lob</option> }</InputSelect><ValidationMessage For="() => _form.LineOfBusiness" class="text-danger" /></label>
+                    <label><span>Carrier</span><InputSelect class="form-select" @bind-Value="_form.CarrierIdText"><option value="">All carriers</option>@foreach (var carrier in _carriers) { <option value="@carrier.CarrierId.ToString()">@carrier.CarrierName</option> }</InputSelect></label>
+                    <label><span>Scope</span><InputSelect class="form-select" @bind-Value="_form.ScopeCode">@foreach (var option in ScopeOptions) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _form.ScopeCode" class="text-danger" /></label>
+                    <label><span>Type</span><InputSelect class="form-select" @bind-Value="_form.RequirementTypeCode">@foreach (var option in TypeOptions) { <option value="@option">@option</option> }</InputSelect><ValidationMessage For="() => _form.RequirementTypeCode" class="text-danger" /></label>
+                    <label><span>State</span><InputText class="form-control" @bind-Value="_form.StateCode" maxlength="20" /></label>
+                    <label><span>Channel</span><InputSelect class="form-select" @bind-Value="_form.ChannelCode"><option value="">Any channel</option>@foreach (var option in ChannelOptions) { <option value="@option">@option</option> }</InputSelect></label>
+                    <label><span>Score weight</span><InputNumber class="form-control" @bind-Value="_form.ScoreWeight" /><ValidationMessage For="() => _form.ScoreWeight" class="text-danger" /></label>
+                    <label><span>Sort order</span><InputNumber class="form-control" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
+                    <label class="crr-wide"><span>Description</span><InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" /></label>
+                    <label class="crr-wide"><span>Evidence prompt</span><InputTextArea class="form-control" rows="2" @bind-Value="_form.EvidencePrompt" /></label>
+                    <label class="crr-check"><InputCheckbox @bind-Value="_form.IsRequired" /><span>Required</span></label>
+                    <label class="crr-check"><InputCheckbox @bind-Value="_form.BlocksSubmit" /><span>Blocks submit</span></label>
+                    <label class="crr-check"><InputCheckbox @bind-Value="_form.AllowsWaiver" /><span>Allows waiver</span></label>
+                    <label class="crr-check"><InputCheckbox @bind-Value="_form.RequiresEvidence" /><span>Requires evidence</span></label>
+                    <label class="crr-check"><InputCheckbox @bind-Value="_form.IsActive" /><span>Active</span></label>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="crr-modal-backdrop" role="dialog" aria-modal="true"><div class="um-confirm-dialog"><div class="um-confirm-body"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div><div><h3>Delete readiness requirement?</h3><p>Delete <strong>@_deleteTarget.DisplayName</strong>? Existing submission audit history remains intact.</p></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="() => _deleteTarget = null">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_saving">Delete</button></div></div></div>
+}
+
+@code {
+    Guid TenantId;
+    Guid? UserId;
+    readonly List<SubmissionReadinessRequirementDto> _items = [];
+    readonly List<SubmissionReadinessRequirementDto> _filtered = [];
+    readonly List<CarrierDto> _carriers = [];
+    readonly List<string> _lobOptions = [];
+    static readonly string[] ScopeOptions = ["Submission", "Market", "Carrier"];
+    static readonly string[] TypeOptions = ["IntakeConfirmation", "CarrierConfirmation", "DocumentEvidence", "Approval"];
+    static readonly string[] ChannelOptions = ["API", "Email", "Portal", "Manual"];
+    RequirementForm _form = new();
+    SubmissionReadinessRequirementDto? _deleteTarget;
+    Guid? _editId;
+    string? _loadError;
+    string _searchTerm = string.Empty;
+    string _lobFilter = string.Empty;
+    string _carrierFilter = string.Empty;
+    bool _loading;
+    bool _saving;
+    bool _showForm;
+    bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_lobFilter) || !string.IsNullOrWhiteSpace(_carrierFilter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.RequireAsync();
+        TenantId = user.TenantId;
+        UserId = user.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carrier Config", null), new("Readiness Requirements", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            _items.Clear();
+            _items.AddRange(await Api.GetSubmissionReadinessRequirementsAsync(TenantId, _searchTerm) ?? []);
+            _carriers.Clear();
+            _carriers.AddRange((await Api.SearchCarriersAsync(TenantId, null, 1, 250))?.Items ?? []);
+            _lobOptions.Clear();
+            _lobOptions.AddRange(((await Api.SearchLobsAsync(TenantId, null, 1, 250))?.Items ?? []).Select(x => x.LobName).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().OrderBy(x => x));
+            foreach (var lob in _items.Select(x => x.LineOfBusiness).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) if (!_lobOptions.Contains(lob)) _lobOptions.Add(lob);
+            _lobOptions.Sort(StringComparer.OrdinalIgnoreCase);
+            ApplyFilters();
+        }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    void ApplyFilters()
+    {
+        IEnumerable<SubmissionReadinessRequirementDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_lobFilter)) query = query.Where(x => string.Equals(x.LineOfBusiness, _lobFilter, StringComparison.OrdinalIgnoreCase));
+        if (Guid.TryParse(_carrierFilter, out var carrierId)) query = query.Where(x => x.CarrierId == carrierId);
+        _filtered.Clear();
+        _filtered.AddRange(query.OrderBy(x => x.LineOfBusiness).ThenBy(x => x.CarrierName).ThenBy(x => x.SortOrder));
+    }
+
+    void OnSearch(string? value) { _searchTerm = value ?? string.Empty; _ = LoadAsync(); }
+    void ClearFilters() { _searchTerm = string.Empty; _lobFilter = string.Empty; _carrierFilter = string.Empty; ApplyFilters(); }
+    void OpenCreate() { _editId = null; _form = new RequirementForm { LineOfBusiness = _lobOptions.FirstOrDefault() ?? string.Empty }; _showForm = true; }
+    void OpenEdit(SubmissionReadinessRequirementDto item) { _editId = item.ReadinessRequirementId; _form = RequirementForm.From(item); _showForm = true; }
+    void CloseForm() => _showForm = false;
+    void ConfirmDelete(SubmissionReadinessRequirementDto item) => _deleteTarget = item;
+
+    async Task SaveAsync()
+    {
+        _saving = true;
+        _loadError = null;
+        try
+        {
+            var request = _form.ToRequest(TenantId, UserId);
+            if (_editId.HasValue) await Api.UpdateSubmissionReadinessRequirementAsync(_editId.Value, request); else await Api.CreateSubmissionReadinessRequirementAsync(request);
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex) { _loadError = $"Save failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    async Task DeleteAsync()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        _loadError = null;
+        try { await Api.DeleteSubmissionReadinessRequirementAsync(_deleteTarget.ReadinessRequirementId, TenantId, UserId); _deleteTarget = null; await LoadAsync(); }
+        catch (Exception ex) { _loadError = $"Delete failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    RenderFragment Kpi(string key, string title, string value, string hint) => @<button type="button" class="crr-kpi"><span>@title</span><strong>@value</strong><small>@hint</small></button>;
+
+    sealed class RequirementForm
+    {
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = string.Empty;
+        public string CarrierIdText { get; set; } = string.Empty;
+        [StringLength(20)] public string? StateCode { get; set; }
+        [StringLength(50)] public string? ChannelCode { get; set; }
+        [Required, StringLength(50)] public string ScopeCode { get; set; } = "Submission";
+        [Required, StringLength(100)] public string RequirementCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string RequirementTypeCode { get; set; } = "IntakeConfirmation";
+        [Required, StringLength(200)] public string DisplayName { get; set; } = string.Empty;
+        [StringLength(1000)] public string? Description { get; set; }
+        public bool IsRequired { get; set; } = true;
+        public bool BlocksSubmit { get; set; } = true;
+        public bool AllowsWaiver { get; set; } = true;
+        public bool RequiresEvidence { get; set; }
+        [StringLength(500)] public string? EvidencePrompt { get; set; }
+        [Range(0, 100)] public int ScoreWeight { get; set; } = 10;
+        [Range(0, 10000)] public int SortOrder { get; set; } = 100;
+        public bool IsActive { get; set; } = true;
+        public static RequirementForm From(SubmissionReadinessRequirementDto item) => new() { LineOfBusiness = item.LineOfBusiness, CarrierIdText = item.CarrierId?.ToString() ?? string.Empty, StateCode = item.StateCode, ChannelCode = item.ChannelCode, ScopeCode = item.ScopeCode, RequirementCode = item.RequirementCode, RequirementTypeCode = item.RequirementTypeCode, DisplayName = item.DisplayName, Description = item.Description, IsRequired = item.IsRequired, BlocksSubmit = item.BlocksSubmit, AllowsWaiver = item.AllowsWaiver, RequiresEvidence = item.RequiresEvidence, EvidencePrompt = item.EvidencePrompt, ScoreWeight = item.ScoreWeight, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        public UpsertSubmissionReadinessRequirementRequest ToRequest(Guid tenantId, Guid? userId) => new(tenantId, LineOfBusiness, Guid.TryParse(CarrierIdText, out var carrierId) ? carrierId : null, StateCode, ChannelCode, ScopeCode, RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, BlocksSubmit, AllowsWaiver, RequiresEvidence, EvidencePrompt, null, ScoreWeight, SortOrder, IsActive, userId);
+    }
+}

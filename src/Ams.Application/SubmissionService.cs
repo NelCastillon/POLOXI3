@@ -82,6 +82,21 @@ public sealed class SubmissionService : ISubmissionService
     public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetReadinessAsync(submissionId, tenantId, cancellationToken);
 
+    public Task<SubmissionReadinessDto> GetMarketReadinessAsync(Guid submissionId, Guid submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetMarketReadinessAsync(submissionId, submissionMarketId, tenantId, cancellationToken);
+
+    public Task<SubmissionPackagePreviewDto> GetSubmissionPackagePreviewAsync(Guid submissionId, Guid? submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetSubmissionPackagePreviewAsync(submissionId, submissionMarketId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionReadinessRequirementDto>> GetReadinessRequirementsAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessRequirementsAsync(tenantId, searchTerm, cancellationToken);
+
+    public Task<Guid> UpsertReadinessRequirementAsync(Guid? readinessRequirementId, UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertReadinessRequirementAsync(readinessRequirementId, request, cancellationToken);
+
+    public Task DeleteReadinessRequirementAsync(Guid readinessRequirementId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteReadinessRequirementAsync(readinessRequirementId, tenantId, modifiedByUserId, cancellationToken);
+
     public Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetTaskTemplatesAsync(tenantId, cancellationToken);
 
@@ -141,6 +156,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default)
         => _repository.RemoveMarketAsync(submissionMarketId, cancellationToken);
 
+    public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default)
+        => _repository.SynchronizeOverdueMarketRequestsAsync(cancellationToken);
+
     public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteComparisonAsync(submissionId, cancellationToken);
 
@@ -149,6 +167,9 @@ public sealed class SubmissionService : ISubmissionService
 
     public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
         => _repository.RecordQuoteResponseAsync(submissionId, request, cancellationToken);
+
+    public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordCarrierInboundResponseAsync(submissionId, request, cancellationToken);
 
     public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateQuoteAsync(quoteId, request, cancellationToken);

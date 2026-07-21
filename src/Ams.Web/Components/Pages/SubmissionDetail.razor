@@ -107,7 +107,7 @@ else
                         }
                         @if (_activeTab == 3)
                         {
-                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="MarkAllAnswered"><i class="bi bi-check-all" aria-hidden="true"></i> Mark Complete</button>
+                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="RefreshReadinessAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh Readiness</button>
                         }
                         @if (_activeTab == 4)
                         {
@@ -183,10 +183,18 @@ else
                                 <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="ClearMarketFocus"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Focus</button>
                             </section>
                         }
-                        <section class="sdd-market-grid">
-                            @foreach (var market in VisibleMarkets)
+                        <section class="sdd-market-status-sections">
+                            @foreach (var group in MarketStatusGroups)
                             {
-                                <div class="sdd-market-card">
+                                <section class="sdd-market-status-section" aria-label="@group.Status markets">
+                                    <div class="sdd-market-status-section__header">
+                                        <span><i class="bi bi-kanban" aria-hidden="true"></i>@group.Status</span>
+                                        <strong>@group.Markets.Count market@(group.Markets.Count == 1 ? string.Empty : "s")</strong>
+                                    </div>
+                                    <div class="sdd-market-grid">
+                                    @foreach (var market in group.Markets)
+                                    {
+                                        <div class="sdd-market-card">
                                     <div class="sdd-market-head">
                                         <span><i class="bi bi-bank" aria-hidden="true"></i><strong>@market.CarrierName</strong></span>
                                         @MarketStatusBadge(market.Status)
@@ -197,20 +205,73 @@ else
                                         {
                                             <span>Recommended</span>
                                         }
+                                         @if (market.IsPastDue)
+                                         {
+                                             <span class="sdd-market-meta__alert">Past due @market.DaysPastDue d</span>
+                                         }
                                         <span>Added @market.AddedDateUtc.ToLocalTime().ToString("MMM d")</span>
                                     </div>
+                                     @if (market.RequestedLines.Any())
+                                     {
+                                         <div class="sdd-market-request-lines">
+                                             <span>@Safe(market.QuoteRequestScopeCode, "Quote request") · @MoneyOrDash(market.RequestedPremium)</span>
+                                             @if (!string.IsNullOrWhiteSpace(market.LatestQuoteRequestActionCode))
+                                             {
+                                                 <span>@QuoteRequestOptionName(_quoteRequestActionOptions, market.LatestQuoteRequestActionCode) · @Safe(market.LatestQuoteRequestStatusCode, "Tracked") · v@market.LatestQuoteRequestVersion</span>
+                                             }
+                                             @foreach (var line in market.RequestedLines)
+                                             {
+                                                 <div><strong>@line.LineOfBusiness</strong><em>@line.TargetPremium.ToString("C0")</em></div>
+                                             }
+                                         </div>
+                                     }
+                                    @if (market.LatestCarrierTransmissionId.HasValue || market.Transmissions.Any() || market.InboundResponses.Any())
+                                    {
+                                        <div class="sdd-market-transmission">
+                                            <div>
+                                                <span><i class="bi bi-broadcast-pin" aria-hidden="true"></i> Carrier transmission</span>
+                                                <strong>@Safe(market.LatestTransmissionStatusCode, "Not transmitted")</strong>
+                                            </div>
+                                            <div class="sdd-market-transmission__meta">
+                                                <span>@Safe(market.LatestTransmissionConnectorName, market.LatestTransmissionChannelCode ?? "Connector pending")</span>
+                                                @if (market.LatestTransmissionConfirmedDateUtc.HasValue)
+                                                {
+                                                    <span>Confirmed @market.LatestTransmissionConfirmedDateUtc.Value.ToLocalTime().ToString("MMM d h:mm tt")</span>
+                                                }
+                                                else if (market.LatestTransmissionSentDateUtc.HasValue)
+                                                {
+                                                    <span>Sent @market.LatestTransmissionSentDateUtc.Value.ToLocalTime().ToString("MMM d h:mm tt")</span>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(market.LatestTransmissionExternalReferenceNumber))
+                                                {
+                                                    <span>Ref @market.LatestTransmissionExternalReferenceNumber</span>
+                                                }
+                                            </div>
+                                            @if (!string.IsNullOrWhiteSpace(market.LatestTransmissionLastError))
+                                            {
+                                                <div class="sdd-market-transmission__error"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @market.LatestTransmissionLastError</div>
+                                            }
+                                            @if (market.LatestInboundResponseReceivedDateUtc.HasValue)
+                                            {
+                                                <div class="sdd-market-transmission__inbound"><i class="bi bi-inbox" aria-hidden="true"></i> @Safe(market.LatestInboundResponseTypeCode, "Inbound response") · @Safe(market.LatestInboundResponseStatusCode, "Received") · @market.LatestInboundResponseReceivedDateUtc.Value.ToLocalTime().ToString("MMM d h:mm tt")</div>
+                                            }
+                                        </div>
+                                    }
                                     @if (!string.IsNullOrWhiteSpace(market.DeclineReason))
                                     {
                                         <p>@market.DeclineReason</p>
                                     }
                                     <div class="sdd-market-actions">
                                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick="() => SubmitMarketAsync(market)"><i class="bi bi-send" aria-hidden="true"></i> Submit</button>
-                                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => RequestQuoteForMarket(market)"><i class="bi bi-journal-plus" aria-hidden="true"></i> Quote</button>
+                                        <button type="button" class="sdd-btn sdd-btn--ghost" title="@QuoteRequestButtonTitle(market)" disabled="@IsQuoteRequestBlocked(market)" @onclick="() => RequestQuoteForMarket(market)"><i class="bi bi-journal-plus" aria-hidden="true"></i> Quote</button>
                                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenQuoteResponseDialog(market)"><i class="bi bi-receipt" aria-hidden="true"></i> Record Response</button>
                                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenMarketPackageDialog(market)"><i class="bi bi-clipboard-data" aria-hidden="true"></i> Status</button>
                                         <button type="button" class="sdd-icon-btn" @onclick="() => ConfirmRemoveMarket(market)"><i class="bi bi-trash" aria-hidden="true"></i></button>
                                     </div>
-                                </div>
+                                        </div>
+                                    }
+                                    </div>
+                                </section>
                             }
                             @if (!VisibleMarkets.Any())
                             {
@@ -285,16 +346,45 @@ else
                     {
                         <section class="sdd-question-list">
                             <div class="sdd-progress-card"><span>Underwriting readiness</span><strong>@ReadinessPercent%</strong><div class="sdd-progress"><span style="width:@ReadinessPercent%"></span></div></div>
+                             @if (_readiness is not null && _readiness.IsReadyForMarketing)
+                             {
+                                 <div class="sdd-ready-next"><i class="bi bi-check2-circle" aria-hidden="true"></i><div><strong>Ready to submit to market</strong><span>Select a target carrier, preview the package, and submit through the configured channel.</span></div><button type="button" class="sdd-btn sdd-btn--primary" @onclick="GoToMarketsForSubmit"><i class="bi bi-bank" aria-hidden="true"></i> Choose Market</button></div>
+                             }
                              @if (_readiness is not null && !_readiness.IsReadyForMarketing)
                              {
                                  <div class="alert alert-warning sdd-alert" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@string.Join("; ", _readiness.BlockingReasons)</span></div>
                              }
                              @foreach (var question in _intakeQuestions)
                             {
-                                 <div class="sdd-question-row @(question.IsRequired && !question.IsAnswered ? "sdd-question-row--required" : string.Empty)">
+                                  <div class="sdd-question-row @(question.IsRequired && !IsQuestionSatisfied(question) ? "sdd-question-row--required" : string.Empty)">
                                      <span class="sdd-question-num">Q</span>
-                                     <div><strong>@question.QuestionText</strong><small>@question.HelpText</small><p>@Safe(question.AnswerText, "No answer recorded")</p></div>
-                                     <button type="button" class="sdd-btn @(question.IsAnswered ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => ToggleQuestionAsync(question)">@(question.IsAnswered ? "Answered" : "Mark")</button>
+                                      <div>
+                                          <strong>@question.QuestionText</strong>
+                                          <small>@question.HelpText</small>
+                                          <div class="sdd-question-meta">
+                                              <span class="@QuestionStatusClass(question)">@QuestionStatusLabel(question)</span>
+                                              <span>@(question.IsRequired ? "Required" : "Optional")</span>
+                                              @if (question.ScoreWeight > 0)
+                                              {
+                                                  <span>Weight @question.ScoreWeight</span>
+                                              }
+                                          </div>
+                                          <p>@Safe(question.AnswerText, IsQuestionSatisfied(question) ? "Confirmed for market readiness" : "No readiness confirmation recorded")</p>
+                                          <div class="sdd-evidence-row">
+                                              <label><span>Evidence</span><select class="form-select form-select-sm" value="@(question.EvidenceDocumentId?.ToString() ?? string.Empty)" @onchange="args => LinkEvidenceAsync(question, args.Value?.ToString())"><option value="">No linked document</option>@foreach (var doc in _docs) { <option value="@doc.DocumentId.ToString()">@doc.FileName</option> }</select></label>
+                                              @if (!string.IsNullOrWhiteSpace(question.EvidencePrompt))
+                                              {
+                                                  <small>@question.EvidencePrompt</small>
+                                              }
+                                          </div>
+                                      </div>
+                                      <div class="sdd-question-actions">
+                                          <button type="button" class="sdd-btn @(IsQuestionSatisfied(question) ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => ToggleQuestionAsync(question)">@QuestionActionLabel(question)</button>
+                                          @if (question.AllowsWaiver && !IsQuestionSatisfied(question))
+                                          {
+                                              <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenWaiverDialog(question)"><i class="bi bi-shield-exclamation" aria-hidden="true"></i> Waive</button>
+                                          }
+                                      </div>
                                 </div>
                             }
                         </section>
@@ -481,9 +571,60 @@ else
                         }
                         @if (_actionMode is "quote" or "policy" or "quote-review")
                         {
+                            @if (_actionMode == "quote" && QuoteRequestCoverageLines.Any())
+                            {
+                                <div class="sdd-field sdd-field--full sdd-quote-line-breakdown">
+                                    <label class="sdd-field">
+                                        <span>Quote Request Type</span>
+                                        <InputSelect class="form-select" @bind-Value="_actionForm.QuoteRequestActionCode">
+                                            @foreach (var option in _quoteRequestActionOptions)
+                                            {
+                                                <option value="@option.OptionCode">@option.OptionName</option>
+                                            }
+                                        </InputSelect>
+                                    </label>
+                                    @if (RequiresQuoteRequestReason)
+                                    {
+                                        <label class="sdd-field">
+                                            <span>Re-request Reason <em>*</em></span>
+                                            <InputSelect class="form-select" @bind-Value="_actionForm.QuoteRequestReasonCode">
+                                                <option value="">Select reason</option>
+                                                @foreach (var option in _quoteRequestReasonOptions)
+                                                {
+                                                    <option value="@option.OptionCode">@option.OptionName</option>
+                                                }
+                                            </InputSelect>
+                                        </label>
+                                    }
+                                    <span>Request scope</span>
+                                    <InputSelect class="form-select" @bind-Value="_actionForm.QuoteRequestScopeCode" @bind-Value:after="ApplyQuoteRequestScope">
+                                        @foreach (var option in _quoteRequestScopeOptions)
+                                        {
+                                            <option value="@option.OptionCode">@option.OptionName</option>
+                                        }
+                                    </InputSelect>
+                                    <div class="sdd-quote-line-breakdown__rows">
+                                        @foreach (var line in QuoteRequestCoverageLines)
+                                        {
+                                            <label class="sdd-quote-line-breakdown__row">
+                                                <span class="sdd-quote-line-breakdown__line"><InputCheckbox class="form-check-input" Value="IsQuoteLineSelected(line.SubmissionLineId)" ValueChanged="value => ToggleQuoteRequestLine(line.SubmissionLineId, value)" ValueExpression="() => _quoteLineSelectedExpressionValue" disabled="@(IsQuoteLineDisabled(line.SubmissionLineId))" /> <strong>@line.LineOfBusiness</strong></span>
+                                                <span>@line.TargetPremium.ToString("C0")</span>
+                                            </label>
+                                        }
+                                    </div>
+                                    <div class="sdd-quote-line-breakdown__total">
+                                        <strong>@(_actionForm.QuoteRequestScopeCode == "SingleLine" ? "Selected line target premium" : "Package target premium")</strong>
+                                        <span>@QuoteRequestPackagePremium.ToString("C0")</span>
+                                    </div>
+                                </div>
+                            }
                             <label class="sdd-field">
-                                <span>Annual Premium</span>
+                                <span>@(_actionMode == "quote" ? "Package Target Premium" : "Annual Premium")</span>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.AnnualPremium" />
+                                @if (_actionMode == "quote" && QuoteRequestCoverageLines.Count > 1)
+                                {
+                                    <small class="sdd-field-help">This is the total requested package premium. The line premiums above remain separated for underwriting context.</small>
+                                }
                             </label>
                         }
                         @if (_actionMode == "policy")
@@ -696,6 +837,124 @@ else
     </div>
 }
 
+@if (_showQuoteRequestPopup && _quoteRequestInstruction is not null)
+{
+    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseQuoteRequestPopup">
+        <div class="sdd-quote-success @(_quoteRequestPopupIsError ? "sdd-quote-success--error" : string.Empty)" role="dialog" aria-modal="true" aria-labelledby="sdd-quote-success-title" @onclick:stopPropagation="true">
+            <div class="sdd-quote-success__hero">
+                <div class="sdd-quote-success__icon"><i class="bi @(_quoteRequestPopupIsError ? "bi-exclamation-triangle" : "bi-send-check")" aria-hidden="true"></i></div>
+                <span>@(_quoteRequestPopupIsError ? "Quote request failed" : "Quote request confirmed")</span>
+                <h3 id="sdd-quote-success-title">@(_quoteRequestPopupIsError ? "Request could not be completed" : "Request sent and workflow updated")</h3>
+                <p>@_quoteRequestInstruction</p>
+            </div>
+            @if (_quoteRequestPopupIsError)
+            {
+                <div class="sdd-quote-success__error-detail">
+                    <i class="bi bi-shield-exclamation" aria-hidden="true"></i>
+                    <div><span>Failure detail</span><strong>@_quoteRequestError</strong></div>
+                </div>
+            }
+            else
+            {
+                <div class="sdd-quote-success__steps">
+                    <div><i class="bi bi-bank" aria-hidden="true"></i><span>Next step</span><strong>Review market status</strong></div>
+                    <div><i class="bi bi-activity" aria-hidden="true"></i><span>Audit trail</span><strong>Check activity timeline</strong></div>
+                    <div><i class="bi bi-receipt" aria-hidden="true"></i><span>Carrier response</span><strong>Record quote terms</strong></div>
+                </div>
+            }
+            <div class="sdd-modal__footer">
+                @if (!_quoteRequestPopupIsError)
+                {
+                    <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="ShowTimelineFromQuoteRequestPopup"><i class="bi bi-activity" aria-hidden="true"></i> View Activity</button>
+                    <button type="button" class="sdd-btn sdd-btn--primary" @onclick="ShowMarketsFromQuoteRequestPopup"><i class="bi bi-bank" aria-hidden="true"></i> Review Markets</button>
+                }
+                <button type="button" class="sdd-btn @(_quoteRequestPopupIsError ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="CloseQuoteRequestPopup"><i class="bi bi-check2-circle" aria-hidden="true"></i> @(_quoteRequestPopupIsError ? "OK" : "Done")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showReadinessGatePopup)
+{
+    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseReadinessGatePopup">
+        <div class="sdd-readiness-gate" role="dialog" aria-modal="true" aria-labelledby="sdd-readiness-gate-title" @onclick:stopPropagation="true">
+            <div class="sdd-readiness-gate__hero">
+                <div class="sdd-readiness-gate__icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
+                <span>Readiness required</span>
+                <h3 id="sdd-readiness-gate-title">Submission is not ready for market</h3>
+                <p>@Safe(_readinessGateContext, "Complete the DB-backed underwriting readiness checklist before submitting this package to a carrier market.")</p>
+            </div>
+            <div class="sdd-readiness-gate__body">
+                <div class="sdd-readiness-gate__summary">
+                    <div><span>Readiness</span><strong>@ReadinessPercent%</strong></div>
+                    <div><span>Required Intake</span><strong>@(_readiness?.AnsweredRequiredQuestionCount ?? 0)/@(_readiness?.RequiredQuestionCount ?? 0)</strong></div>
+                    <div><span>Required Docs</span><strong>@(_readiness?.SatisfiedRequiredDocumentCount ?? 0)/@(_readiness?.RequiredDocumentCount ?? 0)</strong></div>
+                </div>
+                @if (ReadinessBlockingReasons.Any())
+                {
+                    <div class="sdd-readiness-gate__blockers">
+                        <span><i class="bi bi-list-check" aria-hidden="true"></i> Required before submit</span>
+                        @foreach (var reason in ReadinessBlockingReasons)
+                        {
+                            <div><i class="bi bi-exclamation-circle" aria-hidden="true"></i><strong>@reason</strong></div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="sdd-readiness-gate__blockers">
+                        <span><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh required</span>
+                        <div><i class="bi bi-info-circle" aria-hidden="true"></i><strong>Readiness data may be stale. Refresh the submission and try again.</strong></div>
+                    </div>
+                }
+            </div>
+            <div class="sdd-modal__footer">
+                <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="CloseReadinessGatePopup"><i class="bi bi-x-circle" aria-hidden="true"></i> Not Now</button>
+                <button type="button" class="sdd-btn sdd-btn--primary" @onclick="ReviewReadinessFromGate"><i class="bi bi-clipboard2-check" aria-hidden="true"></i> Review Readiness</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_waiverTarget is not null)
+{
+    <div class="sdd-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="sdd-waiver-title">
+        <div class="sdd-confirm sdd-waiver-dialog" @onclick:stopPropagation="true">
+            <div class="sdd-confirm__body">
+                <div class="sdd-confirm-icon sdd-confirm-icon--danger"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
+                <div>
+                    <h3 id="sdd-waiver-title">Waive readiness requirement?</h3>
+                    <p>Waive <strong>@_waiverTarget.QuestionText</strong> for this submission. This records an exception in the audit trail.</p>
+                    <label class="sdd-waiver-field"><span>Waiver reason</span><textarea class="form-control" rows="3" @bind="_waiverReason" maxlength="1000" placeholder="Explain why this requirement can be waived..."></textarea></label>
+                </div>
+            </div>
+            <div class="sdd-modal__footer">
+                <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="CloseWaiverDialog">Cancel</button>
+                <button type="button" class="sdd-btn sdd-btn--danger" @onclick="ExecuteWaiverAsync" disabled="@(string.IsNullOrWhiteSpace(_waiverReason))">Waive Requirement</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_packagePreview is not null)
+{
+    <div class="sdd-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="sdd-package-preview-title" @onclick="ClosePackagePreview">
+        <div class="sdd-package-preview" @onclick:stopPropagation="true">
+            <div class="sdd-modal__header"><i class="bi bi-box-seam" aria-hidden="true"></i><span id="sdd-package-preview-title">Market Package Preview</span><button type="button" class="sdd-icon-btn sdd-icon-btn--light ms-auto" @onclick="ClosePackagePreview"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <div class="sdd-modal__body">
+                <div class="sdd-package-hero"><div><span>@Safe(_packagePreview.CarrierName, "Selected market")</span><h3>@_packagePreview.SubmissionNumber - @_packagePreview.AccountName</h3><p>@_packagePreview.LineOfBusiness</p></div><div><strong>@_packagePreview.ChannelCode</strong><small>@_packagePreview.ChannelDescription</small><em>@_packagePreview.PackageStatus</em></div></div>
+                <div class="sdd-package-grid">
+                    <section><h4>Coverage lines</h4>@foreach (var line in _packagePreview.Lines) { <div><span>@line.LineOfBusiness</span><strong>@line.TargetPremium.ToString("C0")</strong></div> } @if (!_packagePreview.Lines.Any()) { <p>No coverage lines selected.</p> }</section>
+                    <section><h4>Documents</h4>@foreach (var doc in _packagePreview.Documents) { <div><span>@doc.FileName</span><strong>@doc.CategoryCode</strong></div> } @if (!_packagePreview.Documents.Any()) { <p>No documents attached.</p> }</section>
+                    <section><h4>Readiness evidence</h4>@foreach (var item in _packagePreview.ReadinessItems) { <div><span>@item.DisplayName</span><strong>@item.StatusCode</strong></div> }</section>
+                    <section><h4>Channel history</h4>@foreach (var tx in _packagePreview.Transmissions) { <div><span>@tx.ChannelCode - @tx.StatusCode</span><strong>@(tx.SentDateUtc?.ToLocalTime().ToString("MMM d h:mm tt") ?? "Queued")</strong></div> } @if (!_packagePreview.Transmissions.Any()) { <p>No carrier transmission yet.</p> }</section>
+                </div>
+            </div>
+            <div class="sdd-modal__footer"><button type="button" class="sdd-btn sdd-btn--ghost" @onclick="ClosePackagePreview">Close</button>@if (_packagePreview.SubmissionMarketId.HasValue) { <button type="button" class="sdd-btn sdd-btn--primary" @onclick="SubmitPreviewMarketAsync"><i class="bi bi-send" aria-hidden="true"></i> Submit This Market</button> }</div>
+        </div>
+    </div>
+}
+
 <div class="sdd-toast-stack" aria-live="polite" aria-atomic="true">
     @foreach (var toast in _toasts)
     {
@@ -710,6 +969,8 @@ else
     bool _actionBusy;
     bool _showActionDialog;
     bool _showConfirmDialog;
+    bool _showQuoteRequestPopup;
+    bool _showReadinessGatePopup;
     int _activeTab;
     string _activeKpi = "overview";
     string _commFilter = "All";
@@ -721,12 +982,19 @@ else
     string _actionButtonText = "Continue";
     string _confirmTitle = string.Empty;
     string _confirmMessage = string.Empty;
+    string? _quoteRequestInstruction;
+    string? _quoteRequestError;
+    bool _quoteRequestPopupIsError;
+    string? _readinessGateContext;
+    string _waiverReason = string.Empty;
     Guid? _selectedQuoteId;
     SubmissionMarketDto? _pendingRemoveMarket;
+    SubmissionIntakeQuestionDto? _waiverTarget;
     CurrentUserContextModel? _currentUser;
     IBrowserFile? _selectedDocumentFile;
 
     SubmissionDto? _submission;
+    SubmissionPackagePreviewDto? _packagePreview;
     readonly List<SubmissionMarketDto> _markets = [];
     readonly List<SubmissionMarketDto> _suggestedMarkets = [];
     readonly List<QuoteComparisonDto> _quotes = [];
@@ -748,11 +1016,17 @@ else
     readonly List<SubmissionReferenceOptionDto> _submissionMethodOptions = [];
     readonly List<SubmissionReferenceOptionDto> _proposalDeliveryMethodOptions = [];
     readonly List<SubmissionReferenceOptionDto> _proposalClientDecisionOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _quoteRequestScopeOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _quoteRequestActionOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _quoteRequestReasonOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _quoteRequestBlockedStatusOptions = [];
+    readonly HashSet<Guid> _selectedQuoteRequestLineIds = [];
     readonly List<CommItem> _communications = [];
     readonly List<ToastMessage> _toasts = [];
     readonly ActionForm _actionForm = new();
      SubmissionReadinessDto? _readiness;
      SubmissionMarketDto? _selectedMarket;
+     SubmissionMarketDto? _previewMarket;
      QuoteComparisonDto? _selectedQuote;
      SubmissionLineDto? _selectedCoverageLine;
      SubmissionLineDto? _marketFocusCoverageLine;
@@ -773,14 +1047,26 @@ else
     string PremiumDisplay => _submission?.TargetPremium is > 0 ? _submission.TargetPremium.Value.ToString("C0") : "Not set";
     int DaysToEffective => _submission is null ? 0 : (int)Math.Ceiling((_submission.EffectiveDate.Date - DateTime.Today).TotalDays);
     decimal LowestQuotePremium => _quotes.Any() ? _quotes.Min(q => q.AnnualPremium) : 0;
-    int ReadinessPercent => _readiness is null || _readiness.RequiredQuestionCount + _readiness.RequiredDocumentCount == 0 ? 100 : (int)Math.Round((double)(_readiness.AnsweredRequiredQuestionCount + _readiness.SatisfiedRequiredDocumentCount) / (_readiness.RequiredQuestionCount + _readiness.RequiredDocumentCount) * 100);
+    int ReadinessPercent => _readiness?.ReadinessScore ?? 100;
     int ImportanceScore => CalculateImportanceScore();
     string ImportanceLabel => ImportanceScore >= 85 ? "Critical" : ImportanceScore >= 70 ? "High" : ImportanceScore >= 50 ? "Medium" : "Standard";
     IEnumerable<SubmissionMarketDto> VisibleMarkets => _activeKpi == "markets" ? _markets : _markets;
+    IReadOnlyList<MarketStatusGroup> MarketStatusGroups => VisibleMarkets
+        .GroupBy(m => Safe(m.Status, "Uncategorized"))
+        .OrderBy(g => MarketStatusSortOrder(g.Key))
+        .ThenBy(g => g.Key)
+        .Select(g => new MarketStatusGroup(g.Key, g.OrderByDescending(m => m.IsRecommended).ThenByDescending(m => m.AppetiteScore).ThenBy(m => m.CarrierName).ToList()))
+        .ToList();
     IEnumerable<QuoteComparisonDto> VisibleQuotes => _activeKpi == "premium" ? _quotes.OrderBy(q => q.AnnualPremium) : _quotes;
+    IReadOnlyList<SubmissionLineDto> QuoteRequestCoverageLines => _lines.Count > 0 ? _lines : [];
+    IEnumerable<SubmissionLineDto> SelectedQuoteRequestLines => QuoteRequestCoverageLines.Where(l => _selectedQuoteRequestLineIds.Contains(l.SubmissionLineId));
+    decimal QuoteRequestPackagePremium => SelectedQuoteRequestLines.Any() ? SelectedQuoteRequestLines.Sum(l => l.TargetPremium) : _submission?.TargetPremium ?? 0;
+    bool _quoteLineSelectedExpressionValue;
     IEnumerable<CommItem> VisibleCommunications => _commFilter == "All" ? _communications : _communications.Where(c => c.Type == _commFilter);
     IEnumerable<IntelItem> CoverageInsights => BuildCoverageInsights();
     IEnumerable<string> ImportanceReasons => BuildImportanceReasons();
+    IReadOnlyList<string> ReadinessBlockingReasons => _readiness?.BlockingReasons ?? [];
+    bool RequiresQuoteRequestReason => _actionMode == "quote" && !string.Equals(_actionForm.QuoteRequestActionCode, "InitialRequest", StringComparison.OrdinalIgnoreCase);
     string ConfirmIconClass => _actionMode == "decline" || _actionMode == "remove-market" ? "sdd-confirm-icon sdd-confirm-icon--danger" : "sdd-confirm-icon";
     string ConfirmButtonClass => _actionMode == "decline" || _actionMode == "remove-market" ? "sdd-btn sdd-btn--danger" : "sdd-btn sdd-btn--primary";
     string ActionNotesLabel => _actionMode switch
@@ -903,7 +1189,7 @@ else
 
     async Task LoadReferenceOptionsAsync(Guid tenantId)
     {
-        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _proposalClientDecisionOptions.Count > 0) return;
+        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _proposalClientDecisionOptions.Count > 0 && _quoteRequestScopeOptions.Count > 0 && _quoteRequestActionOptions.Count > 0 && _quoteRequestReasonOptions.Count > 0 && _quoteRequestBlockedStatusOptions.Count > 0) return;
 
         var options = await Api.GetSubmissionReferenceOptionsAsync(tenantId) ?? [];
         LoadOptionGroup(_marketStatuses, options, "MarketStatus");
@@ -911,6 +1197,10 @@ else
         LoadOptionGroup(_submissionMethodOptions, options, "SubmissionMethod");
         LoadOptionGroup(_proposalDeliveryMethodOptions, options, "ProposalDeliveryMethod");
         LoadOptionGroup(_proposalClientDecisionOptions, options, "ProposalClientDecision");
+        LoadOptionGroup(_quoteRequestScopeOptions, options, "QuoteRequestScope");
+        LoadOptionGroup(_quoteRequestActionOptions, options, "QuoteRequestAction");
+        LoadOptionGroup(_quoteRequestReasonOptions, options, "QuoteRequestReason");
+        LoadOptionGroup(_quoteRequestBlockedStatusOptions, options, "QuoteRequestBlockedStatus");
     }
 
     static void LoadOptionGroup(List<SubmissionReferenceOptionDto> target, IEnumerable<SubmissionReferenceOptionDto> options, string group)
@@ -1048,6 +1338,14 @@ else
         _actionForm.SubmissionMethodCode = DefaultOptionCode(_submissionMethodOptions, _actionForm.SubmissionMethodCode);
         _actionForm.DeliveryMethod = DefaultOptionCode(_proposalDeliveryMethodOptions, _actionForm.DeliveryMethod);
         _actionForm.ClientDecision = DefaultOptionCode(_proposalClientDecisionOptions, _actionForm.ClientDecision);
+        _actionForm.QuoteRequestScopeCode = DefaultOptionCode(_quoteRequestScopeOptions, _actionForm.QuoteRequestScopeCode);
+        if (mode == "quote")
+        {
+            _actionForm.QuoteRequestActionCode = ResolveQuoteRequestActionCode(_selectedMarket);
+            _actionForm.QuoteRequestReasonCode = DefaultOptionCode(_quoteRequestReasonOptions, _actionForm.QuoteRequestReasonCode);
+            ResetQuoteRequestLines();
+            SyncQuoteRequestPremium();
+        }
         if (mode == "policy")
         {
             _actionForm.PolicySourceCode = _policyCreationSources.FirstOrDefault(x => x.IsDefault)?.SourceCode
@@ -1134,6 +1432,12 @@ else
 
     void OpenConfirmDialog()
     {
+        if (_actionMode == "submit" && !IsReadyForSubmitToMarket())
+        {
+            ShowReadinessGate("This carrier package cannot be submitted yet because underwriting readiness has open DB-backed blockers.");
+            return;
+        }
+
         if (_actionMode == "policy")
         {
             if (string.IsNullOrWhiteSpace(_actionForm.PolicySourceCode))
@@ -1151,6 +1455,27 @@ else
             if (SelectedPolicyCreationSource?.RequiresReason == true && string.IsNullOrWhiteSpace(_actionForm.PolicySourceReason))
             {
                 ShowToast("Policy creation reason is required for the selected policy source.", true);
+                return;
+            }
+        }
+
+        if (_actionMode == "quote" && QuoteRequestCoverageLines.Any() && !_selectedQuoteRequestLineIds.Any())
+        {
+            ShowToast("Select at least one coverage line for the quote request.", true);
+            return;
+        }
+
+        if (_actionMode == "quote")
+        {
+            if (string.IsNullOrWhiteSpace(_actionForm.QuoteRequestActionCode))
+            {
+                ShowToast("Quote request type is required.", true);
+                return;
+            }
+
+            if (RequiresQuoteRequestReason && string.IsNullOrWhiteSpace(_actionForm.QuoteRequestReasonCode))
+            {
+                ShowToast("A DB-backed reason is required for quote re-requests and revisions.", true);
                 return;
             }
         }
@@ -1192,13 +1517,22 @@ else
         {
             if (_actionMode == "submit")
             {
+                if (!IsReadyForSubmitToMarket())
+                {
+                    ShowReadinessGate("This carrier package cannot be submitted yet because underwriting readiness has open DB-backed blockers.");
+                    return;
+                }
+
                 await Api.SubmitSubmissionToMarketAsync(SubmissionId, new SubmitSubmissionToMarketRequest(_submission.TenantId, _actionForm.CarrierId, _actionForm.Notes));
                 ShowToast("Submission sent to market.");
             }
             else if (_actionMode == "quote")
             {
-                await Api.RequestSubmissionQuoteAsync(SubmissionId, new RequestSubmissionQuoteRequest(_submission.TenantId, _actionForm.CarrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes, _currentUser?.UserId, null, _selectedMarket?.SubmissionMarketId));
-                ShowToast("Quote requested.");
+                var result = await Api.RequestSubmissionQuoteAsync(SubmissionId, new RequestSubmissionQuoteRequest(_submission.TenantId, _actionForm.CarrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes, _currentUser?.UserId, null, _selectedMarket?.SubmissionMarketId, _actionForm.QuoteRequestScopeCode, _selectedQuoteRequestLineIds.ToArray(), _actionForm.QuoteRequestActionCode, RequiresQuoteRequestReason ? _actionForm.QuoteRequestReasonCode : null));
+                _quoteRequestInstruction = $"{result?.Message ?? "AMS created the quote request."} Next, monitor the Markets tab for carrier status, follow the Activity timeline for the request record, and record quote terms when the carrier responds.";
+                _quoteRequestError = null;
+                _quoteRequestPopupIsError = false;
+                _showQuoteRequestPopup = true;
             }
             else if (_actionMode == "policy")
             {
@@ -1281,7 +1615,25 @@ else
         }
         catch (Exception ex)
         {
-            ShowToast($"{_actionTitle} failed: {ex.Message}", true);
+            if (_actionMode == "quote")
+            {
+                _quoteRequestInstruction = "AMS could not complete the quote request. Review the failure detail below, adjust the request if needed, and try again.";
+                _quoteRequestError = ex.Message;
+                _quoteRequestPopupIsError = true;
+                _showQuoteRequestPopup = true;
+            }
+            else
+            {
+                if (_actionMode == "submit" && ex.Message.Contains("not ready for marketing", StringComparison.OrdinalIgnoreCase))
+                {
+                    await RefreshReadinessAsync();
+                    ShowReadinessGate(ex.Message);
+                }
+                else
+                {
+                    ShowToast($"{_actionTitle} failed: {ex.Message}", true);
+                }
+            }
         }
         finally
         {
@@ -1294,6 +1646,12 @@ else
     async Task SubmitMarketAsync(SubmissionMarketDto market)
     {
         if (_submission is null) return;
+        if (!IsReadyForSubmitToMarket())
+        {
+            ShowReadinessGate($"{market.CarrierName} cannot receive this package yet because underwriting readiness has open DB-backed blockers.");
+            return;
+        }
+
         try
         {
             await Api.SubmitSubmissionToMarketAsync(SubmissionId, new SubmitSubmissionToMarketRequest(_submission.TenantId, market.CarrierId, $"Submitted to {market.CarrierName} from detail dashboard."));
@@ -1302,8 +1660,60 @@ else
         }
         catch (Exception ex)
         {
-            ShowToast($"Submit failed: {ex.Message}", true);
+            if (ex.Message.Contains("not ready for marketing", StringComparison.OrdinalIgnoreCase))
+            {
+                await RefreshReadinessAsync();
+                ShowReadinessGate(ex.Message);
+            }
+            else
+            {
+                ShowToast($"Submit failed: {ex.Message}", true);
+            }
         }
+    }
+
+    void GoToMarketsForSubmit()
+    {
+        _activeTab = 1;
+        _activeKpi = "markets";
+    }
+
+    async Task OpenPackagePreviewAsync(SubmissionMarketDto market)
+    {
+        if (_submission is null) return;
+        try
+        {
+            _previewMarket = market;
+            _packagePreview = await Api.GetSubmissionPackagePreviewAsync(SubmissionId, _submission.TenantId, market.SubmissionMarketId);
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Package preview failed: {ex.Message}", true);
+        }
+    }
+
+    void ClosePackagePreview()
+    {
+        _packagePreview = null;
+        _previewMarket = null;
+    }
+
+    async Task SubmitPreviewMarketAsync()
+    {
+        if (_previewMarket is null) return;
+        var market = _previewMarket;
+        ClosePackagePreview();
+        await SubmitMarketAsync(market);
+    }
+
+    async Task RefreshReadinessAsync()
+    {
+        if (_submission is null) return;
+        _intakeQuestions.Clear();
+        _intakeQuestions.AddRange(await Api.GetSubmissionIntakeAsync(SubmissionId) ?? []);
+        _documentChecklist.Clear();
+        _documentChecklist.AddRange(await Api.GetSubmissionDocumentChecklistAsync(SubmissionId, _submission.TenantId) ?? []);
+        _readiness = await Api.GetSubmissionReadinessAsync(SubmissionId, _submission.TenantId);
     }
 
     async Task CreatePolicyFromQuoteAsync(QuoteComparisonDto quote)
@@ -1348,15 +1758,35 @@ else
         _showConfirmDialog = true;
     }
 
+    static bool IsQuestionSatisfied(SubmissionIntakeQuestionDto question) => question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase);
+    static string QuestionStatusLabel(SubmissionIntakeQuestionDto question) => question.StatusCode switch
+    {
+        "Confirmed" => "Confirmed",
+        "Waived" => "Waived",
+        "NeedsFollowUp" => "Needs follow-up",
+        _ when IsQuestionSatisfied(question) => "Confirmed",
+        _ => "Needs review"
+    };
+    static string QuestionActionLabel(SubmissionIntakeQuestionDto question) => IsQuestionSatisfied(question) ? QuestionStatusLabel(question) : "Confirm";
+    static string QuestionStatusClass(SubmissionIntakeQuestionDto question) => question.StatusCode switch
+    {
+        "Confirmed" => "sdd-readiness-status sdd-readiness-status--confirmed",
+        "Waived" => "sdd-readiness-status sdd-readiness-status--waived",
+        "NeedsFollowUp" => "sdd-readiness-status sdd-readiness-status--follow-up",
+        _ when IsQuestionSatisfied(question) => "sdd-readiness-status sdd-readiness-status--confirmed",
+        _ => "sdd-readiness-status sdd-readiness-status--review"
+    };
+
     async Task ToggleQuestionAsync(SubmissionIntakeQuestionDto question)
     {
         if (_submission is null) return;
         try
         {
-            var answered = !question.IsAnswered;
-            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, answered ? Safe(question.AnswerText, "Completed") : null, answered, _currentUser?.UserId));
+            var answered = !IsQuestionSatisfied(question);
+            var statusCode = answered ? "Confirmed" : "NeedsReview";
+            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, answered ? Safe(question.AnswerText, "Confirmed for market readiness") : null, answered, _currentUser?.UserId, statusCode));
             await LoadAsync();
-            ShowToast("Readiness answer saved.");
+            ShowToast("Readiness confirmation saved.");
         }
         catch (Exception ex)
         {
@@ -1364,15 +1794,48 @@ else
         }
     }
 
-    async Task MarkAllAnswered()
+    async Task LinkEvidenceAsync(SubmissionIntakeQuestionDto question, string? documentIdText)
     {
         if (_submission is null) return;
-        foreach (var question in _intakeQuestions.Where(q => !q.IsAnswered))
+        try
         {
-            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, Safe(question.AnswerText, "Completed"), true, _currentUser?.UserId));
+            var evidenceDocumentId = Guid.TryParse(documentIdText, out var documentId) ? documentId : (Guid?)null;
+            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, question.AnswerText, IsQuestionSatisfied(question), _currentUser?.UserId, question.StatusCode, question.StatusReason, evidenceDocumentId, question.WaiverReason, question.ReviewDueDateUtc));
+            await RefreshReadinessAsync();
+            ShowToast("Readiness evidence linked.");
         }
-        await LoadAsync();
-        ShowToast("Underwriting readiness persisted as complete.");
+        catch (Exception ex)
+        {
+            ShowToast($"Evidence link failed: {ex.Message}", true);
+        }
+    }
+
+    void OpenWaiverDialog(SubmissionIntakeQuestionDto question)
+    {
+        _waiverTarget = question;
+        _waiverReason = question.WaiverReason ?? string.Empty;
+    }
+
+    void CloseWaiverDialog()
+    {
+        _waiverTarget = null;
+        _waiverReason = string.Empty;
+    }
+
+    async Task ExecuteWaiverAsync()
+    {
+        if (_submission is null || _waiverTarget is null || string.IsNullOrWhiteSpace(_waiverReason)) return;
+        try
+        {
+            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, _waiverTarget.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, Safe(_waiverTarget.AnswerText, "Waived for market readiness"), true, _currentUser?.UserId, "Waived", "Manager exception recorded", _waiverTarget.EvidenceDocumentId, _waiverReason.Trim(), _waiverTarget.ReviewDueDateUtc));
+            CloseWaiverDialog();
+            await RefreshReadinessAsync();
+            ShowToast("Readiness waiver recorded.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Waiver failed: {ex.Message}", true);
+        }
     }
 
     void NotifyActionValidation() => ShowToast("Complete required action fields.", true);
@@ -1447,10 +1910,71 @@ else
 
     void DismissToast(Guid id) => _toasts.RemoveAll(t => t.Id == id);
 
+    void ClearQuoteRequestInstruction() => _quoteRequestInstruction = null;
+
+    void CloseQuoteRequestPopup()
+    {
+        _showQuoteRequestPopup = false;
+        ClearQuoteRequestInstruction();
+        _quoteRequestError = null;
+        _quoteRequestPopupIsError = false;
+    }
+
+    void ShowMarketsFromQuoteRequestPopup()
+    {
+        _showQuoteRequestPopup = false;
+        ShowMarketsTab();
+    }
+
+    void ShowTimelineFromQuoteRequestPopup()
+    {
+        _showQuoteRequestPopup = false;
+        ShowTimelineTab();
+    }
+
+    bool IsReadyForSubmitToMarket() => _readiness?.IsReadyForMarketing != false;
+
+    void ShowReadinessGate(string? context = null)
+    {
+        _readinessGateContext = context;
+        _showActionDialog = false;
+        _showConfirmDialog = false;
+        _showReadinessGatePopup = true;
+    }
+
+    void CloseReadinessGatePopup()
+    {
+        _showReadinessGatePopup = false;
+        _readinessGateContext = null;
+    }
+
+    void ReviewReadinessFromGate()
+    {
+        CloseReadinessGatePopup();
+        SetTab(3);
+    }
+
+    void ShowMarketsTab() => SetTab(1);
+
+    void ShowTimelineTab() => SetTab(6);
+
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string DefaultOptionCode(IReadOnlyList<SubmissionReferenceOptionDto> options, string fallback) => options.FirstOrDefault(o => o.IsDefault)?.OptionCode ?? options.FirstOrDefault()?.OptionCode ?? fallback;
     static string PreferredOptionCode(IReadOnlyList<SubmissionReferenceOptionDto> options, string preferredCode, string fallback) => options.FirstOrDefault(o => string.Equals(o.OptionCode, preferredCode, StringComparison.OrdinalIgnoreCase))?.OptionCode ?? DefaultOptionCode(options, fallback);
+    static string QuoteRequestOptionName(IReadOnlyList<SubmissionReferenceOptionDto> options, string? code) => options.FirstOrDefault(o => string.Equals(o.OptionCode, code, StringComparison.OrdinalIgnoreCase))?.OptionName ?? Safe(code, "Quote request");
+    static int MarketStatusSortOrder(string status) => status switch
+    {
+        "In Review" => 10,
+        "Pending" => 20,
+        "Submitted" => 30,
+        "Requested" or "Awaiting Quote" => 40,
+        "Quoted" => 50,
+        "Bound" => 60,
+        "Declined" => 70,
+        "No Response" => 80,
+        _ => 100
+    };
     static string MoneyOrDash(decimal? value) => value.HasValue ? value.Value.ToString("C0") : "-";
     static string PercentOrDash(decimal? value) => value.HasValue ? $"{value.Value:N2}%" : "-";
     static DateOnly? ToDateOnly(DateTime? value) => value.HasValue ? DateOnly.FromDateTime(value.Value) : null;
@@ -1468,6 +1992,80 @@ else
         var user = _users.FirstOrDefault(u => u.UserId == userId.Value);
         return user is null ? "System" : Safe(user.FullName, user.UserName);
     }
+
+    bool IsQuoteLineSelected(Guid lineId) => _selectedQuoteRequestLineIds.Contains(lineId);
+    bool IsQuoteLineDisabled(Guid lineId) => string.Equals(_actionForm.QuoteRequestScopeCode, "SingleLine", StringComparison.OrdinalIgnoreCase) && _selectedQuoteRequestLineIds.Count == 1 && !_selectedQuoteRequestLineIds.Contains(lineId);
+    bool IsQuoteRequestBlocked(SubmissionMarketDto market) => _quoteRequestBlockedStatusOptions.Any(o => string.Equals(o.OptionCode, market.Status, StringComparison.OrdinalIgnoreCase));
+    string QuoteRequestButtonTitle(SubmissionMarketDto market) => IsQuoteRequestBlocked(market) ? $"Quote requests are blocked because this market is {market.Status}." : "Create, update, or revise a DB-backed quote request for this market.";
+
+    string ResolveQuoteRequestActionCode(SubmissionMarketDto? market)
+    {
+        var preferredCode = market switch
+        {
+            { LatestQuoteReceivedDateUtc: not null } => "RequestRevision",
+            { LatestQuoteRequestVersion: > 0 } => "ResendUpdate",
+            _ => "InitialRequest"
+        };
+
+        return PreferredOptionCode(_quoteRequestActionOptions, preferredCode, string.Empty);
+    }
+
+    void ToggleQuoteRequestLine(Guid lineId, bool selected)
+    {
+        if (selected)
+        {
+            if (string.Equals(_actionForm.QuoteRequestScopeCode, "SingleLine", StringComparison.OrdinalIgnoreCase))
+            {
+                _selectedQuoteRequestLineIds.Clear();
+            }
+            _selectedQuoteRequestLineIds.Add(lineId);
+        }
+        else
+        {
+            _selectedQuoteRequestLineIds.Remove(lineId);
+        }
+
+        SyncQuoteRequestPremium();
+    }
+
+    void ApplyQuoteRequestScope()
+    {
+        if (string.Equals(_actionForm.QuoteRequestScopeCode, "SingleLine", StringComparison.OrdinalIgnoreCase) && _selectedQuoteRequestLineIds.Count != 1)
+        {
+            var firstLine = QuoteRequestCoverageLines.FirstOrDefault();
+            _selectedQuoteRequestLineIds.Clear();
+            if (firstLine is not null) _selectedQuoteRequestLineIds.Add(firstLine.SubmissionLineId);
+        }
+        else if (!string.Equals(_actionForm.QuoteRequestScopeCode, "SingleLine", StringComparison.OrdinalIgnoreCase) && !_selectedQuoteRequestLineIds.Any())
+        {
+            foreach (var line in QuoteRequestCoverageLines)
+            {
+                _selectedQuoteRequestLineIds.Add(line.SubmissionLineId);
+            }
+        }
+
+        SyncQuoteRequestPremium();
+    }
+
+    void ResetQuoteRequestLines()
+    {
+        _selectedQuoteRequestLineIds.Clear();
+        var scope = _actionForm.QuoteRequestScopeCode;
+        var lines = QuoteRequestCoverageLines;
+        if (string.Equals(scope, "SingleLine", StringComparison.OrdinalIgnoreCase))
+        {
+            var firstLine = lines.FirstOrDefault();
+            if (firstLine is not null) _selectedQuoteRequestLineIds.Add(firstLine.SubmissionLineId);
+            return;
+        }
+
+        foreach (var line in lines)
+        {
+            _selectedQuoteRequestLineIds.Add(line.SubmissionLineId);
+        }
+    }
+
+    void SyncQuoteRequestPremium() => _actionForm.AnnualPremium = QuoteRequestPackagePremium;
 
     static string StatusClass(string status) => $"sdd-status--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string MarketStatusClass(string status) => $"sdd-market-status--{status.ToLowerInvariant().Replace(" ", "-")}";
@@ -1564,6 +2162,12 @@ else
 
         public string ClientDecision { get; set; } = string.Empty;
 
+        public string QuoteRequestScopeCode { get; set; } = string.Empty;
+
+        public string QuoteRequestActionCode { get; set; } = string.Empty;
+
+        public string? QuoteRequestReasonCode { get; set; }
+
         public string DocumentTypeCode { get; set; } = "Submission";
 
         public string DocumentCategoryCode { get; set; } = "Submission";
@@ -1614,12 +2218,16 @@ else
             DeliveryMethod = string.Empty;
             Recipient = string.Empty;
             ClientDecision = string.Empty;
+            QuoteRequestScopeCode = string.Empty;
+            QuoteRequestActionCode = string.Empty;
+            QuoteRequestReasonCode = null;
             DocumentTypeCode = "Submission";
             DocumentCategoryCode = "Submission";
             Notes = string.Empty;
         }
     }
 
+    sealed record MarketStatusGroup(string Status, IReadOnlyList<SubmissionMarketDto> Markets);
     sealed record TabDef(int Index, string Key, string Label, string Kicker, string Title, string Description, string Icon);
     sealed record UwQuestion(int Number, string Text, bool Required, bool Answered, string HelpText)
     {

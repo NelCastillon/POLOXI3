@@ -93,6 +93,36 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> GetReadiness(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetReadinessAsync(id, tenantId, cancellationToken));
 
+    [HttpGet("{id:guid}/markets/{marketId:guid}/readiness")]
+    public async Task<IActionResult> GetMarketReadiness(Guid id, Guid marketId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetMarketReadinessAsync(id, marketId, tenantId, cancellationToken));
+
+    [HttpGet("{id:guid}/package-preview")]
+    public async Task<IActionResult> GetPackagePreview(Guid id, [FromQuery] Guid tenantId, [FromQuery] Guid? submissionMarketId, CancellationToken cancellationToken)
+        => Ok(await _service.GetSubmissionPackagePreviewAsync(id, submissionMarketId, tenantId, cancellationToken));
+
+    [HttpGet("readiness-requirements")]
+    public async Task<IActionResult> GetReadinessRequirements([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
+        => Ok(await _service.GetReadinessRequirementsAsync(tenantId, searchTerm, cancellationToken));
+
+    [HttpPost("readiness-requirements")]
+    public async Task<IActionResult> CreateReadinessRequirement([FromBody] UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken)
+        => Ok(new { id = await _service.UpsertReadinessRequirementAsync(null, request, cancellationToken) });
+
+    [HttpPut("readiness-requirements/{requirementId:guid}")]
+    public async Task<IActionResult> UpdateReadinessRequirement(Guid requirementId, [FromBody] UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken)
+    {
+        await _service.UpsertReadinessRequirementAsync(requirementId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("readiness-requirements/{requirementId:guid}")]
+    public async Task<IActionResult> DeleteReadinessRequirement(Guid requirementId, [FromQuery] Guid tenantId, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteReadinessRequirementAsync(requirementId, tenantId, modifiedByUserId, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("task-templates")]
     public async Task<IActionResult> GetTaskTemplates([FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetTaskTemplatesAsync(tenantId, cancellationToken));
@@ -142,6 +172,10 @@ public sealed class SubmissionsController : ControllerBase
     [HttpGet("{id:guid}/markets/suggestions")]
     public async Task<IActionResult> GetMarketSuggestions(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetMarketSuggestionsAsync(id, cancellationToken));
+
+    [HttpPost("markets/synchronize-overdue")]
+    public async Task<IActionResult> SynchronizeOverdueMarkets(CancellationToken cancellationToken)
+        => Ok(new { updated = await _service.SynchronizeOverdueMarketRequestsAsync(cancellationToken) });
 
     [HttpPost("{id:guid}/markets")]
     public async Task<IActionResult> AddMarket(Guid id, [FromBody] AddSubmissionMarketRequest request, CancellationToken cancellationToken)
@@ -216,6 +250,10 @@ public sealed class SubmissionsController : ControllerBase
     [HttpPost("{id:guid}/quotes/response")]
     public async Task<IActionResult> RecordQuoteResponse(Guid id, [FromBody] RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken)
         => Ok(await _service.RecordQuoteResponseAsync(id, request, cancellationToken));
+
+    [HttpPost("{id:guid}/carrier-inbound-responses")]
+    public async Task<IActionResult> RecordCarrierInboundResponse(Guid id, [FromBody] RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken)
+        => Ok(new { id = await _service.RecordCarrierInboundResponseAsync(id, request, cancellationToken) });
 
     [HttpPatch("{id:guid}/quotes/{quoteId:guid}")]
     public async Task<IActionResult> UpdateQuote(Guid id, Guid quoteId, [FromBody] UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken)

@@ -56,7 +56,15 @@ public sealed record UpdateSubmissionIntakeQuestionRequest(
     [property: StringLength(2000)]
     string? AnswerText,
     bool IsAnswered,
-    Guid? AnsweredByUserId);
+    Guid? AnsweredByUserId,
+    [property: StringLength(50)]
+    string? StatusCode = null,
+    [property: StringLength(1000)]
+    string? StatusReason = null,
+    Guid? EvidenceDocumentId = null,
+    [property: StringLength(1000)]
+    string? WaiverReason = null,
+    DateTime? ReviewDueDateUtc = null);
 
 public sealed record UpdateSubmissionMarketPackageRequest(
     Guid TenantId,
@@ -171,6 +179,24 @@ public sealed record RecordSubmissionQuoteResponseRequest(
     string? CoverageForms = null,
     bool IsBindable = false);
 
+public sealed record RecordCarrierInboundResponseRequest(
+    Guid TenantId,
+    Guid? SubmissionMarketId,
+    Guid? CarrierTransmissionId,
+    Guid? CarrierId,
+    [property: Required, StringLength(50)]
+    string SourceChannelCode,
+    [property: Required, StringLength(50)]
+    string ResponseTypeCode,
+    [property: Required, StringLength(50)]
+    string StatusCode,
+    [property: StringLength(120)]
+    string? CarrierReferenceNumber,
+    [property: Required]
+    string PayloadJson,
+    DateTime? ReceivedDateUtc = null,
+    Guid? CreatedByUserId = null);
+
 public sealed record SelectSubmissionQuoteRequest(
     Guid TenantId,
     Guid QuoteId,
@@ -201,21 +227,62 @@ public sealed record SubmitSubmissionToMarketRequest(
     [StringLength(500)]
     string? Notes);
 
+public sealed record UpsertSubmissionReadinessRequirementRequest(
+    Guid TenantId,
+    [property: Required, StringLength(100)]
+    string LineOfBusiness,
+    Guid? CarrierId,
+    [property: StringLength(20)]
+    string? StateCode,
+    [property: StringLength(50)]
+    string? ChannelCode,
+    [property: Required, StringLength(50)]
+    string ScopeCode,
+    [property: Required, StringLength(100)]
+    string RequirementCode,
+    [property: Required, StringLength(50)]
+    string RequirementTypeCode,
+    [property: Required, StringLength(200)]
+    string DisplayName,
+    [property: StringLength(1000)]
+    string? Description,
+    bool IsRequired,
+    bool BlocksSubmit,
+    bool AllowsWaiver,
+    bool RequiresEvidence,
+    [property: StringLength(500)]
+    string? EvidencePrompt,
+    [property: StringLength(100)]
+    string? ApprovalRoleCode,
+    [property: Range(0, 100)]
+    int ScoreWeight,
+    [property: Range(0, 10000)]
+    int SortOrder,
+    bool IsActive,
+    Guid? ModifiedByUserId);
+
 public sealed record RequestSubmissionQuoteRequest(
     Guid TenantId,
     Guid? CarrierId,
-    [property: Range(0, 999999999999)]
+    [Range(0, 999999999999)]
     decimal? AnnualPremium,
-    [property: Range(0, 999999999999)]
+    [Range(0, 999999999999)]
     decimal? Deductible,
-    [property: Range(0, 999999999999)]
+    [Range(0, 999999999999)]
     decimal? Limit,
-    [property: StringLength(1000)]
+    [StringLength(1000)]
     string? CoverageNotes,
     Guid? RequestedByUserId = null,
-    [property: StringLength(100)]
+    [StringLength(100)]
     string? CarrierReferenceNumber = null,
-    Guid? SubmissionMarketId = null);
+    Guid? SubmissionMarketId = null,
+    [StringLength(50)]
+    string? QuoteRequestScopeCode = null,
+    Guid[]? SubmissionLineIds = null,
+    [StringLength(50)]
+    string? QuoteRequestActionCode = null,
+    [StringLength(80)]
+    string? QuoteRequestReasonCode = null);
 
 public sealed record CopySubmissionRequest(
     Guid TenantId,

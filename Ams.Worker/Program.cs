@@ -19,6 +19,7 @@ builder.Services.AddScoped<IJobStepExecutor, NotificationStepExecutor>();
 builder.Services.AddHostedService<AutomationWorkerService>();
 builder.Services.AddHostedService<PaymentPlatformWorkerService>();
 builder.Services.AddHostedService<SubmitToMarketDispatchWorkerService>();
+builder.Services.AddHostedService<QuoteRequestFollowUpWorkerService>();
 
 var host = builder.Build();
 host.Run();

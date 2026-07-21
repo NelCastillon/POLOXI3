@@ -20,6 +20,18 @@ public sealed class ExceptionHandlingMiddleware
         {
             await _next(context);
         }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Business rule validation failed.");
+            context.Response.StatusCode = (int)HttpStatusCode.Conflict;
+            context.Response.ContentType = "application/problem+json";
+            await context.Response.WriteAsJsonAsync(new ProblemDetails
+            {
+                Title = "Business rule validation failed.",
+                Detail = ex.Message,
+                Status = context.Response.StatusCode
+            });
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unhandled exception occurred.");
