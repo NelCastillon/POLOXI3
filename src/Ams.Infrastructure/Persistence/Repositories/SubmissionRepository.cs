@@ -260,6 +260,71 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'IX_SubmissionIntakeQuestion_Requirement')
     EXEC(N'CREATE INDEX IX_SubmissionIntakeQuestion_Requirement ON Submissions.SubmissionIntakeQuestion(TenantId, ReadinessRequirementId, StatusCode, IsDeleted);');
 
+IF OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessEvidenceDocument
+    (
+        SubmissionReadinessEvidenceDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessEvidenceDocument_Runtime PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        IntakeQuestionId UNIQUEIDENTIFIER NOT NULL,
+        ReadinessRequirementId UNIQUEIDENTIFIER NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Role_Runtime DEFAULT N'SupportingEvidence',
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Created_Runtime DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeleted_Runtime DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Tenant_Runtime DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Submission_Runtime DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IntakeQuestionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IntakeQuestionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Intake_Runtime DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ReadinessRequirementId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ReadinessRequirementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'DocumentId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Document_Runtime DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'EvidenceRoleCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_RoleB_Runtime DEFAULT N'SupportingEvidence';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_CreatedB_Runtime DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeletedB_Runtime DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'UX_SubmissionReadinessEvidenceDocument_Intake_Document')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionReadinessEvidenceDocument_Intake_Document ON Submissions.SubmissionReadinessEvidenceDocument(IntakeQuestionId, DocumentId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Submission ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, SubmissionId, IntakeQuestionId, IsDeleted) INCLUDE (DocumentId, SubmissionMarketId, CarrierId);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Document')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Document ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, DocumentId, IsDeleted);');
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReadinessEvidenceDocument
+        (SubmissionReadinessEvidenceDocumentId, TenantId, SubmissionId, IntakeQuestionId, ReadinessRequirementId, SubmissionMarketId, CarrierId, DocumentId, EvidenceRoleCode, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), q.TenantId, q.SubmissionId, q.IntakeQuestionId, q.ReadinessRequirementId, q.SubmissionMarketId, q.CarrierId, q.EvidenceDocumentId, N'SupportingEvidence', N'Migrated from legacy readiness EvidenceDocumentId.', SYSUTCDATETIME(), q.AnsweredByUserId, 0
+    FROM Submissions.SubmissionIntakeQuestion q
+    INNER JOIN DMS.Document d ON d.DocumentId = q.EvidenceDocumentId AND d.TenantId = q.TenantId AND d.EntityName = N'Submission' AND d.EntityId = q.SubmissionId AND d.IsDeleted = 0
+    WHERE q.EvidenceDocumentId IS NOT NULL
+      AND q.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessEvidenceDocument existing
+          WHERE existing.IntakeQuestionId = q.IntakeQuestionId
+            AND existing.DocumentId = q.EvidenceDocumentId
+            AND existing.IsDeleted = 0
+      );
+END;
+
 IF OBJECT_ID(N'Submissions.SubmissionDocumentRequirement', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.SubmissionDocumentRequirement
@@ -914,6 +979,127 @@ WHERE  SubmissionId = @Id AND IsDeleted = 0;";
         }, cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>> GetReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        return await GetEvidenceDocumentsAsync(cn, submissionId, intakeQuestionId, tenantId, cancellationToken);
+    }
+
+    public async Task ReplaceReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, ReplaceSubmissionReadinessEvidenceRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+
+        var distinctDocumentIds = request.DocumentIds.Distinct().ToArray();
+        var documentIdsJson = System.Text.Json.JsonSerializer.Serialize(distinctDocumentIds);
+        const string validationSql = @"
+DECLARE @SelectedDocuments TABLE (Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @SelectedDocuments (Id)
+SELECT DISTINCT TRY_CONVERT(UNIQUEIDENTIFIER, [value])
+FROM OPENJSON(@DocumentIdsJson)
+WHERE TRY_CONVERT(UNIQUEIDENTIFIER, [value]) IS NOT NULL;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionIntakeQuestion WHERE IntakeQuestionId = @IntakeQuestionId AND SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52013, 'Submission readiness requirement was not found.', 1;
+
+IF EXISTS
+(
+    SELECT 1
+    FROM @SelectedDocuments source
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM DMS.Document d
+        WHERE d.DocumentId = source.Id
+          AND d.TenantId = @TenantId
+          AND d.EntityName = N'Submission'
+          AND d.EntityId = @SubmissionId
+          AND d.IsDeleted = 0
+    )
+)
+    THROW 52014, 'One or more selected evidence documents are not attached to this submission.', 1;";
+
+        using var tx = cn.BeginTransaction();
+        await cn.ExecuteAsync(new CommandDefinition(validationSql, new { SubmissionId = submissionId, IntakeQuestionId = intakeQuestionId, request.TenantId, DocumentIdsJson = documentIdsJson }, tx, cancellationToken: cancellationToken));
+
+        const string deleteSql = @"
+DECLARE @SelectedDocuments TABLE (Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @SelectedDocuments (Id)
+SELECT DISTINCT TRY_CONVERT(UNIQUEIDENTIFIER, [value])
+FROM OPENJSON(@DocumentIdsJson)
+WHERE TRY_CONVERT(UNIQUEIDENTIFIER, [value]) IS NOT NULL;
+
+UPDATE Submissions.SubmissionReadinessEvidenceDocument
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE IntakeQuestionId = @IntakeQuestionId
+  AND SubmissionId = @SubmissionId
+  AND TenantId = @TenantId
+  AND IsDeleted = 0
+  AND DocumentId NOT IN (SELECT Id FROM @SelectedDocuments);";
+        await cn.ExecuteAsync(new CommandDefinition(deleteSql, new { SubmissionId = submissionId, IntakeQuestionId = intakeQuestionId, request.TenantId, request.ModifiedByUserId, DocumentIdsJson = documentIdsJson }, tx, cancellationToken: cancellationToken));
+
+        const string upsertSql = @"
+DECLARE @SelectedDocuments TABLE (Id UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @SelectedDocuments (Id)
+SELECT DISTINCT TRY_CONVERT(UNIQUEIDENTIFIER, [value])
+FROM OPENJSON(@DocumentIdsJson)
+WHERE TRY_CONVERT(UNIQUEIDENTIFIER, [value]) IS NOT NULL;
+
+INSERT INTO Submissions.SubmissionReadinessEvidenceDocument
+    (SubmissionReadinessEvidenceDocumentId, TenantId, SubmissionId, IntakeQuestionId, ReadinessRequirementId, SubmissionMarketId, CarrierId, DocumentId, EvidenceRoleCode, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), q.TenantId, q.SubmissionId, q.IntakeQuestionId, q.ReadinessRequirementId, q.SubmissionMarketId, q.CarrierId, source.Id,
+       COALESCE(NULLIF(@EvidenceRoleCode, N''), N'SupportingEvidence'), @Notes, SYSUTCDATETIME(), @ModifiedByUserId, 0
+FROM @SelectedDocuments source
+INNER JOIN Submissions.SubmissionIntakeQuestion q ON q.IntakeQuestionId = @IntakeQuestionId AND q.SubmissionId = @SubmissionId AND q.TenantId = @TenantId AND q.IsDeleted = 0
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionReadinessEvidenceDocument existing
+    WHERE existing.IntakeQuestionId = q.IntakeQuestionId
+      AND existing.DocumentId = source.Id
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET EvidenceRoleCode = COALESCE(NULLIF(@EvidenceRoleCode, N''), existing.EvidenceRoleCode),
+    Notes = @Notes,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+FROM Submissions.SubmissionReadinessEvidenceDocument existing
+INNER JOIN @SelectedDocuments source ON source.Id = existing.DocumentId
+WHERE existing.IntakeQuestionId = @IntakeQuestionId
+  AND existing.SubmissionId = @SubmissionId
+  AND existing.TenantId = @TenantId
+  AND existing.IsDeleted = 0;
+
+UPDATE q
+SET EvidenceDocumentId = primaryEvidence.DocumentId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+FROM Submissions.SubmissionIntakeQuestion q
+OUTER APPLY
+(
+    SELECT TOP 1 ev.DocumentId
+    FROM Submissions.SubmissionReadinessEvidenceDocument ev
+    INNER JOIN DMS.Document d ON d.DocumentId = ev.DocumentId AND d.IsDeleted = 0
+    WHERE ev.IntakeQuestionId = q.IntakeQuestionId
+      AND ev.IsDeleted = 0
+    ORDER BY ev.CreatedDateUtc, d.CreatedDateUtc DESC
+) primaryEvidence
+WHERE q.IntakeQuestionId = @IntakeQuestionId
+  AND q.SubmissionId = @SubmissionId
+  AND q.TenantId = @TenantId
+  AND q.IsDeleted = 0;
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ReadinessEvidenceUpdated', CONCAT(N'Readiness evidence document links updated. Count: ', (SELECT COUNT(1) FROM @SelectedDocuments)), SYSUTCDATETIME(), @ModifiedByUserId, N'SubmissionIntakeQuestion', @IntakeQuestionId, N'User', 0);";
+        await cn.ExecuteAsync(new CommandDefinition(upsertSql, new { SubmissionId = submissionId, IntakeQuestionId = intakeQuestionId, request.TenantId, EvidenceRoleCode = request.EvidenceRoleCode, request.Notes, request.ModifiedByUserId, DocumentIdsJson = documentIdsJson }, tx, cancellationToken: cancellationToken));
+        tx.Commit();
+    }
+
     public async Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -1126,7 +1312,9 @@ LEFT JOIN Submissions.SubmissionReadinessRequirement r ON r.ReadinessRequirement
 WHERE q.SubmissionId = @SubmissionId AND q.SubmissionMarketId IS NULL AND q.IsDeleted = 0
 ORDER BY q.IsRequired DESC, q.SortOrder, q.QuestionText;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return (await cn.QueryAsync<SubmissionIntakeQuestionDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+        var intake = (await cn.QueryAsync<SubmissionIntakeQuestionDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+        await AttachEvidenceDocumentsAsync(cn, intake, cancellationToken);
+        return intake;
     }
 
     public async Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
@@ -1155,6 +1343,38 @@ SET AnswerText = @AnswerText,
 WHERE IntakeQuestionId = @IntakeQuestionId AND SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;
 
 IF @@ROWCOUNT = 0 THROW 52012, 'Submission intake question was not found.', 1;
+
+IF @EvidenceDocumentId IS NOT NULL
+BEGIN
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM DMS.Document d
+        WHERE d.DocumentId = @EvidenceDocumentId
+          AND d.TenantId = @TenantId
+          AND d.EntityName = N'Submission'
+          AND d.EntityId = @SubmissionId
+          AND d.IsDeleted = 0
+    )
+        THROW 52014, 'Selected evidence document is not attached to this submission.', 1;
+
+    INSERT INTO Submissions.SubmissionReadinessEvidenceDocument
+        (SubmissionReadinessEvidenceDocumentId, TenantId, SubmissionId, IntakeQuestionId, ReadinessRequirementId, SubmissionMarketId, CarrierId, DocumentId, EvidenceRoleCode, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), q.TenantId, q.SubmissionId, q.IntakeQuestionId, q.ReadinessRequirementId, q.SubmissionMarketId, q.CarrierId, @EvidenceDocumentId, N'SupportingEvidence', N'Synced from readiness update.', SYSUTCDATETIME(), @AnsweredByUserId, 0
+    FROM Submissions.SubmissionIntakeQuestion q
+    WHERE q.IntakeQuestionId = @IntakeQuestionId
+      AND q.SubmissionId = @SubmissionId
+      AND q.TenantId = @TenantId
+      AND q.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessEvidenceDocument existing
+          WHERE existing.IntakeQuestionId = q.IntakeQuestionId
+            AND existing.DocumentId = @EvidenceDocumentId
+            AND existing.IsDeleted = 0
+      );
+END;
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES (NEWID(), @SubmissionId, @TenantId, N'ReadinessUpdated', CONCAT(N'Underwriting readiness item updated to ', @EffectiveStatusCode, N'.'), SYSUTCDATETIME(), @AnsweredByUserId, N'SubmissionIntakeQuestion', @IntakeQuestionId, N'User', 0);";
@@ -1213,7 +1433,8 @@ ORDER BY r.SortOrder, r.DisplayName;";
     {
         var intake = await GetIntakeAsync(submissionId, cancellationToken);
         var checklist = await GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
-        static bool IsSatisfied(SubmissionIntakeQuestionDto question) => question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase);
+        static bool IsSatisfied(SubmissionIntakeQuestionDto question) => question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase)
+            || ((question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase)) && (!question.RequiresEvidence || question.EvidenceDocuments.Count > 0));
 
         var blockingQuestions = intake.Where(q => q.IsRequired && q.BlocksSubmit).ToArray();
         var requiredQuestionWeight = blockingQuestions.Sum(q => Math.Max(q.ScoreWeight, 1));
@@ -1222,7 +1443,9 @@ ORDER BY r.SortOrder, r.DisplayName;";
         var satisfiedDocumentWeight = checklist.Count(d => d.IsRequired && d.IsSatisfied);
         var totalWeight = requiredQuestionWeight + requiredDocumentWeight;
         var completedWeight = satisfiedQuestionWeight + satisfiedDocumentWeight;
-        var blockingReasons = blockingQuestions.Where(q => !IsSatisfied(q)).Select(q => $"Missing intake: {q.QuestionText}")
+        var blockingReasons = blockingQuestions.Where(q => !IsSatisfied(q)).Select(q => q.RequiresEvidence && q.EvidenceDocuments.Count == 0 && (q.IsAnswered || q.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase))
+                ? $"Missing evidence: {q.QuestionText}"
+                : $"Missing intake: {q.QuestionText}")
             .Concat(checklist.Where(d => d.IsRequired && !d.IsSatisfied).Select(d => $"Missing document: {d.DisplayName}"))
             .ToArray();
 
@@ -1271,9 +1494,11 @@ LEFT JOIN Core.Carrier c ON c.CarrierId = sm.CarrierId AND c.IsDeleted = 0
 WHERE sm.SubmissionMarketId = @SubmissionMarketId AND sm.SubmissionId = @SubmissionId AND sm.IsDeleted = 0;";
         using var grid = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, SubmissionMarketId = submissionMarketId }, cancellationToken: cancellationToken));
         var intake = (await grid.ReadAsync<SubmissionIntakeQuestionDto>()).AsList();
+        await AttachEvidenceDocumentsAsync(cn, intake, cancellationToken);
         var market = await grid.ReadFirstOrDefaultAsync<(Guid CarrierId, string CarrierName)>();
         var checklist = await GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
-        static bool IsSatisfied(SubmissionIntakeQuestionDto question) => question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase);
+        static bool IsSatisfied(SubmissionIntakeQuestionDto question) => question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase)
+            || ((question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase)) && (!question.RequiresEvidence || question.EvidenceDocuments.Count > 0));
         var blockingQuestions = intake.Where(q => q.IsRequired && q.BlocksSubmit).ToArray();
         var requiredQuestionWeight = blockingQuestions.Sum(q => Math.Max(q.ScoreWeight, 1));
         var satisfiedQuestionWeight = blockingQuestions.Where(IsSatisfied).Sum(q => Math.Max(q.ScoreWeight, 1));
@@ -1281,7 +1506,9 @@ WHERE sm.SubmissionMarketId = @SubmissionMarketId AND sm.SubmissionId = @Submiss
         var satisfiedDocumentWeight = checklist.Count(d => d.IsRequired && d.IsSatisfied);
         var totalWeight = requiredQuestionWeight + requiredDocumentWeight;
         var completedWeight = satisfiedQuestionWeight + satisfiedDocumentWeight;
-        var blockingReasons = blockingQuestions.Where(q => !IsSatisfied(q)).Select(q => $"Missing readiness: {q.QuestionText}")
+        var blockingReasons = blockingQuestions.Where(q => !IsSatisfied(q)).Select(q => q.RequiresEvidence && q.EvidenceDocuments.Count == 0 && (q.IsAnswered || q.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase))
+                ? $"Missing evidence: {q.QuestionText}"
+                : $"Missing readiness: {q.QuestionText}")
             .Concat(checklist.Where(d => d.IsRequired && !d.IsSatisfied).Select(d => $"Missing document: {d.DisplayName}"))
             .ToArray();
 
@@ -1369,17 +1596,72 @@ ORDER BY d.CreatedDateUtc DESC;";
         return (await cn.QueryAsync<SubmissionPackagePreviewDocumentDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
 
+    private static async Task AttachEvidenceDocumentsAsync(System.Data.IDbConnection cn, IReadOnlyList<SubmissionIntakeQuestionDto> intake, CancellationToken cancellationToken)
+    {
+        if (intake.Count == 0)
+        {
+            return;
+        }
+
+        var submissionId = intake[0].SubmissionId;
+        var tenantId = intake[0].TenantId;
+        var evidence = await GetEvidenceDocumentsAsync(cn, submissionId, null, tenantId, cancellationToken);
+        var byQuestion = evidence.GroupBy(e => e.IntakeQuestionId).ToDictionary(g => g.Key, g => (IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>)g.ToList());
+        foreach (var question in intake)
+        {
+            question.EvidenceDocuments = byQuestion.TryGetValue(question.IntakeQuestionId, out var documents) ? documents : [];
+            question.EvidenceDocumentId ??= question.EvidenceDocuments.FirstOrDefault()?.DocumentId;
+        }
+    }
+
+    private static async Task<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>> GetEvidenceDocumentsAsync(System.Data.IDbConnection cn, Guid submissionId, Guid? intakeQuestionId, Guid tenantId, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+SELECT ev.SubmissionReadinessEvidenceDocumentId, ev.TenantId, ev.SubmissionId, ev.IntakeQuestionId, ev.ReadinessRequirementId,
+       ev.SubmissionMarketId, ev.CarrierId, ev.DocumentId, ev.EvidenceRoleCode, ev.Notes,
+       d.FileName, d.CategoryCode, d.DocumentTypeCode, d.ContentType, d.FileSizeBytes, d.CreatedDateUtc AS DocumentCreatedDateUtc,
+       ev.CreatedDateUtc
+FROM Submissions.SubmissionReadinessEvidenceDocument ev
+INNER JOIN DMS.Document d ON d.DocumentId = ev.DocumentId AND d.TenantId = ev.TenantId AND d.EntityName = N'Submission' AND d.EntityId = ev.SubmissionId AND d.IsDeleted = 0
+WHERE ev.SubmissionId = @SubmissionId
+  AND ev.TenantId = @TenantId
+  AND (@IntakeQuestionId IS NULL OR ev.IntakeQuestionId = @IntakeQuestionId)
+  AND ev.IsDeleted = 0
+ORDER BY ev.IntakeQuestionId, ev.CreatedDateUtc, d.CreatedDateUtc DESC;";
+        return (await cn.QueryAsync<SubmissionReadinessEvidenceDocumentDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, IntakeQuestionId = intakeQuestionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
     private static async Task<IReadOnlyList<SubmissionPackagePreviewReadinessDto>> GetPreviewReadinessAsync(System.Data.IDbConnection cn, Guid submissionId, Guid? submissionMarketId, CancellationToken cancellationToken)
     {
         const string sql = @"
-SELECT q.QuestionCode AS RequirementCode, q.QuestionText AS DisplayName, COALESCE(q.StatusCode, CASE WHEN q.IsAnswered = 1 THEN N'Confirmed' ELSE N'NeedsReview' END) AS StatusCode,
-       q.IsRequired, q.BlocksSubmit, q.EvidenceDocumentId
+SELECT q.IntakeQuestionId, q.QuestionCode AS RequirementCode, q.QuestionText AS DisplayName, COALESCE(q.StatusCode, CASE WHEN q.IsAnswered = 1 THEN N'Confirmed' ELSE N'NeedsReview' END) AS StatusCode,
+       q.IsRequired, q.BlocksSubmit, COALESCE(r.RequiresEvidence, CAST(0 AS bit)) AS RequiresEvidence, q.EvidenceDocumentId, d.FileName AS EvidenceFileName, d.CategoryCode AS EvidenceCategoryCode, d.DocumentTypeCode AS EvidenceDocumentTypeCode
 FROM Submissions.SubmissionIntakeQuestion q
+LEFT JOIN Submissions.SubmissionReadinessRequirement r ON r.ReadinessRequirementId = q.ReadinessRequirementId AND r.IsDeleted = 0
+LEFT JOIN DMS.Document d ON d.DocumentId = q.EvidenceDocumentId AND d.TenantId = q.TenantId AND d.EntityName = N'Submission' AND d.EntityId = q.SubmissionId AND d.IsDeleted = 0
 WHERE q.SubmissionId = @SubmissionId
   AND (q.SubmissionMarketId IS NULL OR q.SubmissionMarketId = @SubmissionMarketId)
   AND q.IsDeleted = 0
 ORDER BY q.IsRequired DESC, q.SortOrder, q.QuestionText;";
-        return (await cn.QueryAsync<SubmissionPackagePreviewReadinessDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, SubmissionMarketId = submissionMarketId }, cancellationToken: cancellationToken))).AsList();
+        var readiness = (await cn.QueryAsync<SubmissionPackagePreviewReadinessDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, SubmissionMarketId = submissionMarketId }, cancellationToken: cancellationToken))).AsList();
+        if (readiness.Count == 0)
+        {
+            return readiness;
+        }
+
+        var tenantId = (await cn.QueryFirstAsync<Guid>(new CommandDefinition("SELECT TOP 1 TenantId FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND IsDeleted = 0", new { SubmissionId = submissionId }, cancellationToken: cancellationToken)));
+        var evidence = await GetEvidenceDocumentsAsync(cn, submissionId, null, tenantId, cancellationToken);
+        var byQuestion = evidence.GroupBy(e => e.IntakeQuestionId).ToDictionary(g => g.Key, g => (IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>)g.ToList());
+        foreach (var item in readiness)
+        {
+            item.EvidenceDocuments = byQuestion.TryGetValue(item.IntakeQuestionId, out var documents) ? documents : [];
+            item.EvidenceDocumentId ??= item.EvidenceDocuments.FirstOrDefault()?.DocumentId;
+            item.EvidenceFileName ??= item.EvidenceDocuments.FirstOrDefault()?.FileName;
+            item.EvidenceCategoryCode ??= item.EvidenceDocuments.FirstOrDefault()?.CategoryCode;
+            item.EvidenceDocumentTypeCode ??= item.EvidenceDocuments.FirstOrDefault()?.DocumentTypeCode;
+        }
+
+        return readiness;
     }
 
     public async Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)

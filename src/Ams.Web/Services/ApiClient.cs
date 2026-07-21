@@ -2792,6 +2792,15 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public Task<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>?> GetSubmissionReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>>($"api/submissions/{submissionId}/intake/{intakeQuestionId}/evidence-documents?tenantId={tenantId}", cancellationToken);
+
+    public async Task ReplaceSubmissionReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, ReplaceSubmissionReadinessEvidenceRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/submissions/{submissionId}/intake/{intakeQuestionId}/evidence-documents", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<IReadOnlyList<SubmissionDocumentChecklistDto>?> GetSubmissionDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionDocumentChecklistDto>>($"api/submissions/{submissionId}/document-checklist?tenantId={tenantId}", cancellationToken);
 

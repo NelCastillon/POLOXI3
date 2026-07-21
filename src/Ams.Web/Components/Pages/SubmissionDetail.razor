@@ -356,26 +356,90 @@ else
                              }
                              @foreach (var question in _intakeQuestions)
                             {
+                                var linkedEvidence = LinkedEvidence(question);
+                                var selectedEvidenceDocumentId = AvailableEvidenceDocuments(question).FirstOrDefault()?.DocumentId.ToString() ?? string.Empty;
                                   <div class="sdd-question-row @(question.IsRequired && !IsQuestionSatisfied(question) ? "sdd-question-row--required" : string.Empty)">
                                      <span class="sdd-question-num">Q</span>
-                                      <div>
-                                          <strong>@question.QuestionText</strong>
-                                          <small>@question.HelpText</small>
+                                      <div class="sdd-question-content">
+                                          <div class="sdd-question-title-row">
+                                              <div>
+                                                  <strong>@question.QuestionText</strong>
+                                                  <small>@question.HelpText</small>
+                                              </div>
+                                              <span class="@EvidenceStatusClass(question)"><i class="bi @EvidenceStatusIcon(question)" aria-hidden="true"></i> @EvidenceStatusLabel(question)</span>
+                                          </div>
                                           <div class="sdd-question-meta">
                                               <span class="@QuestionStatusClass(question)">@QuestionStatusLabel(question)</span>
                                               <span>@(question.IsRequired ? "Required" : "Optional")</span>
+                                              <span>@EvidenceRequirementLabel(question)</span>
                                               @if (question.ScoreWeight > 0)
                                               {
                                                   <span>Weight @question.ScoreWeight</span>
                                               }
                                           </div>
                                           <p>@Safe(question.AnswerText, IsQuestionSatisfied(question) ? "Confirmed for market readiness" : "No readiness confirmation recorded")</p>
-                                          <div class="sdd-evidence-row">
-                                              <label><span>Evidence</span><select class="form-select form-select-sm" value="@(question.EvidenceDocumentId?.ToString() ?? string.Empty)" @onchange="args => LinkEvidenceAsync(question, args.Value?.ToString())"><option value="">No linked document</option>@foreach (var doc in _docs) { <option value="@doc.DocumentId.ToString()">@doc.FileName</option> }</select></label>
-                                              @if (!string.IsNullOrWhiteSpace(question.EvidencePrompt))
+                                          <div class="sdd-evidence-card @(linkedEvidence is null && question.RequiresEvidence ? "sdd-evidence-card--missing" : string.Empty)">
+                                              <div class="sdd-evidence-card__header">
+                                                  <div>
+                                                      <span><i class="bi bi-paperclip" aria-hidden="true"></i> Requirement evidence</span>
+                                                      <strong>@EvidenceHeaderText(question)</strong>
+                                                  </div>
+                                                  @if (linkedEvidence is not null)
+                                                  {
+                                                      <a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(linkedEvidence.DocumentId)" title="Download linked evidence"><i class="bi bi-download" aria-hidden="true"></i></a>
+                                                  }
+                                              </div>
+                                              <div class="sdd-evidence-card__body">
+                                                  <label>
+                                                      <span>Add evidence document</span>
+                                                      <select class="form-select form-select-sm" value="@selectedEvidenceDocumentId" @onchange="args => AddEvidenceDocumentAsync(question, args.Value?.ToString())">
+                                                          <option value="">Select document to link</option>
+                                                          @foreach (var doc in AvailableEvidenceDocuments(question))
+                                                          {
+                                                              <option value="@doc.DocumentId.ToString()">@doc.FileName</option>
+                                                          }
+                                                      </select>
+                                                  </label>
+                                                  <div class="sdd-evidence-card__detail">
+                                                      <span>@EvidenceDetail(question, linkedEvidence)</span>
+                                                      @if (question.EvidenceDocuments.Any())
+                                                      {
+                                                          <small>@question.EvidenceDocuments.Count linked document@(question.EvidenceDocuments.Count == 1 ? string.Empty : "s") · Primary: @linkedEvidence?.FileName</small>
+                                                      }
+                                                      else if (!string.IsNullOrWhiteSpace(question.EvidencePrompt))
+                                                      {
+                                                          <small>@question.EvidencePrompt</small>
+                                                      }
+                                                      else
+                                                      {
+                                                          <small>Choose a document already attached to this submission, or upload one from the Documents tab.</small>
+                                                      }
+                                                  </div>
+                                              </div>
+                                              @if (question.EvidenceDocuments.Any())
                                               {
-                                                  <small>@question.EvidencePrompt</small>
+                                                  <div class="sdd-evidence-links">
+                                                      @foreach (var evidence in question.EvidenceDocuments)
+                                                      {
+                                                          <div class="sdd-evidence-link">
+                                                              <i class="bi @DocIcon(evidence.FileName)" aria-hidden="true"></i>
+                                                              <div>
+                                                                  <strong>@evidence.FileName</strong>
+                                                                  <small>@evidence.CategoryCode / @evidence.DocumentTypeCode · @FormatBytes(evidence.FileSizeBytes) · @evidence.DocumentCreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small>
+                                                              </div>
+                                                              <a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(evidence.DocumentId)" title="Download evidence"><i class="bi bi-download" aria-hidden="true"></i></a>
+                                                              <button type="button" class="sdd-icon-btn" title="Remove evidence" @onclick="() => RemoveEvidenceDocumentAsync(question, evidence.DocumentId)"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                                          </div>
+                                                      }
+                                                  </div>
                                               }
+                                              <div class="sdd-evidence-card__actions">
+                                                  @if (question.EvidenceDocuments.Any())
+                                                  {
+                                                      <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => ReplaceEvidenceDocumentsAsync(question, [])"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear Evidence</button>
+                                                  }
+                                                  <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="GoToDocumentsForEvidence"><i class="bi bi-file-earmark-plus" aria-hidden="true"></i> Manage Documents</button>
+                                              </div>
                                           </div>
                                       </div>
                                       <div class="sdd-question-actions">
@@ -946,7 +1010,34 @@ else
                 <div class="sdd-package-grid">
                     <section><h4>Coverage lines</h4>@foreach (var line in _packagePreview.Lines) { <div><span>@line.LineOfBusiness</span><strong>@line.TargetPremium.ToString("C0")</strong></div> } @if (!_packagePreview.Lines.Any()) { <p>No coverage lines selected.</p> }</section>
                     <section><h4>Documents</h4>@foreach (var doc in _packagePreview.Documents) { <div><span>@doc.FileName</span><strong>@doc.CategoryCode</strong></div> } @if (!_packagePreview.Documents.Any()) { <p>No documents attached.</p> }</section>
-                    <section><h4>Readiness evidence</h4>@foreach (var item in _packagePreview.ReadinessItems) { <div><span>@item.DisplayName</span><strong>@item.StatusCode</strong></div> }</section>
+                    <section class="sdd-package-readiness">
+                        <h4>Readiness evidence</h4>
+                        @foreach (var item in _packagePreview.ReadinessItems)
+                        {
+                            <div class="@PackageReadinessEvidenceClass(item)">
+                                <span><i class="bi @PackageReadinessEvidenceIcon(item)" aria-hidden="true"></i> @item.DisplayName</span>
+                                <strong>@item.StatusCode</strong>
+                                <small>@PackageReadinessEvidenceText(item)</small>
+                                @if (item.EvidenceDocuments.Any())
+                                {
+                                    <div class="sdd-package-readiness__docs">
+                                        @foreach (var evidence in item.EvidenceDocuments)
+                                        {
+                                            <em><i class="bi @DocIcon(evidence.FileName)" aria-hidden="true"></i> @evidence.FileName <b>@evidence.CategoryCode / @evidence.DocumentTypeCode</b></em>
+                                        }
+                                    </div>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(item.EvidenceCategoryCode))
+                                {
+                                    <em>@item.EvidenceCategoryCode / @item.EvidenceDocumentTypeCode</em>
+                                }
+                            </div>
+                        }
+                        @if (!_packagePreview.ReadinessItems.Any())
+                        {
+                            <p>No readiness items available.</p>
+                        }
+                    </section>
                     <section><h4>Channel history</h4>@foreach (var tx in _packagePreview.Transmissions) { <div><span>@tx.ChannelCode - @tx.StatusCode</span><strong>@(tx.SentDateUtc?.ToLocalTime().ToString("MMM d h:mm tt") ?? "Queued")</strong></div> } @if (!_packagePreview.Transmissions.Any()) { <p>No carrier transmission yet.</p> }</section>
                 </div>
             </div>
@@ -1711,6 +1802,8 @@ else
         if (_submission is null) return;
         _intakeQuestions.Clear();
         _intakeQuestions.AddRange(await Api.GetSubmissionIntakeAsync(SubmissionId) ?? []);
+        _docs.Clear();
+        _docs.AddRange(await Api.GetSubmissionDocumentsAsync(SubmissionId, _submission.TenantId) ?? []);
         _documentChecklist.Clear();
         _documentChecklist.AddRange(await Api.GetSubmissionDocumentChecklistAsync(SubmissionId, _submission.TenantId) ?? []);
         _readiness = await Api.GetSubmissionReadinessAsync(SubmissionId, _submission.TenantId);
@@ -1758,9 +1851,12 @@ else
         _showConfirmDialog = true;
     }
 
-    static bool IsQuestionSatisfied(SubmissionIntakeQuestionDto question) => question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase);
+    static bool HasEvidence(SubmissionIntakeQuestionDto question) => question.EvidenceDocuments.Any();
+    static bool IsQuestionSatisfied(SubmissionIntakeQuestionDto question) => question.StatusCode.Equals("Waived", StringComparison.OrdinalIgnoreCase)
+        || ((question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase)) && (!question.RequiresEvidence || HasEvidence(question)));
     static string QuestionStatusLabel(SubmissionIntakeQuestionDto question) => question.StatusCode switch
     {
+        _ when question.RequiresEvidence && !HasEvidence(question) && (question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase)) => "Evidence needed",
         "Confirmed" => "Confirmed",
         "Waived" => "Waived",
         "NeedsFollowUp" => "Needs follow-up",
@@ -1770,12 +1866,124 @@ else
     static string QuestionActionLabel(SubmissionIntakeQuestionDto question) => IsQuestionSatisfied(question) ? QuestionStatusLabel(question) : "Confirm";
     static string QuestionStatusClass(SubmissionIntakeQuestionDto question) => question.StatusCode switch
     {
+        _ when question.RequiresEvidence && !HasEvidence(question) && (question.IsAnswered || question.StatusCode.Equals("Confirmed", StringComparison.OrdinalIgnoreCase)) => "sdd-readiness-status sdd-readiness-status--follow-up",
         "Confirmed" => "sdd-readiness-status sdd-readiness-status--confirmed",
         "Waived" => "sdd-readiness-status sdd-readiness-status--waived",
         "NeedsFollowUp" => "sdd-readiness-status sdd-readiness-status--follow-up",
         _ when IsQuestionSatisfied(question) => "sdd-readiness-status sdd-readiness-status--confirmed",
         _ => "sdd-readiness-status sdd-readiness-status--review"
     };
+
+    DocumentDto? LinkedEvidence(SubmissionIntakeQuestionDto question)
+    {
+        var evidenceDocumentId = question.EvidenceDocuments.FirstOrDefault()?.DocumentId;
+        return evidenceDocumentId is Guid documentId ? _docs.FirstOrDefault(doc => doc.DocumentId == documentId) : null;
+    }
+
+    IEnumerable<DocumentDto> AvailableEvidenceDocuments(SubmissionIntakeQuestionDto question)
+    {
+        var linkedIds = question.EvidenceDocuments.Select(e => e.DocumentId).ToHashSet();
+        return _docs.Where(doc => !linkedIds.Contains(doc.DocumentId)).OrderByDescending(d => d.CreatedDateUtc);
+    }
+
+    static string EvidenceHeaderText(SubmissionIntakeQuestionDto question) => question.EvidenceDocuments.Count switch
+    {
+        0 => "No document linked",
+        1 => question.EvidenceDocuments[0].FileName,
+        _ => $"{question.EvidenceDocuments.Count} documents linked"
+    };
+
+    static string EvidenceRequirementLabel(SubmissionIntakeQuestionDto question) => question.RequiresEvidence ? "Evidence required" : "Evidence optional";
+
+    string EvidenceStatusLabel(SubmissionIntakeQuestionDto question)
+    {
+        if (!HasEvidence(question))
+        {
+            return question.RequiresEvidence ? "Missing evidence" : "No evidence linked";
+        }
+
+        return question.EvidenceDocuments.Count == 1 ? "Evidence linked" : $"{question.EvidenceDocuments.Count} evidence docs";
+    }
+
+    string EvidenceStatusClass(SubmissionIntakeQuestionDto question)
+    {
+        if (!HasEvidence(question))
+        {
+            return question.RequiresEvidence ? "sdd-evidence-status sdd-evidence-status--missing" : "sdd-evidence-status sdd-evidence-status--optional";
+        }
+
+        return "sdd-evidence-status sdd-evidence-status--linked";
+    }
+
+    string EvidenceStatusIcon(SubmissionIntakeQuestionDto question)
+    {
+        if (!HasEvidence(question))
+        {
+            return question.RequiresEvidence ? "bi-exclamation-triangle" : "bi-paperclip";
+        }
+
+        return "bi-check2-circle";
+    }
+
+    static string EvidenceDetail(SubmissionIntakeQuestionDto question, DocumentDto? linkedEvidence)
+    {
+        if (question.EvidenceDocuments.Any())
+        {
+            return "This readiness requirement is backed by linked submission evidence documents.";
+        }
+
+        return question.RequiresEvidence
+            ? "Attach evidence before submit-to-market readiness can be considered complete."
+            : "Evidence is optional for this readiness item, but linking support improves audit quality.";
+    }
+
+    static string PackageReadinessEvidenceClass(SubmissionPackagePreviewReadinessDto item)
+    {
+        if (item.EvidenceDocuments.Any())
+        {
+            return "sdd-package-readiness__item sdd-package-readiness__item--linked";
+        }
+
+        return item.RequiresEvidence
+            ? "sdd-package-readiness__item sdd-package-readiness__item--missing"
+            : "sdd-package-readiness__item sdd-package-readiness__item--optional";
+    }
+
+    static string PackageReadinessEvidenceIcon(SubmissionPackagePreviewReadinessDto item)
+    {
+        if (item.EvidenceDocuments.Any())
+        {
+            return "bi-paperclip";
+        }
+
+        return item.RequiresEvidence ? "bi-exclamation-circle" : "bi-info-circle";
+    }
+
+    static string PackageReadinessEvidenceText(SubmissionPackagePreviewReadinessDto item)
+    {
+        if (item.EvidenceDocuments.Count > 1)
+        {
+            return $"Evidence: {item.EvidenceDocuments.Count} linked documents";
+        }
+
+        if (item.EvidenceDocuments.Count == 1)
+        {
+            return $"Evidence: {item.EvidenceDocuments[0].FileName}";
+        }
+
+        if (item.EvidenceDocumentId.HasValue)
+        {
+            return $"Evidence: {Safe(item.EvidenceFileName, "Linked document")}";
+        }
+
+        return item.RequiresEvidence ? "Required evidence is not linked." : "No linked evidence required.";
+    }
+
+    void GoToDocumentsForEvidence()
+    {
+        _activeTab = 4;
+        _activeKpi = "documents";
+    }
 
     async Task ToggleQuestionAsync(SubmissionIntakeQuestionDto question)
     {
@@ -1794,15 +2002,27 @@ else
         }
     }
 
-    async Task LinkEvidenceAsync(SubmissionIntakeQuestionDto question, string? documentIdText)
+    async Task AddEvidenceDocumentAsync(SubmissionIntakeQuestionDto question, string? documentIdText)
+    {
+        if (!Guid.TryParse(documentIdText, out var documentId)) return;
+        var documentIds = question.EvidenceDocuments.Select(e => e.DocumentId).Append(documentId).Distinct().ToArray();
+        await ReplaceEvidenceDocumentsAsync(question, documentIds);
+    }
+
+    async Task RemoveEvidenceDocumentAsync(SubmissionIntakeQuestionDto question, Guid documentId)
+    {
+        var documentIds = question.EvidenceDocuments.Select(e => e.DocumentId).Where(id => id != documentId).ToArray();
+        await ReplaceEvidenceDocumentsAsync(question, documentIds);
+    }
+
+    async Task ReplaceEvidenceDocumentsAsync(SubmissionIntakeQuestionDto question, Guid[] documentIds)
     {
         if (_submission is null) return;
         try
         {
-            var evidenceDocumentId = Guid.TryParse(documentIdText, out var documentId) ? documentId : (Guid?)null;
-            await Api.UpdateSubmissionIntakeQuestionAsync(SubmissionId, question.IntakeQuestionId, new UpdateSubmissionIntakeQuestionRequest(_submission.TenantId, question.AnswerText, IsQuestionSatisfied(question), _currentUser?.UserId, question.StatusCode, question.StatusReason, evidenceDocumentId, question.WaiverReason, question.ReviewDueDateUtc));
+            await Api.ReplaceSubmissionReadinessEvidenceDocumentsAsync(SubmissionId, question.IntakeQuestionId, new ReplaceSubmissionReadinessEvidenceRequest(_submission.TenantId, documentIds, "SupportingEvidence", null, _currentUser?.UserId));
             await RefreshReadinessAsync();
-            ShowToast("Readiness evidence linked.");
+            ShowToast(documentIds.Length == 0 ? "Readiness evidence cleared." : "Readiness evidence links saved.");
         }
         catch (Exception ex)
         {

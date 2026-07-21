@@ -74,6 +74,7 @@ public sealed class SubmissionIntakeQuestionDto
     public string StatusCode { get; set; } = string.Empty;
     public string? StatusReason { get; set; }
     public Guid? EvidenceDocumentId { get; set; }
+    public IReadOnlyList<SubmissionReadinessEvidenceDocumentDto> EvidenceDocuments { get; set; } = [];
     public string? WaiverReason { get; set; }
     public Guid? WaivedByUserId { get; set; }
     public DateTime? WaivedDateUtc { get; set; }
@@ -84,6 +85,27 @@ public sealed class SubmissionIntakeQuestionDto
     public int SortOrder { get; set; }
     public Guid? AnsweredByUserId { get; set; }
     public DateTime? AnsweredDateUtc { get; set; }
+}
+
+public sealed class SubmissionReadinessEvidenceDocumentDto
+{
+    public Guid SubmissionReadinessEvidenceDocumentId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid SubmissionId { get; set; }
+    public Guid IntakeQuestionId { get; set; }
+    public Guid? ReadinessRequirementId { get; set; }
+    public Guid? SubmissionMarketId { get; set; }
+    public Guid? CarrierId { get; set; }
+    public Guid DocumentId { get; set; }
+    public string EvidenceRoleCode { get; set; } = string.Empty;
+    public string? Notes { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public string CategoryCode { get; set; } = string.Empty;
+    public string DocumentTypeCode { get; set; } = string.Empty;
+    public string? ContentType { get; set; }
+    public long? FileSizeBytes { get; set; }
+    public DateTime DocumentCreatedDateUtc { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
 }
 
 public sealed class SubmissionDocumentChecklistDto
@@ -183,12 +205,18 @@ public sealed class SubmissionPackagePreviewDocumentDto
 
 public sealed class SubmissionPackagePreviewReadinessDto
 {
+    public Guid IntakeQuestionId { get; set; }
     public string RequirementCode { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string StatusCode { get; set; } = string.Empty;
     public bool IsRequired { get; set; }
     public bool BlocksSubmit { get; set; }
+    public bool RequiresEvidence { get; set; }
     public Guid? EvidenceDocumentId { get; set; }
+    public string? EvidenceFileName { get; set; }
+    public string? EvidenceCategoryCode { get; set; }
+    public string? EvidenceDocumentTypeCode { get; set; }
+    public IReadOnlyList<SubmissionReadinessEvidenceDocumentDto> EvidenceDocuments { get; set; } = [];
 }
 
 public sealed class SubmissionTaskTemplateDto

@@ -263,6 +263,7 @@ public sealed partial class DatabaseMigrator
         new("0225_Submissions_MarketScopedReadiness_Enterprise", Migration0225_SubmissionsMarketScopedReadinessEnterprise),
         new("0226_Submissions_SubmitToMarketDispatchCompletion", Migration0226_SubmissionsSubmitToMarketDispatchCompletion),
         new("0227_Submissions_CommonExternalCarrierDeliverySettings", Migration0227_SubmissionsCommonExternalCarrierDeliverySettings),
+        new("0228_Submissions_ReadinessEvidenceDocuments", Migration0228_SubmissionsReadinessEvidenceDocuments),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -19227,6 +19228,75 @@ SET SettingName = s.SettingName,
 FROM Agency.CarrierSetting existing
 INNER JOIN @Settings0227 s ON s.SettingCode = existing.SettingCode
 WHERE existing.IsDeleted = 0;
+""";
+
+    private const string Migration0228_SubmissionsReadinessEvidenceDocuments = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessEvidenceDocument
+    (
+        SubmissionReadinessEvidenceDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessEvidenceDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        IntakeQuestionId UNIQUEIDENTIFIER NOT NULL,
+        ReadinessRequirementId UNIQUEIDENTIFIER NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Role_0228 DEFAULT N'SupportingEvidence',
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Created_0228 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeleted_0228 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Tenant_0228 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Submission_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IntakeQuestionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IntakeQuestionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Intake_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ReadinessRequirementId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ReadinessRequirementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'DocumentId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Document_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'EvidenceRoleCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_RoleB_0228 DEFAULT N'SupportingEvidence';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_CreatedB_0228 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeletedB_0228 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReadinessEvidenceDocument
+        (SubmissionReadinessEvidenceDocumentId, TenantId, SubmissionId, IntakeQuestionId, ReadinessRequirementId, SubmissionMarketId, CarrierId, DocumentId, EvidenceRoleCode, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), q.TenantId, q.SubmissionId, q.IntakeQuestionId, q.ReadinessRequirementId, q.SubmissionMarketId, q.CarrierId, q.EvidenceDocumentId, N'SupportingEvidence', N'Migrated from legacy readiness EvidenceDocumentId.', SYSUTCDATETIME(), q.AnsweredByUserId, 0
+    FROM Submissions.SubmissionIntakeQuestion q
+    INNER JOIN DMS.Document d ON d.DocumentId = q.EvidenceDocumentId AND d.TenantId = q.TenantId AND d.EntityName = N'Submission' AND d.EntityId = q.SubmissionId AND d.IsDeleted = 0
+    WHERE q.EvidenceDocumentId IS NOT NULL
+      AND q.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessEvidenceDocument existing
+          WHERE existing.IntakeQuestionId = q.IntakeQuestionId
+            AND existing.DocumentId = q.EvidenceDocumentId
+            AND existing.IsDeleted = 0
+      );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'UX_SubmissionReadinessEvidenceDocument_Intake_Document')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionReadinessEvidenceDocument_Intake_Document ON Submissions.SubmissionReadinessEvidenceDocument(IntakeQuestionId, DocumentId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Submission ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, SubmissionId, IntakeQuestionId, IsDeleted) INCLUDE (DocumentId, SubmissionMarketId, CarrierId);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Document')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Document ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, DocumentId, IsDeleted);');
 """;
 
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """

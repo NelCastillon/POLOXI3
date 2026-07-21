@@ -66,6 +66,15 @@ public sealed record UpdateSubmissionIntakeQuestionRequest(
     string? WaiverReason = null,
     DateTime? ReviewDueDateUtc = null);
 
+public sealed record ReplaceSubmissionReadinessEvidenceRequest(
+    Guid TenantId,
+    Guid[] DocumentIds,
+    [property: StringLength(50)]
+    string? EvidenceRoleCode = null,
+    [property: StringLength(1000)]
+    string? Notes = null,
+    Guid? ModifiedByUserId = null);
+
 public sealed record UpdateSubmissionMarketPackageRequest(
     Guid TenantId,
     Guid SubmissionMarketId,

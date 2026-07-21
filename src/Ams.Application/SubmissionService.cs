@@ -76,6 +76,12 @@ public sealed class SubmissionService : ISubmissionService
     public Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateIntakeQuestionAsync(submissionId, intakeQuestionId, request, cancellationToken);
 
+    public Task<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>> GetReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessEvidenceDocumentsAsync(submissionId, intakeQuestionId, tenantId, cancellationToken);
+
+    public Task ReplaceReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, ReplaceSubmissionReadinessEvidenceRequest request, CancellationToken cancellationToken = default)
+        => _repository.ReplaceReadinessEvidenceDocumentsAsync(submissionId, intakeQuestionId, request, cancellationToken);
+
     public Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
 

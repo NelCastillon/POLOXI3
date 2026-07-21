@@ -85,6 +85,17 @@ public sealed class SubmissionsController : ControllerBase
         return NoContent();
     }
 
+    [HttpGet("{id:guid}/intake/{intakeQuestionId:guid}/evidence-documents")]
+    public async Task<IActionResult> GetReadinessEvidenceDocuments(Guid id, Guid intakeQuestionId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetReadinessEvidenceDocumentsAsync(id, intakeQuestionId, tenantId, cancellationToken));
+
+    [HttpPut("{id:guid}/intake/{intakeQuestionId:guid}/evidence-documents")]
+    public async Task<IActionResult> ReplaceReadinessEvidenceDocuments(Guid id, Guid intakeQuestionId, [FromBody] ReplaceSubmissionReadinessEvidenceRequest request, CancellationToken cancellationToken)
+    {
+        await _service.ReplaceReadinessEvidenceDocumentsAsync(id, intakeQuestionId, request, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("{id:guid}/document-checklist")]
     public async Task<IActionResult> GetDocumentChecklist(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetDocumentChecklistAsync(id, tenantId, cancellationToken));
