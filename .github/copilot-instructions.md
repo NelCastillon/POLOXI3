@@ -28,7 +28,7 @@
 - When making light-mode text color/style overrides, ensure selectors do not affect or compromise dark theme behavior.
 - For AMS search boxes, light mode glow can stay subtle, but dark mode search boxes should be made noticeably visible using a brighter blue-tinted surface, border, glow, icon, and placeholder styling.
 - When polishing UI in dark mode, fix white/light backgrounds and contrast/readability issues, not just decorative styling.
-- **When fixing UI/CSS issues, prefer removing the source CSS/markup that causes the problem instead of adding compensating overrides; if a style is not working because of overlap, remove the conflicting old CSS first.**
+- **When fixing UI/CSS issues, prefer removing the source CSS/markup that causes the problem instead of adding compensating overrides; if a style is not working because of overlap, remove the conflicting old CSS first.** User strongly prefers removal-based fixes over adding overrides; avoid using stronger CSS overrides like !important to compensate for conflicts, and remove/narrow conflicting CSS at the source instead.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
