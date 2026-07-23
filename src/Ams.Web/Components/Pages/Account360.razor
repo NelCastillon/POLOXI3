@@ -5,6 +5,7 @@
 @using Ams.Application.Common.Validation
 @using Ams.Application.Features.Accounts
 @using Ams.Application.Features.Contacts
+@using Ams.Application.Features.Submissions
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject NavigationManager Nav
@@ -235,9 +236,9 @@ else
                     <div class="a360-tab-body">
                         <div class="a360-tab-toolbar">
                             <span class="a360-tab-count">@_policies.Count polic@(_policies.Count == 1 ? "y" : "ies")</span>
-                            <button class="a360-btn a360-btn-ghost a360-btn-sm" @onclick="CreatePolicyWorkflowAsync"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Policy</button>
+                            <button class="a360-btn a360-btn-ghost a360-btn-sm" @onclick="OpenAddExistingPolicy"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Existing Policy</button>
                         </div>
-                        @if (_policies.Count == 0) { @AEmpty("bi-shield","No policies","Bind new policies from quotes or add existing.") }
+                        @if (_policies.Count == 0) { @AEmpty("bi-shield","No policies","Policies appear after carrier-confirmed bind requests or existing policy entry.") }
                         else
                         {
                             <div class="a360-native-table-wrap">
@@ -829,6 +830,67 @@ else
 </div>
 }
 
+<!-- Add Existing Policy -->
+@if (_showAddExistingPolicy)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseExistingPolicyDialog">
+    <div class="a360-modal a360-modal-lg" role="dialog" aria-modal="true" aria-labelledby="a360-existing-policy-title" @onclick:stopPropagation="true">
+        <div class="a360-modal-header">
+            <i class="bi bi-shield-plus" aria-hidden="true"></i>
+            <span id="a360-existing-policy-title">Add Existing Policy</span>
+            <button type="button" class="a360-btn a360-btn-ghost a360-btn-sm a360-ms-auto" @onclick="CloseExistingPolicyDialog" disabled="@_saving"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <EditForm Model="_existingPolicyForm" OnValidSubmit="CommitExistingPolicyAsync">
+            <DataAnnotationsValidator />
+            <div class="a360-modal-body">
+                <div class="a360-form-grid">
+                    <div class="a360-field a360-field--full">
+                        <label>Entry Type <span class="a360-text-danger">*</span></label>
+                        <InputSelect @bind-Value="_existingPolicyForm.PolicySourceCode" class="a360-input">
+                            @foreach (var source in _policyCreationSources)
+                            {
+                                <option value="@source.SourceCode">@source.SourceName</option>
+                            }
+                        </InputSelect>
+                        @if (SelectedExistingPolicySource?.Description is { Length: > 0 } description)
+                        {
+                            <small class="a360-help-text">@description</small>
+                        }
+                    </div>
+                    <div class="a360-field"><label>Policy Number <span class="a360-text-danger">*</span></label><InputText @bind-Value="_existingPolicyForm.PolicyNumber" class="a360-input" /></div>
+                    <div class="a360-field"><label>Carrier <span class="a360-text-danger">*</span></label><InputText @bind-Value="_existingPolicyForm.CarrierName" class="a360-input" /></div>
+                    <div class="a360-field"><label>Line of Business <span class="a360-text-danger">*</span></label><InputText @bind-Value="_existingPolicyForm.LineOfBusiness" class="a360-input" /></div>
+                    <div class="a360-field"><label>Status <span class="a360-text-danger">*</span></label><InputText @bind-Value="_existingPolicyForm.Status" class="a360-input" /></div>
+                    <div class="a360-field"><label>Effective Date <span class="a360-text-danger">*</span></label><InputDate @bind-Value="_existingPolicyForm.EffectiveDate" class="a360-input" /></div>
+                    <div class="a360-field"><label>Expiration Date <span class="a360-text-danger">*</span></label><InputDate @bind-Value="_existingPolicyForm.ExpirationDate" class="a360-input" /></div>
+                    <div class="a360-field"><label>Annual Premium <span class="a360-text-danger">*</span></label><InputNumber @bind-Value="_existingPolicyForm.AnnualPremium" class="a360-input" /></div>
+                    <div class="a360-field"><label>Written Premium</label><InputNumber @bind-Value="_existingPolicyForm.WrittenPremium" class="a360-input" /></div>
+                    <div class="a360-field"><label>Commission Rate %</label><InputNumber @bind-Value="_existingPolicyForm.CommissionRate" class="a360-input" /></div>
+                    <div class="a360-field"><label>Branch</label><InputText @bind-Value="_existingPolicyForm.Branch" class="a360-input" /></div>
+                    @if (SelectedExistingPolicySource?.RequiresReason == true)
+                    {
+                        <div class="a360-field a360-field--full"><label>Reason <span class="a360-text-danger">*</span></label><InputTextArea @bind-Value="_existingPolicyForm.PolicySourceReason" class="a360-input" rows="3" /></div>
+                    }
+                    <div class="a360-field a360-field--full"><label>Notes</label><InputTextArea @bind-Value="_existingPolicyForm.Notes" class="a360-input" rows="3" /></div>
+                    <div class="a360-field a360-field--full">
+                        <label>Declarations Page <small>optional</small></label>
+                        <InputFile OnChange="OnExistingPolicyFileSelected" class="a360-input" accept="@DocumentFileAccept" />
+                        @if (_existingPolicyUploadFile is not null)
+                        {
+                            <small class="a360-help-text">Selected: @_existingPolicyUploadFile.Name</small>
+                        }
+                    </div>
+                </div>
+            </div>
+            <div class="a360-modal-footer">
+                <button type="button" class="a360-btn a360-btn-ghost" @onclick="CloseExistingPolicyDialog" disabled="@_saving">Cancel</button>
+                <button type="submit" class="a360-btn a360-btn-primary" disabled="@(_saving || _policyCreationSources.Count == 0)"><i class="bi bi-check-lg" aria-hidden="true"></i> Add Existing Policy</button>
+            </div>
+        </EditForm>
+    </div>
+</div>
+}
+
 <!-- FNOL/Edit Claim -->
 @if (_showFnol)
 {
@@ -942,8 +1004,8 @@ else
     private int                            _tab     = 0;
     private Account360Model?               _acct;
 
-    private static readonly IReadOnlyList<AccountTab> _tabs =
-    [
+    private static readonly IReadOnlyList<AccountTab> _tabs = new List<AccountTab>
+    {
         new(0, "Overview", "bi-house"),
         new(1, "Contacts", "bi-people"),
         new(2, "Policies", "bi-shield-check"),
@@ -958,25 +1020,26 @@ else
         new(11, "Timeline", "bi-clock-history"),
         new(12, "Relationships", "bi-diagram-3"),
         new(13, "Risk Insights", "bi-graph-up")
-    ];
+    };
 
     // Tab data
-    private List<ContactRow>        _contacts      = [];
-    private List<PolicyRow>         _policies      = [];
-    private List<SubmissionRow>     _submissions   = [];
-    private List<ClaimRow>          _claims        = [];
-    private List<BillingRow>        _billing       = [];
-    private List<CommissionRow>     _commissions   = [];
-    private List<DocRow>            _documents     = [];
-    private List<ActivityRow>       _activities    = [];
-    private List<CommRow>           _comms         = [];
-    private List<CampaignRow>       _campaigns     = [];
-    private List<TimelineEvent>     _timelineEvents = [];
-    private List<RelationshipRow>   _relationships = [];
+    private List<ContactRow>        _contacts      = new();
+    private List<PolicyRow>         _policies      = new();
+    private List<SubmissionRow>     _submissions   = new();
+    private List<ClaimRow>          _claims        = new();
+    private List<BillingRow>        _billing       = new();
+    private List<CommissionRow>     _commissions   = new();
+    private List<DocRow>            _documents     = new();
+    private List<ActivityRow>       _activities    = new();
+    private List<CommRow>           _comms         = new();
+    private List<CampaignRow>       _campaigns     = new();
+    private List<TimelineEvent>     _timelineEvents = new();
+    private List<RelationshipRow>   _relationships = new();
+    private List<PolicyCreationSourceDto> _policyCreationSources = new();
 
     // Risk insights
-    private List<RenewalRiskFactor> _renewalRiskFactors = [];
-    private List<LossRatioYear>     _lossRatioYears     = [];
+    private List<RenewalRiskFactor> _renewalRiskFactors = new();
+    private List<LossRatioYear>     _lossRatioYears     = new();
     private ClaimsHistory           _claimsHistory      = new();
     private RiskInsight             _riskInsight        = new();
 
@@ -987,6 +1050,7 @@ else
     private decimal DisplayYtdCommissions => _acct?.YtdCommissions ?? 0;
     private DateTime? DisplayLastActivity => _acct?.LastActivityDate;
     private IReadOnlyList<PriorityInsight> PriorityInsights => BuildPriorityInsights();
+    private PolicyCreationSourceDto? SelectedExistingPolicySource => _policyCreationSources.FirstOrDefault(source => string.Equals(source.SourceCode, _existingPolicyForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
 
     // Dialog state
     private bool          _showEdit          = false;
@@ -1000,6 +1064,7 @@ else
     private bool          _showCampaign      = false;
     private bool          _showNote          = false;
     private bool          _showAddSubmission = false;
+    private bool          _showAddExistingPolicy = false;
 
     private AccountEditForm _editForm    = new();
     private ContactForm   _contactForm   = new();
@@ -1014,6 +1079,8 @@ else
     private CampaignForm  _campaignForm  = new();
     private NoteForm      _noteForm      = new();
     private SubmissionForm _submissionForm = new();
+    private ExistingPolicyForm _existingPolicyForm = new();
+    private IBrowserFile? _existingPolicyUploadFile;
     private ContactRow?   _editingContact;
     private SubmissionRow? _editingSubmission;
     private ClaimRow?     _editingClaim;
@@ -1026,19 +1093,19 @@ else
     private Func<Task>?   _confirmDeleteAction;
     private bool          _saving;
     private CurrentUserContextModel? _userContext;
-    private readonly List<AccountToast> _toasts = [];
+    private readonly List<AccountToast> _toasts = new();
 
-    private static readonly List<LV> _actTypes     = [new("Call","Call"),new("Email","Email"),new("Meeting","Meeting"),new("Note","Note"),new("Task","Task")];
-    private static readonly List<LV> _commChannels = [new("Email","Email"),new("Phone","Phone"),new("SMS","SMS"),new("Portal","Portal")];
-    private static readonly List<LV> _relTypeOpts  = [new("Parent","Parent"),new("Subsidiary","Subsidiary"),new("Partner","Partner"),new("Referred By","Referred By")];
-    private static readonly List<LV> _campOpts     = [];
-    private static readonly List<LV> _accountTypes = [new("Commercial","Commercial"),new("Personal","Personal"),new("Non-Profit","Non-Profit"),new("Government","Government"),new("Partner","Partner")];
-    private static readonly List<LV> _statusOptions = [new("Active","Active"),new("Prospect","Prospect"),new("Inactive","Inactive"),new("Suspended","Suspended")];
-    private static readonly List<LV> _segmentOptions = [new("Enterprise","Enterprise"),new("Mid-Market","Mid-Market"),new("SMB","SMB"),new("Key Account","Key Account"),new("Startup","Startup")];
-    private static readonly List<LV> _lifecycleOptions = [new("Lead","Lead"),new("Prospect","Prospect"),new("Customer","Customer"),new("Renewal","Renewal"),new("At Risk","At Risk"),new("Inactive","Inactive")];
+    private static readonly List<LV> _actTypes     = new() { new("Call","Call"), new("Email","Email"), new("Meeting","Meeting"), new("Note","Note"), new("Task","Task") };
+    private static readonly List<LV> _commChannels = new() { new("Email","Email"), new("Phone","Phone"), new("SMS","SMS"), new("Portal","Portal") };
+    private static readonly List<LV> _relTypeOpts  = new() { new("Parent","Parent"), new("Subsidiary","Subsidiary"), new("Partner","Partner"), new("Referred By","Referred By") };
+    private static readonly List<LV> _campOpts     = new();
+    private static readonly List<LV> _accountTypes = new() { new("Commercial","Commercial"), new("Personal","Personal"), new("Non-Profit","Non-Profit"), new("Government","Government"), new("Partner","Partner") };
+    private static readonly List<LV> _statusOptions = new() { new("Active","Active"), new("Prospect","Prospect"), new("Inactive","Inactive"), new("Suspended","Suspended") };
+    private static readonly List<LV> _segmentOptions = new() { new("Enterprise","Enterprise"), new("Mid-Market","Mid-Market"), new("SMB","SMB"), new("Key Account","Key Account"), new("Startup","Startup") };
+    private static readonly List<LV> _lifecycleOptions = new() { new("Lead","Lead"), new("Prospect","Prospect"), new("Customer","Customer"), new("Renewal","Renewal"), new("At Risk","At Risk"), new("Inactive","Inactive") };
 
     private Guid _loadedAccountId;
-    private List<DocumentConfigItemDto> _documentCategories = [];
+    private List<DocumentConfigItemDto> _documentCategories = new();
     private IEnumerable<LV> DocumentCategoryOptions => _documentCategories.Select(c => new LV(CategoryLabel(c), CategoryLabel(c)));
     private static string DocumentFileAccept => string.Join(',', Enum.GetValues<DocumentFileExtension>().Select(DocumentFileExtensionValue));
 
@@ -1049,6 +1116,90 @@ else
             _loadedAccountId = AccountId;
             await LoadAsync();
         }
+    }
+
+    private async Task CommitExistingPolicyAsync()
+    {
+        if (_acct is null)
+            return;
+
+        if (_policyCreationSources.Count == 0)
+        {
+            await ShowToast("Add existing policy failed: no DB-backed existing-policy entry sources are configured.", "a360-toast-danger");
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? _acct.TenantId : _acct.TenantId;
+            var notes = BuildExistingPolicyNotes(_existingPolicyForm);
+            var policyId = await Api.CreatePolicyRegisterAsync(new UpsertPolicyRegisterRequest
+            {
+                TenantId = tenantId,
+                AccountId = AccountId,
+                AccountName = _acct.AccountName,
+                AccountType = string.IsNullOrWhiteSpace(_acct.AccountType) ? "Commercial" : _acct.AccountType,
+                PolicyNumber = Normalize(_existingPolicyForm.PolicyNumber) ?? string.Empty,
+                CarrierName = Normalize(_existingPolicyForm.CarrierName) ?? string.Empty,
+                PolicySourceCode = Normalize(_existingPolicyForm.PolicySourceCode) ?? SelectedExistingPolicySource?.SourceCode ?? string.Empty,
+                PolicySourceReason = Normalize(_existingPolicyForm.PolicySourceReason),
+                LineOfBusiness = Normalize(_existingPolicyForm.LineOfBusiness) ?? string.Empty,
+                Status = Normalize(_existingPolicyForm.Status) ?? "Active",
+                EffectiveDate = _existingPolicyForm.EffectiveDate ?? DateTime.Today,
+                ExpirationDate = _existingPolicyForm.ExpirationDate ?? DateTime.Today.AddYears(1),
+                WrittenPremium = _existingPolicyForm.WrittenPremium > 0 ? _existingPolicyForm.WrittenPremium : _existingPolicyForm.AnnualPremium,
+                AnnualPremium = _existingPolicyForm.AnnualPremium,
+                ProducerName = _acct.ProducerName,
+                CsrName = _acct.CsrName,
+                Branch = Normalize(_existingPolicyForm.Branch),
+                RenewalStage = "Not Started",
+                Notes = notes,
+                ModifiedByUserId = _userContext?.UserId
+            });
+
+            if (_existingPolicyUploadFile is not null)
+            {
+                await UploadExistingPolicyDocumentAsync(policyId, tenantId);
+            }
+
+            CloseExistingPolicyDialog();
+            await LoadPoliciesAsync();
+            await LoadDocumentsAsync();
+            await ShowToast("Existing policy added.");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast($"Add existing policy failed: {ex.Message}", "a360-toast-danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task UploadExistingPolicyDocumentAsync(Guid policyId, Guid tenantId)
+    {
+        if (_existingPolicyUploadFile is null)
+            return;
+
+        await using var stream = _existingPolicyUploadFile.OpenReadStream(104_857_600);
+        await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+        {
+            TenantId = tenantId,
+            DocumentTypeCode = "Policy",
+            CategoryCode = "Declarations",
+            FileExtension = Path.GetExtension(_existingPolicyUploadFile.Name),
+            FileName = _existingPolicyUploadFile.Name,
+            OriginalFileName = _existingPolicyUploadFile.Name,
+            EntityName = "Policy",
+            EntityId = policyId,
+            Description = $"Declarations page for existing policy {_existingPolicyForm.PolicyNumber}.",
+            Tags = "policy,declarations,existing-policy",
+            UploadedByName = _userContext?.TenantName,
+            CreatedByUserId = _userContext?.UserId,
+            Content = stream
+        });
     }
 
     private async Task LoadAsync()
@@ -1071,6 +1222,8 @@ else
             _acct = BuildAccountModel(account);
             ClearTabData();
             await LoadDocumentCategoriesAsync(account.TenantId);
+            await LoadPolicyCreationSourcesAsync(account.TenantId);
+            await LoadPoliciesAsync();
             await LoadContactsAsync();
             await LoadDocumentsAsync();
             BuildRightPanel();
@@ -1093,10 +1246,46 @@ else
     {
         var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? accountTenantId : accountTenantId;
         var result = await Api.SearchDocumentConfigItemsAsync(tenantId, "DocumentCategory", pageSize: 1000);
-        _documentCategories = result?.Items.Where(c => c.IsActive).OrderBy(c => c.SortOrder).ThenBy(c => c.Name).ToList() ?? [];
+        _documentCategories = result?.Items.Where(c => c.IsActive).OrderBy(c => c.SortOrder).ThenBy(c => c.Name).ToList() ?? new();
     }
 
     private static string CategoryLabel(DocumentConfigItemDto category) => string.IsNullOrWhiteSpace(category.Name) ? category.Code : category.Name;
+
+    private async Task LoadPolicyCreationSourcesAsync(Guid accountTenantId)
+    {
+        var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? accountTenantId : accountTenantId;
+        var sources = await Api.GetPolicyCreationSourcesAsync(tenantId) ?? Array.Empty<PolicyCreationSourceDto>();
+        _policyCreationSources = sources
+            .Where(source => source.IsActive && !source.RequiresQuote)
+            .OrderBy(source => source.SortOrder)
+            .ThenBy(source => source.SourceName)
+            .ToList();
+    }
+
+    private async Task LoadPoliciesAsync()
+    {
+        if (_acct is null)
+            return;
+
+        var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId ?? _acct.TenantId : _acct.TenantId;
+        var policies = await Api.SearchPolicyRegisterAsync(tenantId, searchTerm: _acct.AccountName, pageSize: 250);
+        _policies = policies?.Items
+            .Where(policy => policy.AccountId == AccountId)
+            .Select(MapPolicy)
+            .ToList() ?? new();
+    }
+
+    private static PolicyRow MapPolicy(PolicyRegisterDto policy) => new()
+    {
+        PolicyId = policy.PolicyId,
+        PolicyNumber = policy.PolicyNumber,
+        LineOfBusiness = policy.LineOfBusiness,
+        Carrier = policy.CarrierName,
+        Premium = policy.WrittenPremium > 0 ? policy.WrittenPremium : policy.AnnualPremium,
+        Status = string.IsNullOrWhiteSpace(policy.CoverageStatus) ? policy.Status : policy.CoverageStatus,
+        EffectiveDate = policy.EffectiveDate,
+        ExpirationDate = policy.ExpirationDate
+    };
 
     private static string DocumentFileExtensionLabel(DocumentFileExtension extension) => DocumentFileExtensionValue(extension).ToUpperInvariant();
 
@@ -1126,23 +1315,23 @@ else
 
     private void ClearTabData()
     {
-        _contacts = [];
-        _policies = [];
-        _submissions = [];
-        _claims = [];
-        _billing = [];
-        _commissions = [];
-        _documents = [];
-        _activities = [];
-        _comms = [];
-        _campaigns = [];
-        _timelineEvents = [];
-        _relationships = [];
+        _contacts = new();
+        _policies = new();
+        _submissions = new();
+        _claims = new();
+        _billing = new();
+        _commissions = new();
+        _documents = new();
+        _activities = new();
+        _comms = new();
+        _campaigns = new();
+        _timelineEvents = new();
+        _relationships = new();
     }
 
     private async Task LoadContactsAsync()
     {
-        var contacts = await Api.GetAccountContactsAsync(AccountId) ?? [];
+        var contacts = await Api.GetAccountContactsAsync(AccountId) ?? Array.Empty<ContactDto>();
         _contacts = contacts.Select(MapContact).ToList();
     }
 
@@ -1167,12 +1356,12 @@ else
         try
         {
             var tenantId = _userContext?.TenantId != Guid.Empty ? _userContext?.TenantId : _acct.TenantId;
-            var documents = await Api.GetDocumentsByEntityAsync(tenantId ?? _acct.TenantId, "Account", AccountId) ?? [];
+            var documents = await Api.GetDocumentsByEntityAsync(tenantId ?? _acct.TenantId, "Account", AccountId) ?? Array.Empty<DocumentDto>();
             _documents = documents.Select(MapDocument).ToList();
         }
         catch (Exception ex)
         {
-            _documents = [];
+            _documents = new();
             _documentLoadError = ex.Message;
             await ShowToast($"Document load failed: {ex.Message}", "a360-toast-danger");
         }
@@ -1192,15 +1381,15 @@ else
     private void BuildRightPanel()
     {
         var daysSinceTouch = _acct?.DaysSinceLastTouch ?? DaysSince(_acct?.LastActivityDate) ?? 0;
-        _renewalRiskFactors =
-        [
+        _renewalRiskFactors = new()
+        {
             new(DisplayBalancesDue > 0 ? $"Outstanding balance: {DisplayBalancesDue:C0}" : "No outstanding balance", DisplayBalancesDue <= 0),
             new($"Active policies: {DisplayActivePolicies:N0}", DisplayActivePolicies > 0),
             new($"Open claims: {DisplayOpenClaims:N0}", DisplayOpenClaims == 0),
             new($"Open opportunities: {_acct?.OpenOpportunities ?? 0:N0}", (_acct?.OpenOpportunities ?? 0) > 0),
             new(daysSinceTouch > 0 ? $"Days since last touch: {daysSinceTouch:N0}" : "No last-touch date recorded", daysSinceTouch is > 0 and <= 30),
-        ];
-        _lossRatioYears = [];
+        };
+        _lossRatioYears = new();
         _claimsHistory = new ClaimsHistory { TotalClaims = DisplayOpenClaims, OpenClaims = DisplayOpenClaims };
         _riskInsight = new RiskInsight
         {
@@ -1246,14 +1435,6 @@ else
         SelectTab(10);
         OpenCampaign();
         await ShowToast("Opportunity workflow opened. Save requires a DB-backed opportunity or campaign endpoint.");
-    }
-
-    private async Task CreatePolicyWorkflowAsync()
-    {
-        if (_acct is null)
-            return;
-
-        await ShowToast("Policy workflow unavailable: no DB-backed policy endpoint is configured for Account 360.", "a360-toast-danger");
     }
 
     private async Task SaveAccountAsync()
@@ -1462,6 +1643,18 @@ else
     }
     private void SetUploadDragActive() => _uploadDragActive = true;
     private void ClearUploadDragActive() => _uploadDragActive = false;
+    private Task OpenAddExistingPolicy()
+    {
+        if (_acct is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        Nav.NavigateTo($"/accounts/{AccountId}/policies/new");
+        return Task.CompletedTask;
+    }
+    private void CloseExistingPolicyDialog() { _showAddExistingPolicy = false; _existingPolicyForm = new(); _existingPolicyUploadFile = null; }
+    private void OnExistingPolicyFileSelected(InputFileChangeEventArgs args) => _existingPolicyUploadFile = args.File;
     private void OpenFnol() { _editingClaim = null; _claimForm = new() { LossDate = DateTime.UtcNow }; _showFnol = true; }
     private void OpenEditClaim(ClaimRow row) { _editingClaim = row; _claimForm = new() { PolicyNumber = row.ClaimNumber, LineOfBusiness = row.LineOfBusiness, LossDate = row.LossDate, Adjuster = row.Adjuster }; _showFnol = true; }
     private void CloseClaimDialog() { _showFnol = false; _editingClaim = null; _claimForm = new(); }
@@ -1597,6 +1790,16 @@ else
     private static string AvatarColor(string name) { var c=new[]{"a360-av1","a360-av2","a360-av3","a360-av4","a360-av5","a360-av6"}; return c[Math.Abs(name.GetHashCode())%c.Length]; }
     private static string Initials(string name) { var p=name.Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries); return p.Length>=2?$"{p[0][0]}{p[^1][0]}":name.Length>0?name[..1]:"?"; }
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? BuildExistingPolicyNotes(ExistingPolicyForm form)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(form.Notes))
+            parts.Add(form.Notes.Trim());
+        if (form.CommissionRate is > 0)
+            parts.Add($"Commission rate: {form.CommissionRate:0.##}%.");
+        return parts.Count == 0 ? null : string.Join(Environment.NewLine, parts);
+    }
 
     // -- Account mapping -------------------------------------------------------------------
     private static Account360Model BuildAccountModel(AccountDto account) => new()
@@ -1854,6 +2057,54 @@ else
         [StringLength(2000, ErrorMessage = "Notes cannot exceed 2,000 characters.")]
         public string? Notes { get; set; }
     }
+
+    private sealed class ExistingPolicyForm
+    {
+        [Required]
+        [StringLength(50, ErrorMessage = "Entry type cannot exceed 50 characters.")]
+        public string PolicySourceCode { get; set; } = "ManualEntry";
+
+        [Required]
+        [StringLength(80, ErrorMessage = "Policy number cannot exceed 80 characters.")]
+        public string PolicyNumber { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(160, ErrorMessage = "Carrier cannot exceed 160 characters.")]
+        public string CarrierName { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(100, ErrorMessage = "Line of business cannot exceed 100 characters.")]
+        public string LineOfBusiness { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(40, ErrorMessage = "Status cannot exceed 40 characters.")]
+        public string Status { get; set; } = "Active";
+
+        [Required]
+        public DateTime? EffectiveDate { get; set; } = DateTime.Today;
+
+        [Required]
+        public DateTime? ExpirationDate { get; set; } = DateTime.Today.AddYears(1);
+
+        [Range(0.01, 999999999999, ErrorMessage = "Annual premium must be greater than zero.")]
+        public decimal AnnualPremium { get; set; }
+
+        [Range(0, 999999999999, ErrorMessage = "Written premium cannot be negative.")]
+        public decimal WrittenPremium { get; set; }
+
+        [Range(0, 100, ErrorMessage = "Commission rate must be between 0 and 100.")]
+        public decimal? CommissionRate { get; set; }
+
+        [StringLength(80, ErrorMessage = "Branch cannot exceed 80 characters.")]
+        public string? Branch { get; set; }
+
+        [StringLength(500, ErrorMessage = "Reason cannot exceed 500 characters.")]
+        public string? PolicySourceReason { get; set; }
+
+        [StringLength(1000, ErrorMessage = "Notes cannot exceed 1,000 characters.")]
+        public string? Notes { get; set; }
+    }
+
     private sealed class ContactRow     { public Guid ContactId { get; set; } public string FirstName { get; set; }=string.Empty; public string LastName { get; set; }=string.Empty; public string FullName => $"{FirstName} {LastName}".Trim(); public string? Title { get; set; } public string? Email { get; set; } public string? Phone { get; set; } public bool IsPrimary { get; set; } }
     private sealed class PolicyRow      { public Guid PolicyId { get; set; }=Guid.NewGuid(); public string PolicyNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public decimal Premium { get; set; } public string Status { get; set; }="Active"; public DateTime EffectiveDate { get; set; }=DateTime.UtcNow; public DateTime ExpirationDate { get; set; }=DateTime.UtcNow.AddYears(1); }
     private sealed class SubmissionRow  { public string SubmissionNumber { get; set; }=string.Empty; public string LineOfBusiness { get; set; }=string.Empty; public string Carrier { get; set; }=string.Empty; public string Status { get; set; }="Submitted"; public DateTime SubmittedAt { get; set; }=DateTime.UtcNow; public DateTime? DueDate { get; set; } public string? Notes { get; set; } }

@@ -96,7 +96,7 @@ public sealed class SubmissionProposalWorkflowTests
     }
 
     private static SubmissionService CreateService(FakeSubmissionRepository repository)
-        => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository());
+        => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository(), new FakePolicyCreationService());
 
     private sealed class FakeSubmissionRepository : ISubmissionRepository
     {
@@ -160,6 +160,7 @@ public sealed class SubmissionProposalWorkflowTests
         public Task<IReadOnlyList<PolicyCreationSourceDto>> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyCreationSourceDto>>([]);
         public Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyBindStatusDto>>([]);
         public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyBindTransactionDto>>([]);
+        public Task<PolicyBindTransactionDto?> GetPolicyBindTransactionAsync(Guid policyBindTransactionId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyBindTransactionDto?>(null);
         public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionMarketDto>>([]);
         public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketSuggestionsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionMarketDto>>([]);
         public Task<Guid> AddMarketAsync(AddSubmissionMarketRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
@@ -219,5 +220,11 @@ public sealed class SubmissionProposalWorkflowTests
         public Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<Guid> UpsertCompetitorAsync(UpsertOpportunityCompetitorRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.CompetitorId ?? Guid.NewGuid());
         public Task DeleteCompetitorAsync(Guid competitorId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakePolicyCreationService : Ams.Application.Abstractions.Services.IPolicyCreationService
+    {
+        public Task<Guid> CreatePolicyFromConfirmedBindAsync(PolicyCreationFromConfirmedBindRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(Guid.NewGuid());
     }
 }

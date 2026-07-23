@@ -272,7 +272,7 @@
 
                     <div class="bc-drawer-actions">
                         <button type="button" class="bc-btn bc-btn--primary" @onclick="() => OpenBindDialog(_selected)" disabled="@IsBound(_selected)">
-                            <i class="bi bi-shield-check" aria-hidden="true"></i> Bind Policy
+                            <i class="bi bi-shield-check" aria-hidden="true"></i> Record Bind Confirmation
                         </button>
                         <button type="button" class="bc-btn bc-btn--ghost" @onclick="() => SelectQuoteAsync(_selected)" disabled="@(_selected.IsSelected || IsBound(_selected))">
                             <i class="bi bi-check2-square" aria-hidden="true"></i> Select Quote
@@ -569,8 +569,8 @@
         _ => true
     };
 
-    static bool IsBound(BindQueueRow row) => row.BindTransaction?.BindStatusCode == "Bound";
-    static bool CreatesPolicyStatus(string statusCode) => string.Equals(statusCode, "Bound", StringComparison.OrdinalIgnoreCase);
+    static bool IsBound(BindQueueRow row) => row.BindTransaction?.PolicyId.HasValue == true;
+    bool CreatesPolicyStatus(string statusCode) => _bindStatuses.Any(s => s.IsActive && s.CreatesPolicy && string.Equals(s.StatusCode, statusCode, StringComparison.OrdinalIgnoreCase));
     static bool IsManualConfirmationSource(string? sourceCode) => sourceCode is not null && (sourceCode.Equals("CarrierPortal", StringComparison.OrdinalIgnoreCase) || sourceCode.Equals("Email", StringComparison.OrdinalIgnoreCase) || sourceCode.Equals("Phone", StringComparison.OrdinalIgnoreCase) || sourceCode.Equals("BinderDocument", StringComparison.OrdinalIgnoreCase) || sourceCode.Equals("Manual", StringComparison.OrdinalIgnoreCase));
     static bool IsExpiringSoon(BindQueueRow row) => row.QuoteExpiresDateUtc.Date >= DateTime.UtcNow.Date && row.QuoteExpiresDateUtc.Date <= DateTime.UtcNow.Date.AddDays(14);
     static bool RequiredDocumentsSatisfied(BindQueueRow row) => string.IsNullOrWhiteSpace(row.Subjectivities);
@@ -615,7 +615,8 @@
         }
 
         _bindTarget = row;
-        _bindForm.Reset(row, source.SourceCode, status.StatusCode);
+        var authorizationMethod = _customerAuthorizationMethods.FirstOrDefault(m => m.IsDefault) ?? _customerAuthorizationMethods.FirstOrDefault();
+        _bindForm.Reset(row, source.SourceCode, status.StatusCode, authorizationMethod?.OptionCode, CreatesPolicyStatus);
         _showBindDialog = true;
     }
 
@@ -667,7 +668,7 @@
                 PolicySourceNotes: _bindForm.Notes,
                 RequestedByUserId: _currentUser.UserId,
                 ApprovedByUserId: _currentUser.UserId,
-                BoundByUserId: _bindForm.BindStatusCode == "Bound" ? _currentUser.UserId : null,
+                BoundByUserId: CreatesPolicyStatus(_bindForm.BindStatusCode) ? _currentUser.UserId : null,
                 BindStatusCode: _bindForm.BindStatusCode,
                 CustomerAuthorizationMethodCode: _bindForm.CustomerAuthorizationMethodCode,
                 CustomerAuthorizationReference: _bindForm.CustomerAuthorizationReference,
@@ -690,7 +691,7 @@
             _showBindDialog = false;
             _bindTarget = null;
             await LoadAsync();
-            var createsPolicy = string.Equals(_bindForm.BindStatusCode, "Bound", StringComparison.OrdinalIgnoreCase);
+            var createsPolicy = CreatesPolicyStatus(_bindForm.BindStatusCode);
             await ShowToastAsync(createsPolicy ? "Policy created" : "Bind request saved", createsPolicy ? $"Policy {id} was created after carrier Bound confirmation." : $"Bind request {id} was saved for carrier response tracking.", "enterprise-toast-success");
         }
         catch (Exception ex)
@@ -745,7 +746,7 @@
 
     RenderFragment GridActions(BindQueueRow row) =>
         @<div class="bc-grid-actions">
-            <button type="button" class="um-btn um-btn-primary um-btn-xs" title="Bind policy" @onclick="() => OpenBindDialog(row)" disabled="@IsBound(row)"><i class="bi bi-shield-check" aria-hidden="true"></i></button>
+            <button type="button" class="um-btn um-btn-primary um-btn-xs" title="Record bind confirmation" @onclick="() => OpenBindDialog(row)" disabled="@IsBound(row)"><i class="bi bi-shield-check" aria-hidden="true"></i></button>
             <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Open submission" @onclick="() => OpenSubmission(row)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i></button>
         </div>;
 
@@ -861,12 +862,15 @@
         public bool ConfirmationCertified { get; set; }
         public TimeSpan? RequestedEffectiveTime => TimeSpan.TryParse(EffectiveTime, out var value) ? value : null;
 
-        public void Reset(BindQueueRow row, string sourceCode, string bindStatusCode)
+        public Func<string, bool> CreatesPolicyStatus { get; set; } = _ => false;
+
+        public void Reset(BindQueueRow row, string sourceCode, string bindStatusCode, string? authorizationMethodCode, Func<string, bool>? createsPolicyStatus = null)
         {
             PolicyNumber = row.PolicyNumber;
             PolicySourceCode = sourceCode;
             BindStatusCode = bindStatusCode;
-            CustomerAuthorizationMethodCode = "EmailApproval";
+            CustomerAuthorizationMethodCode = authorizationMethodCode;
+            CreatesPolicyStatus = createsPolicyStatus ?? (_ => false);
             CustomerAuthorizationReference = null;
             ConfirmationSourceCode = null;
             CarrierReferenceNumber = null;
@@ -892,7 +896,7 @@
             if (!string.IsNullOrWhiteSpace(EffectiveTime) && RequestedEffectiveTime is null)
                 yield return new ValidationResult("Effective time must be valid.", [nameof(EffectiveTime)]);
 
-            if (string.Equals(BindStatusCode, "Bound", StringComparison.OrdinalIgnoreCase))
+            if (CreatesPolicyStatus(BindStatusCode))
             {
                 if (string.IsNullOrWhiteSpace(ConfirmationSourceCode))
                     yield return new ValidationResult("Confirmation method is required before marking the bind request Bound.", [nameof(ConfirmationSourceCode)]);

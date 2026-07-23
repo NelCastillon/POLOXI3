@@ -25,7 +25,7 @@
         <div class="mt-modal pr-action-modal" role="dialog" aria-modal="true" aria-labelledby="pr-form-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-shield-plus" aria-hidden="true"></i>
-                <span id="pr-form-title">@(_policyForm.Id == Guid.Empty ? "New Policy" : $"Edit {_policyForm.PolicyNumber}")</span>
+                <span id="pr-form-title">Edit @_policyForm.PolicyNumber</span>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePolicyForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
             </div>
             <EditForm Model="_policyForm" OnValidSubmit="SavePolicyAsync" OnInvalidSubmit="NotifyFormValidationAsync">
@@ -325,7 +325,6 @@
         </div>
         <div class="pr-hero-actions">
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")"></i> Refresh</button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewPolicy"><i class="bi bi-plus-lg"></i> New Policy</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
@@ -580,6 +579,8 @@
                         <div><span>Expires</span><strong>@_selected.ExpDate.ToString("MM/dd/yyyy")</strong></div>
                         <div><span>Source</span><strong>@_selected.PolicySourceName</strong></div>
                         <div><span>Bind status</span><strong>@_selected.BindStatusName</strong></div>
+                        <div><span>Coverage status</span><strong>@_selected.CoverageStatus</strong></div>
+                        <div><span>Issued</span><strong>@(_selected.IssuedDateUtc?.ToString("MM/dd/yyyy") ?? "Pending carrier issue")</strong></div>
                         <div><span>Producer</span><strong>@_selected.Producer</strong></div>
                         <div><span>CSR</span><strong>@_selected.Csr</strong></div>
                     </div>
@@ -646,7 +647,7 @@
     readonly List<AccountOption> _accountOptions = [];
     readonly List<PolicyCreationSourceDto> _policyCreationSources = [];
 
-    static readonly string[] PolicyStatuses = ["Active", "Pending", "Cancelled", "Expired", "Non-Renewed"];
+    static readonly string[] PolicyStatuses = ["PendingIssue", "Issued", "Active", "Cancelled", "Expired", "Non-Renewed"];
     static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
     static readonly string[] RenewalStages = ["Not Started", "Pre-Renewal", "Marketing", "Quoted", "Bound", "Lost"];
 
@@ -873,7 +874,9 @@
         AccountId = p.AccountId,
         Carrier = p.CarrierName,
         Lob = string.IsNullOrWhiteSpace(p.LineOfBusiness) ? "General Liability" : p.LineOfBusiness,
-        Status = p.Status == "Bound" ? "Active" : p.Status,
+        Status = string.IsNullOrWhiteSpace(p.IssueStatus) ? p.Status : p.IssueStatus,
+        CoverageStatus = string.IsNullOrWhiteSpace(p.CoverageStatus) ? "Bound" : p.CoverageStatus,
+        IssuedDateUtc = p.IssuedDateUtc,
         EffDate = p.EffectiveDate,
         ExpDate = p.ExpirationDate,
         WrittenPremium = p.WrittenPremium,
@@ -919,6 +922,7 @@
                 || Contains(r.Carrier, term)
                 || Contains(r.Lob, term)
                 || Contains(r.Status, term)
+                || Contains(r.CoverageStatus, term)
                 || Contains(r.PolicySourceCode, term)
                 || Contains(r.PolicySourceName, term)
                 || Contains(r.PolicySourceReason, term)
@@ -1033,32 +1037,6 @@
 
     void OpenPolicy(PolicyRow row) => Nav.NavigateTo($"/policies/{row.Id}");
 
-    void OpenNewPolicy()
-    {
-        var firstAccount = _accountOptions.FirstOrDefault();
-        var defaultSource = DirectPolicySources.FirstOrDefault(x => string.Equals(x.SourceCode, "ManualEntry", StringComparison.OrdinalIgnoreCase)) ?? DirectPolicySources.FirstOrDefault();
-        _policyForm = new PolicyForm
-        {
-            PolicyNumber = string.Empty,
-            EffDate = DateTime.Today,
-            ExpDate = DateTime.Today.AddYears(1),
-            Status = "Active",
-            Lob = "General Liability",
-            Carrier = CarrierOptions.FirstOrDefault() ?? string.Empty,
-            Branch = BranchOptions.FirstOrDefault() ?? "HQ",
-            RenewalStage = "Not Started",
-            PolicySourceCode = defaultSource?.SourceCode ?? "ManualEntry",
-            PolicySourceReason = string.Empty,
-            PolicySourceRequiresReason = defaultSource?.RequiresReason == true,
-            AccountId = firstAccount?.Id ?? Guid.Empty,
-            Account = firstAccount?.Name ?? string.Empty,
-            AccountType = firstAccount?.Type ?? "Commercial"
-        };
-        _accountSearchText = _policyForm.Account;
-        _accountDropdownOpen = false;
-        _showForm = true;
-    }
-
     void ClosePolicyForm()
     {
         if (_actionBusy) return;
@@ -1097,20 +1075,18 @@
 
     async Task SavePolicyAsync()
     {
+        if (_policyForm.Id == Guid.Empty)
+        {
+            ShowToast("Policies are created automatically from confirmed bind requests. Use the Bind Center to record carrier confirmation.", "danger");
+            return;
+        }
+
         _actionBusy = true;
         try
         {
             var request = ToUpsertRequest(_policyForm);
-            if (_policyForm.Id == Guid.Empty)
-            {
-                var id = await Api.CreatePolicyRegisterAsync(request);
-                _selected.Id = id;
-            }
-            else
-            {
-                await Api.UpdatePolicyRegisterAsync(_policyForm.Id, request);
-                _selected.Id = _policyForm.Id;
-            }
+            await Api.UpdatePolicyRegisterAsync(_policyForm.Id, request);
+            _selected.Id = _policyForm.Id;
 
             _showForm = false;
             _page = 1;
@@ -1455,6 +1431,8 @@
         public string Carrier { get; set; } = string.Empty;
         public string Lob { get; set; } = string.Empty;
         public string Status { get; set; } = "Active";
+        public string CoverageStatus { get; set; } = "Bound";
+        public DateTime? IssuedDateUtc { get; set; }
         public DateTime EffDate { get; set; }
         public DateTime ExpDate { get; set; }
         public decimal WrittenPremium { get; set; }

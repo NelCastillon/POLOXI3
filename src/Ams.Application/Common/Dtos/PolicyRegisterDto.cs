@@ -13,6 +13,8 @@ public sealed class PolicyRegisterDto
     public string CarrierName { get; set; } = string.Empty;
     public string PolicyNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string IssueStatus { get; set; } = "PendingIssue";
+    public string CoverageStatus { get; set; } = "Bound";
     public string LineOfBusiness { get; set; } = string.Empty;
     public string Priority { get; set; } = string.Empty;
     public decimal AnnualPremium { get; set; }
@@ -20,6 +22,7 @@ public sealed class PolicyRegisterDto
     public DateTime EffectiveDate { get; set; }
     public DateTime ExpirationDate { get; set; }
     public DateTime BoundDateUtc { get; set; }
+    public DateTime? IssuedDateUtc { get; set; }
     public string PolicySourceCode { get; set; } = "QuoteBound";
     public string PolicySourceName { get; set; } = "Quote Bound";
     public string? PolicySourceReason { get; set; }

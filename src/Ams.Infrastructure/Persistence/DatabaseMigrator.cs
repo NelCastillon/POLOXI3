@@ -265,6 +265,10 @@ public sealed partial class DatabaseMigrator
         new("0227_Submissions_CommonExternalCarrierDeliverySettings", Migration0227_SubmissionsCommonExternalCarrierDeliverySettings),
         new("0228_Submissions_ReadinessEvidenceDocuments", Migration0228_SubmissionsReadinessEvidenceDocuments),
         new("0229_Submissions_QuoteRequest_BusinessObject", Migration0229_SubmissionsQuoteRequestBusinessObject),
+        new("0230_Policy_ManualExistingPolicyWorkflow", Migration0230PolicyManualExistingPolicyWorkflow),
+        new("0231_Policy_PolicyLine_MultiLineManual", Migration0231PolicyPolicyLineMultiLineManual),
+        new("0232_Submissions_BoundPolicy_StatusColumnRepair", Migration0232SubmissionsBoundPolicyStatusColumnRepair),
+        new("0233_Submissions_PolicyBindTransaction_EnterpriseColumnRepair", Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -16170,6 +16174,13 @@ BEGIN
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_PolicySourceCode_0213 DEFAULT N'QuoteBound';
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceReason') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceReason NVARCHAR(500) NULL;
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceNotes') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0213 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0213 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+    UPDATE Submissions.BoundPolicy
+    SET IssueStatus = CASE WHEN Status IN (N'Issued', N'Active') THEN N'Issued' ELSE COALESCE(NULLIF(IssueStatus, N''), N'PendingIssue') END,
+        CoverageStatus = CASE WHEN Status IN (N'Cancelled', N'Expired', N'Non-Renewed') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''), N'Bound') END
+    WHERE IsDeleted = 0;
 END;
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyCreationSource') AND name = N'UX_PolicyCreationSource_Tenant_Code_0213')
@@ -16297,7 +16308,7 @@ BEGIN
         AccountId UNIQUEIDENTIFIER NOT NULL,
         CarrierId UNIQUEIDENTIFIER NOT NULL,
         PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Source_0214 DEFAULT N'QuoteBound',
-        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_0214 DEFAULT N'Bound',
+        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_0214 DEFAULT N'Pending',
         PolicyNumber NVARCHAR(80) NULL,
         AnnualPremium DECIMAL(18,2) NOT NULL,
         EffectiveDate DATE NOT NULL,
@@ -16359,11 +16370,24 @@ IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId')
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManuallyB_0214 DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_CertifiedB_0214 DEFAULT 0;
+DECLARE @PolicyBindStatusDefaultName SYSNAME;
+SELECT @PolicyBindStatusDefaultName = dc.name
+FROM sys.default_constraints dc
+INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+WHERE dc.parent_object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction')
+  AND c.name = N'BindStatusCode'
+  AND dc.definition LIKE N'%Bound%';
+IF @PolicyBindStatusDefaultName IS NOT NULL
+BEGIN
+    DECLARE @DropPolicyBindStatusDefaultSql NVARCHAR(MAX) = N'ALTER TABLE Submissions.PolicyBindTransaction DROP CONSTRAINT ' + QUOTENAME(@PolicyBindStatusDefaultName);
+    EXEC sp_executesql @DropPolicyBindStatusDefaultSql;
+    ALTER TABLE Submissions.PolicyBindTransaction ADD CONSTRAINT DF_PolicyBindTransaction_Status_Pending_0214 DEFAULT N'Pending' FOR BindStatusCode;
+END;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicyId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicyId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'AccountId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_AccountId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_CarrierId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicySourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_SourceB_0214 DEFAULT N'QuoteBound';
-IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BindStatusCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_StatusB_0214 DEFAULT N'Bound';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BindStatusCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_StatusB_0214 DEFAULT N'Pending';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicyNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicyNumber NVARCHAR(80) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'AnnualPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD AnnualPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Premium_0214 DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EffectiveDate') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EffectiveDate DATE NOT NULL CONSTRAINT DF_PolicyBindTransaction_Effective_0214 DEFAULT CONVERT(date, SYSUTCDATETIME());
@@ -19934,6 +19958,544 @@ BEGIN
     INNER JOIN Submissions.Submission s ON s.SubmissionId = q.SubmissionId AND s.TenantId = q.TenantId AND s.IsDeleted = 0
     INNER JOIN Submissions.SubmissionReadinessRequirement r ON r.TenantId = s.TenantId AND r.LineOfBusiness = s.LineOfBusiness AND r.RequirementCode = q.QuestionCode AND r.IsDeleted = 0
     WHERE q.IsDeleted = 0;
+END;
+""";
+
+    private const string Migration0230PolicyManualExistingPolicyWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Policy.ManualPolicyOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.ManualPolicyOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_ManualPolicyOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_RequiresDocument DEFAULT 0,
+        RequiresElevatedPermission BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Elevated DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_ManualPolicyOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyOption_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.ManualPolicyOption') AND name = N'UX_ManualPolicyOption_Tenant_Group_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_ManualPolicyOption_Tenant_Group_Code ON Policy.ManualPolicyOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.ManualPolicyDraft', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.ManualPolicyDraft
+    (
+        DraftId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_ManualPolicyDraft PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CurrentStep INT NOT NULL CONSTRAINT DF_ManualPolicyDraft_CurrentStep DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ManualPolicyDraft_Status DEFAULT N'InProgress',
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ManualPolicyDraft_Payload DEFAULT N'{}',
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Created DEFAULT SYSUTCDATETIME(),
+        UpdatedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Updated DEFAULT SYSUTCDATETIME(),
+        ExpiresAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Expires DEFAULT DATEADD(day, 30, SYSUTCDATETIME()),
+        SubmittedPolicyId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ManualPolicyDraft_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.ManualPolicyDraft') AND name = N'IX_ManualPolicyDraft_Account_Status')
+    EXEC(N'CREATE INDEX IX_ManualPolicyDraft_Account_Status ON Policy.ManualPolicyDraft(TenantId, AccountId, StatusCode, UpdatedAtUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTerm', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTerm
+    (
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicyTerm PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        TermNumber INT NOT NULL CONSTRAINT DF_PolicyTerm_TermNumber DEFAULT 1,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        TermStatusCode NVARCHAR(50) NOT NULL,
+        TransactionTypeCode NVARCHAR(50) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        AnnualizedPremium DECIMAL(18,2) NULL,
+        Taxes DECIMAL(18,2) NULL,
+        Fees DECIMAL(18,2) NULL,
+        Surcharges DECIMAL(18,2) NULL,
+        TotalCost DECIMAL(18,2) NULL,
+        BillingTypeCode NVARCHAR(50) NULL,
+        DataCompletenessCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyTerm_DataCompleteness DEFAULT N'Partial',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTerm_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTerm_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTerm') AND name = N'IX_PolicyTerm_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyTerm_Policy ON Policy.PolicyTerm(PolicyId, TermNumber) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicySource', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicySource
+    (
+        PolicySourceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicySource PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        SourceCode NVARCHAR(80) NOT NULL,
+        ManualReasonCode NVARCHAR(80) NULL,
+        ExternalSystem NVARCHAR(160) NULL,
+        ExternalReference NVARCHAR(160) NULL,
+        CarrierPortalReference NVARCHAR(160) NULL,
+        MigrationBatch NVARCHAR(160) NULL,
+        SourceNotes NVARCHAR(2000) NULL,
+        RecordedByUserId UNIQUEIDENTIFIER NULL,
+        RecordedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicySource_Recorded DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicySource_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicySource') AND name = N'IX_PolicySource_Policy')
+    EXEC(N'CREATE INDEX IX_PolicySource_Policy ON Policy.PolicySource(PolicyId, RecordedAtUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyNamedInsured', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyNamedInsured
+    (
+        PolicyNamedInsuredId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_NamedInsured PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        AccountPartyId UNIQUEIDENTIFIER NULL,
+        LegalName NVARCHAR(240) NOT NULL,
+        DbaName NVARCHAR(240) NULL,
+        AddressSnapshotJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_PolicyNamedInsured_Address DEFAULT N'{}',
+        IsPrimary BIT NOT NULL CONSTRAINT DF_PolicyNamedInsured_Primary DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyNamedInsured_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyNamedInsured_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCoverageSummary', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageSummary
+    (
+        PolicyCoverageSummaryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_CoverageSummary PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        CoverageNotes NVARCHAR(MAX) NULL,
+        RiskSnapshotJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageSummary_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageSummary_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyAssignment
+    (
+        PolicyAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Assignment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        Agency NVARCHAR(160) NULL,
+        Branch NVARCHAR(160) NULL,
+        Department NVARCHAR(160) NULL,
+        ProducerId UNIQUEIDENTIFIER NULL,
+        AccountManagerId UNIQUEIDENTIFIER NULL,
+        CsrId UNIQUEIDENTIFIER NULL,
+        ProducerName NVARCHAR(160) NULL,
+        AccountManagerName NVARCHAR(160) NULL,
+        CsrName NVARCHAR(160) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyAssignment_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyAssignment_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCommissionEstimate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCommissionEstimate
+    (
+        PolicyCommissionEstimateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_CommissionEstimate PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        CommissionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Type DEFAULT N'Estimated',
+        CommissionStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Status DEFAULT N'Estimated',
+        CommissionRate DECIMAL(9,4) NULL,
+        EstimatedCommission DECIMAL(18,2) NULL,
+        ProducerSplitPercent DECIMAL(9,4) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyAuditEvent
+    (
+        PolicyAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_AuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EntityType NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NOT NULL,
+        ActionCode NVARCHAR(100) NOT NULL,
+        SourceCode NVARCHAR(80) NOT NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        UserId UNIQUEIDENTIFIER NULL,
+        BeforeJson NVARCHAR(MAX) NULL,
+        AfterJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyAuditEvent_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyAuditEvent_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyAuditEvent') AND name = N'IX_PolicyAuditEvent_Entity')
+    EXEC(N'CREATE INDEX IX_PolicyAuditEvent_Entity ON Policy.PolicyAuditEvent(TenantId, EntityType, EntityId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0230 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0230 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'NormalizedPolicyNumber') IS NULL ALTER TABLE Submissions.BoundPolicy ADD NormalizedPolicyNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'WritingCompanyId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD WritingCompanyId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'BrokerOrMgaId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD BrokerOrMgaId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyType') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyForm') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyForm NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyDescription') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyDescription NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'LineOfBusiness') IS NULL ALTER TABLE Submissions.BoundPolicy ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_BoundPolicy_LineOfBusiness_0230 DEFAULT N'General Liability';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'DataCompletenessCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD DataCompletenessCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_DataCompleteness_0230 DEFAULT N'Partial';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'VerificationStatusCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD VerificationStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_Verification_0230 DEFAULT N'PendingVerification';
+
+    EXEC(N'
+    UPDATE Submissions.BoundPolicy
+    SET NormalizedPolicyNumber = UPPER(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(NULLIF(PolicyNumber, N''''), N''''), N''-'', N''''), N'' '', N''''), N''.'', N''''), N''/'', N'''')),
+        IssueStatus = CASE WHEN Status IN (N''Issued'', N''Active'') THEN N''Issued'' ELSE COALESCE(NULLIF(IssueStatus, N''''), N''PendingIssue'') END,
+        CoverageStatus = CASE WHEN Status IN (N''Cancelled'', N''Expired'', N''Non-Renewed'') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''''), N''Bound'') END,
+        IssuedDateUtc = CASE WHEN Status IN (N''Issued'', N''Active'') THEN COALESCE(IssuedDateUtc, BoundDateUtc) ELSE IssuedDateUtc END
+    WHERE IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.BoundPolicy') AND name = N'IX_BoundPolicy_ManualDuplicate_0230')
+        EXEC(N'CREATE INDEX IX_BoundPolicy_ManualDuplicate_0230 ON Submissions.BoundPolicy(TenantId, AccountId, CarrierId, NormalizedPolicyNumber, EffectiveDate, ExpirationDate, LineOfBusiness) WHERE IsDeleted = 0;');
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresVerification') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresVerification BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_Verification_0230 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RecommendedDocumentTypeCode') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RecommendedDocumentTypeCode NVARCHAR(80) NULL;
+END;
+
+IF OBJECT_ID(N'tempdb..#ManualPolicyTenants') IS NOT NULL DROP TABLE #ManualPolicyTenants;
+CREATE TABLE #ManualPolicyTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ManualPolicyTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #ManualPolicyTenants)
+    INSERT INTO #ManualPolicyTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#ManualPolicyOptions') IS NOT NULL DROP TABLE #ManualPolicyOptions;
+CREATE TABLE #ManualPolicyOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    RequiresDocument BIT NOT NULL,
+    RequiresElevatedPermission BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ManualPolicyOptions (OptionGroupCode, OptionCode, DisplayName, Description, RequiresDocument, RequiresElevatedPermission, IsDefault, SortOrder) VALUES
+(N'PolicyCreationSource', N'ManualExistingPolicy', N'Manually Added Existing Policy', N'Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.', 1, 0, 1, 10),
+(N'PolicyCreationSource', N'CarrierDownload', N'Carrier Download', N'Policy originated from a carrier download or reconciliation workflow.', 0, 0, 0, 20),
+(N'PolicyCreationSource', N'DataMigration', N'Data Migration', N'Policy originated from book conversion or legacy AMS import.', 0, 0, 0, 30),
+(N'PolicyCreationSource', N'ExternalRater', N'External Rater', N'Policy was written using an external comparative rater.', 1, 0, 0, 40),
+(N'PolicyCreationSource', N'CarrierPortal', N'Carrier Portal', N'Policy was written through a carrier portal.', 1, 0, 0, 50),
+(N'PolicyCreationSource', N'MgaPortal', N'MGA / Wholesaler Portal', N'Policy was written through an MGA or wholesaler portal.', 1, 0, 0, 60),
+(N'PolicyCreationSource', N'BrokerOfRecord', N'Broker of Record', N'Policy came into the agency through a broker-of-record workflow.', 1, 0, 0, 70),
+(N'PolicyCreationSource', N'Acquisition', N'Agency Acquisition', N'Policy came from an acquired book of business.', 0, 0, 0, 80),
+(N'PolicyCreationSource', N'ApiImport', N'API Import', N'Policy was imported through an integration API.', 0, 0, 0, 90),
+(N'ManualPolicyReason', N'WrittenOutsideAgencyBinder', N'Written Outside AgencyBinder', N'Policy was written outside AgencyBinder and is being recorded for servicing.', 1, 0, 1, 10),
+(N'ManualPolicyReason', N'ExistingBookOfBusiness', N'Existing Book of Business', N'Policy existed before AgencyBinder adoption.', 0, 0, 0, 20),
+(N'ManualPolicyReason', N'MissingCarrierDownload', N'Missing Carrier Download', N'Carrier download is missing or failed.', 1, 0, 0, 30),
+(N'ManualPolicyReason', N'BrokerOfRecord', N'Broker of Record', N'Broker-of-record policy record.', 1, 0, 0, 40),
+(N'ManualPolicyReason', N'LegacyConversion', N'Legacy Conversion', N'Policy migrated from a legacy AMS.', 0, 0, 0, 50),
+(N'ManualPolicyReason', N'AgencyAcquisition', N'Agency Acquisition', N'Policy from acquired agency book.', 0, 0, 0, 60),
+(N'ManualPolicyReason', N'AdministrativeCorrection', N'Administrative Correction', N'Approved limited data-entry correction.', 0, 1, 0, 70),
+(N'ManualPolicyReason', N'Other', N'Other', N'Other approved manual-entry reason.', 1, 0, 0, 99),
+(N'PolicyStatus', N'Draft', N'Draft', NULL, 0, 0, 0, 10),
+(N'PolicyStatus', N'PendingVerification', N'Pending Verification', NULL, 0, 0, 1, 20),
+(N'PolicyStatus', N'PendingIssue', N'Pending Issue', NULL, 0, 0, 0, 30),
+(N'PolicyStatus', N'Active', N'Active', NULL, 0, 0, 0, 40),
+(N'PolicyStatus', N'Cancelled', N'Cancelled', NULL, 0, 0, 0, 50),
+(N'PolicyStatus', N'Expired', N'Expired', NULL, 0, 0, 0, 60),
+(N'PolicyStatus', N'NonRenewed', N'Non-Renewed', NULL, 0, 0, 0, 70),
+(N'PolicyStatus', N'Rewritten', N'Rewritten', NULL, 0, 0, 0, 80),
+(N'PolicyStatus', N'Suspended', N'Suspended', NULL, 0, 0, 0, 90),
+(N'PolicyStatus', N'Archived', N'Archived', NULL, 0, 0, 0, 100),
+(N'PolicyTermStatus', N'Draft', N'Draft', NULL, 0, 0, 0, 10),
+(N'PolicyTermStatus', N'Future', N'Future', NULL, 0, 0, 0, 20),
+(N'PolicyTermStatus', N'Active', N'Active', NULL, 0, 0, 1, 30),
+(N'PolicyTermStatus', N'Expired', N'Expired', NULL, 0, 0, 0, 40),
+(N'PolicyTermStatus', N'Cancelled', N'Cancelled', NULL, 0, 0, 0, 50),
+(N'PolicyTermStatus', N'NonRenewed', N'Non-Renewed', NULL, 0, 0, 0, 60),
+(N'PolicyTermStatus', N'Rewritten', N'Rewritten', NULL, 0, 0, 0, 70),
+(N'PolicyTransactionType', N'NewBusiness', N'New Business', NULL, 0, 0, 0, 10),
+(N'PolicyTransactionType', N'Renewal', N'Renewal', NULL, 0, 0, 0, 20),
+(N'PolicyTransactionType', N'Rewrite', N'Rewrite', NULL, 0, 0, 0, 30),
+(N'PolicyTransactionType', N'BrokerOfRecord', N'Broker of Record', NULL, 0, 0, 0, 40),
+(N'PolicyTransactionType', N'Conversion', N'Conversion', NULL, 0, 0, 1, 50),
+(N'BillingType', N'DirectBill', N'Direct Bill', N'Store premium and billing summary; no agency invoice unless requested.', 0, 0, 1, 10),
+(N'BillingType', N'AgencyBill', N'Agency Bill', N'Can create account receivable or invoice when requested.', 0, 0, 0, 20),
+(N'BillingType', N'PremiumFinance', N'Premium Finance', N'Can create finance agreement and installment schedule when requested.', 0, 0, 0, 30),
+(N'DocumentType', N'DeclarationsPage', N'Declarations Page', N'Strongly recommended for manual existing policies.', 0, 0, 1, 10),
+(N'DocumentType', N'PolicyContract', N'Policy Contract', NULL, 0, 0, 0, 20),
+(N'DocumentType', N'Binder', N'Binder', NULL, 0, 0, 0, 30),
+(N'DocumentType', N'CarrierConfirmation', N'Carrier Confirmation', NULL, 0, 0, 0, 40),
+(N'DocumentType', N'BorLetter', N'BOR Letter', NULL, 0, 0, 0, 50),
+(N'DocumentType', N'CoverageSummary', N'Coverage Summary', NULL, 0, 0, 0, 60),
+(N'DataCompleteness', N'Partial', N'Partial', NULL, 0, 0, 1, 10),
+(N'DataCompleteness', N'Complete', N'Complete', NULL, 0, 0, 0, 20),
+(N'CommissionType', N'Estimated', N'Estimated', N'Manual policy commission is estimated until reconciled.', 0, 0, 1, 10),
+(N'CommissionType', N'CarrierStatement', N'Carrier Statement', NULL, 0, 1, 0, 20);
+
+INSERT INTO Policy.ManualPolicyOption
+    (OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, RequiresDocument, RequiresElevatedPermission, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.RequiresDocument, o.RequiresElevatedPermission, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #ManualPolicyTenants t
+CROSS JOIN #ManualPolicyOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.ManualPolicyOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    RequiresDocument = o.RequiresDocument,
+    RequiresElevatedPermission = o.RequiresElevatedPermission,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.ManualPolicyOption existing
+INNER JOIN #ManualPolicyOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.PolicyCreationSource
+        (PolicyCreationSourceId, TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted, RequiresVerification, RecommendedDocumentTypeCode)
+    SELECT NEWID(), t.TenantId, N''ManualExistingPolicy'', N''Manually Added Existing Policy'', N''Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.'', 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 15, SYSUTCDATETIME(), 0, 1, N''DeclarationsPage''
+    FROM #ManualPolicyTenants t
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM Submissions.PolicyCreationSource s
+        WHERE s.TenantId = t.TenantId AND s.SourceCode = N''ManualExistingPolicy'' AND s.IsDeleted = 0
+    );
+
+    UPDATE Submissions.PolicyCreationSource
+    SET SourceName = N''Manually Added Existing Policy'',
+        Description = N''Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.'',
+        RequiresQuote = 0,
+        RequiresSubmission = 0,
+        RequiresAccount = 1,
+        RequiresReason = 1,
+        RequiresPolicyNumber = 1,
+        AllowsDirectPolicyEntry = 1,
+        RequiresVerification = 1,
+        RecommendedDocumentTypeCode = N''DeclarationsPage'',
+        IsActive = 1,
+        SortOrder = 15,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE SourceCode = N''ManualExistingPolicy'' AND IsDeleted = 0;
+    ');
+END;
+
+IF OBJECT_ID(N'IAM.Permission', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Master') EXEC(N'CREATE SCHEMA Master');
+
+    IF OBJECT_ID(N'Master.PermissionAction', N'U') IS NULL
+    BEGIN
+        CREATE TABLE Master.PermissionAction
+        (
+            PermissionActionId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            ActionCode NVARCHAR(100) NOT NULL UNIQUE,
+            ActionName NVARCHAR(100) NOT NULL UNIQUE,
+            Description NVARCHAR(200) NULL
+        );
+    END;
+
+    EXEC(N'
+    INSERT INTO Master.PermissionAction (ActionCode, ActionName)
+    SELECT v.ActionCode, v.ActionName
+    FROM (VALUES
+        (N''READ'', N''Read''),
+        (N''WRITE'', N''Write''),
+        (N''MANAGE'', N''Manage'')
+    ) v(ActionCode, ActionName)
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM Master.PermissionAction existing
+        WHERE UPPER(existing.ActionCode) = v.ActionCode OR UPPER(existing.ActionName) = UPPER(v.ActionName)
+    );
+    ');
+
+    IF OBJECT_ID(N'tempdb..#ManualPolicyPermissions') IS NOT NULL DROP TABLE #ManualPolicyPermissions;
+    CREATE TABLE #ManualPolicyPermissions (PermissionCode NVARCHAR(200) NOT NULL PRIMARY KEY, PermissionName NVARCHAR(200) NOT NULL, ActionCode NVARCHAR(100) NOT NULL, Description NVARCHAR(500) NULL);
+    INSERT INTO #ManualPolicyPermissions (PermissionCode, PermissionName, ActionCode, Description) VALUES
+    (N'Policy.View', N'View Policies', N'Read', N'View policy records.'),
+    (N'Policy.CreateManual', N'Create Manual Policy', N'Create', N'Add an existing policy record from an account.'),
+    (N'Policy.CreateManualWithoutDocument', N'Create Manual Policy Without Document', N'Create', N'Create a manual policy without supporting documentation.'),
+    (N'Policy.OverrideDuplicate', N'Override Policy Duplicate Warning', N'Approve', N'Override possible duplicate manual policy warnings.'),
+    (N'Policy.Backdate', N'Backdate Policy Term', N'Approve', N'Create or edit backdated policy terms.'),
+    (N'Policy.Verify', N'Verify Policy', N'Approve', N'Verify manually added policy records.');
+
+    DECLARE @ManualPolicyReadActionId INT = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = N'READ' OR UPPER(ActionName) = N'READ' ORDER BY PermissionActionId);
+    IF @ManualPolicyReadActionId IS NULL SET @ManualPolicyReadActionId = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction ORDER BY PermissionActionId);
+
+    INSERT INTO IAM.Permission (PermissionId, TenantId, PermissionCode, PermissionName, ResourceCode, ActionCode, PermissionActionId, ModuleCode, Description, IsBuiltIn, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tenant.TenantId, p.PermissionCode, p.PermissionName, N'Policy', p.ActionCode, COALESCE(pa.PermissionActionId, @ManualPolicyReadActionId), N'Policy', p.Description, 1, 1, SYSUTCDATETIME(), 0
+    FROM #ManualPolicyPermissions p
+    CROSS APPLY (SELECT TOP 1 TenantId FROM #ManualPolicyTenants ORDER BY TenantId) tenant
+    OUTER APPLY (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END OR UPPER(ActionName) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END ORDER BY PermissionActionId) pa
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM IAM.Permission existing
+        WHERE existing.PermissionCode = p.PermissionCode
+    );
+
+    UPDATE existing
+    SET PermissionName = p.PermissionName,
+        ResourceCode = N'Policy',
+        ActionCode = p.ActionCode,
+        PermissionActionId = COALESCE(pa.PermissionActionId, @ManualPolicyReadActionId, existing.PermissionActionId),
+        ModuleCode = N'Policy',
+        Description = p.Description,
+        IsBuiltIn = 1,
+        IsActive = 1,
+        IsDeleted = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM IAM.Permission existing
+    INNER JOIN #ManualPolicyPermissions p ON p.PermissionCode = existing.PermissionCode
+    OUTER APPLY (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END OR UPPER(ActionName) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END ORDER BY PermissionActionId) pa;
+END;
+""";
+
+    private const string Migration0231PolicyPolicyLineMultiLineManual = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyLine
+    (
+        PolicyLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicyLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        PolicyLineStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyLine_Status DEFAULT N'Active',
+        WrittenPremium DECIMAL(18,2) NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyLine_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyLine_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyLine_Deleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessId') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessCode') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessCode NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyLine_Code_0231 DEFAULT N'UNKNOWN';
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessName') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessName NVARCHAR(160) NOT NULL CONSTRAINT DF_PolicyLine_Name_0231 DEFAULT N'Unknown';
+IF COL_LENGTH(N'Policy.PolicyLine', N'PolicyLineStatusCode') IS NULL ALTER TABLE Policy.PolicyLine ADD PolicyLineStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyLine_Status_0231 DEFAULT N'Active';
+IF COL_LENGTH(N'Policy.PolicyLine', N'WrittenPremium') IS NULL ALTER TABLE Policy.PolicyLine ADD WrittenPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'CoverageSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD CoverageSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'LimitsSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD LimitsSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'DeductibleSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD DeductibleSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'SortOrder') IS NULL ALTER TABLE Policy.PolicyLine ADD SortOrder INT NOT NULL CONSTRAINT DF_PolicyLine_Sort_0231 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyLine', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyLine ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF TYPE_ID(N'Policy.PolicyLineCreateTableType') IS NULL
+BEGIN
+    EXEC(N'CREATE TYPE Policy.PolicyLineCreateTableType AS TABLE
+    (
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        PolicyLineStatusCode NVARCHAR(50) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        SortOrder INT NOT NULL
+    );');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLine') AND name = N'IX_PolicyLine_PolicyTerm')
+    EXEC(N'CREATE INDEX IX_PolicyLine_PolicyTerm ON Policy.PolicyLine(PolicyId, PolicyTermId, SortOrder) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLine') AND name = N'IX_PolicyLine_Lob')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Lob ON Policy.PolicyLine(TenantId, LineOfBusinessId, LineOfBusinessCode) WHERE IsDeleted = 0;');
+""";
+
+    private const string Migration0232SubmissionsBoundPolicyStatusColumnRepair = """
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0232 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0232 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+
+    EXEC(N'
+    UPDATE Submissions.BoundPolicy
+    SET IssueStatus = CASE WHEN Status IN (N''Issued'', N''Active'') THEN N''Issued'' ELSE COALESCE(NULLIF(IssueStatus, N''''), N''PendingIssue'') END,
+        CoverageStatus = CASE WHEN Status IN (N''Cancelled'', N''Expired'', N''Non-Renewed'') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''''), N''Bound'') END,
+        IssuedDateUtc = CASE WHEN Status IN (N''Issued'', N''Active'') THEN COALESCE(IssuedDateUtc, BoundDateUtc) ELSE IssuedDateUtc END
+    WHERE IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair = """
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedEffectiveTime') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedEffectiveTime TIME NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationSourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BinderNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BinderNumber NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FinalPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FinalPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'DownPaymentAmount') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD DownPaymentAmount DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubjectivitiesOutstanding') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubjectivitiesOutstanding NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationNotes NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_0233 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_0233 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_0233 DEFAULT 0;
 END;
 """;
 }

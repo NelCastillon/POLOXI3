@@ -10,8 +10,11 @@ public sealed class PolicyBindDto
     public Guid CarrierId { get; set; }
     public string PolicyNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string IssueStatus { get; set; } = "PendingIssue";
+    public string CoverageStatus { get; set; } = "Bound";
     public decimal AnnualPremium { get; set; }
     public DateTime EffectiveDate { get; set; }
     public DateTime ExpirationDate { get; set; }
     public DateTime BoundDateUtc { get; set; }
+    public DateTime? IssuedDateUtc { get; set; }
 }

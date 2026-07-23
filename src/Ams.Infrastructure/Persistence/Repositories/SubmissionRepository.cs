@@ -453,6 +453,14 @@ END;
 
 IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
 BEGIN
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestMethodCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestMethodCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequestHistory_Method_Runtime DEFAULT N'ManualUnderwriter';
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestedPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'CoverageNotes') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD CoverageNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Market_Open')
         EXEC(N'CREATE INDEX IX_QuoteRequestHistory_Market_Open ON Submissions.QuoteRequestHistory(SubmissionMarketId, StatusCode, IsDeleted, RequestedDateUtc DESC);');
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Submission')
@@ -555,13 +563,14 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 
 IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
 BEGIN
+    EXEC(N'
     INSERT INTO Submissions.QuoteRequest
         (QuoteRequestId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, QuoteRequestActionCode, QuoteRequestReasonCode, QuoteRequestMethodCode, QuoteRequestScopeCode,
          RequestedPremium, CoverageNotes, RequestVersion, StatusCode, RequestedDateUtc, RequestedByUserId, ClosedDateUtc, CreatedDateUtc, CreatedByUserId,
          ModifiedDateUtc, ModifiedByUserId, IsDeleted)
     SELECT NEWID(), h.TenantId, h.SubmissionId, h.SubmissionMarketId, h.CarrierId, h.QuoteRequestActionCode, h.QuoteRequestReasonCode,
-           COALESCE(NULLIF(h.QuoteRequestMethodCode, N''), NULLIF(sm.SubmissionMethodCode, N''), N'ManualUnderwriter'), COALESCE(NULLIF(h.QuoteRequestScopeCode, N''), N'Package'), h.RequestedPremium, h.CoverageNotes, h.RequestVersion, h.StatusCode,
-           h.RequestedDateUtc, h.RequestedByUserId, CASE WHEN h.StatusCode IN (N'Closed', N'Declined', N'Received', N'Expired', N'No Response') THEN h.ModifiedDateUtc ELSE NULL END,
+           COALESCE(NULLIF(h.QuoteRequestMethodCode, N''''), NULLIF(sm.SubmissionMethodCode, N''''), N''ManualUnderwriter''), COALESCE(NULLIF(h.QuoteRequestScopeCode, N''''), N''Package''), h.RequestedPremium, h.CoverageNotes, h.RequestVersion, h.StatusCode,
+           h.RequestedDateUtc, h.RequestedByUserId, CASE WHEN h.StatusCode IN (N''Closed'', N''Declined'', N''Received'', N''Expired'', N''No Response'') THEN h.ModifiedDateUtc ELSE NULL END,
            h.CreatedDateUtc, h.CreatedByUserId, h.ModifiedDateUtc, h.ModifiedByUserId, h.IsDeleted
     FROM Submissions.QuoteRequestHistory h
     LEFT JOIN Submissions.SubmissionMarket sm ON sm.SubmissionMarketId = h.SubmissionMarketId AND sm.IsDeleted = 0
@@ -574,6 +583,7 @@ BEGIN
             AND existing.RequestVersion = h.RequestVersion
             AND existing.IsDeleted = 0
       );
+    ');
 END;
 
 IF OBJECT_ID(N'Submissions.SubmissionMarketLine', N'U') IS NULL
@@ -2287,7 +2297,87 @@ WHERE pbt.SubmissionId = @SubmissionId
   AND pbt.IsDeleted = 0
 ORDER BY pbt.CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var tenantId = await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 COALESCE(pbt.TenantId, s.TenantId)
+FROM Submissions.PolicyBindTransaction pbt
+LEFT JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId AND s.IsDeleted = 0
+WHERE pbt.SubmissionId = @SubmissionId
+   OR s.SubmissionId = @SubmissionId;", new { SubmissionId = submissionId }, cancellationToken: cancellationToken));
+        await EnsurePolicyBindTransactionSchemaAsync(cn, tenantId ?? Guid.Parse("00000000-0000-0000-0000-000000000001"), cancellationToken);
+
         return (await cn.QueryAsync<PolicyBindTransactionDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<PolicyBindTransactionDto?> GetPolicyBindTransactionAsync(Guid policyBindTransactionId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP 1 pbt.PolicyBindTransactionId,
+       pbt.TenantId,
+       pbt.SubmissionId,
+       s.SubmissionNumber,
+       pbt.QuoteId,
+       q.QuoteNumber,
+       pbt.PolicyId,
+       COALESCE(bp.PolicyNumber, pbt.PolicyNumber) AS PolicyNumber,
+       pbt.AccountId,
+       COALESCE(a.AccountName, s.SubmissionNumber, N'Account') AS AccountName,
+       pbt.CarrierId,
+       COALESCE(c.CarrierName, N'Carrier') AS CarrierName,
+       pbt.PolicySourceCode,
+       COALESCE(pcs.SourceName, pbt.PolicySourceCode) AS PolicySourceName,
+       pbt.BindStatusCode,
+       COALESCE(pbs.StatusName, pbt.BindStatusCode) AS BindStatusName,
+       pbt.BindReason,
+       pbt.Notes,
+       pbt.AnnualPremium,
+       CAST(pbt.EffectiveDate AS DATETIME2) AS EffectiveDate,
+       CAST(pbt.ExpirationDate AS DATETIME2) AS ExpirationDate,
+       pbt.RequestedEffectiveTime,
+       pbt.ConfirmationSourceCode,
+       COALESCE(cso.OptionName, pbt.ConfirmationSourceCode) AS ConfirmationSourceName,
+       pbt.CarrierReferenceNumber,
+       pbt.BinderNumber,
+       pbt.FinalPremium,
+       pbt.DownPaymentAmount,
+       pbt.SubjectivitiesOutstanding,
+       pbt.ConfirmationNotes,
+       pbt.ConfirmationDocumentId,
+       pbt.ConfirmationReceivedFrom,
+       pbt.ConfirmationMessageId,
+       pbt.UnderwriterName,
+       pbt.UnderwriterCompany,
+       pbt.FollowUpWrittenConfirmationRequired,
+       pbt.IntegrationCorrelationId,
+       pbt.ExternalTransactionId,
+       pbt.ConfirmedManually,
+       pbt.ConfirmationCertified,
+       pbt.RequestedByUserId,
+       pbt.RequestedDateUtc,
+       pbt.ApprovedByUserId,
+       pbt.ApprovedDateUtc,
+       pbt.BoundByUserId,
+       pbt.BoundDateUtc,
+       pbt.CreatedDateUtc
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId
+LEFT JOIN Submissions.Quote q ON q.QuoteId = pbt.QuoteId AND q.IsDeleted = 0
+LEFT JOIN Submissions.BoundPolicy bp ON bp.PolicyId = pbt.PolicyId AND bp.IsDeleted = 0
+LEFT JOIN Client.Account a ON a.AccountId = pbt.AccountId
+LEFT JOIN Core.Carrier c ON c.CarrierId = pbt.CarrierId
+LEFT JOIN Submissions.PolicyCreationSource pcs ON pcs.TenantId = pbt.TenantId AND pcs.SourceCode = pbt.PolicySourceCode AND pcs.IsDeleted = 0
+LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = pbt.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsDeleted = 0
+LEFT JOIN Submissions.SubmissionReferenceOption cso ON cso.TenantId = pbt.TenantId AND cso.OptionGroup = N'BindConfirmationSource' AND cso.OptionCode = pbt.ConfirmationSourceCode AND cso.IsDeleted = 0
+WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId
+  AND pbt.IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var tenantId = await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 TenantId
+FROM Submissions.PolicyBindTransaction
+WHERE PolicyBindTransactionId = @PolicyBindTransactionId
+  AND IsDeleted = 0;", new { PolicyBindTransactionId = policyBindTransactionId }, cancellationToken: cancellationToken));
+        await EnsurePolicyBindTransactionSchemaAsync(cn, tenantId ?? Guid.Parse("00000000-0000-0000-0000-000000000001"), cancellationToken);
+
+        return await cn.QuerySingleOrDefaultAsync<PolicyBindTransactionDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId }, cancellationToken: cancellationToken));
     }
 
     public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
@@ -2959,6 +3049,13 @@ BEGIN
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceReason') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceReason NVARCHAR(500) NULL;
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceNotes') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceNotes NVARCHAR(1000) NULL;
     IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyBindTransactionId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyBindTransactionId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_Runtime DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_Runtime DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+    UPDATE Submissions.BoundPolicy
+    SET IssueStatus = CASE WHEN Status IN (N'Issued', N'Active') THEN N'Issued' ELSE COALESCE(NULLIF(IssueStatus, N''), N'PendingIssue') END,
+        CoverageStatus = CASE WHEN Status IN (N'Cancelled', N'Expired', N'Non-Renewed') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''), N'Bound') END
+    WHERE IsDeleted = 0;
 END;
 
 IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NULL
@@ -3084,7 +3181,7 @@ BEGIN
         AccountId UNIQUEIDENTIFIER NOT NULL,
         CarrierId UNIQUEIDENTIFIER NOT NULL,
         PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Source_Runtime DEFAULT N'QuoteBound',
-        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_Runtime DEFAULT N'Bound',
+        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_Runtime DEFAULT N'Pending',
         PolicyNumber NVARCHAR(80) NULL,
         AnnualPremium DECIMAL(18,2) NOT NULL,
         EffectiveDate DATE NOT NULL,
@@ -3143,6 +3240,20 @@ IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId')
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_Ensure DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_Ensure DEFAULT 0;
+
+DECLARE @PolicyBindStatusDefaultName SYSNAME;
+SELECT @PolicyBindStatusDefaultName = dc.name
+FROM sys.default_constraints dc
+INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+WHERE dc.parent_object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction')
+  AND c.name = N'BindStatusCode'
+  AND dc.definition LIKE N'%Bound%';
+IF @PolicyBindStatusDefaultName IS NOT NULL
+BEGIN
+    DECLARE @DropPolicyBindStatusDefaultSql NVARCHAR(MAX) = N'ALTER TABLE Submissions.PolicyBindTransaction DROP CONSTRAINT ' + QUOTENAME(@PolicyBindStatusDefaultName);
+    EXEC sp_executesql @DropPolicyBindStatusDefaultSql;
+    ALTER TABLE Submissions.PolicyBindTransaction ADD CONSTRAINT DF_PolicyBindTransaction_Status_Pending_Runtime DEFAULT N'Pending' FOR BindStatusCode;
+END;
 
 IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL AND COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyBindTransactionId') IS NULL
     ALTER TABLE Submissions.BoundPolicy ADD PolicyBindTransactionId UNIQUEIDENTIFIER NULL;
@@ -4518,7 +4629,9 @@ ORDER BY ar.AppetiteScore DESC;";
            p.CarrierId,
            COALESCE(c.CarrierName, N'Bound Carrier') AS CarrierName,
            p.PolicyNumber,
-           CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+            COALESCE(NULLIF(p.IssueStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'PendingIssue' ELSE p.Status END) AS Status,
+            COALESCE(NULLIF(p.IssueStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'PendingIssue' ELSE p.Status END) AS IssueStatus,
+            COALESCE(NULLIF(p.CoverageStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'Bound' ELSE p.Status END) AS CoverageStatus,
            COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness,
            COALESCE(NULLIF(s.Priority, N''), N'Normal') AS Priority,
            p.AnnualPremium,
@@ -4526,6 +4639,7 @@ ORDER BY ar.AppetiteScore DESC;";
            p.EffectiveDate,
            p.ExpirationDate,
            p.BoundDateUtc,
+              p.IssuedDateUtc,
              COALESCE(NULLIF(p.PolicySourceCode, N''), N'ManualEntry') AS PolicySourceCode,
              COALESCE(pcs.SourceName, p.PolicySourceCode, N'Manual Entry') AS PolicySourceName,
              p.PolicySourceReason,
@@ -4574,7 +4688,7 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 
 ;WITH Cte AS
 (
-    SELECT CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+    SELECT COALESCE(NULLIF(p.IssueStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'PendingIssue' ELSE p.Status END) AS Status,
            COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness
     FROM   Submissions.BoundPolicy p
     LEFT JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
@@ -4622,7 +4736,9 @@ SELECT TOP 1 p.PolicyId,
        p.CarrierId,
        COALESCE(c.CarrierName, N'Bound Carrier') AS CarrierName,
        p.PolicyNumber,
-       CASE WHEN p.Status = N'Bound' THEN N'Active' ELSE p.Status END AS Status,
+       COALESCE(NULLIF(p.IssueStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'PendingIssue' ELSE p.Status END) AS Status,
+       COALESCE(NULLIF(p.IssueStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'PendingIssue' ELSE p.Status END) AS IssueStatus,
+       COALESCE(NULLIF(p.CoverageStatus, N''), CASE WHEN p.Status = N'Bound' THEN N'Bound' ELSE p.Status END) AS CoverageStatus,
        COALESCE(NULLIF(s.LineOfBusiness, N''), N'General Liability') AS LineOfBusiness,
        COALESCE(NULLIF(s.Priority, N''), N'Normal') AS Priority,
        p.AnnualPremium,
@@ -4630,6 +4746,7 @@ SELECT TOP 1 p.PolicyId,
        p.EffectiveDate,
        p.ExpirationDate,
        p.BoundDateUtc,
+        p.IssuedDateUtc,
         COALESCE(NULLIF(p.PolicySourceCode, N''), N'ManualEntry') AS PolicySourceCode,
         COALESCE(pcs.SourceName, p.PolicySourceCode, N'Manual Entry') AS PolicySourceName,
         p.PolicySourceReason,
@@ -4742,7 +4859,14 @@ SELECT @CarrierId;";
             PolicySourceNotes: sourceNotes,
             RequestedByUserId: request.ModifiedByUserId,
             ApprovedByUserId: request.ModifiedByUserId,
-            BoundByUserId: request.ModifiedByUserId), cancellationToken);
+            BoundByUserId: request.ModifiedByUserId,
+            BindStatusCode: "Bound",
+            ConfirmationSourceCode: "Manual",
+            CarrierReferenceNumber: request.PolicyNumber,
+            FinalPremium: request.AnnualPremium,
+            ConfirmationNotes: sourceNotes ?? sourceReason ?? "Carrier-issued policy record entered in AgencyBinder.",
+            ConfirmedManually: true,
+            ConfirmationCertified: true), cancellationToken);
 
         return id;
     }
@@ -4763,6 +4887,9 @@ UPDATE Submissions.BoundPolicy
 SET PolicyNumber = @PolicyNumber,
     CarrierId = @CarrierId,
     Status = CASE WHEN @Status = N'Active' THEN N'Bound' ELSE @Status END,
+    IssueStatus = CASE WHEN @Status IN (N'Issued', N'Active') THEN N'Issued' WHEN @Status = N'PendingIssue' THEN N'PendingIssue' ELSE @Status END,
+    CoverageStatus = CASE WHEN @Status IN (N'Issued', N'Active') THEN N'Active' WHEN @Status = N'PendingIssue' THEN N'Bound' ELSE @Status END,
+    IssuedDateUtc = CASE WHEN @Status IN (N'Issued', N'Active') THEN COALESCE(IssuedDateUtc, SYSUTCDATETIME()) ELSE IssuedDateUtc END,
     AnnualPremium = @AnnualPremium,
     EffectiveDate = @EffectiveDate,
     ExpirationDate = @ExpirationDate,
@@ -4975,7 +5102,11 @@ SELECT @Message;";
     {
         const string sql = @"
 SELECT PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId,
-       PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc
+       PolicyNumber,
+       COALESCE(NULLIF(IssueStatus, N''), CASE WHEN Status = N'Bound' THEN N'PendingIssue' ELSE Status END) AS Status,
+       COALESCE(NULLIF(IssueStatus, N''), CASE WHEN Status = N'Bound' THEN N'PendingIssue' ELSE Status END) AS IssueStatus,
+       COALESCE(NULLIF(CoverageStatus, N''), CASE WHEN Status = N'Bound' THEN N'Bound' ELSE Status END) AS CoverageStatus,
+       AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IssuedDateUtc
 FROM   Submissions.BoundPolicy
 WHERE  SubmissionId = @SubmissionId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -5102,9 +5233,7 @@ SELECT CAST(CASE WHEN EXISTS
             }
         }
 
-        if (!bindStatus.CreatesPolicy)
-        {
-            const string bindRequestSql = @"
+        const string bindRequestSql = @"
 DECLARE @PolicyBindTransactionId UNIQUEIDENTIFIER = NEWID();
 DECLARE @RequestedDateUtc DATETIME2 = SYSUTCDATETIME();
 DECLARE @CustomerAuthorizationId UNIQUEIDENTIFIER = @CustomerAuthorizationIdIn;
@@ -5139,7 +5268,7 @@ VALUES
      @ConfirmationMessageId, @UnderwriterName, @UnderwriterCompany, @FollowUpWrittenConfirmationRequired, @IntegrationCorrelationId,
      @ExternalTransactionId, @ConfirmedManually, @ConfirmationCertified, @RequestedByUserId, @RequestedDateUtc, @ApprovedByUserId,
      CASE WHEN @ApprovedByUserId IS NULL THEN NULL ELSE @RequestedDateUtc END,
-     NULL, NULL, @RequestedDateUtc, @RequestedByUserId, 0);
+     CASE WHEN @CreatesPolicy = 1 THEN @BoundByUserId ELSE NULL END, CASE WHEN @CreatesPolicy = 1 THEN @RequestedDateUtc ELSE NULL END, @RequestedDateUtc, @RequestedByUserId, 0);
 
 UPDATE Submissions.CustomerAuthorization
 SET PolicyBindTransactionId = COALESCE(PolicyBindTransactionId, @PolicyBindTransactionId),
@@ -5159,152 +5288,13 @@ WHERE SubmissionId = @SubmissionId
   AND Status NOT IN (N'Bound', N'Lost', N'Cancelled', N'Closed');
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
-SELECT NEWID(), @SubmissionId, @TenantId, N'BindRequestRecorded', CONCAT(N'Bind request recorded with status ', @BindStatusCode, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), SYSUTCDATETIME(), N'PolicyBindTransaction', @PolicyBindTransactionId, N'User', 0
+SELECT NEWID(), @SubmissionId, @TenantId, CASE WHEN @CreatesPolicy = 1 THEN N'CarrierConfirmationRecorded' ELSE N'BindRequestRecorded' END, CONCAT(CASE WHEN @CreatesPolicy = 1 THEN N'Carrier confirmation recorded with status ' ELSE N'Bind request recorded with status ' END, @BindStatusCode, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), SYSUTCDATETIME(), N'PolicyBindTransaction', @PolicyBindTransactionId, N'User', 0
 WHERE @SubmissionId IS NOT NULL;
 
 SELECT @PolicyBindTransactionId;";
 
-            var transactionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(bindRequestSql, new
-            {
-                SubmissionId = submissionId,
-                QuoteId = quoteId,
-                request.TenantId,
-                request.AccountId,
-                request.CarrierId,
-                request.AnnualPremium,
-                request.EffectiveDate,
-                request.ExpirationDate,
-                request.PolicyNumber,
-                PolicySourceCode = source.SourceCode,
-                request.PolicySourceReason,
-                request.PolicySourceNotes,
-                request.RequestedByUserId,
-                request.ApprovedByUserId,
-                request.BindStatusCode,
-                request.ProposalId,
-                CustomerAuthorizationIdIn = request.CustomerAuthorizationId,
-                request.CustomerAuthorizationMethodCode,
-                request.CustomerAuthorizationReference,
-                request.CustomerAuthorizationNotes,
-                request.CustomerAuthorizedByName,
-                request.CustomerAuthorizedDateUtc,
-                request.CustomerAuthorizationDocumentId,
-                request.RequestedEffectiveTime,
-                request.ConfirmationSourceCode,
-                request.CarrierReferenceNumber,
-                request.BinderNumber,
-                request.FinalPremium,
-                request.DownPaymentAmount,
-                request.SubjectivitiesOutstanding,
-                request.ConfirmationNotes,
-                request.ConfirmationDocumentId,
-                request.ConfirmationReceivedFrom,
-                request.ConfirmationMessageId,
-                request.UnderwriterName,
-                request.UnderwriterCompany,
-                request.FollowUpWrittenConfirmationRequired,
-                request.IntegrationCorrelationId,
-                request.ExternalTransactionId,
-                request.ConfirmedManually,
-                request.ConfirmationCertified,
-            }, cancellationToken: cancellationToken));
-
-            if (submissionId.HasValue)
-            {
-                await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = submissionId.Value, request.TenantId }, cancellationToken: cancellationToken));
-                await RecordOpportunityWorkflowAsync(cn, submissionId.Value, request.TenantId, "Binding", "Bind Request Recorded", "Bind Request Recorded", $"Bind request recorded with status {bindStatus.StatusName}; policy was not created because carrier confirmation is not complete.", "PolicyBindTransaction", transactionId, request.RequestedByUserId, cancellationToken);
-            }
-
-            return transactionId;
-        }
-
-        const string sql = @"
-DECLARE @PolicyBindTransactionId UNIQUEIDENTIFIER = NEWID();
-DECLARE @RequestedDateUtc DATETIME2 = SYSUTCDATETIME();
-DECLARE @BoundDateUtc DATETIME2 = SYSUTCDATETIME();
-DECLARE @CustomerAuthorizationId UNIQUEIDENTIFIER = @CustomerAuthorizationIdIn;
-
-IF @QuoteId IS NOT NULL AND @QuoteId <> '00000000-0000-0000-0000-000000000000'
-BEGIN
-    IF @CustomerAuthorizationId IS NULL
-    BEGIN
-        SET @CustomerAuthorizationId = NEWID();
-        INSERT INTO Submissions.CustomerAuthorization
-            (CustomerAuthorizationId, TenantId, SubmissionId, QuoteId, ProposalId, AuthorizationMethodCode, AuthorizationReference, AuthorizationNotes, AuthorizedByName, AuthorizedDateUtc, DocumentId, CreatedDateUtc, CreatedByUserId, IsDeleted)
-        VALUES
-            (@CustomerAuthorizationId, @TenantId, @SubmissionId, @QuoteId, @ProposalId, @CustomerAuthorizationMethodCode, @CustomerAuthorizationReference, @CustomerAuthorizationNotes, @CustomerAuthorizedByName, COALESCE(@CustomerAuthorizedDateUtc, @RequestedDateUtc), @CustomerAuthorizationDocumentId, @RequestedDateUtc, @RequestedByUserId, 0);
-    END
-    ELSE IF NOT EXISTS (SELECT 1 FROM Submissions.CustomerAuthorization WHERE CustomerAuthorizationId = @CustomerAuthorizationId AND TenantId = @TenantId AND SubmissionId = @SubmissionId AND QuoteId = @QuoteId AND IsDeleted = 0)
-        THROW 52072, 'Customer authorization does not match the selected submission quote.', 1;
-END;
-
-INSERT INTO Submissions.PolicyBindTransaction
-    (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, ProposalId, CustomerAuthorizationId, PolicyId, AccountId, CarrierId,
-     PolicySourceCode, BindStatusCode, PolicyNumber, AnnualPremium, EffectiveDate, ExpirationDate,
-     BindReason, Notes, RequestedEffectiveTime, ConfirmationSourceCode, CarrierReferenceNumber, BinderNumber, FinalPremium,
-     DownPaymentAmount, SubjectivitiesOutstanding, ConfirmationNotes, ConfirmationDocumentId, ConfirmationReceivedFrom,
-     ConfirmationMessageId, UnderwriterName, UnderwriterCompany, FollowUpWrittenConfirmationRequired, IntegrationCorrelationId,
-     ExternalTransactionId, ConfirmedManually, ConfirmationCertified, RequestedByUserId, RequestedDateUtc, ApprovedByUserId, ApprovedDateUtc,
-     BoundByUserId, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
-VALUES
-    (@PolicyBindTransactionId, @TenantId, @SubmissionId, @QuoteId, @ProposalId, @CustomerAuthorizationId, @PolicyId, @AccountId, @CarrierId,
-     @PolicySourceCode, @BindStatusCode, @PolicyNumber, @AnnualPremium, @EffectiveDate, @ExpirationDate,
-     @PolicySourceReason, @PolicySourceNotes, @RequestedEffectiveTime, @ConfirmationSourceCode, @CarrierReferenceNumber, @BinderNumber, @FinalPremium,
-     @DownPaymentAmount, @SubjectivitiesOutstanding, @ConfirmationNotes, @ConfirmationDocumentId, @ConfirmationReceivedFrom,
-     @ConfirmationMessageId, @UnderwriterName, @UnderwriterCompany, @FollowUpWrittenConfirmationRequired, @IntegrationCorrelationId,
-     @ExternalTransactionId, @ConfirmedManually, @ConfirmationCertified, @RequestedByUserId, @RequestedDateUtc, @ApprovedByUserId,
-     CASE WHEN @ApprovedByUserId IS NULL THEN NULL ELSE @RequestedDateUtc END,
-     @BoundByUserId, CASE WHEN @BindStatusCode = N'Bound' THEN @BoundDateUtc ELSE NULL END, @RequestedDateUtc, @RequestedByUserId, 0);
-
-INSERT INTO Submissions.BoundPolicy
-    (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId,
-     PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, PolicySourceCode, PolicySourceReason, PolicySourceNotes, PolicyBindTransactionId, IsDeleted)
-VALUES
-    (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId,
-     COALESCE(NULLIF(@PolicyNumber, N''), 'POL-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS VARCHAR), 5)),
-     'Bound', @AnnualPremium, @EffectiveDate, @ExpirationDate, @BoundDateUtc, @PolicySourceCode, @PolicySourceReason, @PolicySourceNotes, @PolicyBindTransactionId, 0);
-
-UPDATE pbt
-SET PolicyNumber = bp.PolicyNumber,
-    ModifiedDateUtc = SYSUTCDATETIME()
-FROM Submissions.PolicyBindTransaction pbt
-INNER JOIN Submissions.BoundPolicy bp ON bp.PolicyId = pbt.PolicyId
-WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId;
-
-UPDATE Submissions.CustomerAuthorization
-SET PolicyBindTransactionId = COALESCE(PolicyBindTransactionId, @PolicyBindTransactionId),
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @RequestedByUserId
-WHERE CustomerAuthorizationId = @CustomerAuthorizationId
-  AND IsDeleted = 0;
-
-";
-        const string postBindSql = @"
-UPDATE Submissions.Quote
-SET Status = CASE WHEN QuoteId = @QuoteId THEN N'Bound' ELSE N'Not Selected' END,
-    IsSelected = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
-    IsRecommended = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
-    ModifiedDateUtc = SYSUTCDATETIME()
-WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 AND @SubmissionId IS NOT NULL AND @QuoteId IS NOT NULL AND @QuoteId <> '00000000-0000-0000-0000-000000000000';
-
-UPDATE Submissions.SubmissionMarket
-SET Status = CASE WHEN CarrierId = @CarrierId THEN N'Bound' ELSE CASE WHEN Status IN (N'Declined', N'Blocked') THEN Status ELSE N'Not Selected' END END,
-    RespondedDateUtc = COALESCE(RespondedDateUtc, SYSUTCDATETIME()),
-    ModifiedDateUtc = SYSUTCDATETIME()
-WHERE SubmissionId = @SubmissionId AND IsDeleted = 0 AND @SubmissionId IS NOT NULL;
-
-INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
-SELECT NEWID(), @SubmissionId, @TenantId, N'PolicyBound', CONCAT(N'Policy created. Source: ', @PolicySourceCode, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), SYSUTCDATETIME(), CASE WHEN @QuoteId IS NULL OR @QuoteId = '00000000-0000-0000-0000-000000000000' THEN N'Policy' ELSE N'Quote' END, CASE WHEN @QuoteId IS NULL OR @QuoteId = '00000000-0000-0000-0000-000000000000' THEN @PolicyId ELSE @QuoteId END, N'User', 0
-WHERE @SubmissionId IS NOT NULL;
-
-INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, DueDate, CreatedDateUtc, IsDeleted)
-SELECT NEWID(), @TenantId, CONCAT(N'TASK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 6)),
-       v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', CASE WHEN @SubmissionId IS NULL THEN N'Policy' ELSE N'Submission' END, COALESCE(@SubmissionId, @PolicyId), @AccountId, DATEADD(day, 7, CONVERT(date, SYSUTCDATETIME())), SYSUTCDATETIME(), 0
-FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect policy', N'Attach issued policy.'), (N'Collect invoice', N'Attach invoice.'), (N'Collect certificates', N'Attach certificates.'), (N'Collect evidence of insurance', N'Attach evidence of insurance.'), (N'Collect endorsements', N'Attach required endorsements.')) v(Title, Description);";
-        var id = Guid.NewGuid();
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        var transactionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(bindRequestSql, new
         {
-            PolicyId       = id,
             SubmissionId = submissionId,
             QuoteId = quoteId,
             request.TenantId,
@@ -5347,13 +5337,20 @@ FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect pol
             request.ExternalTransactionId,
             request.ConfirmedManually,
             request.ConfirmationCertified,
+            CreatesPolicy = bindStatus.CreatesPolicy,
         }, cancellationToken: cancellationToken));
-        await cn.ExecuteAsync(new CommandDefinition(postBindSql, new { SubmissionId = submissionId, QuoteId = quoteId, request.TenantId, request.AccountId, request.CarrierId }, cancellationToken: cancellationToken));
+
         if (submissionId.HasValue)
         {
-            await RecordOpportunityWorkflowAsync(cn, submissionId.Value, request.TenantId, "Won", "Policy Bound", "Policy Bound", "Policy bound from selected quote.", "BoundPolicy", id, null, cancellationToken);
+            await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = submissionId.Value, request.TenantId }, cancellationToken: cancellationToken));
+            var workflowTitle = bindStatus.CreatesPolicy ? "Carrier Confirmation Recorded" : "Bind Request Recorded";
+            var workflowMessage = bindStatus.CreatesPolicy
+                ? $"Carrier confirmation recorded with status {bindStatus.StatusName}; policy creation has been requested from the Policy Service."
+                : $"Bind request recorded with status {bindStatus.StatusName}; policy was not created because carrier confirmation is not complete.";
+            await RecordOpportunityWorkflowAsync(cn, submissionId.Value, request.TenantId, "Binding", workflowTitle, workflowTitle, workflowMessage, "PolicyBindTransaction", transactionId, request.RequestedByUserId, cancellationToken);
         }
-        return id;
+
+        return transactionId;
     }
 }
 

@@ -53,16 +53,16 @@ public sealed record CreateSubmissionFollowUpTaskRequest(
 
 public sealed record UpdateSubmissionIntakeQuestionRequest(
     Guid TenantId,
-    [property: StringLength(2000)]
+    [param: StringLength(2000)]
     string? AnswerText,
     bool IsAnswered,
     Guid? AnsweredByUserId,
-    [property: StringLength(50)]
+    [param: StringLength(50)]
     string? StatusCode = null,
-    [property: StringLength(1000)]
+    [param: StringLength(1000)]
     string? StatusReason = null,
     Guid? EvidenceDocumentId = null,
-    [property: StringLength(1000)]
+    [param: StringLength(1000)]
     string? WaiverReason = null,
     DateTime? ReviewDueDateUtc = null);
 

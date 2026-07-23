@@ -432,6 +432,8 @@ public static class ServiceCollectionExtensions
         // ── Submissions & Quoting Engine ─────────────────────────────
         services.AddScoped<ISubmissionRepository, SubmissionRepository>();
         services.AddScoped<ISubmissionService, SubmissionService>();
+        services.AddScoped<IPolicyCreationRepository, PolicyCreationRepository>();
+        services.AddScoped<IPolicyCreationService, PolicyCreationService>();
         services.AddScoped<ISubmissionWorkflowConfigurationRepository, SubmissionWorkflowConfigurationRepository>();
         services.AddScoped<ISubmissionWorkflowConfigurationService, SubmissionWorkflowConfigurationService>();
         services.AddScoped<ISubmissionReferenceOptionRepository, SubmissionReferenceOptionRepository>();

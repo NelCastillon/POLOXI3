@@ -12,15 +12,18 @@ public sealed class SubmissionService : ISubmissionService
     private readonly ISubmissionRepository _repository;
     private readonly IAccountRepository _accountRepository;
     private readonly IOpportunityRepository _opportunityRepository;
+    private readonly IPolicyCreationService _policyCreationService;
 
     public SubmissionService(
         ISubmissionRepository repository,
         IAccountRepository accountRepository,
-        IOpportunityRepository opportunityRepository)
+        IOpportunityRepository opportunityRepository,
+        IPolicyCreationService policyCreationService)
     {
         _repository = repository;
         _accountRepository = accountRepository;
         _opportunityRepository = opportunityRepository;
+        _policyCreationService = policyCreationService;
     }
 
     public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
@@ -141,7 +144,15 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Submission belongs to a different tenant; a policy cannot be created from it.");
         }
 
-        return await _repository.CreatePolicyAsync(id, request, cancellationToken);
+        var result = await _repository.CreatePolicyAsync(id, request, cancellationToken);
+        var bindTransaction = await _repository.GetPolicyBindTransactionAsync(result.Id, cancellationToken);
+        if (bindTransaction is not null && await BindStatusCreatesPolicyAsync(request.TenantId, bindTransaction.BindStatusCode, cancellationToken))
+        {
+            var policyId = await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, result.Id, null), cancellationToken);
+            return new SubmissionActionResult(policyId, "Policy created after carrier confirmation.");
+        }
+
+        return result;
     }
 
     public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default)
@@ -210,8 +221,11 @@ public sealed class SubmissionService : ISubmissionService
     public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
         => _repository.GetPolicyByIdAsync(policyId, cancellationToken);
 
-    public Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
-        => _repository.CreatePolicyRegisterAsync(request, cancellationToken);
+    public async Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        var bindTransactionId = await _repository.CreatePolicyRegisterAsync(request, cancellationToken);
+        return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.ModifiedByUserId), cancellationToken);
+    }
 
     public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdatePolicyRegisterAsync(policyId, request, cancellationToken);
@@ -230,7 +244,13 @@ public sealed class SubmissionService : ISubmissionService
                 throw new InvalidOperationException("Direct policy binding requires an Account when no parent Submission is supplied.");
             }
 
-            return await _repository.BindPolicyAsync(request, cancellationToken);
+            var directBindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
+            if (await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken))
+            {
+                return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, directBindTransactionId, request.RequestedByUserId), cancellationToken);
+            }
+
+            return directBindTransactionId;
         }
 
         var submission = await _repository.GetByIdAsync(request.SubmissionId.Value, cancellationToken)
@@ -246,27 +266,19 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent submission is not linked to the supplied account; the bind chain is inconsistent.");
         }
 
-        var result = await CreatePolicyAsync(request.SubmissionId.Value, new CreatePolicyFromSubmissionRequest(
-            TenantId: request.TenantId,
-            QuoteId: request.QuoteId.HasValue && request.QuoteId.Value != Guid.Empty ? request.QuoteId : null,
-            CarrierId: request.CarrierId,
-            AnnualPremium: request.AnnualPremium,
-            EffectiveDate: request.EffectiveDate,
-            ExpirationDate: request.ExpirationDate,
-            PolicyNumber: request.PolicyNumber,
-            PolicySourceCode: request.PolicySourceCode,
-            PolicySourceReason: request.PolicySourceReason,
-            PolicySourceNotes: request.PolicySourceNotes,
-            ProposalId: request.ProposalId,
-            CustomerAuthorizationId: request.CustomerAuthorizationId,
-            CustomerAuthorizationMethodCode: request.CustomerAuthorizationMethodCode,
-            CustomerAuthorizationReference: request.CustomerAuthorizationReference,
-            CustomerAuthorizationNotes: request.CustomerAuthorizationNotes,
-            CustomerAuthorizedByName: request.CustomerAuthorizedByName,
-            CustomerAuthorizedDateUtc: request.CustomerAuthorizedDateUtc,
-            CustomerAuthorizationDocumentId: request.CustomerAuthorizationDocumentId), cancellationToken);
+        var bindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
+        if (await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken))
+        {
+            return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.RequestedByUserId), cancellationToken);
+        }
 
-        return result.Id;
+        return bindTransactionId;
+    }
+
+    private async Task<bool> BindStatusCreatesPolicyAsync(Guid tenantId, string statusCode, CancellationToken cancellationToken)
+    {
+        var statuses = await _repository.GetPolicyBindStatusesAsync(tenantId, cancellationToken);
+        return statuses.Any(status => status.IsActive && status.CreatesPolicy && string.Equals(status.StatusCode, statusCode, StringComparison.OrdinalIgnoreCase));
     }
 }
 

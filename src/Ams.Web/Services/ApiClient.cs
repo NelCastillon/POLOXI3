@@ -2655,6 +2655,45 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<PolicyCreationSourceDto>?> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyCreationSourceDto>>($"api/submissions/policy-creation-sources?tenantId={tenantId}", cancellationToken);
 
+    public Task<IReadOnlyList<ManualPolicyOptionDto>?> GetManualPolicyOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ManualPolicyOptionDto>>($"api/policies/manual/options?tenantId={tenantId}", cancellationToken);
+
+    public async Task<ManualPolicyDraftDto> SaveManualPolicyDraftAsync(Guid accountId, UpsertManualPolicyDraftRequest request, Guid? draftId = null, CancellationToken cancellationToken = default)
+    {
+        HttpResponseMessage response;
+        if (draftId.HasValue)
+        {
+            response = await _httpClient.PutAsJsonAsync($"api/accounts/{accountId}/policies/manual/draft/{draftId.Value}", request, cancellationToken);
+        }
+        else
+        {
+            response = await _httpClient.PostAsJsonAsync($"api/accounts/{accountId}/policies/manual/draft", request, cancellationToken);
+        }
+
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<ManualPolicyDraftDto>(cancellationToken: cancellationToken))!;
+    }
+
+    public Task<ManualPolicyDraftDto?> GetManualPolicyDraftAsync(Guid tenantId, Guid accountId, Guid draftId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ManualPolicyDraftDto>($"api/accounts/{accountId}/policies/manual/draft/{draftId}?tenantId={tenantId}", cancellationToken);
+
+    public async Task<ManualPolicyValidationResultDto> ValidateManualPolicyAsync(Guid accountId, CreateManualPolicyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/accounts/{accountId}/policies/manual/validate", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<ManualPolicyValidationResultDto>(cancellationToken: cancellationToken))!;
+    }
+
+    public Task<IReadOnlyList<ManualPolicyDuplicateCandidateDto>?> CheckManualPolicyDuplicatesAsync(Guid tenantId, Guid accountId, Guid carrierId, string policyNumber, DateOnly effectiveDate, DateOnly expirationDate, string? lineOfBusiness = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ManualPolicyDuplicateCandidateDto>>($"api/accounts/{accountId}/policies/duplicate-check?tenantId={tenantId}&carrierId={carrierId}&policyNumber={Uri.EscapeDataString(policyNumber)}&effectiveDate={effectiveDate:yyyy-MM-dd}&expirationDate={expirationDate:yyyy-MM-dd}&lineOfBusiness={Uri.EscapeDataString(lineOfBusiness ?? string.Empty)}", cancellationToken);
+
+    public async Task<ManualPolicyCreateResultDto> CreateManualPolicyAsync(Guid accountId, CreateManualPolicyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/accounts/{accountId}/policies/manual", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<ManualPolicyCreateResultDto>(cancellationToken: cancellationToken))!;
+    }
+
     public Task<PolicyRegisterDto?> GetPolicyRegisterByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyRegisterDto>($"api/submissions/policies/{policyId}", cancellationToken);
 
