@@ -15,6 +15,7 @@ public sealed class SubmissionProposalWorkflowTests
     private static readonly Guid ProposalId = Guid.Parse("33333333-3333-3333-3333-333333333333");
     private static readonly Guid QuoteId = Guid.Parse("44444444-4444-4444-4444-444444444444");
     private static readonly Guid UserId = Guid.Parse("55555555-5555-5555-5555-555555555555");
+    private static readonly Guid AccountId = Guid.Parse("66666666-6666-6666-6666-666666666666");
 
     [Fact]
     public async Task GenerateProposalAsync_Forwards_QuoteIds_And_CustomIntroduction()
@@ -63,6 +64,37 @@ public sealed class SubmissionProposalWorkflowTests
         Assert.Equal(UserId, repository.LastProposalDecisionRequest.DecidedByUserId);
     }
 
+    [Fact]
+    public async Task BindPolicyAsync_Forwards_Optional_Proposal_And_CustomerAuthorization_Metadata()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new BindPolicyRequest(
+            SubmissionId,
+            QuoteId,
+            TenantId,
+            AccountId,
+            Guid.Parse("77777777-7777-7777-7777-777777777777"),
+            12500m,
+            DateTime.Today,
+            DateTime.Today.AddYears(1),
+            ProposalId: ProposalId,
+            CustomerAuthorizationMethodCode: "EmailApproval",
+            CustomerAuthorizationReference: "client approval email",
+            CustomerAuthorizationNotes: "Customer approved exact terms by email.",
+            CustomerAuthorizedByName: "Pat Customer",
+            CustomerAuthorizedDateUtc: DateTime.UtcNow,
+            RequestedByUserId: UserId);
+
+        await service.BindPolicyAsync(request);
+
+        Assert.Same(request, repository.LastBindPolicyRequest);
+        Assert.Equal(ProposalId, repository.LastBindPolicyRequest!.ProposalId);
+        Assert.Equal("Pending", repository.LastBindPolicyRequest.BindStatusCode);
+        Assert.Equal("EmailApproval", repository.LastBindPolicyRequest.CustomerAuthorizationMethodCode);
+        Assert.Equal("client approval email", repository.LastBindPolicyRequest.CustomerAuthorizationReference);
+    }
+
     private static SubmissionService CreateService(FakeSubmissionRepository repository)
         => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository());
 
@@ -74,6 +106,7 @@ public sealed class SubmissionProposalWorkflowTests
         public ProposalDeliveryRequest? LastProposalDeliveryRequest { get; private set; }
         public Guid? LastDecisionProposalId { get; private set; }
         public ProposalDecisionRequest? LastProposalDecisionRequest { get; private set; }
+        public BindPolicyRequest? LastBindPolicyRequest { get; private set; }
 
         public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         {
@@ -96,7 +129,7 @@ public sealed class SubmissionProposalWorkflowTests
         }
 
         public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<SubmissionDto>());
-        public Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<SubmissionDto?>(new SubmissionDto { SubmissionId = id, TenantId = TenantId, AccountId = Guid.NewGuid(), OpportunityId = Guid.NewGuid() });
+        public Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<SubmissionDto?>(new SubmissionDto { SubmissionId = id, TenantId = TenantId, AccountId = AccountId, OpportunityId = Guid.NewGuid() });
         public Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -149,7 +182,11 @@ public sealed class SubmissionProposalWorkflowTests
         public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<SubmissionActionResult> ExecutePolicyRegisterActionAsync(Guid policyId, PolicyRegisterActionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(policyId, "ok"));
         public Task<PolicyBindDto?> GetPolicyBySubmissionAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyBindDto?>(null);
-        public Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> BindPolicyAsync(BindPolicyRequest request, CancellationToken cancellationToken = default)
+        {
+            LastBindPolicyRequest = request;
+            return Task.FromResult(Guid.NewGuid());
+        }
     }
 
     private sealed class FakeAccountRepository : IAccountRepository

@@ -26,6 +26,15 @@ public sealed class QuoteComparisonDto
     public bool IsBindable { get; set; }
     public Guid? QuoteDocumentId { get; set; }
     public string? QuoteDocumentFileName { get; set; }
+    public Guid? DisclosureDocumentId { get; set; }
+    public bool IsReviewed { get; set; }
+    public Guid? ReviewedByUserId { get; set; }
+    public DateTime? ReviewedDateUtc { get; set; }
+    public Guid? ApprovedForPresentationByUserId { get; set; }
+    public DateTime? ApprovedForPresentationDateUtc { get; set; }
+    public string? PresentationReadinessNotes { get; set; }
+    public bool IsProposalReady { get; set; }
+    public string? ProposalReadinessReason { get; set; }
     public bool IsSelected { get; set; }
     public bool IsRecommended { get; set; }
     public int RecommendationScore { get; set; }

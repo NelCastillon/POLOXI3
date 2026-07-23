@@ -243,7 +243,7 @@ INSERT INTO Submissions.CarrierTransmission
      TransmissionTypeCode, ChannelCode, StatusCode, Recipient, Subject, EndpointUri, PayloadJson, DocumentPackageJson, ExternalReferenceNumber,
      AttemptCount, LastAttemptDateUtc, SentDateUtc, ConfirmedDateUtc, FailedDateUtc, BounceDateUtc, LastError, CreatedDateUtc, IsDeleted)
 SELECT NEWID(), d.TenantId, d.SubmissionId, d.SubmissionMarketId, d.SubmissionMarketDispatchId, d.CarrierId, connector.CarrierExternalConnectorId,
-       N'SubmitToMarket', d.DispatchChannelCode,
+       CASE WHEN JSON_VALUE(d.PayloadJson, '$.quoteRequestId') IS NOT NULL THEN N'QuoteRequest' ELSE N'SubmitToMarket' END, d.DispatchChannelCode,
        CASE
            WHEN d.DispatchStatusCode = N'Completed' THEN N'Delivered'
            WHEN d.DispatchStatusCode = N'ReadyForExternalConnector' THEN N'AwaitingExternalConnector'
@@ -267,6 +267,37 @@ WHERE NOT EXISTS
       AND existing.IsDeleted = 0
 );
 
+UPDATE qr
+SET StatusCode = CASE
+        WHEN d.DispatchStatusCode = N'Failed' THEN N'Failed'
+        WHEN t.StatusCode = N'Delivered' THEN N'Acknowledged'
+        ELSE N'Submitted' END,
+    RetryCount = d.AttemptCount,
+    LastAttemptDateUtc = d.LastAttemptDateUtc,
+    DispatchedDateUtc = COALESCE(qr.DispatchedDateUtc, t.SentDateUtc, d.LastAttemptDateUtc, SYSUTCDATETIME()),
+    AcknowledgedDateUtc = CASE WHEN t.StatusCode = N'Delivered' THEN COALESCE(qr.AcknowledgedDateUtc, t.ConfirmedDateUtc, SYSUTCDATETIME()) ELSE qr.AcknowledgedDateUtc END,
+    LastError = CASE WHEN d.DispatchStatusCode = N'Failed' THEN COALESCE(d.LastError, t.LastError, N'Carrier dispatch failed.') ELSE NULL END,
+    ClosedDateUtc = CASE WHEN d.DispatchStatusCode = N'Failed' THEN COALESCE(qr.ClosedDateUtc, SYSUTCDATETIME()) ELSE qr.ClosedDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.QuoteRequest qr
+INNER JOIN Submissions.SubmissionMarketDispatch d ON d.SubmissionMarketId = qr.SubmissionMarketId AND d.IsDeleted = 0
+INNER JOIN #Batch b ON b.SubmissionMarketDispatchId = d.SubmissionMarketDispatchId
+INNER JOIN Submissions.CarrierTransmission t ON t.SubmissionMarketDispatchId = d.SubmissionMarketDispatchId AND t.IsDeleted = 0
+WHERE qr.IsDeleted = 0
+  AND JSON_VALUE(d.PayloadJson, '$.quoteRequestId') = CONVERT(NVARCHAR(36), qr.QuoteRequestId)
+  AND qr.StatusCode IN (N'PendingDispatch', N'Submitted', N'Failed');
+
+UPDATE qrh
+SET StatusCode = qr.StatusCode,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.QuoteRequestHistory qrh
+INNER JOIN Submissions.QuoteRequest qr ON qr.SubmissionMarketId = qrh.SubmissionMarketId AND qr.RequestVersion = qrh.RequestVersion AND qr.IsDeleted = 0
+INNER JOIN Submissions.SubmissionMarketDispatch d ON d.SubmissionMarketId = qr.SubmissionMarketId AND d.IsDeleted = 0
+INNER JOIN #Batch b ON b.SubmissionMarketDispatchId = d.SubmissionMarketDispatchId
+WHERE qrh.IsDeleted = 0
+  AND JSON_VALUE(d.PayloadJson, '$.quoteRequestId') = CONVERT(NVARCHAR(36), qr.QuoteRequestId)
+  AND qrh.StatusCode IN (N'PendingDispatch', N'Submitted', N'Failed');
+
 INSERT INTO Submissions.CarrierTransmissionEvent
     (CarrierTransmissionEventId, TenantId, CarrierTransmissionId, SubmissionId, SubmissionMarketId, EventCode, EventMessage, EventPayloadJson, CreatedDateUtc, IsDeleted)
 SELECT NEWID(), t.TenantId, t.CarrierTransmissionId, t.SubmissionId, t.SubmissionMarketId,
@@ -285,6 +316,26 @@ WHERE NOT EXISTS
     FROM Submissions.CarrierTransmissionEvent existing
     WHERE existing.CarrierTransmissionId = t.CarrierTransmissionId
       AND existing.EventCode IN (N'DeliveryConfirmed', N'DeliveryFailed', N'ExternalConnectorQueued')
+      AND existing.IsDeleted = 0
+);
+
+INSERT INTO Submissions.CarrierTransmissionEvent
+    (CarrierTransmissionEventId, TenantId, CarrierTransmissionId, SubmissionId, SubmissionMarketId, EventCode, EventMessage, EventPayloadJson, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, t.CarrierTransmissionId, t.SubmissionId, t.SubmissionMarketId,
+       CASE WHEN qr.StatusCode = N'Failed' THEN N'QuoteRequestDispatchFailed' WHEN qr.StatusCode = N'Acknowledged' THEN N'QuoteRequestAcknowledged' ELSE N'QuoteRequestSubmitted' END,
+       CASE WHEN qr.StatusCode = N'Failed' THEN COALESCE(qr.LastError, N'Quote request dispatch failed.') WHEN qr.StatusCode = N'Acknowledged' THEN N'Quote request delivery was acknowledged.' ELSE N'Quote request was submitted to the configured carrier connector.' END,
+       CONCAT(N'{""quoteRequestId"":""', CONVERT(NVARCHAR(36), qr.QuoteRequestId), N'"",""statusCode"":""', qr.StatusCode, N'""}'),
+       SYSUTCDATETIME(), 0
+FROM Submissions.CarrierTransmission t
+INNER JOIN #Batch b ON b.SubmissionMarketDispatchId = t.SubmissionMarketDispatchId
+INNER JOIN Submissions.SubmissionMarketDispatch d ON d.SubmissionMarketDispatchId = t.SubmissionMarketDispatchId
+INNER JOIN Submissions.QuoteRequest qr ON qr.SubmissionMarketId = t.SubmissionMarketId AND qr.IsDeleted = 0 AND JSON_VALUE(d.PayloadJson, '$.quoteRequestId') = CONVERT(NVARCHAR(36), qr.QuoteRequestId)
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.CarrierTransmissionEvent existing
+    WHERE existing.CarrierTransmissionId = t.CarrierTransmissionId
+      AND existing.EventCode IN (N'QuoteRequestSubmitted', N'QuoteRequestAcknowledged', N'QuoteRequestDispatchFailed')
       AND existing.IsDeleted = 0
 );
 

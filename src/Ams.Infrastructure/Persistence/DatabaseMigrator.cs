@@ -264,6 +264,7 @@ public sealed partial class DatabaseMigrator
         new("0226_Submissions_SubmitToMarketDispatchCompletion", Migration0226_SubmissionsSubmitToMarketDispatchCompletion),
         new("0227_Submissions_CommonExternalCarrierDeliverySettings", Migration0227_SubmissionsCommonExternalCarrierDeliverySettings),
         new("0228_Submissions_ReadinessEvidenceDocuments", Migration0228_SubmissionsReadinessEvidenceDocuments),
+        new("0229_Submissions_QuoteRequest_BusinessObject", Migration0229_SubmissionsQuoteRequestBusinessObject),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -1373,6 +1374,11 @@ BEGIN
     CREATE TABLE Submissions.Proposal (ProposalId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_Proposal PRIMARY KEY DEFAULT NEWID(), SubmissionId UNIQUEIDENTIFIER NOT NULL, TenantId UNIQUEIDENTIFIER NOT NULL, Title NVARCHAR(200) NOT NULL, Status NVARCHAR(50) NOT NULL, PdfUrl NVARCHAR(500) NULL, HtmlContent NVARCHAR(MAX) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Submissions_Proposal_Created_0125 DEFAULT SYSUTCDATETIME(), GeneratedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_Submissions_Proposal_IsDeleted_0125 DEFAULT 0);
 END
 
+IF OBJECT_ID(N'Submissions.CustomerAuthorization', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CustomerAuthorization (CustomerAuthorizationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CustomerAuthorization PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL, SubmissionId UNIQUEIDENTIFIER NOT NULL, QuoteId UNIQUEIDENTIFIER NOT NULL, ProposalId UNIQUEIDENTIFIER NULL, AuthorizationMethodCode NVARCHAR(50) NOT NULL, AuthorizationReference NVARCHAR(200) NULL, AuthorizationNotes NVARCHAR(2000) NULL, AuthorizedByName NVARCHAR(200) NULL, AuthorizedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerAuthorization_Authorized_0125 DEFAULT SYSUTCDATETIME(), DocumentId UNIQUEIDENTIFIER NULL, PolicyBindTransactionId UNIQUEIDENTIFIER NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerAuthorization_Created_0125 DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL, ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CustomerAuthorization_IsDeleted_0125 DEFAULT 0);
+END
+
 IF OBJECT_ID(N'Submissions.SubmissionActionLog', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.SubmissionActionLog (ActionLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionActionLog PRIMARY KEY DEFAULT NEWID(), SubmissionId UNIQUEIDENTIFIER NOT NULL, TenantId UNIQUEIDENTIFIER NOT NULL, ActionCode NVARCHAR(80) NOT NULL, Notes NVARCHAR(1000) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionActionLog_Created_0125 DEFAULT SYSUTCDATETIME(), IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionActionLog_IsDeleted_0125 DEFAULT 0);
@@ -1385,6 +1391,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarket') AND name = N'IX_SubmissionMarket_Submission') CREATE INDEX IX_SubmissionMarket_Submission ON Submissions.SubmissionMarket(SubmissionId, IsDeleted, IsRecommended DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_Submission') CREATE INDEX IX_Submissions_Quote_Submission ON Submissions.Quote(SubmissionId, IsDeleted, AnnualPremium DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.BoundPolicy') AND name = N'IX_BoundPolicy_Submission') CREATE INDEX IX_BoundPolicy_Submission ON Submissions.BoundPolicy(SubmissionId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CustomerAuthorization') AND name = N'IX_CustomerAuthorization_Submission') CREATE INDEX IX_CustomerAuthorization_Submission ON Submissions.CustomerAuthorization(TenantId, SubmissionId, QuoteId, IsDeleted, AuthorizedDateUtc DESC);
 
 -- Direct Submission Intake staging table: captures submissions arriving outside the CRM lead path
 -- (email, portal, API, producer upload, carrier request, walk-in) and normalizes them into
@@ -11210,11 +11217,11 @@ BEGIN
                CONCAT(N'QT-', s.LeadNumber) AS QuoteNumber,
                CONCAT(N'POL-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), s.LeadId), N'-', N''), 8)) AS PolicyNumber,
                CASE
-                   WHEN s.RowNum % 5 = 1 THEN N'New'
-                   WHEN s.RowNum % 5 = 2 THEN N'In Review'
-                   WHEN s.RowNum % 5 = 3 THEN N'Quoted'
+                    WHEN s.RowNum % 5 = 1 THEN N'In Progress'
+                    WHEN s.RowNum % 5 = 2 THEN N'Marketing'
+                    WHEN s.RowNum % 5 = 3 THEN N'Quotes Received'
                    WHEN s.RowNum % 5 = 4 THEN N'Bound'
-                   ELSE N'Declined'
+                    ELSE N'Lost'
                END AS SubmissionStatus
         INTO #LeadWorkflowChain
         FROM #LeadWorkflowSource s
@@ -11229,8 +11236,8 @@ BEGIN
         (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
         SELECT c.SubmissionId, @TenantId, c.AccountId, c.OpportunityId, c.SubmissionNumber, c.LineOfBusiness, c.SubmissionStatus, c.Priority, c.AssignedToUserId,
                DATEADD(day, 30 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 395 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), c.TargetPremium,
-               CASE WHEN c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined') THEN 1 ELSE 0 END,
-               CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN 1 ELSE 0 END,
+               CASE WHEN c.SubmissionStatus IN (N'Marketing', N'Quotes Received', N'Bound', N'Lost') THEN 1 ELSE 0 END,
+               CASE WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound') THEN 1 ELSE 0 END,
                SYSUTCDATETIME(), @AdminUserId, 0
         FROM #LeadWorkflowChain c
         WHERE NOT EXISTS (SELECT 1 FROM Submissions.Submission s WHERE s.SubmissionId = c.SubmissionId);
@@ -11254,12 +11261,12 @@ BEGIN
         BEGIN
             INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, DeclineReason, IsDeleted)
             SELECT NEWID(), c.SubmissionId, @DefaultCarrierId,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN N'Quoted' ELSE N'Submitted' END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Declined' WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound') THEN N'Quoted' ELSE N'Submitted' END,
                    CASE WHEN c.Priority = N'High' THEN 88 ELSE 76 END, 1, DATEADD(day, -7, SYSUTCDATETIME()),
-                   CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Lead-sourced market declined during qualification.' ELSE NULL END, 0
+                   CASE WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound', N'Lost') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Lead-sourced market declined during qualification.' ELSE NULL END, 0
             FROM #LeadWorkflowChain c
-            WHERE c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined')
+            WHERE c.SubmissionStatus IN (N'Marketing', N'Quotes Received', N'Bound', N'Lost')
               AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = c.SubmissionId AND sm.CarrierId = @DefaultCarrierId AND sm.IsDeleted = 0);
         END
 
@@ -11267,10 +11274,10 @@ BEGIN
         BEGIN
             INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
             SELECT c.QuoteId, c.SubmissionId, @DefaultCarrierId, c.QuoteNumber,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus = N'Bound' THEN N'Accepted' ELSE N'Presented' END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Declined' WHEN c.SubmissionStatus = N'Bound' THEN N'Bound' ELSE N'Presented' END,
                    c.TargetPremium, 5000, 1000000, CONCAT(N'Quote synced from lead ', c.LeadNumber, N' workflow.'), DATEADD(day, -3, SYSUTCDATETIME()), DATEADD(day, 27, SYSUTCDATETIME()), SYSUTCDATETIME(), 0
             FROM #LeadWorkflowChain c
-            WHERE c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined')
+            WHERE c.SubmissionStatus IN (N'Quotes Received', N'Bound', N'Lost')
               AND NOT EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = c.QuoteId);
 
             INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
@@ -16297,6 +16304,24 @@ BEGIN
         ExpirationDate DATE NOT NULL,
         BindReason NVARCHAR(500) NULL,
         Notes NVARCHAR(1000) NULL,
+        RequestedEffectiveTime TIME NULL,
+        ConfirmationSourceCode NVARCHAR(50) NULL,
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        BinderNumber NVARCHAR(120) NULL,
+        FinalPremium DECIMAL(18,2) NULL,
+        DownPaymentAmount DECIMAL(18,2) NULL,
+        SubjectivitiesOutstanding NVARCHAR(2000) NULL,
+        ConfirmationNotes NVARCHAR(2000) NULL,
+        ConfirmationDocumentId UNIQUEIDENTIFIER NULL,
+        ConfirmationReceivedFrom NVARCHAR(320) NULL,
+        ConfirmationMessageId NVARCHAR(200) NULL,
+        UnderwriterName NVARCHAR(200) NULL,
+        UnderwriterCompany NVARCHAR(200) NULL,
+        FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_0214 DEFAULT 0,
+        IntegrationCorrelationId NVARCHAR(120) NULL,
+        ExternalTransactionId NVARCHAR(120) NULL,
+        ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_0214 DEFAULT 0,
+        ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_0214 DEFAULT 0,
         RequestedByUserId UNIQUEIDENTIFIER NULL,
         RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_Requested_0214 DEFAULT SYSUTCDATETIME(),
         ApprovedByUserId UNIQUEIDENTIFIER NULL,
@@ -16314,6 +16339,26 @@ END;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'TenantId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_TenantId_0214 DEFAULT '00000000-0000-0000-0000-000000000001';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubmissionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_SubmissionId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'QuoteId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_QuoteIdB_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ProposalId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ProposalId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CustomerAuthorizationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CustomerAuthorizationId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedEffectiveTime') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedEffectiveTime TIME NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationSourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationSourceCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BinderNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BinderNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FinalPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FinalPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'DownPaymentAmount') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD DownPaymentAmount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubjectivitiesOutstanding') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubjectivitiesOutstanding NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationNotes NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWrittenB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManuallyB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_CertifiedB_0214 DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicyId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicyId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'AccountId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_AccountId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_CarrierId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
@@ -16374,12 +16419,15 @@ CREATE TABLE #PolicyBindStatuses
 );
 
 INSERT INTO #PolicyBindStatuses (StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, SortOrder) VALUES
-(N'Draft', N'Draft', N'Bind transaction has been started but not submitted for execution.', 0, 0, 1, 10),
-(N'PendingApproval', N'Pending Approval', N'Bind transaction requires internal approval before policy creation.', 0, 0, 0, 20),
-(N'ReadyToBind', N'Ready to Bind', N'Bind transaction passed validation and is ready to create the policy.', 0, 0, 0, 30),
-(N'Bound', N'Bound', N'Bind transaction created the policy and completed the bind workflow.', 1, 1, 0, 40),
-(N'Cancelled', N'Cancelled', N'Bind transaction was cancelled before policy creation.', 1, 0, 0, 50),
-(N'Failed', N'Failed', N'Bind transaction failed validation or execution.', 1, 0, 0, 60);
+(N'Pending', N'Pending', N'Bind request has been captured and is pending carrier submission or review.', 0, 0, 1, 10),
+(N'CarrierReviewing', N'Carrier Reviewing', N'Carrier is reviewing the bind request before confirmation.', 0, 0, 0, 20),
+(N'WaitingPayment', N'Waiting Payment', N'Carrier requires down payment before binding.', 0, 0, 0, 30),
+(N'WaitingDocuments', N'Waiting Documents', N'Carrier requires signed application or additional documents before binding.', 0, 0, 0, 40),
+(N'Approved', N'Approved', N'Carrier approved the bind request but policy issuance is not complete.', 0, 0, 0, 50),
+(N'Bound', N'Bound', N'Carrier confirmed coverage is bound; policy creation may proceed.', 1, 1, 0, 60),
+(N'Declined', N'Declined', N'Carrier declined the bind request.', 1, 0, 0, 50),
+(N'Cancelled', N'Cancelled', N'Bind transaction was cancelled before policy creation.', 1, 0, 0, 55),
+(N'Failed', N'Failed', N'Bind request failed validation or carrier processing.', 1, 0, 0, 60);
 
 EXEC(N'
 INSERT INTO Submissions.PolicyBindStatus
@@ -16949,6 +16997,16 @@ BEGIN
     IF COL_LENGTH(N'Submissions.Quote', N'EffectiveDate') IS NULL ALTER TABLE Submissions.Quote ADD EffectiveDate DATETIME2 NULL;
     IF COL_LENGTH(N'Submissions.Quote', N'CoverageForms') IS NULL ALTER TABLE Submissions.Quote ADD CoverageForms NVARCHAR(2000) NULL;
     IF COL_LENGTH(N'Submissions.Quote', N'IsBindable') IS NULL ALTER TABLE Submissions.Quote ADD IsBindable BIT NOT NULL CONSTRAINT DF_Submissions_Quote_IsBindable_0219 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.Quote', N'CommissionPercent') IS NULL ALTER TABLE Submissions.Quote ADD CommissionPercent DECIMAL(9,4) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'Subjectivities') IS NULL ALTER TABLE Submissions.Quote ADD Subjectivities NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'Exclusions') IS NULL ALTER TABLE Submissions.Quote ADD Exclusions NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CarrierRating') IS NULL ALTER TABLE Submissions.Quote ADD CarrierRating NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'PaymentTerms') IS NULL ALTER TABLE Submissions.Quote ADD PaymentTerms NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'MinimumEarnedPremium') IS NULL ALTER TABLE Submissions.Quote ADD MinimumEarnedPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'TaxesAndFees') IS NULL ALTER TABLE Submissions.Quote ADD TaxesAndFees DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'BrokerFee') IS NULL ALTER TABLE Submissions.Quote ADD BrokerFee DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'TriaIncluded') IS NULL ALTER TABLE Submissions.Quote ADD TriaIncluded BIT NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD ModifiedDateUtc DATETIME2 NULL;
 END;
 
 IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NULL
@@ -17327,6 +17385,7 @@ END;
 IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
 BEGIN
     IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestMethodCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestMethodCode NVARCHAR(50) NULL;
     IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
     IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestedPremium DECIMAL(18,2) NULL;
     IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestVersion') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestVersion_0223 DEFAULT 1;
@@ -17353,10 +17412,41 @@ BEGIN
         (N'QuoteRequestReason', N'CarrierClarification', N'Carrier clarification', N'Carrier requested clarification or additional information.', CAST(0 AS bit), 40),
         (N'QuoteRequestReason', N'MissingInformation', N'Missing information supplied', N'Previously missing information or documents are now available.', CAST(0 AS bit), 50),
         (N'QuoteRequestReason', N'Other', N'Other', N'Other documented business reason.', CAST(0 AS bit), 90),
+        (N'QuoteRequestScope', N'Package', N'Package', N'Request quote terms for the full submission package.', CAST(1 AS bit), 10),
+        (N'QuoteRequestScope', N'SingleLine', N'Single coverage line', N'Request quote terms for one selected coverage line.', CAST(0 AS bit), 20),
         (N'QuoteRequestOpenMarketStatus', N'In Review', N'In Review', N'Market has an open quote request workflow.', CAST(1 AS bit), 10),
         (N'QuoteRequestOpenMarketStatus', N'Submitted', N'Submitted', N'Market submission has been sent and is awaiting quote activity.', CAST(0 AS bit), 20),
         (N'QuoteRequestOpenMarketStatus', N'Awaiting Quote', N'Awaiting Quote', N'Market is awaiting carrier quote terms.', CAST(0 AS bit), 30),
         (N'QuoteRequestOpenMarketStatus', N'Requested', N'Requested', N'Quote request is pending carrier response.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'Draft', N'Draft', N'Quote request is being prepared and has not been dispatched.', CAST(0 AS bit), 5),
+        (N'QuoteRequestStatus', N'ValidationRequired', N'Validation Required', N'Quote request is blocked until required submission information is completed.', CAST(0 AS bit), 8),
+        (N'QuoteRequestStatus', N'PendingDispatch', N'Pending Dispatch', N'Quote request was created and is waiting for dispatch.', CAST(1 AS bit), 10),
+        (N'QuoteRequestStatus', N'Submitted', N'Submitted', N'Quote request has been submitted to the market.', CAST(0 AS bit), 20),
+        (N'QuoteRequestStatus', N'Acknowledged', N'Acknowledged', N'Market acknowledged the quote request.', CAST(0 AS bit), 30),
+        (N'QuoteRequestStatus', N'UnderReview', N'Under Review', N'Market is underwriting or reviewing the quote request.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'MoreInformationRequired', N'More Information Required', N'Market requested more information before quoting.', CAST(0 AS bit), 50),
+        (N'QuoteRequestStatus', N'Quoted', N'Quoted', N'Market returned quote terms and a Quote record may exist.', CAST(0 AS bit), 70),
+        (N'QuoteRequestStatus', N'Declined', N'Declined', N'Market declined to quote.', CAST(0 AS bit), 80),
+        (N'QuoteRequestStatus', N'Expired', N'Expired', N'Quote request expired before receiving market terms.', CAST(0 AS bit), 90),
+        (N'QuoteRequestStatus', N'Cancelled', N'Cancelled', N'Quote request was cancelled before response.', CAST(0 AS bit), 100),
+        (N'QuoteRequestStatus', N'Failed', N'Failed', N'Quote request dispatch or processing failed.', CAST(0 AS bit), 110),
+        (N'QuoteResponseSource', N'ManualEntry', N'Manual Entry', N'Quote response was entered manually by an agency user.', CAST(1 AS bit), 10),
+        (N'QuoteResponseSource', N'CarrierPortal', N'Carrier Portal', N'Quote response was copied from a carrier, MGA, or wholesaler portal.', CAST(0 AS bit), 20),
+        (N'QuoteResponseSource', N'Email', N'Email', N'Quote response was received through email.', CAST(0 AS bit), 30),
+        (N'QuoteResponseSource', N'Api', N'API', N'Quote response was received through carrier or rater API integration.', CAST(0 AS bit), 40),
+        (N'CustomerAuthorizationMethod', N'SignedProposal', N'Signed Proposal', N'Customer accepted using a signed proposal.', CAST(1 AS bit), 10),
+        (N'CustomerAuthorizationMethod', N'EmailApproval', N'Email Approval', N'Customer accepted using written email approval.', CAST(0 AS bit), 20),
+        (N'CustomerAuthorizationMethod', N'RecordedCall', N'Recorded Call', N'Customer accepted using a recorded call.', CAST(0 AS bit), 30),
+        (N'CustomerAuthorizationMethod', N'ESignature', N'E-Signature', N'Customer accepted using an e-signature workflow.', CAST(0 AS bit), 40),
+        (N'CustomerAuthorizationMethod', N'PortalAcceptance', N'Portal Acceptance', N'Customer accepted through a portal workflow.', CAST(0 AS bit), 50),
+        (N'CustomerAuthorizationMethod', N'WrittenInstruction', N'Written Instruction', N'Customer accepted using written instruction outside a proposal.', CAST(0 AS bit), 60),
+        (N'BindConfirmationSource', N'Api', N'API', N'Carrier confirmation was received through API integration.', CAST(0 AS bit), 10),
+        (N'BindConfirmationSource', N'Webhook', N'Webhook', N'Carrier confirmation was received asynchronously by webhook or polling.', CAST(0 AS bit), 20),
+        (N'BindConfirmationSource', N'CarrierPortal', N'Carrier Portal', N'Agency user recorded confirmation from the carrier portal.', CAST(1 AS bit), 30),
+        (N'BindConfirmationSource', N'Email', N'Email', N'Carrier confirmation was received by email.', CAST(0 AS bit), 40),
+        (N'BindConfirmationSource', N'Phone', N'Phone', N'Carrier confirmation was received verbally by phone and requires documentation.', CAST(0 AS bit), 50),
+        (N'BindConfirmationSource', N'BinderDocument', N'Binder Document', N'Carrier binder document confirms coverage is bound.', CAST(0 AS bit), 60),
+        (N'BindConfirmationSource', N'Manual', N'Manual', N'Agency user manually recorded authoritative carrier confirmation.', CAST(0 AS bit), 70),
         (N'QuoteRequestBlockedStatus', N'Bound', N'Bound', N'Bound submissions or markets cannot request additional quotes.', CAST(1 AS bit), 10),
         (N'QuoteRequestBlockedStatus', N'Declined', N'Declined', N'Declined submissions or markets are blocked from additional quote requests.', CAST(0 AS bit), 20),
         (N'QuoteRequestBlockedStatus', N'Withdrawn', N'Withdrawn', N'Withdrawn submissions are blocked from quote requests.', CAST(0 AS bit), 30),
@@ -17372,6 +17462,48 @@ BEGIN
           AND existing.OptionCode = seed.OptionCode
           AND existing.IsDeleted = 0
     );
+
+    UPDATE Submissions.SubmissionReferenceOption
+    SET IsActive = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE OptionGroup = N'QuoteRequestStatus'
+      AND OptionCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'Withdrawn', N'Closed', N'No Response')
+      AND IsDeleted = 0;
+
+    IF OBJECT_ID(N'Submissions.QuoteRequest', N'U') IS NOT NULL
+    BEGIN
+        UPDATE Submissions.QuoteRequest
+        SET StatusCode = CASE StatusCode
+                WHEN N'Open' THEN N'PendingDispatch'
+                WHEN N'CarrierProcessing' THEN N'UnderReview'
+                WHEN N'Referred' THEN N'UnderReview'
+                WHEN N'Received' THEN N'Quoted'
+                WHEN N'No Response' THEN N'Failed'
+                WHEN N'Withdrawn' THEN N'Cancelled'
+                WHEN N'Closed' THEN N'Cancelled'
+                ELSE StatusCode END,
+            ClosedDateUtc = CASE WHEN StatusCode IN (N'No Response', N'Withdrawn', N'Closed') THEN COALESCE(ClosedDateUtc, SYSUTCDATETIME()) ELSE ClosedDateUtc END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE StatusCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'No Response', N'Withdrawn', N'Closed')
+          AND IsDeleted = 0;
+    END;
+
+    IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+    BEGIN
+        UPDATE Submissions.QuoteRequestHistory
+        SET StatusCode = CASE StatusCode
+                WHEN N'Open' THEN N'PendingDispatch'
+                WHEN N'CarrierProcessing' THEN N'UnderReview'
+                WHEN N'Referred' THEN N'UnderReview'
+                WHEN N'Received' THEN N'Quoted'
+                WHEN N'No Response' THEN N'Failed'
+                WHEN N'Withdrawn' THEN N'Cancelled'
+                WHEN N'Closed' THEN N'Cancelled'
+                ELSE StatusCode END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE StatusCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'No Response', N'Withdrawn', N'Closed')
+          AND IsDeleted = 0;
+    END;
 END;
 """;
 
@@ -19128,6 +19260,7 @@ INSERT INTO @Connectors0227 VALUES
 (N'PORTAL_MANUAL_HANDOFF', N'Carrier Portal Manual Handoff', N'Portal', N'ManualHandoff', NULL, N'Portal', 1, 0, 1, N'{"deliveryMode":"manualPortal","requiresPortalUrl":true,"requiresCredentials":true,"commonUse":"Top AMS workflow for carrier portals that do not expose APIs"}', N'{"icon":"bi-window-stack","description":"Manual upload checklist and portal URL handoff."}', 130),
 (N'API_JSON_SUBMISSION', N'Carrier API JSON Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"jsonApi","authModes":["OAuth2ClientCredentials","ApiKey","MutualTls"],"commonUse":"Modern carrier API quote intake"}', N'{"icon":"bi-braces","description":"JSON API submit-to-market connector template."}', 140),
 (N'API_ACORD_XML_SUBMISSION', N'Carrier API ACORD XML Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"acordXmlApi","payloadFormats":["ACORD_XML","SupplementalDocuments"],"commonUse":"Commercial lines carrier API/package exchange"}', N'{"icon":"bi-filetype-xml","description":"ACORD XML plus document package API connector template."}', 150),
+(N'API_RATING_JSON', N'Carrier API Rating Connector', N'RatingApi', N'ExternalConnector', NULL, N'API', 0, 1, 1, N'{"deliveryMode":"jsonApiRating","authModes":["None","ApiKey","BearerToken"],"responseContract":"normalizedQuoteResponse","commonUse":"Personal-lines or comparative-rater API rating request"}', N'{"icon":"bi-speedometer2","description":"Executes DB-backed API rating requests and stores normalized quote responses."}', 155),
 (N'WEBHOOK_SUBMISSION', N'Webhook Submission Connector', N'Webhook', N'ExternalConnector', NULL, N'Webhook', 1, 1, 1, N'{"deliveryMode":"webhook","requiresSigningSecret":true,"commonUse":"MGA/wholesaler or middleware webhook intake"}', N'{"icon":"bi-diagram-2","description":"Signed webhook package delivery template."}', 160),
 (N'SFTP_PACKAGE_DROP', N'SFTP Package Drop Connector', N'SFTP', N'ExternalConnector', NULL, N'SFTP', 1, 0, 1, N'{"deliveryMode":"sftp","requiresSecretReference":true,"commonUse":"Legacy or bulk package drop-off workflow"}', N'{"icon":"bi-folder-symlink","description":"SFTP package export/drop connector template."}', 170),
 (N'DOWNLOAD_PACKAGE_EXPORT', N'Download Package Export', N'Download', N'ManualHandoff', NULL, N'Download', 1, 0, 0, N'{"deliveryMode":"download","commonUse":"CSR/marketer downloads a carrier package for manual upload"}', N'{"icon":"bi-download","description":"Generate an outbound package for user-managed delivery."}', 180);
@@ -19189,6 +19322,18 @@ INSERT INTO @Settings0227 VALUES
 (N'CARRIER_DELIVERY_REQUIRE_ACORD_XML', N'Require ACORD XML Payload', N'CarrierDelivery', N'Carrier', N'Boolean', NULL, N'false', N'Indicates whether this carrier connector expects ACORD XML in addition to documents.', N'{"required":false}', N'{"control":"toggle","icon":"bi-filetype-xml"}', N'CarrierExternalTransmission', 0, 0, 230),
 (N'CARRIER_DELIVERY_ENABLE_PACKAGE_DOWNLOAD', N'Enable Package Download Handoff', N'CarrierDelivery', N'Tenant', N'Boolean', N'true', N'true', N'Allows users to download a market package for carrier portal or manual delivery.', N'{"required":false}', N'{"control":"toggle","icon":"bi-download"}', N'CarrierExternalTransmission', 0, 0, 240),
 (N'CARRIER_DELIVERY_DEFAULT_FOLLOWUP_DAYS', N'Default Carrier Follow-up Days', N'CarrierDelivery', N'Tenant', N'Number', N'3', N'3', N'Default number of business days before carrier follow-up is due after package delivery.', N'{"min":1,"max":30}', N'{"control":"number","icon":"bi-calendar-check"}', N'CarrierExternalTransmission', 0, 0, 250);
+
+INSERT INTO @Settings0227 VALUES
+(N'API_RATING_WORKER_ENABLED', N'API Rating Worker Enabled', N'ApiRating', N'Tenant', N'Boolean', N'true', N'true', N'Enables DB-backed API rating connector execution for queued quote requests.', N'{"required":true}', N'{"control":"toggle","icon":"bi-play-circle"}', N'ApiRatingConnectorWorkerService', 1, 0, 300),
+(N'API_RATING_WORKER_POLL_SECONDS', N'API Rating Worker Poll Seconds', N'ApiRating', N'Tenant', N'Number', N'30', N'30', N'Polling interval for API rating connector execution.', N'{"min":10,"max":3600}', N'{"control":"number","icon":"bi-clock"}', N'ApiRatingConnectorWorkerService', 1, 0, 310),
+(N'API_RATING_WORKER_BATCH_SIZE', N'API Rating Worker Batch Size', N'ApiRating', N'Tenant', N'Number', N'10', N'10', N'Maximum queued API rating transmissions processed per poll.', N'{"min":1,"max":100}', N'{"control":"number","icon":"bi-list-ol"}', N'ApiRatingConnectorWorkerService', 1, 0, 320),
+(N'CARRIER_RATING_CONNECTOR_CODE', N'Carrier Rating Connector Code', N'ApiRating', N'Carrier', N'Select', NULL, N'API_RATING_JSON', N'Carrier-specific connector used for API rating requests.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"control":"select","icon":"bi-diagram-3"}', N'ApiRatingConnectorWorkerService', 0, 0, 330),
+(N'CARRIER_RATING_API_ENDPOINT', N'Carrier Rating API Endpoint', N'ApiRating', N'Carrier', N'Url', NULL, NULL, N'Carrier or comparative-rater endpoint for API rating requests.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'ApiRatingConnectorWorkerService', 0, 0, 340),
+(N'CARRIER_RATING_API_AUTH_MODE', N'Carrier Rating API Auth Mode', N'ApiRating', N'Carrier', N'Select', NULL, N'None', N'Authentication mode used by the API rating connector.', N'{"options":["None","ApiKey","BearerToken"]}', N'{"control":"select","icon":"bi-shield-lock"}', N'ApiRatingConnectorWorkerService', 0, 0, 350),
+(N'CARRIER_RATING_API_KEY', N'Carrier Rating API Key', N'ApiRating', N'Carrier', N'Secret', NULL, NULL, N'API key value or secure secret material for the rating endpoint when ApiKey auth is selected.', N'{"maxLength":2000}', N'{"control":"secret","icon":"bi-key-fill"}', N'ApiRatingConnectorWorkerService', 0, 1, 360),
+(N'CARRIER_RATING_BEARER_TOKEN', N'Carrier Rating Bearer Token', N'ApiRating', N'Carrier', N'Secret', NULL, NULL, N'Bearer token value or secure secret material for the rating endpoint when BearerToken auth is selected.', N'{"maxLength":4000}', N'{"control":"secret","icon":"bi-key"}', N'ApiRatingConnectorWorkerService', 0, 1, 370),
+(N'CARRIER_RATING_API_KEY_HEADER', N'Carrier Rating API Key Header', N'ApiRating', N'Carrier', N'Text', NULL, N'x-api-key', N'Header name used when ApiKey authentication is selected.', N'{"maxLength":100}', N'{"control":"text","icon":"bi-input-cursor-text"}', N'ApiRatingConnectorWorkerService', 0, 0, 380),
+(N'CARRIER_RATING_REQUEST_TIMEOUT_SECONDS', N'Carrier Rating Request Timeout Seconds', N'ApiRating', N'Carrier', N'Number', NULL, N'30', N'Timeout for outbound rating API requests.', N'{"min":5,"max":300}', N'{"control":"number","icon":"bi-hourglass"}', N'ApiRatingConnectorWorkerService', 0, 0, 390);
 
 INSERT INTO Agency.CarrierSetting
     (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
@@ -19297,6 +19442,247 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Document')
     EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Document ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, DocumentId, IsDeleted);');
+""";
+
+    private const string Migration0229_SubmissionsQuoteRequestBusinessObject = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.QuoteRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRequest
+    (
+        QuoteRequestId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRequest PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        QuoteRequestActionCode NVARCHAR(50) NOT NULL,
+        QuoteRequestReasonCode NVARCHAR(80) NULL,
+        QuoteRequestScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Scope_0229 DEFAULT N'Package',
+        RequestedPremium DECIMAL(18,2) NULL,
+        Premium DECIMAL(18,2) NULL,
+        CommissionPercent DECIMAL(9,4) NULL,
+        QuoteNumber NVARCHAR(80) NULL,
+        ExpirationDateUtc DATETIME2 NULL,
+        CoverageNotes NVARCHAR(1000) NULL,
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        DeliveryMethodCode NVARCHAR(50) NULL,
+        AssignedUnderwriterUserId UNIQUEIDENTIFIER NULL,
+        AssignedUnderwriterName NVARCHAR(200) NULL,
+        AssignedUnderwriterEmail NVARCHAR(320) NULL,
+        AssignedUnderwriterPhone NVARCHAR(50) NULL,
+        DueDateUtc DATETIME2 NULL,
+        RetryCount INT NOT NULL CONSTRAINT DF_QuoteRequest_RetryCount_0229 DEFAULT 0,
+        CorrelationId NVARCHAR(120) NULL,
+        DispatchedDateUtc DATETIME2 NULL,
+        AcknowledgedDateUtc DATETIME2 NULL,
+        ResponseDateUtc DATETIME2 NULL,
+        LastAttemptDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequest_RequestVersion_0229 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Status_0229 DEFAULT N'PendingDispatch',
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_RequestedDateUtc_0229 DEFAULT SYSUTCDATETIME(),
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        ClosedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_CreatedDateUtc_0229 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequest_IsDeleted_0229 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'TenantId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Tenant_0229 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'SubmissionId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Submission_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD SubmissionMarketId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Market_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CarrierId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Carrier_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestActionCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Action_0229 DEFAULT N'InitialRequest';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_ScopeB_0229 DEFAULT N'Package';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'Premium') IS NULL ALTER TABLE Submissions.QuoteRequest ADD Premium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CommissionPercent') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CommissionPercent DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteNumber') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteNumber NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ExpirationDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ExpirationDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CoverageNotes') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CoverageNotes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DeliveryMethodCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DeliveryMethodCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterName') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterEmail') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterEmail NVARCHAR(320) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterPhone') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterPhone NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DueDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DueDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RetryCount') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RetryCount INT NOT NULL CONSTRAINT DF_QuoteRequest_RetryCountB_0229 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CorrelationId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CorrelationId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DispatchedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DispatchedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AcknowledgedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AcknowledgedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ResponseDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ResponseDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'LastAttemptDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD LastAttemptDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'LastError') IS NULL ALTER TABLE Submissions.QuoteRequest ADD LastError NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestVersion') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequest_RequestVersionB_0229 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'StatusCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_StatusB_0229 DEFAULT N'PendingDispatch';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_RequestedDateUtcB_0229 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ClosedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ClosedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_CreatedDateUtcB_0229 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'IsDeleted') IS NULL ALTER TABLE Submissions.QuoteRequest ADD IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequest_IsDeletedB_0229 DEFAULT 0;
+
+IF COL_LENGTH(N'Submissions.Quote', N'QuoteRequestId') IS NULL ALTER TABLE Submissions.Quote ADD QuoteRequestId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'UX_QuoteRequest_Market_Version')
+    EXEC(N'CREATE UNIQUE INDEX UX_QuoteRequest_Market_Version ON Submissions.QuoteRequest(SubmissionMarketId, RequestVersion) WHERE IsDeleted = 0;');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Submission')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Submission ON Submissions.QuoteRequest(TenantId, SubmissionId, IsDeleted, RequestedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Market_Status')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Market_Status ON Submissions.QuoteRequest(SubmissionMarketId, StatusCode, IsDeleted, RequestedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Correlation')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Correlation ON Submissions.QuoteRequest(TenantId, CorrelationId, IsDeleted) WHERE CorrelationId IS NOT NULL;');
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT tenants.TenantId, seed.OptionGroup, seed.OptionCode, seed.OptionName, seed.Description, seed.IsDefault, seed.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0) tenants
+    CROSS JOIN (VALUES
+        (N'QuoteRequestStatus', N'Draft', N'Draft', N'Quote request is being prepared and has not been dispatched.', CAST(0 AS bit), 5),
+        (N'QuoteRequestStatus', N'ValidationRequired', N'Validation Required', N'Quote request is blocked until required submission information is completed.', CAST(0 AS bit), 8),
+        (N'QuoteRequestStatus', N'PendingDispatch', N'Pending Dispatch', N'Quote request was created and is waiting for dispatch.', CAST(1 AS bit), 10),
+        (N'QuoteRequestStatus', N'Open', N'Open', N'Legacy open quote request awaiting market response.', CAST(0 AS bit), 12),
+        (N'QuoteRequestStatus', N'Submitted', N'Submitted', N'Quote request has been submitted to the market.', CAST(0 AS bit), 20),
+        (N'QuoteRequestStatus', N'Acknowledged', N'Acknowledged', N'Market acknowledged the quote request.', CAST(0 AS bit), 30),
+        (N'QuoteRequestStatus', N'UnderReview', N'Under Review', N'Market is underwriting or reviewing the quote request.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'MoreInformationRequired', N'More Information Required', N'Market requested more information before quoting.', CAST(0 AS bit), 50),
+        (N'QuoteRequestStatus', N'Referred', N'Referred', N'Quote request was referred to underwriting.', CAST(0 AS bit), 60),
+        (N'QuoteRequestStatus', N'Quoted', N'Quoted', N'Market returned quote terms and a Quote record may exist.', CAST(0 AS bit), 70),
+        (N'QuoteRequestStatus', N'Received', N'Received', N'Legacy status for market returned quote terms.', CAST(0 AS bit), 72),
+        (N'QuoteRequestStatus', N'Declined', N'Declined', N'Market declined to quote.', CAST(0 AS bit), 80),
+        (N'QuoteRequestStatus', N'Withdrawn', N'Withdrawn', N'Quote request was withdrawn before response.', CAST(0 AS bit), 90),
+        (N'QuoteRequestStatus', N'Expired', N'Expired', N'Quote request or response expired.', CAST(0 AS bit), 100),
+        (N'QuoteRequestStatus', N'Cancelled', N'Cancelled', N'Quote request was cancelled.', CAST(0 AS bit), 110),
+        (N'QuoteRequestStatus', N'Failed', N'Failed', N'Quote request dispatch or processing failed.', CAST(0 AS bit), 120),
+        (N'QuoteRequestStatus', N'Closed', N'Closed', N'Quote request was closed by a replacement request or workflow action.', CAST(0 AS bit), 130),
+        (N'QuoteRequestStatus', N'No Response', N'No Response', N'Market did not respond before the follow-up due date.', CAST(0 AS bit), 140),
+        (N'QuoteRequestMethod', N'ApiRating', N'API Rating', N'Personal-lines or comparative-rater API path where request quote submits and rates in one workflow.', CAST(1 AS bit), 10),
+        (N'QuoteRequestMethod', N'MgaPortal', N'MGA Portal', N'MGA, wholesaler, or carrier portal path where AMS tracks portal submission and quote response.', CAST(0 AS bit), 20),
+        (N'QuoteRequestMethod', N'Email', N'Email', N'Email path where AMS tracks a quote request sent to the market or underwriter by email.', CAST(0 AS bit), 30),
+        (N'QuoteRequestMethod', N'ManualUnderwriter', N'Manual Underwriter', N'Manual commercial underwriting path where an underwriter reviews before quote terms are returned.', CAST(0 AS bit), 40),
+        (N'SubmissionMethod', N'ApiRating', N'API Rating', N'Submission and quote request are sent through a carrier or comparative rater API.', CAST(0 AS bit), 5),
+        (N'SubmissionMethod', N'MgaPortal', N'MGA Portal', N'Submission package is delivered through an MGA, wholesaler, or carrier portal.', CAST(0 AS bit), 18),
+        (N'SubmissionMethod', N'ManualUnderwriter', N'Manual Underwriter', N'Submission package is tracked through manual underwriter review.', CAST(0 AS bit), 45),
+        (N'SubmissionStatus', N'Draft', N'Draft', N'Submission is being drafted and is not ready for quote requests.', CAST(1 AS bit), 5),
+        (N'SubmissionStatus', N'In Progress', N'In Progress', N'Submission risk information is being collected before marketing readiness.', CAST(0 AS bit), 8),
+        (N'SubmissionStatus', N'Ready for Marketing', N'Ready for Marketing', N'Submission passed readiness checks and can be marketed.', CAST(0 AS bit), 10),
+        (N'SubmissionStatus', N'Marketing', N'Marketing', N'Submission is in active market placement workflow, including quote requests and underwriting.', CAST(0 AS bit), 20),
+        (N'SubmissionStatus', N'Quotes Received', N'Quotes Received', N'One or more market quote responses have been received.', CAST(0 AS bit), 40),
+        (N'SubmissionStatus', N'Proposal Prepared', N'Proposal Prepared', N'Customer proposal has been prepared from approved quotes.', CAST(0 AS bit), 50),
+        (N'SubmissionStatus', N'Presented', N'Presented', N'Proposal has been presented to the customer.', CAST(0 AS bit), 60),
+        (N'SubmissionStatus', N'Customer Accepted', N'Customer Accepted', N'Customer accepted a proposal or quote option.', CAST(0 AS bit), 70),
+        (N'SubmissionStatus', N'Binding', N'Binding', N'Selected quote is in bind request workflow.', CAST(0 AS bit), 80),
+        (N'SubmissionStatus', N'Bound', N'Bound', N'Submission has been bound into policy workflow.', CAST(0 AS bit), 90),
+        (N'SubmissionStatus', N'Lost', N'Lost', N'Submission was lost or not placed.', CAST(0 AS bit), 100),
+        (N'SubmissionStatus', N'Cancelled', N'Cancelled', N'Submission workflow was cancelled.', CAST(0 AS bit), 110),
+        (N'SubmissionStatus', N'Closed', N'Closed', N'Submission workflow was administratively closed.', CAST(0 AS bit), 120),
+        (N'QuoteStatus', N'Received', N'Received', N'Carrier quote response has been received and is awaiting internal review.', CAST(1 AS bit), 10),
+        (N'QuoteStatus', N'Under Review', N'Under Review', N'Quote is under internal review before customer presentation.', CAST(0 AS bit), 20),
+        (N'QuoteStatus', N'Revision Requested', N'Revision Requested', N'Quote requires revised terms from the market.', CAST(0 AS bit), 30),
+        (N'QuoteStatus', N'Approved for Presentation', N'Approved for Presentation', N'Quote has been approved for customer presentation.', CAST(0 AS bit), 40),
+        (N'QuoteStatus', N'Presented', N'Presented', N'Quote has been included in a customer proposal.', CAST(0 AS bit), 50),
+        (N'QuoteStatus', N'Selected', N'Selected', N'Customer selected this quote for binding.', CAST(0 AS bit), 60),
+        (N'QuoteStatus', N'Not Selected', N'Not Selected', N'Quote was retained in history but not selected.', CAST(0 AS bit), 70),
+        (N'QuoteStatus', N'Expired', N'Expired', N'Quote expired before selection or binding.', CAST(0 AS bit), 80),
+        (N'QuoteStatus', N'Superseded', N'Superseded', N'Quote was superseded by a later version or revision.', CAST(0 AS bit), 90),
+        (N'QuoteStatus', N'Bound', N'Bound', N'Quote was bound into a policy.', CAST(0 AS bit), 100)
+    ) seed(OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = tenants.TenantId
+          AND existing.OptionGroup = seed.OptionGroup
+          AND existing.OptionCode = seed.OptionCode
+          AND existing.IsDeleted = 0
+    );
+
+    UPDATE Submissions.SubmissionReferenceOption
+    SET IsActive = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE OptionGroup = N'SubmissionStatus'
+      AND OptionCode IN (N'New', N'In Review', N'Submitted', N'Quoted', N'Quotes Requested', N'Declined', N'Withdrawn')
+      AND IsDeleted = 0;
+
+    UPDATE Submissions.Submission
+    SET Status = CASE Status
+            WHEN N'New' THEN N'In Progress'
+            WHEN N'In Review' THEN N'Marketing'
+            WHEN N'Submitted' THEN N'Marketing'
+            WHEN N'Quoted' THEN N'Quotes Received'
+            WHEN N'Quotes Requested' THEN N'Marketing'
+            WHEN N'Declined' THEN N'Lost'
+            WHEN N'Withdrawn' THEN N'Cancelled'
+            ELSE Status END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE Status IN (N'New', N'In Review', N'Submitted', N'Quoted', N'Quotes Requested', N'Declined', N'Withdrawn')
+      AND IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.QuoteRequest
+        (QuoteRequestId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, QuoteRequestActionCode, QuoteRequestReasonCode, QuoteRequestMethodCode, QuoteRequestScopeCode,
+         RequestedPremium, CoverageNotes, RequestVersion, StatusCode, RequestedDateUtc, RequestedByUserId, ClosedDateUtc, CreatedDateUtc, CreatedByUserId,
+         ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    SELECT NEWID(), h.TenantId, h.SubmissionId, h.SubmissionMarketId, h.CarrierId, h.QuoteRequestActionCode, h.QuoteRequestReasonCode,
+           COALESCE(NULLIF(h.QuoteRequestMethodCode, N''), NULLIF(sm.SubmissionMethodCode, N''), N'ManualUnderwriter'), COALESCE(NULLIF(h.QuoteRequestScopeCode, N''), N'Package'), h.RequestedPremium, h.CoverageNotes, h.RequestVersion, h.StatusCode,
+           h.RequestedDateUtc, h.RequestedByUserId, CASE WHEN h.StatusCode IN (N'Closed', N'Declined', N'Received', N'Expired', N'No Response') THEN h.ModifiedDateUtc ELSE NULL END,
+           h.CreatedDateUtc, h.CreatedByUserId, h.ModifiedDateUtc, h.ModifiedByUserId, h.IsDeleted
+    FROM Submissions.QuoteRequestHistory h
+    LEFT JOIN Submissions.SubmissionMarket sm ON sm.SubmissionMarketId = h.SubmissionMarketId AND sm.IsDeleted = 0
+    WHERE h.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.QuoteRequest existing
+          WHERE existing.SubmissionMarketId = h.SubmissionMarketId
+            AND existing.RequestVersion = h.RequestVersion
+            AND existing.IsDeleted = 0
+      );
+END;
+
+UPDATE q
+SET QuoteRequestId = qr.QuoteRequestId,
+    ModifiedDateUtc = COALESCE(q.ModifiedDateUtc, SYSUTCDATETIME())
+FROM Submissions.Quote q
+OUTER APPLY
+(
+    SELECT TOP 1 QuoteRequestId
+    FROM Submissions.QuoteRequest qr
+    WHERE qr.SubmissionMarketId = q.SubmissionMarketId
+      AND qr.IsDeleted = 0
+    ORDER BY qr.RequestVersion DESC, qr.RequestedDateUtc DESC
+) qr
+WHERE q.QuoteRequestId IS NULL
+  AND q.SubmissionMarketId IS NOT NULL
+  AND qr.QuoteRequestId IS NOT NULL;
+
+UPDATE qr
+SET StatusCode = CASE
+        WHEN q.Status IN (N'Declined') THEN N'Declined'
+        WHEN q.QuoteReceivedDateUtc IS NOT NULL OR q.Status IN (N'Received', N'Presented', N'Accepted', N'Bound', N'Selected') THEN N'Received'
+        ELSE qr.StatusCode
+    END,
+    Premium = COALESCE(qr.Premium, q.AnnualPremium),
+    CommissionPercent = COALESCE(qr.CommissionPercent, q.CommissionPercent),
+    QuoteNumber = COALESCE(qr.QuoteNumber, q.QuoteNumber),
+    ExpirationDateUtc = COALESCE(qr.ExpirationDateUtc, q.ExpiresDateUtc),
+    CarrierReferenceNumber = COALESCE(qr.CarrierReferenceNumber, q.CarrierReferenceNumber),
+    ClosedDateUtc = CASE WHEN q.QuoteReceivedDateUtc IS NOT NULL THEN COALESCE(qr.ClosedDateUtc, q.QuoteReceivedDateUtc) ELSE qr.ClosedDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.QuoteRequest qr
+INNER JOIN Submissions.Quote q ON q.QuoteRequestId = qr.QuoteRequestId AND q.IsDeleted = 0
+WHERE qr.IsDeleted = 0;
 """;
 
     private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """

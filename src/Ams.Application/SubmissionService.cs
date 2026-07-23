@@ -256,7 +256,15 @@ public sealed class SubmissionService : ISubmissionService
             PolicyNumber: request.PolicyNumber,
             PolicySourceCode: request.PolicySourceCode,
             PolicySourceReason: request.PolicySourceReason,
-            PolicySourceNotes: request.PolicySourceNotes), cancellationToken);
+            PolicySourceNotes: request.PolicySourceNotes,
+            ProposalId: request.ProposalId,
+            CustomerAuthorizationId: request.CustomerAuthorizationId,
+            CustomerAuthorizationMethodCode: request.CustomerAuthorizationMethodCode,
+            CustomerAuthorizationReference: request.CustomerAuthorizationReference,
+            CustomerAuthorizationNotes: request.CustomerAuthorizationNotes,
+            CustomerAuthorizedByName: request.CustomerAuthorizedByName,
+            CustomerAuthorizedDateUtc: request.CustomerAuthorizedDateUtc,
+            CustomerAuthorizationDocumentId: request.CustomerAuthorizationDocumentId), cancellationToken);
 
         return result.Id;
     }

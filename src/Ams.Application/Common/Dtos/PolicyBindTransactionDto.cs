@@ -23,6 +23,25 @@ public sealed class PolicyBindTransactionDto
     public decimal AnnualPremium { get; set; }
     public DateTime EffectiveDate { get; set; }
     public DateTime ExpirationDate { get; set; }
+    public TimeSpan? RequestedEffectiveTime { get; set; }
+    public string? ConfirmationSourceCode { get; set; }
+    public string? ConfirmationSourceName { get; set; }
+    public string? CarrierReferenceNumber { get; set; }
+    public string? BinderNumber { get; set; }
+    public decimal? FinalPremium { get; set; }
+    public decimal? DownPaymentAmount { get; set; }
+    public string? SubjectivitiesOutstanding { get; set; }
+    public string? ConfirmationNotes { get; set; }
+    public Guid? ConfirmationDocumentId { get; set; }
+    public string? ConfirmationReceivedFrom { get; set; }
+    public string? ConfirmationMessageId { get; set; }
+    public string? UnderwriterName { get; set; }
+    public string? UnderwriterCompany { get; set; }
+    public bool FollowUpWrittenConfirmationRequired { get; set; }
+    public string? IntegrationCorrelationId { get; set; }
+    public string? ExternalTransactionId { get; set; }
+    public bool ConfirmedManually { get; set; }
+    public bool ConfirmationCertified { get; set; }
     public Guid? RequestedByUserId { get; set; }
     public DateTime RequestedDateUtc { get; set; }
     public Guid? ApprovedByUserId { get; set; }

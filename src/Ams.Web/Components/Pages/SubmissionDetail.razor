@@ -72,8 +72,8 @@ else
         <section class="sdd-workflows" aria-label="Submission workflow shortcuts">
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i><span><strong>Submit to market</strong><small>Send package to a selected carrier</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i><span><strong>Request quote</strong><small>Generate a quote workflow request</small></span></button>
-            <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("proposal")'><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal</strong><small>Create proposal from available quotes</small></span></button>
-            <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Create policy</strong><small>Quote-bound or direct policy source</small></span></button>
+            <button type="button" class="sdd-workflow" disabled="@(!CanGenerateProposal)" title="@GenerateProposalTitle" @onclick='() => OpenActionDialog("proposal")'><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal</strong><small>Create proposal from ready approved quotes</small></span></button>
+            <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Request Bind</strong><small>Capture customer authorization and send bind request</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("copy")'><i class="bi bi-copy" aria-hidden="true"></i><span><strong>Copy / remarket</strong><small>Create renewal or remarketing copy</small></span></button>
         </section>
 
@@ -217,12 +217,41 @@ else
                                              <span>@Safe(market.QuoteRequestScopeCode, "Quote request") · @MoneyOrDash(market.RequestedPremium)</span>
                                              @if (!string.IsNullOrWhiteSpace(market.LatestQuoteRequestActionCode))
                                              {
-                                                 <span>@QuoteRequestOptionName(_quoteRequestActionOptions, market.LatestQuoteRequestActionCode) · @Safe(market.LatestQuoteRequestStatusCode, "Tracked") · v@market.LatestQuoteRequestVersion</span>
+                                                  <span>@QuoteRequestOptionName(_quoteRequestActionOptions, market.LatestQuoteRequestActionCode) · @QuoteRequestOptionName(_quoteRequestMethodOptions, market.LatestQuoteRequestMethodCode) · @Safe(market.LatestQuoteRequestStatusCode, "Tracked") · v@market.LatestQuoteRequestVersion</span>
+                                                  <span>Request @ShortId(market.LatestQuoteRequestId) · @Safe(market.LatestQuoteRequestDeliveryMethodCode, "Delivery pending") · Due @DateOrDash(market.LatestQuoteRequestDueDateUtc)</span>
+                                                  <span>Retries @market.LatestQuoteRequestRetryCount · Attachments @market.LatestQuoteRequestAttachmentCount · Correlation @Safe(market.LatestQuoteRequestCorrelationId, "not assigned")</span>
+                                                  @if (!string.IsNullOrWhiteSpace(market.LatestQuoteRequestCarrierReferenceNumber) || market.LatestQuoteRequestResponseDateUtc.HasValue)
+                                                  {
+                                                      <span>Carrier ref @Safe(market.LatestQuoteRequestCarrierReferenceNumber, "pending") · Response @DateTimeOrDash(market.LatestQuoteRequestResponseDateUtc)</span>
+                                                  }
+                                                  @if (!string.IsNullOrWhiteSpace(market.LatestQuoteRequestAssignedUnderwriterName) || !string.IsNullOrWhiteSpace(market.LatestQuoteRequestAssignedUnderwriterEmail))
+                                                  {
+                                                      <span>Underwriter @Safe(market.LatestQuoteRequestAssignedUnderwriterName, "Assigned") · @Safe(market.LatestQuoteRequestAssignedUnderwriterEmail, "No email")</span>
+                                                  }
+                                                  @if (!string.IsNullOrWhiteSpace(market.LatestQuoteRequestLastError))
+                                                  {
+                                                      <span class="sdd-market-meta__alert">Error @market.LatestQuoteRequestLastError</span>
+                                                  }
                                              }
                                              @foreach (var line in market.RequestedLines)
                                              {
                                                  <div><strong>@line.LineOfBusiness</strong><em>@line.TargetPremium.ToString("C0")</em></div>
                                              }
+                                         </div>
+                                     }
+                                     @if (market.QuoteRequests.Any())
+                                     {
+                                         <div class="sdd-market-transmission">
+                                             <div>
+                                                 <span><i class="bi bi-diagram-3" aria-hidden="true"></i> QuoteRequest entity lifecycle</span>
+                                                 <strong>@market.QuoteRequests.Count request@(market.QuoteRequests.Count == 1 ? string.Empty : "s") tracked</strong>
+                                             </div>
+                                             <div class="sdd-market-transmission__meta">
+                                                 @foreach (var request in market.QuoteRequests.Take(3))
+                                                 {
+                                                     <span>@ShortId(request.QuoteRequestId) · @QuoteRequestOptionName(_quoteRequestActionOptions, request.QuoteRequestActionCode) · @Safe(request.StatusCode, "Tracked") · v@request.RequestVersion · @Safe(request.DeliveryMethodCode, request.QuoteRequestMethodCode) · Due @DateOrDash(request.DueDateUtc)</span>
+                                                 }
+                                             </div>
                                          </div>
                                      }
                                     @if (market.LatestCarrierTransmissionId.HasValue || market.Transmissions.Any() || market.InboundResponses.Any())
@@ -329,10 +358,14 @@ else
                                     {
                                         <p>@quote.CoverageNotes</p>
                                     }
+                                    @if (!quote.IsProposalReady && !string.IsNullOrWhiteSpace(quote.ProposalReadinessReason))
+                                    {
+                                        <p><strong>Proposal readiness:</strong> @quote.ProposalReadinessReason</p>
+                                    }
                                     <div class="sdd-quote-actions">
                                          <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenQuoteReviewDialog(quote)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Review</button>
                                          <button type="button" class="sdd-btn @(quote.QuoteId == _selectedQuoteId ? "sdd-btn--primary" : "sdd-btn--ghost")" @onclick="() => SelectQuoteAsync(quote)"><i class="bi bi-check-circle" aria-hidden="true"></i> Select</button>
-                                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => CreatePolicyFromQuoteAsync(quote)"><i class="bi bi-shield-check" aria-hidden="true"></i> Bind</button>
+                                        <button type="button" class="sdd-btn sdd-btn--ghost" disabled="@(!CanBindQuote(quote))" title="@BindQuoteTitle(quote)" @onclick="() => CreatePolicyFromQuote(quote)"><i class="bi bi-shield-check" aria-hidden="true"></i> Bind</button>
                                     </div>
                                 </div>
                             }
@@ -533,7 +566,7 @@ else
                     <div class="sdd-selected-actions">
                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit Market</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i> Request Quote</button>
-                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i> Create Policy</button>
+                        <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i> Request Bind</button>
                              <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("proposal-delivery")'><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Delivery</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("task")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Task</button>
                         <button type="button" class="sdd-btn sdd-btn--danger" @onclick='() => OpenActionDialog("decline")'><i class="bi bi-x-circle" aria-hidden="true"></i> Decline</button>
@@ -667,6 +700,16 @@ else
                                             <option value="@option.OptionCode">@option.OptionName</option>
                                         }
                                     </InputSelect>
+                                    <label class="sdd-field">
+                                        <span>Request quote method</span>
+                                        <InputSelect class="form-select" @bind-Value="_actionForm.QuoteRequestMethodCode">
+                                            @foreach (var option in _quoteRequestMethodOptions)
+                                            {
+                                                <option value="@option.OptionCode">@option.OptionName</option>
+                                            }
+                                        </InputSelect>
+                                        <small class="sdd-field-help">API Rating submits and rates in one workflow; MGA Portal, Email, and Manual Underwriter track commercial market review before quote response.</small>
+                                    </label>
                                     <div class="sdd-quote-line-breakdown__rows">
                                         @foreach (var line in QuoteRequestCoverageLines)
                                         {
@@ -714,6 +757,41 @@ else
                                 <label class="sdd-field sdd-field--full">
                                     <span>Policy Creation Reason <em>*</em></span>
                                     <InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.PolicySourceReason" placeholder="Explain why this policy is being created without first binding a quote in AMS." />
+                                </label>
+                            }
+                            @if (SelectedPolicyCreationSource?.RequiresQuote == true)
+                            {
+                                <label class="sdd-field">
+                                    <span>Authorization Method <em>*</em></span>
+                                    <InputSelect class="form-select" @bind-Value="_actionForm.CustomerAuthorizationMethodCode">
+                                        <option value="">Select authorization method</option>
+                                        @foreach (var option in _customerAuthorizationMethodOptions)
+                                        {
+                                            <option value="@option.OptionCode">@option.OptionName</option>
+                                        }
+                                    </InputSelect>
+                                </label>
+                                <label class="sdd-field">
+                                    <span>Authorization Date</span>
+                                    <InputDate class="form-control" @bind-Value="_actionForm.CustomerAuthorizedDateUtc" />
+                                </label>
+                                <label class="sdd-field">
+                                    <span>Authorized By</span>
+                                    <InputText class="form-control" @bind-Value="_actionForm.CustomerAuthorizedByName" placeholder="Customer contact name" />
+                                </label>
+                                <label class="sdd-field">
+                                    <span>Authorization Reference</span>
+                                    <InputText class="form-control" @bind-Value="_actionForm.CustomerAuthorizationReference" placeholder="Email subject, call id, document ref, portal confirmation" />
+                                </label>
+                                <label class="sdd-field">
+                                    <span>Proposal / External Proposal</span>
+                                    <InputSelect class="form-select" @bind-Value="_actionForm.ProposalId">
+                                        <option value="">No internal proposal / external authorization</option>
+                                        @foreach (var proposal in _proposals)
+                                        {
+                                            <option value="@proposal.ProposalId">@proposal.Title - @proposal.Status</option>
+                                        }
+                                    </InputSelect>
                                 </label>
                             }
                         }
@@ -1110,7 +1188,9 @@ else
     readonly List<SubmissionReferenceOptionDto> _quoteRequestScopeOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestActionOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestReasonOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _quoteRequestMethodOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestBlockedStatusOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _customerAuthorizationMethodOptions = [];
     readonly HashSet<Guid> _selectedQuoteRequestLineIds = [];
     readonly List<CommItem> _communications = [];
     readonly List<ToastMessage> _toasts = [];
@@ -1149,6 +1229,9 @@ else
         .Select(g => new MarketStatusGroup(g.Key, g.OrderByDescending(m => m.IsRecommended).ThenByDescending(m => m.AppetiteScore).ThenBy(m => m.CarrierName).ToList()))
         .ToList();
     IEnumerable<QuoteComparisonDto> VisibleQuotes => _activeKpi == "premium" ? _quotes.OrderBy(q => q.AnnualPremium) : _quotes;
+    IEnumerable<QuoteComparisonDto> ProposalReadyQuotes => _quotes.Where(q => q.IsProposalReady);
+    bool CanGenerateProposal => ProposalReadyQuotes.Any();
+    string GenerateProposalTitle => CanGenerateProposal ? "Generate proposal from ready approved quotes." : "At least one non-expired reviewed quote must be approved for presentation with premium, coverage, deductible, carrier, and document data.";
     IReadOnlyList<SubmissionLineDto> QuoteRequestCoverageLines => _lines.Count > 0 ? _lines : [];
     IEnumerable<SubmissionLineDto> SelectedQuoteRequestLines => QuoteRequestCoverageLines.Where(l => _selectedQuoteRequestLineIds.Contains(l.SubmissionLineId));
     decimal QuoteRequestPackagePremium => SelectedQuoteRequestLines.Any() ? SelectedQuoteRequestLines.Sum(l => l.TargetPremium) : _submission?.TargetPremium ?? 0;
@@ -1172,7 +1255,7 @@ else
     {
         "submit" => "Submit the package to a carrier market using the existing submit-to-market workflow.",
             "quote" => "Request quote terms using the existing quote request workflow. Choose a current market or let AMS auto-select the best recommended market.",
-        "policy" => "Create a quote-bound or direct policy using database-backed source rules and persisted audit context.",
+        "policy" => "Create a bind request using customer authorization. Quote-bound policies are only created after carrier confirmation.",
         "proposal" => "Generate a proposal record from available quotes.",
         "decline" => "Decline this submission and all eligible market rows with a required reason.",
         "copy" => "Create a new copied submission for renewal or remarketing.",
@@ -1280,7 +1363,7 @@ else
 
     async Task LoadReferenceOptionsAsync(Guid tenantId)
     {
-        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _proposalClientDecisionOptions.Count > 0 && _quoteRequestScopeOptions.Count > 0 && _quoteRequestActionOptions.Count > 0 && _quoteRequestReasonOptions.Count > 0 && _quoteRequestBlockedStatusOptions.Count > 0) return;
+        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _proposalClientDecisionOptions.Count > 0 && _quoteRequestScopeOptions.Count > 0 && _quoteRequestActionOptions.Count > 0 && _quoteRequestReasonOptions.Count > 0 && _quoteRequestMethodOptions.Count > 0 && _quoteRequestBlockedStatusOptions.Count > 0 && _customerAuthorizationMethodOptions.Count > 0) return;
 
         var options = await Api.GetSubmissionReferenceOptionsAsync(tenantId) ?? [];
         LoadOptionGroup(_marketStatuses, options, "MarketStatus");
@@ -1291,7 +1374,9 @@ else
         LoadOptionGroup(_quoteRequestScopeOptions, options, "QuoteRequestScope");
         LoadOptionGroup(_quoteRequestActionOptions, options, "QuoteRequestAction");
         LoadOptionGroup(_quoteRequestReasonOptions, options, "QuoteRequestReason");
+        LoadOptionGroup(_quoteRequestMethodOptions, options, "QuoteRequestMethod");
         LoadOptionGroup(_quoteRequestBlockedStatusOptions, options, "QuoteRequestBlockedStatus");
+        LoadOptionGroup(_customerAuthorizationMethodOptions, options, "CustomerAuthorizationMethod");
     }
 
     static void LoadOptionGroup(List<SubmissionReferenceOptionDto> target, IEnumerable<SubmissionReferenceOptionDto> options, string group)
@@ -1392,7 +1477,7 @@ else
         {
             "submit" => "Submit to Market",
             "quote" => "Request Quote",
-            "policy" => "Create Policy",
+            "policy" => "Request Bind",
             "proposal" => "Generate Proposal",
             "decline" => "Decline Submission",
             "copy" => "Copy Submission",
@@ -1434,6 +1519,7 @@ else
         {
             _actionForm.QuoteRequestActionCode = ResolveQuoteRequestActionCode(_selectedMarket);
             _actionForm.QuoteRequestReasonCode = DefaultOptionCode(_quoteRequestReasonOptions, _actionForm.QuoteRequestReasonCode);
+            _actionForm.QuoteRequestMethodCode = ResolveQuoteRequestMethodCode(_selectedMarket);
             ResetQuoteRequestLines();
             SyncQuoteRequestPremium();
         }
@@ -1442,6 +1528,14 @@ else
             _actionForm.PolicySourceCode = _policyCreationSources.FirstOrDefault(x => x.IsDefault)?.SourceCode
                 ?? _policyCreationSources.FirstOrDefault()?.SourceCode
                 ?? "AlreadyBound";
+            var selectedQuote = SelectedPolicyQuote;
+            if (selectedQuote is not null)
+            {
+                _actionForm.CarrierId = selectedQuote.CarrierId;
+                _actionForm.AnnualPremium = selectedQuote.AnnualPremium;
+            }
+            _actionForm.CustomerAuthorizationMethodCode = DefaultOptionCode(_customerAuthorizationMethodOptions, string.Empty);
+            _actionForm.CustomerAuthorizedDateUtc = DateTime.Today;
         }
         if (_taskTemplates.Count > 0)
         {
@@ -1548,6 +1642,34 @@ else
                 ShowToast("Policy creation reason is required for the selected policy source.", true);
                 return;
             }
+
+            if (SelectedPolicyCreationSource?.RequiresQuote == true)
+            {
+                var quote = SelectedPolicyQuote;
+                if (quote is null)
+                {
+                    ShowToast("Select a quote before binding or creating a quote-bound policy.", true);
+                    return;
+                }
+
+                if (!CanBindQuote(quote))
+                {
+                    ShowToast("The selected quote must be selected/accepted and marked bindable before policy creation.", true);
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(_actionForm.CustomerAuthorizationMethodCode))
+                {
+                    ShowToast("Customer authorization method is required before binding.", true);
+                    return;
+                }
+            }
+        }
+
+        if (_actionMode == "proposal" && !CanGenerateProposal)
+        {
+            ShowToast(GenerateProposalTitle, true);
+            return;
         }
 
         if (_actionMode == "quote" && QuoteRequestCoverageLines.Any() && !_selectedQuoteRequestLineIds.Any())
@@ -1576,7 +1698,7 @@ else
         {
             "submit" => "Submit this package to the selected or default market?",
             "quote" => "Request quote terms for this submission? If no carrier was selected, AMS will use the recommended market first, then auto-select from attached/current markets.",
-            "policy" => "Create this policy using the selected policy source and persist the source context for audit?",
+            "policy" => "Create a bind request using the selected quote and persisted customer authorization? Policy will be created only after carrier confirms Bound.",
             "proposal" => "Generate a proposal from the available quote options?",
             "decline" => "Decline this submission? This updates the submission status and market rows.",
             "copy" => "Create a copied submission for remarketing or renewal?",
@@ -1619,23 +1741,27 @@ else
             }
             else if (_actionMode == "quote")
             {
-                var result = await Api.RequestSubmissionQuoteAsync(SubmissionId, new RequestSubmissionQuoteRequest(_submission.TenantId, _actionForm.CarrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes, _currentUser?.UserId, null, _selectedMarket?.SubmissionMarketId, _actionForm.QuoteRequestScopeCode, _selectedQuoteRequestLineIds.ToArray(), _actionForm.QuoteRequestActionCode, RequiresQuoteRequestReason ? _actionForm.QuoteRequestReasonCode : null));
-                _quoteRequestInstruction = $"{result?.Message ?? "AMS created the quote request."} Next, monitor the Markets tab for carrier status, follow the Activity timeline for the request record, and record quote terms when the carrier responds.";
+                var result = await Api.RequestSubmissionQuoteAsync(SubmissionId, new RequestSubmissionQuoteRequest(_submission.TenantId, _actionForm.CarrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes, _currentUser?.UserId, null, _selectedMarket?.SubmissionMarketId, _actionForm.QuoteRequestScopeCode, _selectedQuoteRequestLineIds.ToArray(), _actionForm.QuoteRequestActionCode, RequiresQuoteRequestReason ? _actionForm.QuoteRequestReasonCode : null, _actionForm.QuoteRequestMethodCode));
+                _quoteRequestInstruction = $"{result?.Message ?? "AMS created the quote request."} Method: {QuoteRequestOptionName(_quoteRequestMethodOptions, _actionForm.QuoteRequestMethodCode)}. Next, monitor the Markets tab for carrier status, follow the Activity timeline for the request record, and record quote terms when the carrier responds.";
                 _quoteRequestError = null;
                 _quoteRequestPopupIsError = false;
                 _showQuoteRequestPopup = true;
             }
+
             else if (_actionMode == "policy")
             {
                 var requiresQuote = SelectedPolicyCreationSource?.RequiresQuote == true;
-                var quoteId = requiresQuote ? _selectedQuoteId ?? _quotes.OrderBy(q => q.AnnualPremium).FirstOrDefault()?.QuoteId : null;
-                await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _submission.TenantId, QuoteId: quoteId, CarrierId: _actionForm.CarrierId, AnnualPremium: _actionForm.AnnualPremium, EffectiveDate: _submission.EffectiveDate, ExpirationDate: _submission.ExpirationDate, PolicyNumber: _actionForm.PolicyNumber, PolicySourceCode: _actionForm.PolicySourceCode, PolicySourceReason: _actionForm.PolicySourceReason, PolicySourceNotes: _actionForm.Notes));
-                ShowToast("Policy created from submission.");
+                var quote = requiresQuote ? SelectedPolicyQuote : null;
+                var quoteId = quote?.QuoteId;
+                var carrierId = requiresQuote ? quote?.CarrierId : _actionForm.CarrierId;
+                var annualPremium = requiresQuote ? quote?.AnnualPremium : _actionForm.AnnualPremium;
+                await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _submission.TenantId, QuoteId: quoteId, CarrierId: carrierId, AnnualPremium: annualPremium, EffectiveDate: _submission.EffectiveDate, ExpirationDate: _submission.ExpirationDate, PolicyNumber: _actionForm.PolicyNumber, PolicySourceCode: _actionForm.PolicySourceCode, PolicySourceReason: _actionForm.PolicySourceReason, PolicySourceNotes: _actionForm.Notes, ProposalId: _actionForm.ProposalId, CustomerAuthorizationMethodCode: _actionForm.CustomerAuthorizationMethodCode, CustomerAuthorizationReference: _actionForm.CustomerAuthorizationReference, CustomerAuthorizationNotes: _actionForm.Notes, CustomerAuthorizedByName: _actionForm.CustomerAuthorizedByName, CustomerAuthorizedDateUtc: _actionForm.CustomerAuthorizedDateUtc, CustomerAuthorizationDocumentId: null));
+                ShowToast(requiresQuote ? "Bind request created from customer-authorized quote." : "Policy created from submission.");
             }
             else if (_actionMode == "proposal")
             {
-                var quoteIds = _quotes.Select(q => q.QuoteId).ToArray();
-                await Api.GenerateProposalAsync(new GenerateProposalRequest(SubmissionId, _submission.TenantId, $"{_submission.SubmissionNumber} Proposal", quoteIds, _actionForm.Notes));
+                var quoteIds = ProposalReadyQuotes.Select(q => q.QuoteId).ToArray();
+                await Api.GenerateProposalAsync(new GenerateProposalRequest(SubmissionId, _submission.TenantId, $"{_submission.SubmissionNumber} Proposal", quoteIds, _actionForm.Notes, _currentUser?.UserId));
                 ShowToast("Proposal generation started.");
             }
             else if (_actionMode == "decline")
@@ -1809,19 +1935,41 @@ else
         _readiness = await Api.GetSubmissionReadinessAsync(SubmissionId, _submission.TenantId);
     }
 
-    async Task CreatePolicyFromQuoteAsync(QuoteComparisonDto quote)
+    void CreatePolicyFromQuote(QuoteComparisonDto quote)
     {
         if (_submission is null) return;
-        try
+        if (!CanBindQuote(quote))
         {
-            await Api.CreatePolicyFromSubmissionAsync(SubmissionId, new CreatePolicyFromSubmissionRequest(TenantId: _submission.TenantId, QuoteId: quote.QuoteId, CarrierId: quote.CarrierId, AnnualPremium: quote.AnnualPremium, EffectiveDate: _submission.EffectiveDate, ExpirationDate: _submission.ExpirationDate, PolicyNumber: null, PolicySourceCode: "QuoteBound", PolicySourceReason: null, PolicySourceNotes: null));
-            await LoadAsync();
-            ShowToast($"Policy created from {quote.QuoteNumber}.");
+            ShowToast("Select the quote and mark it bindable before binding or creating a policy.", true);
+            return;
         }
-        catch (Exception ex)
+
+        _selectedQuoteId = quote.QuoteId;
+        OpenActionDialog("policy");
+    }
+
+    private QuoteComparisonDto? SelectedPolicyQuote => _quotes.FirstOrDefault(q => q.QuoteId == _selectedQuoteId) ?? _quotes.FirstOrDefault(q => q.IsSelected);
+
+    static bool CanBindQuote(QuoteComparisonDto quote) => quote.IsBindable && quote.ExpiresDateUtc > DateTime.UtcNow && (quote.IsSelected || quote.Status is "Selected" or "Presented" or "Approved for Presentation");
+
+    static string BindQuoteTitle(QuoteComparisonDto quote)
+    {
+        if (!quote.IsSelected && quote.Status is not ("Selected" or "Presented" or "Approved for Presentation"))
         {
-            ShowToast($"Policy creation failed: {ex.Message}", true);
+            return "Select, present, or approve this quote before binding.";
         }
+
+        if (quote.ExpiresDateUtc <= DateTime.UtcNow)
+        {
+            return "Expired quotes cannot be bound.";
+        }
+
+        if (!quote.IsBindable)
+        {
+            return "Mark this quote bindable during quote review before binding.";
+        }
+
+        return "Bind this confirmed quote and create the policy.";
     }
 
     async Task SelectQuoteAsync(QuoteComparisonDto quote)
@@ -2180,6 +2328,9 @@ else
 
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    static string ShortId(Guid? id) => id.HasValue && id.Value != Guid.Empty ? id.Value.ToString("N")[..8].ToUpperInvariant() : "pending";
+    static string DateOrDash(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy") : "-";
+    static string DateTimeOrDash(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d h:mm tt") : "-";
     static string DefaultOptionCode(IReadOnlyList<SubmissionReferenceOptionDto> options, string fallback) => options.FirstOrDefault(o => o.IsDefault)?.OptionCode ?? options.FirstOrDefault()?.OptionCode ?? fallback;
     static string PreferredOptionCode(IReadOnlyList<SubmissionReferenceOptionDto> options, string preferredCode, string fallback) => options.FirstOrDefault(o => string.Equals(o.OptionCode, preferredCode, StringComparison.OrdinalIgnoreCase))?.OptionCode ?? DefaultOptionCode(options, fallback);
     static string QuoteRequestOptionName(IReadOnlyList<SubmissionReferenceOptionDto> options, string? code) => options.FirstOrDefault(o => string.Equals(o.OptionCode, code, StringComparison.OrdinalIgnoreCase))?.OptionName ?? Safe(code, "Quote request");
@@ -2228,6 +2379,38 @@ else
         };
 
         return PreferredOptionCode(_quoteRequestActionOptions, preferredCode, string.Empty);
+    }
+
+    string ResolveQuoteRequestMethodCode(SubmissionMarketDto? market)
+    {
+        var marketMethod = market?.LatestQuoteRequestMethodCode ?? market?.SubmissionMethodCode;
+        if (!string.IsNullOrWhiteSpace(marketMethod))
+        {
+            var normalized = marketMethod switch
+            {
+                "API" or "CarrierApi" => "ApiRating",
+                "Portal" => "MgaPortal",
+                "Manual" or "InternalQueue" or "Download" => "ManualUnderwriter",
+                _ => marketMethod
+            };
+
+            if (_quoteRequestMethodOptions.Any(option => string.Equals(option.OptionCode, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                return normalized;
+            }
+        }
+
+        var lineOfBusiness = _submission?.LineOfBusiness ?? string.Empty;
+        if ((lineOfBusiness.Contains("Auto", StringComparison.OrdinalIgnoreCase)
+            || lineOfBusiness.Contains("Home", StringComparison.OrdinalIgnoreCase)
+            || lineOfBusiness.Contains("Rent", StringComparison.OrdinalIgnoreCase)
+            || lineOfBusiness.Contains("Personal", StringComparison.OrdinalIgnoreCase))
+            && _quoteRequestMethodOptions.Any(option => string.Equals(option.OptionCode, "ApiRating", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "ApiRating";
+        }
+
+        return PreferredOptionCode(_quoteRequestMethodOptions, "ManualUnderwriter", DefaultOptionCode(_quoteRequestMethodOptions, string.Empty));
     }
 
     void ToggleQuoteRequestLine(Guid lineId, bool selected)
@@ -2318,6 +2501,14 @@ else
 
         public Guid? ProposalId { get; set; }
 
+        public string? CustomerAuthorizationMethodCode { get; set; }
+
+        public string? CustomerAuthorizationReference { get; set; }
+
+        public string? CustomerAuthorizedByName { get; set; }
+
+        public DateTime? CustomerAuthorizedDateUtc { get; set; }
+
         public string TaskTitle { get; set; } = string.Empty;
 
         public string TaskTypeCode { get; set; } = "MissingInformation";
@@ -2388,6 +2579,8 @@ else
 
         public string? QuoteRequestReasonCode { get; set; }
 
+        public string QuoteRequestMethodCode { get; set; } = string.Empty;
+
         public string DocumentTypeCode { get; set; } = "Submission";
 
         public string DocumentCategoryCode { get; set; } = "Submission";
@@ -2406,6 +2599,10 @@ else
             Priority = submission?.Priority;
             AssignedToUserId = submission?.AssignedToUserId;
             ProposalId = null;
+            CustomerAuthorizationMethodCode = null;
+            CustomerAuthorizationReference = null;
+            CustomerAuthorizedByName = null;
+            CustomerAuthorizedDateUtc = null;
             TaskTitle = submission is null ? string.Empty : $"Follow up on {submission.SubmissionNumber}";
             TaskTypeCode = "MissingInformation";
             TaskDueDate = DateTime.Today.AddDays(2);
@@ -2441,6 +2638,7 @@ else
             QuoteRequestScopeCode = string.Empty;
             QuoteRequestActionCode = string.Empty;
             QuoteRequestReasonCode = null;
+            QuoteRequestMethodCode = string.Empty;
             DocumentTypeCode = "Submission";
             DocumentCategoryCode = "Submission";
             Notes = string.Empty;

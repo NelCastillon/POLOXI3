@@ -291,7 +291,9 @@ public sealed record RequestSubmissionQuoteRequest(
     [StringLength(50)]
     string? QuoteRequestActionCode = null,
     [StringLength(80)]
-    string? QuoteRequestReasonCode = null);
+    string? QuoteRequestReasonCode = null,
+    [StringLength(50)]
+    string? QuoteRequestMethodCode = null);
 
 public sealed record CopySubmissionRequest(
     Guid TenantId,
@@ -321,7 +323,19 @@ public sealed record CreatePolicyFromSubmissionRequest(
     [property: StringLength(500)]
     string? PolicySourceReason = null,
     [property: StringLength(1000)]
-    string? PolicySourceNotes = null);
+    string? PolicySourceNotes = null,
+    Guid? ProposalId = null,
+    Guid? CustomerAuthorizationId = null,
+    [property: StringLength(50)]
+    string? CustomerAuthorizationMethodCode = null,
+    [property: StringLength(200)]
+    string? CustomerAuthorizationReference = null,
+    [property: StringLength(2000)]
+    string? CustomerAuthorizationNotes = null,
+    [property: StringLength(200)]
+    string? CustomerAuthorizedByName = null,
+    DateTime? CustomerAuthorizedDateUtc = null,
+    Guid? CustomerAuthorizationDocumentId = null);
 
 public sealed record AddSubmissionMarketRequest(
     Guid SubmissionId,
@@ -334,7 +348,8 @@ public sealed record GenerateProposalRequest(
     Guid TenantId,
     string Title,
     Guid[] QuoteIds,
-    string? CustomIntroduction);
+    string? CustomIntroduction,
+    Guid? GeneratedByUserId = null);
 
 public sealed record UpsertSubmissionIntakeTemplateRequest(
     Guid TenantId,
@@ -390,7 +405,33 @@ public sealed record BindPolicyRequest(
     Guid? RequestedByUserId = null,
     Guid? ApprovedByUserId = null,
     Guid? BoundByUserId = null,
-    string BindStatusCode = "Bound");
+    string BindStatusCode = "Pending",
+    Guid? ProposalId = null,
+    Guid? CustomerAuthorizationId = null,
+    string? CustomerAuthorizationMethodCode = null,
+    string? CustomerAuthorizationReference = null,
+    string? CustomerAuthorizationNotes = null,
+    string? CustomerAuthorizedByName = null,
+    DateTime? CustomerAuthorizedDateUtc = null,
+    Guid? CustomerAuthorizationDocumentId = null,
+    TimeSpan? RequestedEffectiveTime = null,
+    string? ConfirmationSourceCode = null,
+    string? CarrierReferenceNumber = null,
+    string? BinderNumber = null,
+    decimal? FinalPremium = null,
+    decimal? DownPaymentAmount = null,
+    string? SubjectivitiesOutstanding = null,
+    string? ConfirmationNotes = null,
+    Guid? ConfirmationDocumentId = null,
+    string? ConfirmationReceivedFrom = null,
+    string? ConfirmationMessageId = null,
+    string? UnderwriterName = null,
+    string? UnderwriterCompany = null,
+    bool FollowUpWrittenConfirmationRequired = false,
+    string? IntegrationCorrelationId = null,
+    string? ExternalTransactionId = null,
+    bool ConfirmedManually = false,
+    bool ConfirmationCertified = false);
 
 public sealed class UpsertPolicyRegisterRequest
 {

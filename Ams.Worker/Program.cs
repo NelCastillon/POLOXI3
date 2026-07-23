@@ -16,10 +16,12 @@ builder.Services.AddScoped<IJobStepExecutor, CarrierDownloadStepExecutor>();
 builder.Services.AddScoped<IJobStepExecutor, CarrierDownloadMatchStepExecutor>();
 builder.Services.AddScoped<IJobStepExecutor, CarrierDownloadApplyUpdatesStepExecutor>();
 builder.Services.AddScoped<IJobStepExecutor, NotificationStepExecutor>();
+builder.Services.AddHttpClient(nameof(ApiRatingConnectorWorkerService));
 builder.Services.AddHostedService<AutomationWorkerService>();
 builder.Services.AddHostedService<PaymentPlatformWorkerService>();
 builder.Services.AddHostedService<SubmitToMarketDispatchWorkerService>();
 builder.Services.AddHostedService<QuoteRequestFollowUpWorkerService>();
+builder.Services.AddHostedService<ApiRatingConnectorWorkerService>();
 
 var host = builder.Build();
 host.Run();

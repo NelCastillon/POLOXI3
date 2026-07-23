@@ -582,6 +582,8 @@ BEGIN TRY
             DECLARE @EffectiveDate DATETIME2 = NULL;
             DECLARE @ExpirationDate DATETIME2 = NULL;
             DECLARE @QuoteNumber NVARCHAR(50) = NULL;
+            DECLARE @SubmissionMarketId UNIQUEIDENTIFIER = NULL;
+            DECLARE @QuoteRequestId UNIQUEIDENTIFIER = NEWID();
 
             SELECT TOP 1 @SourceOpportunitySubmissionId = s.SubmissionId,
                          @SubmissionNumber = NULLIF(LTRIM(RTRIM(s.SubmissionNumber)), N''),
@@ -644,7 +646,7 @@ BEGIN TRY
               AND OpportunityId = @OpportunityId
               AND IsDeleted = 0
               AND LineOfBusiness = @LineOfBusiness
-            ORDER BY CASE WHEN Status = N'Bound' THEN 0 WHEN Status = N'Quoted' THEN 1 ELSE 2 END,
+            ORDER BY CASE WHEN Status = N'Bound' THEN 0 WHEN Status = N'Quotes Received' THEN 1 WHEN Status = N'Marketing' THEN 2 ELSE 3 END,
                      CreatedDateUtc DESC;
 
             IF @SubmissionId IS NULL
@@ -682,20 +684,61 @@ BEGIN TRY
                 WHERE SubmissionId = @SubmissionId;
             END
 
-            IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND CarrierId = @CarrierId AND IsDeleted = 0)
+            SELECT TOP 1 @SubmissionMarketId = SubmissionMarketId
+            FROM Submissions.SubmissionMarket WITH (UPDLOCK, HOLDLOCK)
+            WHERE SubmissionId = @SubmissionId
+              AND CarrierId = @CarrierId
+              AND IsDeleted = 0
+            ORDER BY AddedDateUtc DESC;
+
+            IF @SubmissionMarketId IS NULL
             BEGIN
+                SET @SubmissionMarketId = NEWID();
                 INSERT INTO Submissions.SubmissionMarket
                     (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, IsDeleted)
                 VALUES
-                    (NEWID(), @SubmissionId, @CarrierId, N'Quoted', 100, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+                    (@SubmissionMarketId, @SubmissionId, @CarrierId, N'Quoted', 100, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
             END
+            ELSE
+            BEGIN
+                UPDATE Submissions.SubmissionMarket
+                SET Status = CASE WHEN Status = N'Bound' THEN Status ELSE N'Quoted' END,
+                    RespondedDateUtc = COALESCE(RespondedDateUtc, SYSUTCDATETIME()),
+                    ModifiedDateUtc = SYSUTCDATETIME(),
+                    ModifiedByUserId = @ModifiedByUserId
+                WHERE SubmissionMarketId = @SubmissionMarketId;
+            END;
 
             SET @QuoteNumber = CONCAT(N'QT-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @QuoteId), N'-', N''), 6));
 
-            INSERT INTO Submissions.Quote
-                (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
+            INSERT INTO Submissions.QuoteRequest
+                (QuoteRequestId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, QuoteRequestActionCode, QuoteRequestMethodCode, QuoteRequestScopeCode,
+                 RequestedPremium, CoverageNotes, CarrierReferenceNumber, DeliveryMethodCode, AssignedUnderwriterName, AssignedUnderwriterEmail, AssignedUnderwriterPhone, DueDateUtc, CorrelationId, ResponseDateUtc,
+                 RequestVersion, StatusCode, RequestedDateUtc, RequestedByUserId, ClosedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
             VALUES
-                (@QuoteId, @SubmissionId, @CarrierId, @QuoteNumber, N'Accepted', @AnnualPremium, NULL, NULL, CONCAT(N'Accepted quote created when opportunity ', @OpportunityNumber, N' was marked Closed Won.'), SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), 0);
+                (@QuoteRequestId, @TenantId, @SubmissionId, @SubmissionMarketId, @CarrierId, N'InitialRequest', N'ManualUnderwriter', N'Package',
+                 @AnnualPremium, CONCAT(N'Market quote response recorded from closed-won opportunity ', @OpportunityNumber, N'.'), @QuoteNumber,
+                 N'ManualUnderwriter',
+                 (SELECT TOP 1 UnderwriterName FROM Submissions.SubmissionMarket WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0),
+                 (SELECT TOP 1 UnderwriterEmail FROM Submissions.SubmissionMarket WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0),
+                 (SELECT TOP 1 UnderwriterPhone FROM Submissions.SubmissionMarket WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0),
+                 (SELECT TOP 1 DueDateUtc FROM Submissions.SubmissionMarket WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0),
+                 CONCAT(N'QR-', CONVERT(NVARCHAR(36), @QuoteRequestId)), SYSUTCDATETIME(),
+                 COALESCE((SELECT MAX(RequestVersion) FROM Submissions.QuoteRequest WHERE SubmissionMarketId = @SubmissionMarketId AND IsDeleted = 0), 0) + 1,
+                 N'Quoted', SYSUTCDATETIME(), @ModifiedByUserId, SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+            INSERT INTO Submissions.QuoteRequestHistory
+                (QuoteRequestHistoryId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, QuoteRequestActionCode, QuoteRequestMethodCode, QuoteRequestScopeCode,
+                 RequestedPremium, CoverageNotes, RequestVersion, StatusCode, RequestedDateUtc, RequestedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            VALUES
+                (NEWID(), @TenantId, @SubmissionId, @SubmissionMarketId, @CarrierId, N'InitialRequest', N'ManualUnderwriter', N'Package',
+                 @AnnualPremium, CONCAT(N'Market quote response recorded from closed-won opportunity ', @OpportunityNumber, N'.'),
+                 (SELECT RequestVersion FROM Submissions.QuoteRequest WHERE QuoteRequestId = @QuoteRequestId), N'Quoted', SYSUTCDATETIME(), @ModifiedByUserId, SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+            INSERT INTO Submissions.Quote
+                (QuoteId, SubmissionId, SubmissionMarketId, QuoteRequestId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, QuoteRequestDateUtc, QuoteReceivedDateUtc, ResponseVersion, ResponseSourceCode, CarrierReferenceNumber, CreatedDateUtc, IsDeleted)
+            VALUES
+                (@QuoteId, @SubmissionId, @SubmissionMarketId, @QuoteRequestId, @CarrierId, @QuoteNumber, N'Bound', @AnnualPremium, NULL, NULL, CONCAT(N'Market quote response recorded when opportunity ', @OpportunityNumber, N' was marked Closed Won.'), SYSUTCDATETIME(), DATEADD(day, 30, SYSUTCDATETIME()), SYSUTCDATETIME(), SYSUTCDATETIME(), 1, N'ManualEntry', @QuoteNumber, SYSUTCDATETIME(), 0);
 
             INSERT INTO Submissions.SubmissionLine
                 (SubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
@@ -717,7 +760,7 @@ BEGIN TRY
 
             INSERT INTO Submissions.QuoteLine
                 (QuoteLineId, TenantId, QuoteId, SubmissionId, OpportunityLineId, LineOfBusiness, QuotedPremium, Status, CreatedDateUtc, IsDeleted)
-            SELECT NEWID(), line.TenantId, @QuoteId, @SubmissionId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), N'Accepted', SYSUTCDATETIME(), 0
+            SELECT NEWID(), line.TenantId, @QuoteId, @SubmissionId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), N'Bound', SYSUTCDATETIME(), 0
             FROM CRM.OpportunityLine line
             LEFT JOIN CRM.OpportunitySubmissionLine sl ON sl.SubmissionId = @SourceOpportunitySubmissionId AND sl.OpportunityLineId = line.OpportunityLineId AND sl.IsDeleted = 0
             WHERE line.TenantId = @TenantId
@@ -1709,7 +1752,7 @@ BEGIN
         LEFT JOIN Core.Carrier c ON c.CarrierId = sm.CarrierId
         WHERE sm.SubmissionId = @SubmissionId
           AND sm.IsDeleted = 0
-          AND sm.Status = N''Submitted''
+          AND sm.Status IN (N''Submitted'', N''Awaiting Response'', N''In Review'', N''Under Review'')
           AND NOT EXISTS
           (
               SELECT 1
@@ -1730,7 +1773,7 @@ BEGIN
         FROM Submissions.SubmissionMarket sm
         WHERE sm.SubmissionId = @SubmissionId
           AND sm.IsDeleted = 0
-          AND sm.Status = N'Submitted'
+          AND sm.Status IN (N'Submitted', N'Awaiting Response', N'In Review', N'Under Review')
           AND NOT EXISTS
           (
               SELECT 1
@@ -1780,7 +1823,7 @@ BEGIN
     OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting WHERE TenantId = @TenantId AND CarrierId IS NULL AND SettingCode = N'SUBMIT_TO_MARKET_MAX_ATTEMPTS' AND IsActive = 1 AND IsDeleted = 0 ORDER BY ModifiedDateUtc DESC, CreatedDateUtc DESC) maxAttempts
     WHERE sm.SubmissionId = @SubmissionId
       AND sm.IsDeleted = 0
-      AND sm.Status = N'Submitted'
+      AND sm.Status IN (N'Submitted', N'Awaiting Response', N'In Review', N'Under Review')
       AND NOT EXISTS
       (
           SELECT 1
