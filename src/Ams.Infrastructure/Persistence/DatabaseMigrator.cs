@@ -280,6 +280,7 @@ public sealed partial class DatabaseMigrator
         new("0242_Commission_ReceivablePayeeAllocations", Migration0242CommissionReceivablePayeeAllocations),
         new("0243_Billing_AgencyBillReceivables_Enterprise", Migration0243BillingAgencyBillReceivablesEnterprise),
         new("0244_Claims_Servicing_Enterprise", Migration0244ClaimsServicingEnterprise),
+        new("0245_Enterprise_WorkflowRelationshipIntegrity", Migration0245EnterpriseWorkflowRelationshipIntegrity),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -22753,5 +22754,82 @@ UPDATE Claims.ClaimTask SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE C
 UPDATE Claims.ClaimFinancialTransaction SET IsDeleted=1 WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
 UPDATE Claims.CatAffectedInsured SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE CatEventId IN(SELECT CatEventId FROM Claims.CatEvent WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail' AND IsDeleted=0);
 UPDATE Claims.CatEvent SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail';
+""";
+
+private const string Migration0245EnterpriseWorkflowRelationshipIntegrity = """
+-- Synchronize tenant ownership for submission markets created before TenantId became authoritative.
+UPDATE sm
+SET TenantId=s.TenantId
+FROM Submissions.SubmissionMarket sm
+JOIN Submissions.Submission s ON s.SubmissionId=sm.SubmissionId
+WHERE sm.TenantId IS NULL OR sm.TenantId<>s.TenantId;
+
+IF NOT EXISTS(SELECT 1 FROM Submissions.SubmissionMarket WHERE TenantId IS NULL)
+   AND EXISTS(SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID(N'Submissions.SubmissionMarket') AND name=N'TenantId' AND is_nullable=1)
+    ALTER TABLE Submissions.SubmissionMarket ALTER COLUMN TenantId UNIQUEIDENTIFIER NOT NULL;
+
+-- Remove legacy claim examples whose policy/account identifiers were generated independently.
+DECLARE @LegacyClaims TABLE(ClaimId UNIQUEIDENTIFIER PRIMARY KEY);
+INSERT @LegacyClaims(ClaimId)
+SELECT c.ClaimId
+FROM Claims.Claim c
+WHERE c.TenantId='00000000-0000-0000-0000-000000000001'
+  AND (c.ClaimNumber LIKE N'CLM-2024-00%' OR c.ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131'))
+  AND c.CreatedByUserId IS NULL
+  AND c.PolicyLinkStatusCode=N'Unverified'
+  AND NOT EXISTS(SELECT 1 FROM Submissions.BoundPolicy p WHERE p.TenantId=c.TenantId AND p.PolicyId=c.PolicyId);
+
+DELETE FROM Claims.ClaimAuditEvent WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimStatusHistory WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimDocumentLink WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimTask WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimNote WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimFinancialTransaction WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimParty WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimAdjuster WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimActivity WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+IF OBJECT_ID(N'Claims.LossEstimate',N'U') IS NOT NULL
+ EXEC(N'DELETE le FROM Claims.LossEstimate le JOIN Claims.Claim c ON c.ClaimId=le.ClaimId WHERE c.TenantId=''''00000000-0000-0000-0000-000000000001'''' AND c.ClaimNumber LIKE N''''CLM-2024-00%'''' AND c.CreatedByUserId IS NULL;');
+DELETE FROM Claims.Claim WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+
+-- Restore the single missing owner referenced by the legacy commission transaction examples.
+IF EXISTS(SELECT 1 FROM Commission.CommissionTransaction WHERE TenantId='00000000-0000-0000-0000-000000000001' AND PayeeId='23d52fb4-91f4-4cc1-9aef-ff7d186835df' AND IsDeleted=0)
+   AND NOT EXISTS(SELECT 1 FROM Commission.CommissionPayee WHERE TenantId='00000000-0000-0000-0000-000000000001' AND PayeeId='23d52fb4-91f4-4cc1-9aef-ff7d186835df' AND IsDeleted=0)
+BEGIN
+ INSERT Commission.CommissionPayee(CommissionPayeeId,TenantId,PayeeCode,PayeeName,CommissionPayeeTypeId,CurrencyCode,IsActive,CreatedDateUtc,IsDeleted,PayeeTypeCode,SplitPercentage,EffectiveDate,StatusCode,PayeeId)
+ VALUES(NEWID(),'00000000-0000-0000-0000-000000000001',N'DEMO-HOUSE',N'Demo Agency House Account',3,'USD',1,SYSUTCDATETIME(),0,N'PARTNER',100,CONVERT(date,SYSUTCDATETIME()),N'Active','23d52fb4-91f4-4cc1-9aef-ff7d186835df');
+END;
+
+-- Enforce the high-value relationships used by the application flow after data synchronization.
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Submission_Account')
+ ALTER TABLE Submissions.Submission WITH CHECK ADD CONSTRAINT FK_Submission_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_SubmissionMarket_Submission')
+ ALTER TABLE Submissions.SubmissionMarket WITH CHECK ADD CONSTRAINT FK_SubmissionMarket_Submission FOREIGN KEY(SubmissionId) REFERENCES Submissions.Submission(SubmissionId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_BoundPolicy_Account')
+ ALTER TABLE Submissions.BoundPolicy WITH CHECK ADD CONSTRAINT FK_BoundPolicy_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_BoundPolicy_Submission')
+ ALTER TABLE Submissions.BoundPolicy WITH CHECK ADD CONSTRAINT FK_BoundPolicy_Submission FOREIGN KEY(SubmissionId) REFERENCES Submissions.Submission(SubmissionId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_PolicyTerm_BoundPolicy')
+ ALTER TABLE Policy.PolicyTerm WITH CHECK ADD CONSTRAINT FK_PolicyTerm_BoundPolicy FOREIGN KEY(PolicyId) REFERENCES Submissions.BoundPolicy(PolicyId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Claim_BoundPolicy')
+ ALTER TABLE Claims.Claim WITH CHECK ADD CONSTRAINT FK_Claim_BoundPolicy FOREIGN KEY(PolicyId) REFERENCES Submissions.BoundPolicy(PolicyId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Claim_Account')
+ ALTER TABLE Claims.Claim WITH CHECK ADD CONSTRAINT FK_Claim_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionTransaction_Payee')
+ ALTER TABLE Commission.CommissionTransaction WITH CHECK ADD CONSTRAINT FK_CommissionTransaction_Payee FOREIGN KEY(TenantId,PayeeId) REFERENCES Commission.CommissionPayee(TenantId,PayeeId);
+
+-- Index relationship columns in the order used by tenant-scoped repositories.
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.Submission') AND name=N'IX_Submission_Tenant_Account')
+ CREATE INDEX IX_Submission_Tenant_Account ON Submissions.Submission(TenantId,AccountId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.SubmissionMarket') AND name=N'IX_SubmissionMarket_Tenant_Submission')
+ CREATE INDEX IX_SubmissionMarket_Tenant_Submission ON Submissions.SubmissionMarket(TenantId,SubmissionId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.BoundPolicy') AND name=N'IX_BoundPolicy_Tenant_Account')
+ CREATE INDEX IX_BoundPolicy_Tenant_Account ON Submissions.BoundPolicy(TenantId,AccountId,IsDeleted) INCLUDE(PolicyNumber,Status);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Policy.PolicyTerm') AND name=N'IX_PolicyTerm_Tenant_Policy')
+ CREATE INDEX IX_PolicyTerm_Tenant_Policy ON Policy.PolicyTerm(TenantId,PolicyId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PaymentApplication') AND name=N'IX_PaymentApplication_Payment_Invoice')
+ CREATE UNIQUE INDEX IX_PaymentApplication_Payment_Invoice ON Billing.PaymentApplication(PaymentId,InvoiceId);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PaymentApplication') AND name=N'IX_PaymentApplication_Invoice')
+ CREATE INDEX IX_PaymentApplication_Invoice ON Billing.PaymentApplication(InvoiceId,PaymentId) INCLUDE(AppliedAmount,AppliedDateUtc);
 """;
 }
