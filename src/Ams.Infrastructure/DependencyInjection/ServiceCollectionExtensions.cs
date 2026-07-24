@@ -448,6 +448,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPolicyEndorsementRepository, PolicyEndorsementRepository>();
         services.AddScoped<IPolicyEndorsementService, PolicyEndorsementService>();
 
+        // ── Policy Lifecycle Servicing ───────────────────────────────
+        services.AddScoped<IPolicyLifecycleRepository, PolicyLifecycleRepository>();
+        services.AddScoped<IPolicyLifecycleService, PolicyLifecycleService>();
+
         // ── Policy Cancellations Workflow ────────────────────────────
         services.AddScoped<IPolicyCancellationRepository, PolicyCancellationRepository>();
         services.AddScoped<IPolicyCancellationService, PolicyCancellationService>();

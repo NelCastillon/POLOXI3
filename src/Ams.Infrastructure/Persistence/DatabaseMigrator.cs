@@ -269,6 +269,8 @@ public sealed partial class DatabaseMigrator
         new("0231_Policy_PolicyLine_MultiLineManual", Migration0231PolicyPolicyLineMultiLineManual),
         new("0232_Submissions_BoundPolicy_StatusColumnRepair", Migration0232SubmissionsBoundPolicyStatusColumnRepair),
         new("0233_Submissions_PolicyBindTransaction_EnterpriseColumnRepair", Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair),
+        new("0234_Policy_LifecycleServicing_Enterprise", Migration0234PolicyLifecycleServicingEnterprise),
+        new("0235_Policy_LifecycleServicing_Hardening", Migration0235PolicyLifecycleServicingHardening),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -15775,6 +15777,203 @@ BEGIN
 END;
 """;
 
+    private const string Migration0235PolicyLifecycleServicingHardening = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyTerm', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyTerm ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyTerm ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyTerm ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyLine', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyLine', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyLine ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyLine', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyLine ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAuditEvent', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyTermId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyTermId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyTransactionId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyEndorsement', N'PolicyTransactionId') IS NULL
+    ALTER TABLE Policy.PolicyEndorsement ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyCancellation', N'PolicyTransactionId') IS NULL
+    ALTER TABLE Policy.PolicyCancellation ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Policy.PolicyTransactionTransition', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionTransition
+    (
+        PolicyTransactionTransitionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionTransition PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionTypeCode NVARCHAR(80) NULL,
+        FromStatusCode NVARCHAR(80) NOT NULL,
+        ToStatusCode NVARCHAR(80) NOT NULL,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Document DEFAULT 0,
+        RequiresApproval BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Approval DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionTransition') AND name = N'UX_PolicyTransactionTransition_Route')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyTransactionTransition_Route ON Policy.PolicyTransactionTransition(TenantId, FromStatusCode, ToStatusCode, TransactionTypeCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyEndorsement') AND name = N'IX_PolicyEndorsement_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyEndorsement_Transaction ON Policy.PolicyEndorsement(TenantId, PolicyTransactionId) WHERE IsDeleted = 0 AND PolicyTransactionId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCancellation') AND name = N'IX_PolicyCancellation_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyCancellation_Transaction ON Policy.PolicyCancellation(TenantId, PolicyTransactionId) WHERE IsDeleted = 0 AND PolicyTransactionId IS NOT NULL;');
+
+IF OBJECT_ID(N'tempdb..#LifecycleHardeningTenants') IS NOT NULL DROP TABLE #LifecycleHardeningTenants;
+CREATE TABLE #LifecycleHardeningTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO #LifecycleHardeningTenants (TenantId)
+SELECT DISTINCT TenantId FROM Policy.PolicyLifecycleOption WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM #LifecycleHardeningTenants) AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO #LifecycleHardeningTenants (TenantId) SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+IF OBJECT_ID(N'tempdb..#LifecycleHardeningOptions') IS NOT NULL DROP TABLE #LifecycleHardeningOptions;
+CREATE TABLE #LifecycleHardeningOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsTerminal BIT NOT NULL,
+    IsPremiumBearing BIT NOT NULL,
+    RequiresDocument BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #LifecycleHardeningOptions VALUES
+(N'PolicyTermStatus', N'Draft', N'Draft', N'Term is being prepared.', 0, 0, 0, 1, 10),
+(N'PolicyTermStatus', N'Active', N'Active', N'Term is in force.', 0, 1, 0, 0, 20),
+(N'PolicyTermStatus', N'PendingRenewal', N'Pending Renewal', N'Term is in renewal processing.', 0, 0, 0, 0, 30),
+(N'PolicyTermStatus', N'Renewed', N'Renewed', N'Term was superseded by a renewal term.', 1, 1, 1, 0, 40),
+(N'PolicyTermStatus', N'Expired', N'Expired', N'Term expired without continuation.', 1, 0, 0, 0, 50),
+(N'PolicyTermStatus', N'Cancelled', N'Cancelled', N'Term was cancelled.', 1, 1, 1, 0, 60),
+(N'PolicyTermStatus', N'NonRenewed', N'Non-Renewed', N'Term will not renew.', 1, 0, 1, 0, 70),
+(N'PolicyTermStatus', N'Rewritten', N'Rewritten', N'Term was replaced by a rewrite.', 1, 1, 1, 0, 80),
+(N'PolicyLineStatus', N'Active', N'Active', N'Policy line is active.', 0, 1, 0, 1, 10),
+(N'PolicyLineStatus', N'Cancelled', N'Cancelled', N'Policy line was cancelled.', 1, 1, 1, 0, 20),
+(N'PolicyLineStatus', N'NonRenewed', N'Non-Renewed', N'Policy line will not renew.', 1, 0, 1, 0, 30),
+(N'PolicyLineStatus', N'Rewritten', N'Rewritten', N'Policy line was rewritten.', 1, 1, 1, 0, 40),
+(N'PolicyTransactionSource', N'PolicyLifecycle', N'Policy Lifecycle', N'Created by the policy lifecycle workbench.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionSource', N'PolicyDetail', N'Policy Detail', N'Created from policy detail servicing.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionSource', N'EndorsementWorkbench', N'Endorsement Workbench', N'Synchronized from endorsement servicing.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionSource', N'CancellationCenter', N'Cancellation Center', N'Synchronized from cancellation servicing.', 0, 0, 0, 0, 40),
+(N'PolicyTransactionSource', N'CarrierDownload', N'Carrier Download', N'Created from carrier download processing.', 0, 0, 0, 0, 50),
+(N'PolicyTransactionReason', N'InsuredRequest', N'Insured Request', N'Requested by the insured.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionReason', N'CarrierRequest', N'Carrier Request', N'Requested by the carrier or market.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionReason', N'AgencyCorrection', N'Agency Correction', N'Agency correction or servicing adjustment.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionReason', N'Underwriting', N'Underwriting', N'Underwriting-driven change.', 0, 0, 0, 0, 40),
+(N'PolicyTransactionReason', N'NonPayment', N'Non-Payment', N'Premium non-payment.', 0, 0, 0, 0, 50),
+(N'PolicyTransactionReason', N'ExposureChange', N'Exposure Change', N'Change in insured exposure.', 0, 0, 0, 0, 60),
+(N'PolicyTransactionReason', N'RenewalProcessing', N'Renewal Processing', N'Annual renewal processing.', 0, 0, 0, 0, 70),
+(N'PolicyTransactionReason', N'PremiumAudit', N'Premium Audit', N'Premium or exposure audit.', 0, 0, 0, 0, 80),
+(N'PolicyTransactionReason', N'Other', N'Other', N'Other documented lifecycle reason.', 0, 0, 0, 0, 90);
+
+INSERT INTO Policy.PolicyLifecycleOption
+    (PolicyLifecycleOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsTerminal, o.IsPremiumBearing, o.RequiresDocument, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #LifecycleHardeningTenants t CROSS JOIN #LifecycleHardeningOptions o
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyLifecycleOption e WHERE e.TenantId = t.TenantId AND e.OptionGroupCode = o.OptionGroupCode AND e.OptionCode = o.OptionCode AND e.IsDeleted = 0);
+
+IF OBJECT_ID(N'tempdb..#LifecycleTransitions') IS NOT NULL DROP TABLE #LifecycleTransitions;
+CREATE TABLE #LifecycleTransitions (FromStatusCode NVARCHAR(80), ToStatusCode NVARCHAR(80), RequiresDocument BIT, RequiresApproval BIT, SortOrder INT);
+INSERT INTO #LifecycleTransitions VALUES
+(N'Draft', N'PendingReview', 0, 0, 10),
+(N'Draft', N'Withdrawn', 0, 0, 20),
+(N'PendingReview', N'Approved', 0, 1, 30),
+(N'PendingReview', N'Declined', 0, 1, 40),
+(N'PendingReview', N'Withdrawn', 0, 0, 50),
+(N'Approved', N'Issued', 1, 1, 60),
+(N'Approved', N'Withdrawn', 0, 1, 70),
+(N'Issued', N'Completed', 0, 0, 80),
+(N'Issued', N'Superseded', 0, 1, 90),
+(N'Completed', N'Superseded', 0, 1, 100);
+
+INSERT INTO Policy.PolicyTransactionTransition
+    (PolicyTransactionTransitionId, TenantId, TransactionTypeCode, FromStatusCode, ToStatusCode, RequiresDocument, RequiresApproval, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, x.FromStatusCode, x.ToStatusCode, x.RequiresDocument, x.RequiresApproval, 1, x.SortOrder, SYSUTCDATETIME(), 0
+FROM #LifecycleHardeningTenants t CROSS JOIN #LifecycleTransitions x
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Policy.PolicyTransactionTransition e
+    WHERE e.TenantId = t.TenantId AND e.TransactionTypeCode IS NULL AND e.FromStatusCode = x.FromStatusCode AND e.ToStatusCode = x.ToStatusCode AND e.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyEndorsement', N'PolicyTransactionId') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate, ExpirationDate,
+         RequestedDateUtc, ApprovedDateUtc, IssuedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TaxesChange, TotalCostChange,
+         ReasonCode, SourceCode, ExternalReference, CarrierTransactionNumber, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), e.TenantId, e.PolicyId, pt.PolicyTermId, e.EndorsementNumber, N''Endorsement'',
+           CASE e.Status WHEN N''Pending'' THEN N''Draft'' WHEN N''In Review'' THEN N''PendingReview'' WHEN N''Info Needed'' THEN N''PendingReview'' WHEN N''Approved'' THEN N''Approved'' WHEN N''Issued'' THEN N''Issued'' WHEN N''Declined'' THEN N''Declined'' ELSE N''Draft'' END,
+           CONVERT(date, e.EffectiveDate), CONVERT(date, e.ExpirationDate), e.RequestedDateUtc, e.ApprovedDateUtc, e.IssuedDateUtc,
+           CASE WHEN e.Status = N''Issued'' THEN e.IssuedDateUtc ELSE NULL END, bp.AnnualPremium - e.PremiumDelta, e.PremiumDelta, bp.AnnualPremium,
+           e.TaxFeeDelta, e.TotalCostDelta, e.Reason, N''EndorsementWorkbench'', CONVERT(nvarchar(36), e.EndorsementId), e.CarrierReferenceNumber,
+           e.Description, COALESCE(e.InternalNotes, e.ClientFacingNotes), 1, 0, e.CreatedDateUtc, e.CreatedByUserId, 0
+    FROM Policy.PolicyEndorsement e
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = e.TenantId AND bp.PolicyId = e.PolicyId AND bp.IsDeleted = 0
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = e.TenantId AND pt.PolicyId = e.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC) pt
+    WHERE e.IsDeleted = 0 AND e.PolicyId IS NOT NULL AND e.PolicyTransactionId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction tx WHERE tx.TenantId = e.TenantId AND tx.SourceCode = N''EndorsementWorkbench'' AND tx.ExternalReference = CONVERT(nvarchar(36), e.EndorsementId) AND tx.IsDeleted = 0);
+
+    UPDATE e SET PolicyTransactionId = tx.PolicyTransactionId, ModifiedDateUtc = COALESCE(e.ModifiedDateUtc, SYSUTCDATETIME())
+    FROM Policy.PolicyEndorsement e
+    INNER JOIN Policy.PolicyTransaction tx ON tx.TenantId = e.TenantId AND tx.SourceCode = N''EndorsementWorkbench'' AND tx.ExternalReference = CONVERT(nvarchar(36), e.EndorsementId) AND tx.IsDeleted = 0
+    WHERE e.PolicyTransactionId IS NULL;';
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyCancellation', N'PolicyTransactionId') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate,
+         RequestedDateUtc, ApprovedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TotalCostChange,
+         ReasonCode, SourceCode, ExternalReference, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), c.TenantId, c.PolicyId, pt.PolicyTermId, c.CancellationNumber,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN N''Reinstatement'' ELSE N''Cancellation'' END,
+           CASE c.Status WHEN N''Pending'' THEN N''Draft'' WHEN N''Reinstatement Pending'' THEN N''Draft'' WHEN N''Under Review'' THEN N''PendingReview'' WHEN N''Approved'' THEN N''Approved'' WHEN N''Cancelled'' THEN N''Completed'' WHEN N''Reinstated'' THEN N''Completed'' WHEN N''Denied'' THEN N''Declined'' WHEN N''Rescinded'' THEN N''Withdrawn'' ELSE N''Draft'' END,
+           CONVERT(date, c.EffectiveDate), c.RequestDateUtc, c.ApprovedDateUtc,
+           CASE WHEN c.Status IN (N''Cancelled'', N''Reinstated'') THEN COALESCE(c.ApprovedDateUtc, c.ModifiedDateUtc) ELSE NULL END,
+           bp.AnnualPremium, CASE WHEN c.RequestType = N''Reinstatement'' THEN ABS(c.ReturnPremium) ELSE -ABS(c.ReturnPremium) END,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN bp.AnnualPremium ELSE bp.AnnualPremium - ABS(c.ReturnPremium) END,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN ABS(c.ReturnPremium) ELSE -ABS(c.ReturnPremium) END,
+           c.CancellationReason, N''CancellationCenter'', CONVERT(nvarchar(36), c.CancellationId), CONCAT(c.RequestType, N'' for '', c.PolicyNumber), c.Notes,
+           1, 0, c.CreatedDateUtc, c.CreatedByUserId, 0
+    FROM Policy.PolicyCancellation c
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = c.TenantId AND bp.PolicyId = c.PolicyId AND bp.IsDeleted = 0
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = c.TenantId AND pt.PolicyId = c.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC) pt
+    WHERE c.IsDeleted = 0 AND c.PolicyId IS NOT NULL AND c.PolicyTransactionId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction tx WHERE tx.TenantId = c.TenantId AND tx.SourceCode = N''CancellationCenter'' AND tx.ExternalReference = CONVERT(nvarchar(36), c.CancellationId) AND tx.IsDeleted = 0);
+
+    UPDATE c SET PolicyTransactionId = tx.PolicyTransactionId, ModifiedDateUtc = COALESCE(c.ModifiedDateUtc, SYSUTCDATETIME())
+    FROM Policy.PolicyCancellation c
+    INNER JOIN Policy.PolicyTransaction tx ON tx.TenantId = c.TenantId AND tx.SourceCode = N''CancellationCenter'' AND tx.ExternalReference = CONVERT(nvarchar(36), c.CancellationId) AND tx.IsDeleted = 0
+    WHERE c.PolicyTransactionId IS NULL;';
+END;
+""";
+
     private const string Migration0200_DmsCrmProcessDocumentGroupSeed = """
 IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL OR OBJECT_ID(N'Master.Category', N'U') IS NULL
     RETURN;
@@ -20496,6 +20695,345 @@ BEGIN
     IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
     IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_0233 DEFAULT 0;
     IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_0233 DEFAULT 0;
+END;
+""";
+
+    private const string Migration0234PolicyLifecycleServicingEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyLifecycleOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyLifecycleOption
+    (
+        PolicyLifecycleOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_LifecycleOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsTerminal BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Terminal DEFAULT 0,
+        IsPremiumBearing BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_PremiumBearing DEFAULT 0,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Document DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLifecycleOption') AND name = N'UX_PolicyLifecycleOption_Tenant_Group_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyLifecycleOption_Tenant_Group_Code ON Policy.PolicyLifecycleOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransaction
+    (
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Transaction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        ParentPolicyTransactionId UNIQUEIDENTIFIER NULL,
+        SupersedesPolicyTransactionId UNIQUEIDENTIFIER NULL,
+        TransactionNumber NVARCHAR(80) NOT NULL,
+        TransactionTypeCode NVARCHAR(80) NOT NULL,
+        TransactionStatusCode NVARCHAR(80) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NULL,
+        RequestedDateUtc DATETIME2 NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        IssuedDateUtc DATETIME2 NULL,
+        ProcessedDateUtc DATETIME2 NULL,
+        PriorWrittenPremium DECIMAL(18,2) NULL,
+        PremiumChange DECIMAL(18,2) NULL,
+        NewWrittenPremium DECIMAL(18,2) NULL,
+        TaxesChange DECIMAL(18,2) NULL,
+        FeesChange DECIMAL(18,2) NULL,
+        SurchargesChange DECIMAL(18,2) NULL,
+        TotalCostChange DECIMAL(18,2) NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        SourceCode NVARCHAR(80) NULL,
+        ExternalReference NVARCHAR(160) NULL,
+        CarrierTransactionNumber NVARCHAR(160) NULL,
+        Description NVARCHAR(1000) NULL,
+        Notes NVARCHAR(2000) NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        ApprovedByUserId UNIQUEIDENTIFIER NULL,
+        IssuedByUserId UNIQUEIDENTIFIER NULL,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_PolicyTransaction_Version DEFAULT 1,
+        DocumentCount INT NOT NULL CONSTRAINT DF_PolicyTransaction_DocCount DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransaction_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransaction_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransaction') AND name = N'IX_PolicyTransaction_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyTransaction_Policy ON Policy.PolicyTransaction(TenantId, PolicyId, EffectiveDate DESC, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransaction') AND name = N'IX_PolicyTransaction_Status')
+    EXEC(N'CREATE INDEX IX_PolicyTransaction_Status ON Policy.PolicyTransaction(TenantId, TransactionStatusCode, TransactionTypeCode, EffectiveDate) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransactionLineChange', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionLineChange
+    (
+        PolicyTransactionLineChangeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionLineChange PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        ChangeTypeCode NVARCHAR(80) NOT NULL,
+        PriorPremium DECIMAL(18,2) NULL,
+        PremiumChange DECIMAL(18,2) NULL,
+        NewPremium DECIMAL(18,2) NULL,
+        BeforeJson NVARCHAR(MAX) NULL,
+        AfterJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionLineChange_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionLineChange_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionLineChange') AND name = N'IX_PolicyTransactionLineChange_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyTransactionLineChange_Transaction ON Policy.PolicyTransactionLineChange(TenantId, PolicyTransactionId, LineOfBusinessCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransactionDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionDocument
+    (
+        PolicyTransactionDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NULL,
+        DocumentRoleCode NVARCHAR(80) NOT NULL,
+        DocumentTitle NVARCHAR(240) NOT NULL,
+        DocumentNumber NVARCHAR(120) NULL,
+        FileName NVARCHAR(260) NULL,
+        StorageUri NVARCHAR(1000) NULL,
+        LinkedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Linked DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionDocument') AND name = N'IX_PolicyTransactionDocument_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyTransactionDocument_Transaction ON Policy.PolicyTransactionDocument(TenantId, PolicyTransactionId, DocumentRoleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTermHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTermHistory
+    (
+        PolicyTermHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TermHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        TermNumber INT NOT NULL,
+        TermStatusCode NVARCHAR(80) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        AnnualizedPremium DECIMAL(18,2) NULL,
+        TotalCost DECIMAL(18,2) NULL,
+        SnapshotJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTermHistory_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTermHistory_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTermHistory') AND name = N'IX_PolicyTermHistory_Term')
+    EXEC(N'CREATE INDEX IX_PolicyTermHistory_Term ON Policy.PolicyTermHistory(TenantId, PolicyId, PolicyTermId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyVersion
+    (
+        PolicyVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Version PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        VersionNumber INT NOT NULL,
+        VersionReasonCode NVARCHAR(80) NOT NULL,
+        SnapshotJson NVARCHAR(MAX) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyVersion') AND name = N'UX_PolicyVersion_Policy_Version')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyVersion_Policy_Version ON Policy.PolicyVersion(TenantId, PolicyId, VersionNumber) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyStatusHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyStatusHistory
+    (
+        PolicyStatusHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_StatusHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        StatusScopeCode NVARCHAR(80) NOT NULL,
+        OldStatusCode NVARCHAR(80) NULL,
+        NewStatusCode NVARCHAR(80) NOT NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        Notes NVARCHAR(1000) NULL,
+        ChangedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyStatusHistory_Changed DEFAULT SYSUTCDATETIME(),
+        ChangedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyStatusHistory_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyStatusHistory_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyStatusHistory') AND name = N'IX_PolicyStatusHistory_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyStatusHistory_Policy ON Policy.PolicyStatusHistory(TenantId, PolicyId, ChangedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'tempdb..#PolicyLifecycleTenants') IS NOT NULL DROP TABLE #PolicyLifecycleTenants;
+CREATE TABLE #PolicyLifecycleTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #PolicyLifecycleTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #PolicyLifecycleTenants)
+    INSERT INTO #PolicyLifecycleTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#PolicyLifecycleOptions') IS NOT NULL DROP TABLE #PolicyLifecycleOptions;
+CREATE TABLE #PolicyLifecycleOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsTerminal BIT NOT NULL,
+    IsPremiumBearing BIT NOT NULL,
+    RequiresDocument BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #PolicyLifecycleOptions (OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, SortOrder) VALUES
+(N'PolicyTransactionType', N'NewBusiness', N'New Business', N'Initial policy transaction created from bind or manual intake.', 0, 1, 1, 1, 10),
+(N'PolicyTransactionType', N'Endorsement', N'Endorsement', N'Mid-term policy change affecting coverage, exposures, forms, or premium.', 0, 1, 1, 0, 20),
+(N'PolicyTransactionType', N'PolicyChange', N'Policy Change', N'Administrative or coverage policy change not classified as a formal endorsement.', 0, 1, 0, 0, 30),
+(N'PolicyTransactionType', N'Renewal', N'Renewal', N'Next term renewal transaction.', 0, 1, 1, 0, 40),
+(N'PolicyTransactionType', N'Rewrite', N'Rewrite', N'Rewritten policy replacing a prior policy or term.', 0, 1, 1, 0, 50),
+(N'PolicyTransactionType', N'Cancellation', N'Cancellation', N'Policy or term cancellation transaction.', 1, 1, 1, 0, 60),
+(N'PolicyTransactionType', N'Reinstatement', N'Reinstatement', N'Reinstates a previously cancelled or lapsed policy.', 0, 1, 1, 0, 70),
+(N'PolicyTransactionType', N'Audit', N'Audit', N'Premium audit or exposure audit transaction.', 0, 1, 1, 0, 80),
+(N'PolicyTransactionType', N'NonRenewal', N'Non-Renewal', N'Carrier or agency non-renewal transaction.', 1, 0, 1, 0, 90),
+(N'PolicyTransactionType', N'Conversion', N'Conversion', N'Legacy, carrier-download, or external conversion transaction.', 0, 1, 0, 0, 100),
+(N'PolicyTransactionStatus', N'Draft', N'Draft', N'Transaction is being prepared.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionStatus', N'PendingReview', N'Pending Review', N'Transaction is ready for service or carrier review.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionStatus', N'Approved', N'Approved', N'Transaction has been approved but not issued.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionStatus', N'Issued', N'Issued', N'Carrier issued transaction evidence.', 0, 0, 1, 0, 40),
+(N'PolicyTransactionStatus', N'Completed', N'Completed', N'Transaction processing is complete.', 1, 0, 0, 0, 50),
+(N'PolicyTransactionStatus', N'Declined', N'Declined', N'Transaction was declined.', 1, 0, 0, 0, 60),
+(N'PolicyTransactionStatus', N'Withdrawn', N'Withdrawn', N'Transaction was withdrawn.', 1, 0, 0, 0, 70),
+(N'PolicyTransactionStatus', N'Superseded', N'Superseded', N'Transaction was replaced by a later version.', 1, 0, 0, 0, 80),
+(N'PolicyLineChangeType', N'AddLine', N'Add Line', N'Adds a policy line or coverage section.', 0, 1, 0, 0, 10),
+(N'PolicyLineChangeType', N'UpdateLine', N'Update Line', N'Updates existing policy line data.', 0, 1, 0, 1, 20),
+(N'PolicyLineChangeType', N'RemoveLine', N'Remove Line', N'Removes or non-renews a policy line.', 0, 1, 0, 0, 30),
+(N'PolicyLineChangeType', N'PremiumOnly', N'Premium Only', N'Premium-only adjustment with no coverage wording change.', 0, 1, 0, 0, 40),
+(N'PolicyDocumentRole', N'DeclarationsPage', N'Declarations Page', N'Policy declarations page linked to the transaction.', 0, 0, 0, 0, 10),
+(N'PolicyDocumentRole', N'EndorsementForm', N'Endorsement Form', N'Carrier endorsement form.', 0, 0, 0, 0, 20),
+(N'PolicyDocumentRole', N'CancellationNotice', N'Cancellation Notice', N'Carrier or insured cancellation notice.', 0, 0, 0, 0, 30),
+(N'PolicyDocumentRole', N'ReinstatementNotice', N'Reinstatement Notice', N'Reinstatement evidence.', 0, 0, 0, 0, 40),
+(N'PolicyDocumentRole', N'RenewalOffer', N'Renewal Offer', N'Renewal offer or quote evidence.', 0, 0, 0, 0, 50),
+(N'PolicyDocumentRole', N'AuditStatement', N'Audit Statement', N'Premium audit statement.', 0, 0, 0, 0, 60),
+(N'PolicyStatusScope', N'Policy', N'Policy', N'Policy-level status history.', 0, 0, 0, 1, 10),
+(N'PolicyStatusScope', N'Term', N'Term', N'Term-level status history.', 0, 0, 0, 0, 20),
+(N'PolicyStatusScope', N'Transaction', N'Transaction', N'Transaction-level status history.', 0, 0, 0, 0, 30);
+
+INSERT INTO Policy.PolicyLifecycleOption
+    (PolicyLifecycleOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsTerminal, o.IsPremiumBearing, o.RequiresDocument, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #PolicyLifecycleTenants t
+CROSS JOIN #PolicyLifecycleOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.PolicyLifecycleOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    IsTerminal = o.IsTerminal,
+    IsPremiumBearing = o.IsPremiumBearing,
+    RequiresDocument = o.RequiresDocument,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.PolicyLifecycleOption existing
+INNER JOIN #PolicyLifecycleOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate, ExpirationDate, RequestedDateUtc, IssuedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TotalCostChange, ReasonCode, SourceCode, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), bp.TenantId, bp.PolicyId, pt.PolicyTermId,
+           CONCAT(N'PTR-', FORMAT(COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), bp.PolicyId), N'-', N''), 6)),
+           CASE WHEN COALESCE(bp.PolicySourceCode, N'') = N'ManualExistingPolicy' THEN N'Conversion' ELSE N'NewBusiness' END,
+           CASE WHEN bp.Status IN (N'Active', N'Issued', N'Bound') THEN N'Completed' ELSE N'Issued' END,
+           CONVERT(date, bp.EffectiveDate), CONVERT(date, bp.ExpirationDate), bp.BoundDateUtc, bp.IssuedDateUtc, COALESCE(bp.IssuedDateUtc, bp.BoundDateUtc, SYSUTCDATETIME()),
+           0, bp.AnnualPremium, bp.AnnualPremium, bp.AnnualPremium, bp.PolicySourceCode, bp.PolicySourceCode,
+           N'Baseline transaction synchronized from existing policy record.', bp.PolicySourceNotes, 1, 0, COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), 0
+    FROM Submissions.BoundPolicy bp
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = bp.TenantId AND pt.PolicyId = bp.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC, pt.CreatedDateUtc DESC) pt
+    WHERE bp.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction existing WHERE existing.TenantId = bp.TenantId AND existing.PolicyId = bp.PolicyId AND existing.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyVersion
+        (PolicyVersionId, TenantId, PolicyId, PolicyTermId, PolicyTransactionId, VersionNumber, VersionReasonCode, SnapshotJson, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tx.TenantId, tx.PolicyId, tx.PolicyTermId, tx.PolicyTransactionId, 1, N'Baseline',
+           JSON_OBJECT(N'PolicyId': tx.PolicyId, N'TransactionId': tx.PolicyTransactionId, N'TransactionType': tx.TransactionTypeCode, N'Status': bp.Status, N'PolicyNumber': bp.PolicyNumber, N'EffectiveDate': CONVERT(NVARCHAR(30), bp.EffectiveDate, 126), N'ExpirationDate': CONVERT(NVARCHAR(30), bp.ExpirationDate, 126), N'AnnualPremium': bp.AnnualPremium),
+           tx.CreatedDateUtc, 0
+    FROM Policy.PolicyTransaction tx
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = tx.TenantId AND bp.PolicyId = tx.PolicyId AND bp.IsDeleted = 0
+    WHERE tx.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyVersion existing WHERE existing.TenantId = tx.TenantId AND existing.PolicyId = tx.PolicyId AND existing.VersionNumber = 1 AND existing.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyStatusHistory
+        (PolicyStatusHistoryId, TenantId, PolicyId, PolicyTermId, PolicyTransactionId, StatusScopeCode, OldStatusCode, NewStatusCode, ReasonCode, Notes, ChangedDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tx.TenantId, tx.PolicyId, tx.PolicyTermId, tx.PolicyTransactionId, N'Policy', NULL, bp.Status, tx.TransactionTypeCode, N'Baseline policy status synchronized from existing policy record.', COALESCE(bp.BoundDateUtc, tx.CreatedDateUtc), COALESCE(bp.BoundDateUtc, tx.CreatedDateUtc), 0
+    FROM Policy.PolicyTransaction tx
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = tx.TenantId AND bp.PolicyId = tx.PolicyId AND bp.IsDeleted = 0
+    WHERE tx.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyStatusHistory existing WHERE existing.TenantId = tx.TenantId AND existing.PolicyId = tx.PolicyId AND existing.StatusScopeCode = N'Policy' AND existing.NewStatusCode = bp.Status AND existing.IsDeleted = 0);
 END;
 """;
 }
