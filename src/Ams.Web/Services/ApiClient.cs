@@ -943,6 +943,57 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 
+    public Task<CommissionAccountingWorkspaceDto?> GetCommissionAccountingWorkspaceAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<CommissionAccountingWorkspaceDto>($"api/commission-accounting/workspace?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<CarrierCommissionStatementLineDto>?> GetCarrierCommissionStatementLinesAsync(Guid tenantId, Guid statementId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<CarrierCommissionStatementLineDto>>($"api/commission-accounting/statements/{statementId}/lines?tenantId={tenantId}", cancellationToken);
+
+    public async Task<CommissionImportResultDto?> ImportCarrierCommissionStatementAsync(ImportCarrierCommissionStatementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commission-accounting/statements/import", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CommissionImportResultDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<CommissionMatchRunResultDto?> RunCommissionMatchingAsync(Guid statementId, RunCommissionMatchingRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/commission-accounting/statements/{statementId}/match", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CommissionMatchRunResultDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task ApproveCommissionMatchAsync(Guid matchId, ApproveCommissionMatchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/commission-accounting/matches/{matchId}/approve", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task ApproveCommissionPayableAsync(Guid payableId, ApproveCommissionPayableRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/commission-accounting/payables/{payableId}/approve", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task ResolveCommissionReconciliationExceptionAsync(Guid exceptionId, ResolveCommissionReconciliationExceptionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/commission-accounting/exceptions/{exceptionId}/resolve", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>?> GenerateCommissionPayablesAsync(CreateCommissionPayableBatchRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commission-accounting/payables/generate", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<Guid>>(cancellationToken: cancellationToken);
+    }
+
+    public async Task SynchronizeCommissionExpectedReceivablesAsync(SynchronizeCommissionExpectedReceivablesRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/commission-accounting/expected-receivables/synchronize", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<PagedResult<LeadDto>?> SearchLeadsAsync(Guid tenantId, string? searchTerm = null, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<LeadDto>>($"api/leads?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}", cancellationToken);
 
@@ -1549,6 +1600,29 @@ public sealed partial class ApiClient
 
     public Task<AccountDto?> GetAccountByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<AccountDto>($"api/accounts/{id}", cancellationToken);
+
+    public Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<Account360Dto>($"api/accounts/{accountId}/360?tenantId={tenantId}", cancellationToken);
+
+    public Task<Guid> UpsertAccountNamedInsuredAsync(Guid accountId, UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "named-insureds", request, cancellationToken);
+    public Task<Guid> UpsertAccountLocationAsync(Guid accountId, UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "locations", request, cancellationToken);
+    public Task<Guid> UpsertAccountVehicleAsync(Guid accountId, UpsertAccountVehicleRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "vehicles", request, cancellationToken);
+    public Task<Guid> UpsertAccountDriverAsync(Guid accountId, UpsertAccountDriverRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "drivers", request, cancellationToken);
+    public Task<Guid> UpsertAccountPropertyAsync(Guid accountId, UpsertAccountPropertyRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "properties", request, cancellationToken);
+    public Task<Guid> UpsertAccountScheduleItemAsync(Guid accountId, UpsertAccountScheduleItemRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "schedule-items", request, cancellationToken);
+
+    private async Task<Guid> PostAccount360Async<TRequest>(Guid accountId, string resource, TRequest request, CancellationToken cancellationToken)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/accounts/{accountId}/360/{resource}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task DeleteAccount360ItemAsync(Guid tenantId, Guid accountId, string entityType, Guid entityId, Guid? userId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/accounts/{accountId}/360/{Uri.EscapeDataString(entityType)}/{entityId}?tenantId={tenantId}&userId={userId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
 
     public async Task UpdateAccountAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default)
     {
@@ -2721,8 +2795,8 @@ public sealed partial class ApiClient
     public Task<PagedResult<PolicyCertificateDto>?> SearchPolicyCertificatesAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? certificateType = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<PolicyCertificateDto>>($"api/policy-certificates?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&certificateType={Uri.EscapeDataString(certificateType ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
-    public Task<PolicyCertificateDto?> GetPolicyCertificateAsync(Guid certificateId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PolicyCertificateDto>($"api/policy-certificates/{certificateId}", cancellationToken);
+    public Task<PolicyCertificateDto?> GetPolicyCertificateAsync(Guid tenantId, Guid certificateId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyCertificateDto>($"api/policy-certificates/{certificateId}?tenantId={tenantId}", cancellationToken);
 
     public async Task<PolicyCertificateDto?> GetPolicyCertificateByNumberAsync(Guid tenantId, string certificateNumber, CancellationToken cancellationToken = default)
     {

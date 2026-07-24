@@ -22,89 +22,18 @@
     </div>
 }
 
-@if (_showUpload)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseUpload">
-        <div class="mt-modal pd-action-modal" role="dialog" aria-modal="true" aria-labelledby="pd-upload-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-cloud-arrow-up-fill" aria-hidden="true"></i>
-                <span id="pd-upload-title">Upload Policy Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUpload" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <EditForm Model="_uploadForm" OnValidSubmit="UploadAsync" OnInvalidSubmit="NotifyValidationAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="pd-modal-intro">
-                        <span class="pd-modal-chip"><i class="bi bi-folder2-open" aria-hidden="true"></i> Policy document vault</span>
-                        <p>Upload declarations, certificates, endorsements, binders, cancellation notices, and retained policy workflow files.</p>
-                    </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full pd-dlg-section">Document File</div>
-                        <div class="um-field um-field--full">
-                            <label>File <span class="text-danger">*</span></label>
-                            <InputFile class="form-control" OnChange="OnUploadFileSelected" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.tif,.tiff" />
-                            @if (_uploadFile is not null)
-                            {
-                                <div class="pd-file-note"><i class="bi bi-paperclip" aria-hidden="true"></i>@_uploadFile.Name - @FormatFileSize(_uploadFile.Size)</div>
-                            }
-                            @if (!string.IsNullOrWhiteSpace(_fileError))
-                            {
-                                <div class="text-danger mt-1">@_fileError</div>
-                            }
-                        </div>
-
-                        <div class="um-field um-field--full pd-dlg-section">Indexing & Workflow</div>
-                        <div class="um-field">
-                            <label>Document Name <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.FileName" />
-                        </div>
-                        <div class="um-field">
-                            <label>Document Type <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_uploadForm.DocumentTypeCode">
-                                @foreach (var type in DocumentTypes)
-                                {
-                                    <option value="@type">@type</option>
-                                }
-                            </InputSelect>
-                        </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_uploadForm.CategoryCode">
-                                @foreach (var category in Categories)
-                                {
-                                    <option value="@category">@category</option>
-                                }
-                            </InputSelect>
-                        </div>
-                        <div class="um-field">
-                            <label>Retention Date</label>
-                            <InputDate class="form-control" @bind-Value="_uploadForm.RetentionDate" />
-                        </div>
-                        <div class="um-field">
-                            <label>Tags</label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.Tags" />
-                        </div>
-                        <div class="um-field">
-                            <label>Uploaded By</label>
-                            <input class="form-control pd-readonly-input" value="@_uploadedByName" disabled />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Description</label>
-                            <InputTextArea class="form-control" rows="3" @bind-Value="_uploadForm.Description" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseUpload" disabled="@_busy">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
-                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
-                        Upload Document
-                    </button>
-                </div>
-            </EditForm>
-        </div>
-    </div>
-}
+<EnterpriseDocumentUpload @bind-IsOpen="_showUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_tenantAdminUserId"
+                          UploadedByName="_uploadedByName"
+                          EntityName="Policy"
+                          Title="Upload Policy Document"
+                          IntroText="Upload declarations, certificates, endorsements, binders, cancellation notices, and retained policy workflow files."
+                          DefaultDocumentTypeCode="Policy"
+                          DefaultCategoryCode="Policy"
+                          DefaultTags="policy"
+                          OnUploaded="HandlePolicyDocumentUploadedAsync"
+                          OnUploadFailed="HandlePolicyDocumentUploadFailed" />
 
 @if (_showMetadata)
 {
@@ -591,10 +520,7 @@
 
     private DocumentDto? _selected;
     private DocumentDto? _drawerRow;
-    private IBrowserFile? _uploadFile;
     private IBrowserFile? _versionFile;
-    private string? _fileError;
-    private UploadForm _uploadForm = new();
     private MetadataForm _metadataForm = new();
     private RenameForm _renameForm = new();
     private VersionForm _versionForm = new();
@@ -795,68 +721,18 @@
 
     private void OpenUpload()
     {
-        _uploadForm = new();
-        _uploadFile = null;
-        _fileError = null;
         _showUpload = true;
     }
 
-    private void CloseUpload() => _showUpload = false;
-
-    private void OnUploadFileSelected(InputFileChangeEventArgs args)
+    private async Task HandlePolicyDocumentUploadedAsync(Guid documentId)
     {
-        _fileError = null;
-        _uploadFile = args.File;
-        if (_uploadFile.Size > MaxUploadBytes)
-        {
-            _fileError = "The selected file is larger than the 100 MB upload limit.";
-            _uploadFile = null;
-            return;
-        }
-
-        _uploadForm.FileName = _uploadFile.Name;
+        ShowToast("Document uploaded successfully.");
+        await LoadAsync();
+        var uploaded = _rows.FirstOrDefault(row => row.DocumentId == documentId);
+        if (uploaded is not null) await OpenDetailAsync(uploaded);
     }
 
-    private async Task UploadAsync()
-    {
-        if (_uploadFile is null)
-        {
-            _fileError = "Select a document file to upload.";
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            await using var stream = _uploadFile.OpenReadStream(MaxUploadBytes);
-            await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
-            {
-                TenantId = _tenantId,
-                DocumentTypeCode = _uploadForm.DocumentTypeCode,
-                CategoryCode = _uploadForm.CategoryCode,
-                FileName = _uploadForm.FileName,
-                OriginalFileName = _uploadFile.Name,
-                EntityName = "Policy",
-                Description = _uploadForm.Description,
-                Tags = EnsurePolicyTag(_uploadForm.Tags),
-                RetentionDate = _uploadForm.RetentionDate,
-                UploadedByName = _uploadedByName,
-                CreatedByUserId = _tenantAdminUserId,
-                Content = stream
-            });
-            _showUpload = false;
-            ShowToast("Document uploaded successfully.");
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Upload failed: {ex.Message}", "danger");
-        }
-        finally
-        {
-            _busy = false;
-        }
-    }
+    private void HandlePolicyDocumentUploadFailed(string message) => ShowToast(message, "danger");
 
     private void OpenMetadata(DocumentDto row)
     {

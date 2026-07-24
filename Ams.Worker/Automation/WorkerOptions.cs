@@ -14,4 +14,6 @@ public sealed class WorkerOptions
     public int QuoteRequestFollowUpPollIntervalSeconds { get; set; } = 300;
     public int ApiRatingPollIntervalSeconds { get; set; } = 30;
     public int MaxApiRatingTransmissionsPerPoll { get; set; } = 10;
+    public int CertificateRenewalPollIntervalSeconds { get; set; } = 300;
+    public int MaxCertificateRenewalsPerPoll { get; set; } = 50;
 }

@@ -1,10 +1,12 @@
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.PolicyCertificates;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/policy-certificates")]
 public sealed class PolicyCertificatesController : ControllerBase
 {
@@ -27,9 +29,9 @@ public sealed class PolicyCertificatesController : ControllerBase
         => Ok(await _service.SearchAsync(tenantId, searchTerm, status, certificateType, pageNumber, pageSize, cancellationToken));
 
     [HttpGet("{certificateId:guid}")]
-    public async Task<IActionResult> GetById(Guid certificateId, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetById(Guid certificateId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        var item = await _service.GetByIdAsync(certificateId, cancellationToken);
+        var item = await _service.GetByIdAsync(tenantId, certificateId, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
 

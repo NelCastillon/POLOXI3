@@ -271,6 +271,15 @@ public sealed partial class DatabaseMigrator
         new("0233_Submissions_PolicyBindTransaction_EnterpriseColumnRepair", Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair),
         new("0234_Policy_LifecycleServicing_Enterprise", Migration0234PolicyLifecycleServicingEnterprise),
         new("0235_Policy_LifecycleServicing_Hardening", Migration0235PolicyLifecycleServicingHardening),
+        new("0236_Client_Account360_ExposureDepth", Migration0236ClientAccount360ExposureDepth),
+        new("0237_Client_Account360_SchemaCompatibilityRepair", Migration0237ClientAccount360SchemaCompatibilityRepair),
+        new("0238_Client_AccountRelationship_AccountIdRepair", Migration0238ClientAccountRelationshipAccountIdRepair),
+        new("0239_Client_Account360_SupportTablesRepair", Migration0239ClientAccount360SupportTablesRepair),
+        new("0240_Policy_CertificateDocumentWorkflow_Enterprise", Migration0240PolicyCertificateDocumentWorkflowEnterprise),
+        new("0241_Commission_AccountingReconciliation_Enterprise", Migration0241CommissionAccountingReconciliationEnterprise),
+        new("0242_Commission_ReceivablePayeeAllocations", Migration0242CommissionReceivablePayeeAllocations),
+        new("0243_Billing_AgencyBillReceivables_Enterprise", Migration0243BillingAgencyBillReceivablesEnterprise),
+        new("0244_Claims_Servicing_Enterprise", Migration0244ClaimsServicingEnterprise),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -302,6 +311,160 @@ BEGIN
         ModifiedByUserId UNIQUEIDENTIFIER NULL,
         IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Tenant_IsDeleted DEFAULT 0
     );
+END;
+
+IF COL_LENGTH(N'Client.Account', N'DbaName') IS NULL ALTER TABLE Client.Account ADD DbaName NVARCHAR(200) NULL;
+
+IF OBJECT_ID(N'Client.AccountActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountActivity
+    (
+        ActivityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountActivity_0236 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(50) NOT NULL,
+        [Subject] NVARCHAR(200) NOT NULL,
+        Notes NVARCHAR(MAX) NULL,
+        OccurredAtUtc DATETIME2 NOT NULL,
+        Outcome NVARCHAR(100) NULL,
+        DurationMinutes INT NULL,
+        RelatedEntityType NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountActivity_Created_0236 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountActivity_Deleted_0236 DEFAULT 0,
+        CONSTRAINT FK_AccountActivity_Account_0236 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId)
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Client.AccountActivity', N'ActivityType') IS NULL ALTER TABLE Client.AccountActivity ADD ActivityType NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Subject') IS NULL ALTER TABLE Client.AccountActivity ADD [Subject] NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Notes') IS NULL ALTER TABLE Client.AccountActivity ADD Notes NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'OccurredAtUtc') IS NULL ALTER TABLE Client.AccountActivity ADD OccurredAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Outcome') IS NULL ALTER TABLE Client.AccountActivity ADD Outcome NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'DurationMinutes') IS NULL ALTER TABLE Client.AccountActivity ADD DurationMinutes INT NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityType') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityId') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ModifiedDateUtc') IS NULL ALTER TABLE Client.AccountActivity ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ModifiedByUserId') IS NULL ALTER TABLE Client.AccountActivity ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Title') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), [Subject]=COALESCE([Subject],Title,N''Account activity''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR [Subject] IS NULL OR OccurredAtUtc IS NULL;';
+    ELSE
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), [Subject]=COALESCE([Subject],N''Account activity''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR [Subject] IS NULL OR OccurredAtUtc IS NULL;';
+    IF COL_LENGTH(N'Client.AccountActivity', N'Description') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET Notes=COALESCE(Notes,Description) WHERE Notes IS NULL;';
+END;
+
+IF OBJECT_ID(N'Client.AccountRelationship', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountRelationship
+    (
+        RelationshipId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountRelationship_0236 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        RelatedAccountId UNIQUEIDENTIFIER NOT NULL,
+        RelationshipType NVARCHAR(50) NOT NULL,
+        [Description] NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountRelationship_Active_0236 DEFAULT 1,
+        StartedAtUtc DATETIME2 NULL,
+        EndedAtUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountRelationship_Created_0236 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountRelationship_Deleted_0236 DEFAULT 0,
+        CONSTRAINT FK_AccountRelationship_Account_0236 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountRelationship_Related_0236 FOREIGN KEY (RelatedAccountId) REFERENCES Client.Account(AccountId)
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Client.AccountRelationship', N'AccountId') IS NULL ALTER TABLE Client.AccountRelationship ADD AccountId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'StartedAtUtc') IS NULL ALTER TABLE Client.AccountRelationship ADD StartedAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'EndedAtUtc') IS NULL ALTER TABLE Client.AccountRelationship ADD EndedAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'SourceAccountId') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountRelationship SET AccountId=COALESCE(AccountId,SourceAccountId) WHERE AccountId IS NULL;';
+END;
+
+IF OBJECT_ID(N'Client.AccountStakeholder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountStakeholder
+    (
+        AccountStakeholderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountStakeholder PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        StakeholderRoleCode NVARCHAR(50) NOT NULL,
+        OwnershipPercentage DECIMAL(5,2) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Primary DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountStakeholder_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountStakeholder_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountStakeholder_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT CK_AccountStakeholder_Ownership CHECK (OwnershipPercentage IS NULL OR (OwnershipPercentage >= 0 AND OwnershipPercentage <= 100))
+    );
+    CREATE UNIQUE INDEX UX_AccountStakeholder_Role ON Client.AccountStakeholder(TenantId,AccountId,ContactId,StakeholderRoleCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountCommunicationPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountCommunicationPreference
+    (
+        AccountCommunicationPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountCommunicationPreference PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        CommunicationPurposeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        PreferenceStatusCode NVARCHAR(50) NOT NULL,
+        PreferredTimeZoneCode NVARCHAR(100) NULL,
+        PreferredStartTime TIME NULL,
+        PreferredEndTime TIME NULL,
+        ConsentSourceCode NVARCHAR(50) NULL,
+        ConsentDateUtc DATETIME2 NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountCommunicationPreference_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountCommunicationPreference_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE UNIQUE INDEX UX_AccountCommunicationPreference ON Client.AccountCommunicationPreference(TenantId,AccountId,ContactId,CommunicationPurposeCode,ChannelCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountServiceAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountServiceAssignment
+    (
+        AccountServiceAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountServiceAssignment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        AssignmentRoleCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Primary DEFAULT 0,
+        EffectiveDate DATE NOT NULL CONSTRAINT DF_AccountServiceAssignment_Effective DEFAULT CONVERT(date,SYSUTCDATETIME()),
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountServiceAssignment_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountServiceAssignment_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountServiceAssignment_User FOREIGN KEY (UserId) REFERENCES IAM.[User](UserId)
+    );
+    CREATE UNIQUE INDEX UX_AccountServiceAssignment ON Client.AccountServiceAssignment(TenantId,AccountId,UserId,AssignmentRoleCode) WHERE IsDeleted=0;
 END;
 
 IF OBJECT_ID(N'Core.Branch', N'U') IS NULL
@@ -5605,6 +5768,260 @@ INSERT INTO Portal.AdminRecord (PortalAdminRecordId,TenantId,Kind,Code,Name,Stat
 (NEWID(),@TenantId,N''PortalActivity'',N''act-003'',N''Failed login attempt'',N''Warning'',N''{"occurredAt":"2025-04-12T08:30:00","userName":"Unknown","userEmail":"hacker@spam.net","accountName":"—","eventType":"Login","detail":"Failed login attempt — invalid credentials (3×)","severity":"Warning","ipAddress":"45.33.32.156"}'',DATEADD(minute,-90,@Now),0);
 END
 ');
+""";
+
+    private const string Migration0241CommissionAccountingReconciliationEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'Commission') EXEC(N'CREATE SCHEMA Commission');
+
+IF OBJECT_ID(N'Commission.CommissionAccountingOption',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionAccountingOption
+ (
+  CommissionAccountingOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccountingOption PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, OptionGroupCode NVARCHAR(80) NOT NULL, OptionCode NVARCHAR(100) NOT NULL,
+  DisplayName NVARCHAR(200) NOT NULL, Description NVARCHAR(1000) NULL, IsDefault BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Default DEFAULT 0,
+  IsActive BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Active DEFAULT 1, SortOrder INT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Sort DEFAULT 0,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccountingOption_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierStatementImportProfile',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierStatementImportProfile
+ (
+  CarrierStatementImportProfileId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierStatementImportProfile PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierId UNIQUEIDENTIFIER NULL, ProfileCode NVARCHAR(80) NOT NULL, ProfileName NVARCHAR(200) NOT NULL,
+  FileFormatCode NVARCHAR(40) NOT NULL, Delimiter NVARCHAR(10) NULL, HasHeaderRow BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Header DEFAULT 1,
+  ColumnMappingJson NVARCHAR(MAX) NOT NULL, DateFormat NVARCHAR(40) NULL, CultureCode NVARCHAR(20) NULL, IsActive BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Active DEFAULT 1,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionExpectedReceivable',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionExpectedReceivable
+ (
+  CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionExpectedReceivable PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, SourceLedgerId UNIQUEIDENTIFIER NULL, PolicyId UNIQUEIDENTIFIER NULL, AccountId UNIQUEIDENTIFIER NULL, CarrierId UNIQUEIDENTIFIER NULL,
+  PolicyNumber NVARCHAR(80) NOT NULL, AccountName NVARCHAR(200) NULL, CarrierName NVARCHAR(200) NULL, LineOfBusinessCode NVARCHAR(100) NULL,
+  BusinessTypeCode NVARCHAR(50) NOT NULL, BillingTypeCode NVARCHAR(50) NOT NULL, TransactionTypeCode NVARCHAR(50) NOT NULL,
+  EffectiveDate DATE NULL, StatementPeriodStart DATE NOT NULL, StatementPeriodEnd DATE NOT NULL, PremiumAmount DECIMAL(18,2) NOT NULL,
+  ExpectedRatePct DECIMAL(9,4) NOT NULL, ExpectedCommissionAmount DECIMAL(18,2) NOT NULL, ReceivedCommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Received DEFAULT 0,
+  ReconciledCommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Reconciled DEFAULT 0, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Currency DEFAULT N'USD',
+  StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Status DEFAULT N'Expected', DueDate DATE NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierCommissionStatement',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierCommissionStatement
+ (
+  CarrierCommissionStatementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierCommissionStatement PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierId UNIQUEIDENTIFIER NULL, ImportProfileId UNIQUEIDENTIFIER NULL, StatementNumber NVARCHAR(100) NOT NULL,
+  StatementDate DATE NOT NULL, PeriodStartDate DATE NULL, PeriodEndDate DATE NULL, BillingTypeCode NVARCHAR(50) NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Currency DEFAULT N'USD',
+  GrossPremiumAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Premium DEFAULT 0, CommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Commission DEFAULT 0,
+  ChargebackAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Chargeback DEFAULT 0, NetReceivedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Net DEFAULT 0,
+  SourceFileName NVARCHAR(260) NULL, SourceFileHash NVARCHAR(128) NULL, ImportStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_ImportStatus DEFAULT N'Uploaded',
+  ReconciliationStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_ReconStatus DEFAULT N'Unreconciled', ImportedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Imported DEFAULT SYSUTCDATETIME(),
+  ImportedByUserId UNIQUEIDENTIFIER NULL, ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Created DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL,
+  IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierCommissionStatementLine',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierCommissionStatementLine
+ (
+  CarrierCommissionStatementLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierCommissionStatementLine PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementId UNIQUEIDENTIFIER NOT NULL, LineNumber INT NOT NULL, ExternalTransactionId NVARCHAR(120) NULL,
+  PolicyNumber NVARCHAR(80) NULL, InsuredName NVARCHAR(200) NULL, ProducerCode NVARCHAR(80) NULL, LineOfBusinessCode NVARCHAR(100) NULL,
+  TransactionTypeCode NVARCHAR(50) NOT NULL, BillingTypeCode NVARCHAR(50) NULL, TransactionDate DATE NULL, EffectiveDate DATE NULL,
+  PremiumAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Premium DEFAULT 0, CommissionRatePct DECIMAL(9,4) NULL,
+  CommissionAmount DECIMAL(18,2) NOT NULL, ChargebackAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Chargeback DEFAULT 0,
+  NetAmount DECIMAL(18,2) NOT NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Currency DEFAULT N'USD',
+  MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_MatchStatus DEFAULT N'Unmatched', RawDataJson NVARCHAR(MAX) NULL,
+  ValidationErrorsJson NVARCHAR(MAX) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Created DEFAULT SYSUTCDATETIME(), IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionReconciliationMatch',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReconciliationMatch
+ (
+  CommissionReconciliationMatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReconciliationMatch PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementLineId UNIQUEIDENTIFIER NOT NULL, CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL,
+  MatchMethodCode NVARCHAR(50) NOT NULL, MatchScore DECIMAL(9,4) NULL, MatchedAmount DECIMAL(18,2) NOT NULL, VarianceAmount DECIMAL(18,2) NOT NULL,
+  StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Status DEFAULT N'Proposed', MatchedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Date DEFAULT SYSUTCDATETIME(),
+  MatchedByUserId UNIQUEIDENTIFIER NULL, ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL, Notes NVARCHAR(1000) NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Created DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL,
+  IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionReconciliationException',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReconciliationException
+ (
+  CommissionReconciliationExceptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReconciliationException PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementId UNIQUEIDENTIFIER NULL, CarrierCommissionStatementLineId UNIQUEIDENTIFIER NULL,
+  CommissionExpectedReceivableId UNIQUEIDENTIFIER NULL, ExceptionNumber NVARCHAR(80) NOT NULL, ExceptionTypeCode NVARCHAR(80) NOT NULL,
+  SeverityCode NVARCHAR(30) NOT NULL, StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReconciliationException_Status DEFAULT N'Open',
+  ExpectedAmount DECIMAL(18,2) NULL, ReceivedAmount DECIMAL(18,2) NULL, VarianceAmount DECIMAL(18,2) NULL, Description NVARCHAR(1000) NOT NULL,
+  ResolutionNotes NVARCHAR(2000) NULL, AssignedToUserId UNIQUEIDENTIFIER NULL, ResolvedDateUtc DATETIME2 NULL, ResolvedByUserId UNIQUEIDENTIFIER NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationException_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReconciliationException_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionPayable',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionPayable
+ (
+  CommissionPayableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPayable PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL,
+  PayeeId UNIQUEIDENTIFIER NOT NULL, CommissionReconciliationMatchId UNIQUEIDENTIFIER NULL, CommissionTransactionId UNIQUEIDENTIFIER NULL, ClawbackId UNIQUEIDENTIFIER NULL,
+  PayoutBatchId UNIQUEIDENTIFIER NULL, PayableNumber NVARCHAR(80) NOT NULL, PayableTypeCode NVARCHAR(50) NOT NULL, AccountingDate DATE NOT NULL,
+  GrossPayableAmount DECIMAL(18,2) NOT NULL, AdjustmentAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionPayable_Adjustment DEFAULT 0,
+  NetPayableAmount DECIMAL(18,2) NOT NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CommissionPayable_Currency DEFAULT N'USD', StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionPayable_Status DEFAULT N'PendingApproval',
+  ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL, PaidDateUtc DATETIME2 NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPayable_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPayable_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionAccountingAuditEvent',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionAccountingAuditEvent
+ (
+  CommissionAccountingAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccountingAuditEvent PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL,
+  EntityTypeCode NVARCHAR(80) NOT NULL, EntityId UNIQUEIDENTIFIER NOT NULL, EventTypeCode NVARCHAR(80) NOT NULL, EventDescription NVARCHAR(1000) NOT NULL,
+  OldValueJson NVARCHAR(MAX) NULL, NewValueJson NVARCHAR(MAX) NULL, ActorUserId UNIQUEIDENTIFIER NULL, CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CommissionAccountingAuditEvent_Correlation DEFAULT NEWID(),
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccountingAuditEvent_Created DEFAULT SYSUTCDATETIME()
+ );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionAccountingOption') AND name=N'UX_CommissionAccountingOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_CommissionAccountingOption_Tenant_Group_Code ON Commission.CommissionAccountingOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierStatementImportProfile') AND name=N'UX_CarrierStatementImportProfile_Tenant_Code') CREATE UNIQUE INDEX UX_CarrierStatementImportProfile_Tenant_Code ON Commission.CarrierStatementImportProfile(TenantId,ProfileCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionExpectedReceivable') AND name=N'IX_CommissionExpectedReceivable_Reconciliation') CREATE INDEX IX_CommissionExpectedReceivable_Reconciliation ON Commission.CommissionExpectedReceivable(TenantId,StatusCode,CarrierId,PolicyNumber,StatementPeriodEnd) INCLUDE(ExpectedCommissionAmount,ReceivedCommissionAmount,ReconciledCommissionAmount,BillingTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatement') AND name=N'UX_CarrierCommissionStatement_Tenant_Number') CREATE UNIQUE INDEX UX_CarrierCommissionStatement_Tenant_Number ON Commission.CarrierCommissionStatement(TenantId,StatementNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatement') AND name=N'UX_CarrierCommissionStatement_Tenant_Hash') CREATE UNIQUE INDEX UX_CarrierCommissionStatement_Tenant_Hash ON Commission.CarrierCommissionStatement(TenantId,SourceFileHash) WHERE IsDeleted=0 AND SourceFileHash IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatementLine') AND name=N'UX_CarrierCommissionStatementLine_Statement_Line') CREATE UNIQUE INDEX UX_CarrierCommissionStatementLine_Statement_Line ON Commission.CarrierCommissionStatementLine(CarrierCommissionStatementId,LineNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatementLine') AND name=N'IX_CarrierCommissionStatementLine_Matching') CREATE INDEX IX_CarrierCommissionStatementLine_Matching ON Commission.CarrierCommissionStatementLine(TenantId,MatchStatusCode,PolicyNumber,TransactionDate) INCLUDE(CommissionAmount,NetAmount,TransactionTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionReconciliationException') AND name=N'IX_CommissionReconciliationException_WorkQueue') CREATE INDEX IX_CommissionReconciliationException_WorkQueue ON Commission.CommissionReconciliationException(TenantId,StatusCode,SeverityCode,CreatedDateUtc DESC) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionPayable') AND name=N'IX_CommissionPayable_WorkQueue') CREATE INDEX IX_CommissionPayable_WorkQueue ON Commission.CommissionPayable(TenantId,StatusCode,AccountingDate,PayeeId) INCLUDE(NetPayableAmount,PayoutBatchId) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionAccountingAuditEvent') AND name=N'IX_CommissionAccountingAuditEvent_Entity') CREATE INDEX IX_CommissionAccountingAuditEvent_Entity ON Commission.CommissionAccountingAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionExpectedReceivable_Rate') ALTER TABLE Commission.CommissionExpectedReceivable ADD CONSTRAINT CK_CommissionExpectedReceivable_Rate CHECK(ExpectedRatePct BETWEEN -100 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionExpectedReceivable_Period') ALTER TABLE Commission.CommissionExpectedReceivable ADD CONSTRAINT CK_CommissionExpectedReceivable_Period CHECK(StatementPeriodEnd>=StatementPeriodStart);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReconciliationMatch_Score') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT CK_CommissionReconciliationMatch_Score CHECK(MatchScore IS NULL OR MatchScore BETWEEN 0 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionPayable_Net') ALTER TABLE Commission.CommissionPayable ADD CONSTRAINT CK_CommissionPayable_Net CHECK(NetPayableAmount=GrossPayableAmount+AdjustmentAmount);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CarrierStatementLine_Statement') ALTER TABLE Commission.CarrierCommissionStatementLine ADD CONSTRAINT FK_CarrierStatementLine_Statement FOREIGN KEY(CarrierCommissionStatementId) REFERENCES Commission.CarrierCommissionStatement(CarrierCommissionStatementId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReconciliationMatch_Line') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT FK_CommissionReconciliationMatch_Line FOREIGN KEY(CarrierCommissionStatementLineId) REFERENCES Commission.CarrierCommissionStatementLine(CarrierCommissionStatementLineId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReconciliationMatch_Expected') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT FK_CommissionReconciliationMatch_Expected FOREIGN KEY(CommissionExpectedReceivableId) REFERENCES Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionPayable_Match') ALTER TABLE Commission.CommissionPayable ADD CONSTRAINT FK_CommissionPayable_Match FOREIGN KEY(CommissionReconciliationMatchId) REFERENCES Commission.CommissionReconciliationMatch(CommissionReconciliationMatchId);
+
+SELECT DISTINCT TenantId INTO #CommissionAccountingTenants FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0;
+CREATE TABLE #CommissionAccountingOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(100),DisplayName NVARCHAR(200),Description NVARCHAR(1000),IsDefault BIT,SortOrder INT);
+INSERT INTO #CommissionAccountingOptions VALUES
+(N'BillingType',N'DirectBill',N'Direct Bill',N'Carrier bills insured; agency recognizes commission receivable from carrier statement.',1,10),
+(N'BillingType',N'AgencyBill',N'Agency Bill',N'Agency invoices premium and reconciles carrier payable and commission.',0,20),
+(N'TransactionType',N'NewBusiness',N'New Business',N'Initial policy commission.',1,10),(N'TransactionType',N'Renewal',N'Renewal',N'Renewal policy commission.',0,20),
+(N'TransactionType',N'Endorsement',N'Endorsement',N'Premium-bearing policy change.',0,30),(N'TransactionType',N'Cancellation',N'Cancellation',N'Return commission or chargeback.',0,40),
+(N'MatchMethod',N'ExactPolicyAmount',N'Exact Policy and Amount',N'Exact normalized policy number and amount.',1,10),(N'MatchMethod',N'PolicyTolerance',N'Policy with Tolerance',N'Policy number matched within configured amount tolerance.',0,20),
+(N'MatchMethod',N'Manual',N'Manual',N'User-approved allocation.',0,30),(N'ExceptionSeverity',N'Critical',N'Critical',N'Blocks statement approval and payable creation.',0,10),
+(N'ExceptionSeverity',N'High',N'High',N'Requires accounting review.',1,20),(N'ExceptionSeverity',N'Medium',N'Medium',N'Review before period close.',0,30),
+(N'ExceptionType',N'UnmatchedStatementLine',N'Unmatched Statement Line',N'Carrier line has no expected commission.',1,10),(N'ExceptionType',N'MissingStatementLine',N'Missing Statement Line',N'Expected commission has not been received.',0,20),
+(N'ExceptionType',N'AmountVariance',N'Amount Variance',N'Received amount differs from expected amount.',0,30),(N'ExceptionType',N'DuplicateImport',N'Duplicate Import',N'Statement file was previously imported.',0,40),
+(N'PayableStatus',N'PendingApproval',N'Pending Approval',N'Calculated producer payable awaiting approval.',1,10),(N'PayableStatus',N'Approved',N'Approved',N'Eligible for payout batch.',0,20),
+(N'PayableStatus',N'Paid',N'Paid',N'Settled through a payout batch.',0,30),(N'ImportStatus',N'Uploaded',N'Uploaded',N'File received and awaiting validation.',1,10),
+(N'ImportStatus',N'Validated',N'Validated',N'All rows normalized and validation complete.',0,20),(N'ImportStatus',N'Failed',N'Failed',N'Import contains blocking validation errors.',0,30);
+INSERT INTO Commission.CommissionAccountingOption(CommissionAccountingOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0 FROM #CommissionAccountingTenants t CROSS JOIN #CommissionAccountingOptions o
+WHERE NOT EXISTS(SELECT 1 FROM Commission.CommissionAccountingOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+IF OBJECT_ID(N'Commission.CommissionLedger',N'U') IS NOT NULL
+BEGIN
+ INSERT INTO Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId,TenantId,SourceLedgerId,PolicyNumber,AccountName,CarrierName,LineOfBusinessCode,BusinessTypeCode,BillingTypeCode,TransactionTypeCode,StatementPeriodStart,StatementPeriodEnd,PremiumAmount,ExpectedRatePct,ExpectedCommissionAmount,ReceivedCommissionAmount,ReconciledCommissionAmount,CurrencyCode,StatusCode,CreatedDateUtc,IsDeleted)
+ SELECT NEWID(),l.TenantId,l.CommissionId,l.PolicyNumber,NULLIF(l.AccountName,N''),NULLIF(l.Carrier,N''),NULLIF(l.LineOfBusiness,N''),COALESCE(NULLIF(l.BusinessType,N''),N'Policy'),
+        COALESCE(NULLIF(REPLACE(s.BillingModeCode,N' ',N''),N''),N'Unspecified'),CASE WHEN l.BusinessType LIKE N'%Renew%' THEN N'Renewal' ELSE N'NewBusiness' END,
+        DATEFROMPARTS(YEAR(l.TransactionDate),MONTH(l.TransactionDate),1),EOMONTH(l.TransactionDate),l.GrossAmount,l.CommissionPct,l.AgencyAmount,
+        CASE WHEN l.Status=N'Paid' THEN l.AgencyAmount ELSE 0 END,CASE WHEN l.Status=N'Paid' THEN l.AgencyAmount ELSE 0 END,N'USD',CASE WHEN l.Status=N'Paid' THEN N'Reconciled' ELSE N'Expected' END,l.CreatedDateUtc,0
+ FROM Commission.CommissionLedger l
+ LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId=l.TenantId AND bp.PolicyNumber=l.PolicyNumber AND bp.IsDeleted=0
+ LEFT JOIN Billing.AccountSettings s ON s.TenantId=bp.TenantId AND s.AccountId=bp.AccountId AND s.IsDeleted=0
+ WHERE l.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Commission.CommissionExpectedReceivable e WHERE e.TenantId=l.TenantId AND e.SourceLedgerId=l.CommissionId AND e.IsDeleted=0);
+END;
+
+INSERT INTO Commission.CommissionAccountingAuditEvent(CommissionAccountingAuditEventId,TenantId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,CreatedDateUtc)
+SELECT NEWID(),e.TenantId,N'ExpectedReceivable',e.CommissionExpectedReceivableId,N'LegacySynchronized',N'Existing commission ledger row synchronized into enterprise reconciliation.',JSON_OBJECT(N'PolicyNumber':e.PolicyNumber,N'ExpectedAmount':e.ExpectedCommissionAmount,N'BillingType':e.BillingTypeCode),SYSUTCDATETIME()
+FROM Commission.CommissionExpectedReceivable e WHERE e.SourceLedgerId IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Commission.CommissionAccountingAuditEvent a WHERE a.TenantId=e.TenantId AND a.EntityTypeCode=N'ExpectedReceivable' AND a.EntityId=e.CommissionExpectedReceivableId AND a.EventTypeCode=N'LegacySynchronized');
+""";
+    private const string Migration0242CommissionReceivablePayeeAllocations = """
+IF OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReceivablePayeeAllocation
+ (
+  CommissionReceivablePayeeAllocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReceivablePayeeAllocation PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL, PayeeId UNIQUEIDENTIFIER NOT NULL,
+  AllocationTypeCode NVARCHAR(50) NOT NULL, SplitPercentage DECIMAL(9,4) NOT NULL, EffectiveDate DATE NOT NULL,
+  EffectiveEndDate DATE NULL, StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Status DEFAULT N'Active',
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Deleted DEFAULT 0
+ );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation') AND name=N'UX_CommissionReceivablePayeeAllocation_Active')
+ CREATE UNIQUE INDEX UX_CommissionReceivablePayeeAllocation_Active ON Commission.CommissionReceivablePayeeAllocation(TenantId,CommissionExpectedReceivableId,PayeeId,AllocationTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReceivablePayeeAllocation_Split')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT CK_CommissionReceivablePayeeAllocation_Split CHECK(SplitPercentage BETWEEN 0 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReceivablePayeeAllocation_Dates')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT CK_CommissionReceivablePayeeAllocation_Dates CHECK(EffectiveEndDate IS NULL OR EffectiveEndDate>=EffectiveDate);
+
+IF EXISTS
+(
+ SELECT 1
+ FROM Commission.CommissionPayee
+ GROUP BY TenantId,PayeeId
+ HAVING COUNT_BIG(*)>1
+)
+ THROW 51000,N'Commission payee data contains duplicate tenant/payee identifiers and cannot be referenced safely.',1;
+
+IF NOT EXISTS
+(
+ SELECT 1
+ FROM sys.indexes i
+ JOIN sys.index_columns ic1 ON ic1.object_id=i.object_id AND ic1.index_id=i.index_id AND ic1.key_ordinal=1
+ JOIN sys.columns c1 ON c1.object_id=ic1.object_id AND c1.column_id=ic1.column_id AND c1.name=N'TenantId'
+ JOIN sys.index_columns ic2 ON ic2.object_id=i.object_id AND ic2.index_id=i.index_id AND ic2.key_ordinal=2
+ JOIN sys.columns c2 ON c2.object_id=ic2.object_id AND c2.column_id=ic2.column_id AND c2.name=N'PayeeId'
+ WHERE i.object_id=OBJECT_ID(N'Commission.CommissionPayee') AND i.is_unique=1 AND i.has_filter=0 AND i.is_disabled=0
+   AND NOT EXISTS(SELECT 1 FROM sys.index_columns extra WHERE extra.object_id=i.object_id AND extra.index_id=i.index_id AND extra.key_ordinal>2)
+)
+ CREATE UNIQUE INDEX UX_CommissionPayee_Tenant_Payee ON Commission.CommissionPayee(TenantId,PayeeId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReceivablePayeeAllocation_Expected')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT FK_CommissionReceivablePayeeAllocation_Expected FOREIGN KEY(CommissionExpectedReceivableId) REFERENCES Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId);
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE parent_object_id=OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation') AND name=N'FK_CommissionReceivablePayeeAllocation_Payee')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation DROP CONSTRAINT FK_CommissionReceivablePayeeAllocation_Payee;
+ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT FK_CommissionReceivablePayeeAllocation_Payee FOREIGN KEY(TenantId,PayeeId) REFERENCES Commission.CommissionPayee(TenantId,PayeeId);
+
+IF OBJECT_ID(N'Commission.CommissionLedger',N'U') IS NOT NULL AND OBJECT_ID(N'IAM.[User]',N'U') IS NOT NULL
+BEGIN
+ INSERT Commission.CommissionReceivablePayeeAllocation(CommissionReceivablePayeeAllocationId,TenantId,CommissionExpectedReceivableId,PayeeId,AllocationTypeCode,SplitPercentage,EffectiveDate,StatusCode,CreatedDateUtc,IsDeleted)
+ SELECT NEWID(),e.TenantId,e.CommissionExpectedReceivableId,p.PayeeId,COALESCE(NULLIF(p.PayeeTypeCode,N''),N'Producer'),
+        CASE WHEN e.ExpectedCommissionAmount=0 THEN 0 ELSE ROUND(ABS(l.ProducerAmount/e.ExpectedCommissionAmount)*100,4) END,
+        COALESCE(e.EffectiveDate,e.StatementPeriodStart),N'Active',SYSUTCDATETIME(),0
+ FROM Commission.CommissionExpectedReceivable e
+ JOIN Commission.CommissionLedger l ON l.TenantId=e.TenantId AND l.CommissionId=e.SourceLedgerId AND l.IsDeleted=0
+ JOIN IAM.[User] u ON u.TenantId=e.TenantId AND u.IsDeleted=0 AND l.Producer IN(NULLIF(u.FullName,N''),NULLIF(u.DisplayName,N''),NULLIF(u.UserName,N''))
+ JOIN Commission.CommissionPayee p ON p.TenantId=e.TenantId AND p.UserId=u.UserId AND p.IsDeleted=0 AND p.StatusCode=N'Active'
+ WHERE e.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Commission.CommissionReceivablePayeeAllocation a WHERE a.TenantId=e.TenantId AND a.CommissionExpectedReceivableId=e.CommissionExpectedReceivableId AND a.PayeeId=p.PayeeId AND a.IsDeleted=0);
+END;
 """;
     private const string Migration0089_PortalMyAccountFullSeed = """
 IF OBJECT_ID(N'Portal.AdminRecord') IS NOT NULL
@@ -15777,6 +16194,392 @@ BEGIN
 END;
 """;
 
+    private const string Migration0236ClientAccount360ExposureDepth = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client') EXEC(N'CREATE SCHEMA Client');
+
+IF OBJECT_ID(N'Client.AccountNamedInsured', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountNamedInsured
+    (
+        AccountNamedInsuredId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountNamedInsured PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        InsuredTypeCode NVARCHAR(50) NOT NULL,
+        LegalName NVARCHAR(200) NOT NULL,
+        DbaName NVARCHAR(200) NULL,
+        TaxIdentifier NVARCHAR(50) NULL,
+        RelationshipCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountNamedInsured_IsPrimary DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountNamedInsured_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountNamedInsured_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountNamedInsured_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountNamedInsured_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE INDEX IX_AccountNamedInsured_Account ON Client.AccountNamedInsured(TenantId, AccountId, IsPrimary DESC) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountLocation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountLocation
+    (
+        AccountLocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountLocation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        LocationNumber NVARCHAR(50) NOT NULL,
+        LocationTypeCode NVARCHAR(50) NOT NULL,
+        LocationName NVARCHAR(200) NOT NULL,
+        AddressLine1 NVARCHAR(200) NOT NULL,
+        AddressLine2 NVARCHAR(200) NULL,
+        City NVARCHAR(100) NOT NULL,
+        StateCode NVARCHAR(50) NOT NULL,
+        PostalCode NVARCHAR(20) NOT NULL,
+        CountryCode NVARCHAR(10) NOT NULL CONSTRAINT DF_AccountLocation_Country DEFAULT N'US',
+        County NVARCHAR(100) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountLocation_Primary DEFAULT 0,
+        IsMailingAddress BIT NOT NULL CONSTRAINT DF_AccountLocation_Mailing DEFAULT 0,
+        Latitude DECIMAL(10,7) NULL,
+        Longitude DECIMAL(10,7) NULL,
+        OccupancyCode NVARCHAR(80) NULL,
+        AnnualRevenue DECIMAL(18,2) NULL,
+        EmployeeCount INT NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountLocation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountLocation_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountLocation_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT UQ_AccountLocation_Number UNIQUE (TenantId, AccountId, LocationNumber)
+    );
+    CREATE INDEX IX_AccountLocation_Account ON Client.AccountLocation(TenantId, AccountId, LocationName) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountVehicle', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountVehicle
+    (
+        AccountVehicleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountVehicle PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NULL,
+        VehicleNumber NVARCHAR(50) NOT NULL,
+        Vin NVARCHAR(17) NOT NULL,
+        ModelYear INT NOT NULL,
+        Make NVARCHAR(80) NOT NULL,
+        Model NVARCHAR(100) NOT NULL,
+        VehicleTypeCode NVARCHAR(50) NOT NULL,
+        UseTypeCode NVARCHAR(50) NOT NULL,
+        GaragingStateCode NVARCHAR(50) NULL,
+        GaragingPostalCode NVARCHAR(20) NULL,
+        RadiusMiles INT NULL,
+        AnnualMileage INT NULL,
+        CostNew DECIMAL(18,2) NULL,
+        StatedValue DECIMAL(18,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountVehicle_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountVehicle_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountVehicle_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountVehicle_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountVehicle_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountVehicle_Vin UNIQUE (TenantId, Vin)
+    );
+    CREATE INDEX IX_AccountVehicle_Account ON Client.AccountVehicle(TenantId, AccountId, IsActive) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountDriver', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountDriver
+    (
+        AccountDriverId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountDriver PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        DriverNumber NVARCHAR(50) NOT NULL,
+        FirstName NVARCHAR(100) NOT NULL,
+        LastName NVARCHAR(100) NOT NULL,
+        DateOfBirth DATE NOT NULL,
+        LicenseNumber NVARCHAR(80) NOT NULL,
+        LicenseStateCode NVARCHAR(50) NOT NULL,
+        LicenseClassCode NVARCHAR(50) NULL,
+        LicenseExpirationDate DATE NULL,
+        HireDate DATE NULL,
+        YearsExperience INT NULL,
+        DriverStatusCode NVARCHAR(50) NOT NULL,
+        IsExcluded BIT NOT NULL CONSTRAINT DF_AccountDriver_Excluded DEFAULT 0,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountDriver_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountDriver_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountDriver_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountDriver_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT UQ_AccountDriver_License UNIQUE (TenantId, LicenseStateCode, LicenseNumber)
+    );
+    CREATE INDEX IX_AccountDriver_Account ON Client.AccountDriver(TenantId, AccountId, DriverStatusCode) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountProperty', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountProperty
+    (
+        AccountPropertyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountProperty PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NOT NULL,
+        PropertyNumber NVARCHAR(50) NOT NULL,
+        PropertyTypeCode NVARCHAR(50) NOT NULL,
+        ConstructionTypeCode NVARCHAR(50) NULL,
+        OccupancyCode NVARCHAR(80) NULL,
+        YearBuilt INT NULL,
+        SquareFeet INT NULL,
+        NumberOfStories INT NULL,
+        BuildingValue DECIMAL(18,2) NULL,
+        ContentsValue DECIMAL(18,2) NULL,
+        BusinessIncomeValue DECIMAL(18,2) NULL,
+        ProtectionClassCode NVARCHAR(50) NULL,
+        RoofTypeCode NVARCHAR(50) NULL,
+        RoofYear INT NULL,
+        SprinkleredPercentage DECIMAL(5,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountProperty_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountProperty_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountProperty_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountProperty_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountProperty_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountProperty_Number UNIQUE (TenantId, AccountId, PropertyNumber)
+    );
+    CREATE INDEX IX_AccountProperty_Account ON Client.AccountProperty(TenantId, AccountId, IsActive) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountScheduleItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountScheduleItem
+    (
+        AccountScheduleItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountScheduleItem PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NULL,
+        ScheduleTypeCode NVARCHAR(50) NOT NULL,
+        ItemNumber NVARCHAR(50) NOT NULL,
+        ItemDescription NVARCHAR(300) NOT NULL,
+        Manufacturer NVARCHAR(100) NULL,
+        Model NVARCHAR(100) NULL,
+        SerialNumber NVARCHAR(100) NULL,
+        AcquisitionDate DATE NULL,
+        AppraisalDate DATE NULL,
+        ScheduledValue DECIMAL(18,2) NOT NULL,
+        DeductibleAmount DECIMAL(18,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountScheduleItem_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountScheduleItem_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountScheduleItem_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountScheduleItem_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountScheduleItem_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountScheduleItem_Number UNIQUE (TenantId, AccountId, ScheduleTypeCode, ItemNumber)
+    );
+    CREATE INDEX IX_AccountScheduleItem_Account ON Client.AccountScheduleItem(TenantId, AccountId, ScheduleTypeCode) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountReferenceOption', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountReferenceOption', N'CreatedByUserId') IS NULL ALTER TABLE Client.AccountReferenceOption ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountReferenceOption', N'ModifiedByUserId') IS NULL ALTER TABLE Client.AccountReferenceOption ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+    ;WITH Options AS
+    (
+        SELECT * FROM (VALUES
+            (N'InsuredType', N'BUSINESS', N'Business', 10), (N'InsuredType', N'INDIVIDUAL', N'Individual', 20), (N'InsuredType', N'TRUST', N'Trust', 30),
+            (N'AccountType', N'COMMERCIAL', N'Commercial', 10), (N'AccountType', N'PERSONAL', N'Personal', 20), (N'AccountType', N'NON_PROFIT', N'Non-Profit', 30), (N'AccountType', N'GOVERNMENT', N'Government', 40), (N'AccountType', N'PARTNER', N'Partner', 50),
+            (N'InsuredRelationship', N'PRIMARY', N'Primary Named Insured', 10), (N'InsuredRelationship', N'ADDITIONAL', N'Additional Named Insured', 20), (N'InsuredRelationship', N'DBA', N'Doing Business As', 30),
+            (N'LocationType', N'HEADQUARTERS', N'Headquarters', 10), (N'LocationType', N'BRANCH', N'Branch', 20), (N'LocationType', N'WAREHOUSE', N'Warehouse', 30), (N'LocationType', N'JOB_SITE', N'Job Site', 40), (N'LocationType', N'RESIDENCE', N'Residence', 50),
+            (N'VehicleType', N'PRIVATE_PASSENGER', N'Private Passenger', 10), (N'VehicleType', N'LIGHT_TRUCK', N'Light Truck', 20), (N'VehicleType', N'HEAVY_TRUCK', N'Heavy Truck', 30), (N'VehicleType', N'TRAILER', N'Trailer', 40),
+            (N'VehicleUse', N'BUSINESS', N'Business Use', 10), (N'VehicleUse', N'COMMUTE', N'Commute', 20), (N'VehicleUse', N'SERVICE', N'Service', 30), (N'VehicleUse', N'DELIVERY', N'Delivery', 40),
+            (N'DriverStatus', N'ACTIVE', N'Active', 10), (N'DriverStatus', N'RESTRICTED', N'Restricted', 20), (N'DriverStatus', N'EXCLUDED', N'Excluded', 30), (N'DriverStatus', N'INACTIVE', N'Inactive', 40),
+            (N'PropertyType', N'BUILDING', N'Building', 10), (N'PropertyType', N'UNIT', N'Unit', 20), (N'PropertyType', N'DWELLING', N'Dwelling', 30), (N'PropertyType', N'OTHER_STRUCTURE', N'Other Structure', 40),
+            (N'ScheduleType', N'EQUIPMENT', N'Equipment', 10), (N'ScheduleType', N'INLAND_MARINE', N'Inland Marine', 20), (N'ScheduleType', N'FINE_ARTS', N'Fine Arts', 30), (N'ScheduleType', N'JEWELRY', N'Jewelry', 40),
+            (N'ActivityType', N'CALL', N'Call', 10), (N'ActivityType', N'EMAIL', N'Email', 20), (N'ActivityType', N'MEETING', N'Meeting', 30), (N'ActivityType', N'NOTE', N'Note', 40), (N'ActivityType', N'TASK', N'Task', 50),
+            (N'CommunicationChannel', N'EMAIL', N'Email', 10), (N'CommunicationChannel', N'PHONE', N'Phone', 20), (N'CommunicationChannel', N'SMS', N'SMS', 30), (N'CommunicationChannel', N'PORTAL', N'Portal', 40)
+            ,(N'StakeholderRole', N'OWNER', N'Owner', 10), (N'StakeholderRole', N'OFFICER', N'Officer', 20), (N'StakeholderRole', N'PARTNER', N'Partner', 30), (N'StakeholderRole', N'TRUSTEE', N'Trustee', 40)
+            ,(N'CommunicationPurpose', N'SERVICE', N'Service', 10), (N'CommunicationPurpose', N'BILLING', N'Billing', 20), (N'CommunicationPurpose', N'CLAIMS', N'Claims', 30), (N'CommunicationPurpose', N'MARKETING', N'Marketing', 40), (N'CommunicationPurpose', N'RENEWAL', N'Renewal', 50)
+            ,(N'PreferenceStatus', N'OPTED_IN', N'Opted In', 10), (N'PreferenceStatus', N'OPTED_OUT', N'Opted Out', 20), (N'PreferenceStatus', N'REQUIRED_ONLY', N'Required Communications Only', 30)
+            ,(N'ServiceAssignmentRole', N'PRODUCER', N'Producer', 10), (N'ServiceAssignmentRole', N'CSR', N'CSR', 20), (N'ServiceAssignmentRole', N'ACCOUNT_MANAGER', N'Account Manager', 30), (N'ServiceAssignmentRole', N'CLAIMS_ADVOCATE', N'Claims Advocate', 40), (N'ServiceAssignmentRole', N'BILLING_SPECIALIST', N'Billing Specialist', 50)
+        ) value(OptionGroup, OptionCode, OptionName, SortOrder)
+    )
+    INSERT INTO Client.AccountReferenceOption (AccountReferenceOptionId, TenantId, OptionGroup, OptionCode, OptionName, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tenant.TenantId, optionData.OptionGroup, optionData.OptionCode, optionData.OptionName, CASE WHEN optionData.SortOrder = 10 THEN 1 ELSE 0 END, 1, optionData.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant tenant
+    CROSS JOIN Options optionData
+    WHERE tenant.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1 FROM Client.AccountReferenceOption existing
+          WHERE existing.TenantId = tenant.TenantId AND existing.OptionGroup = optionData.OptionGroup AND existing.OptionCode = optionData.OptionCode
+      );
+END;
+""";
+
+    private const string Migration0237ClientAccount360SchemaCompatibilityRepair = """
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+   AND COL_LENGTH(N'Client.Account', N'DbaName') IS NULL
+    ALTER TABLE Client.Account ADD DbaName NVARCHAR(200) NULL;
+
+IF OBJECT_ID(N'Client.AccountActivity', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountActivity', N'TenantId') IS NULL ALTER TABLE Client.AccountActivity ADD TenantId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'AccountId') IS NULL ALTER TABLE Client.AccountActivity ADD AccountId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ActivityType') IS NULL ALTER TABLE Client.AccountActivity ADD ActivityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Subject') IS NULL ALTER TABLE Client.AccountActivity ADD [Subject] NVARCHAR(255) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Notes') IS NULL ALTER TABLE Client.AccountActivity ADD Notes NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'OccurredAtUtc') IS NULL ALTER TABLE Client.AccountActivity ADD OccurredAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Outcome') IS NULL ALTER TABLE Client.AccountActivity ADD Outcome NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'DurationMinutes') IS NULL ALTER TABLE Client.AccountActivity ADD DurationMinutes INT NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityType') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityId') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'CreatedDateUtc') IS NULL ALTER TABLE Client.AccountActivity ADD CreatedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'CreatedByUserId') IS NULL ALTER TABLE Client.AccountActivity ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'IsDeleted') IS NULL ALTER TABLE Client.AccountActivity ADD IsDeleted BIT NOT NULL CONSTRAINT DF_AccountActivity_IsDeleted_0237 DEFAULT 0;
+
+    IF COL_LENGTH(N'Client.AccountActivity', N'Title') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET [Subject]=COALESCE([Subject],Title,N''Account activity'') WHERE [Subject] IS NULL;';
+    ELSE
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET [Subject]=COALESCE([Subject],N''Account activity'') WHERE [Subject] IS NULL;';
+
+    IF COL_LENGTH(N'Client.AccountActivity', N'Description') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET Notes=COALESCE(Notes,Description) WHERE Notes IS NULL;';
+
+    EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()), CreatedDateUtc=COALESCE(CreatedDateUtc,OccurredAtUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR OccurredAtUtc IS NULL OR CreatedDateUtc IS NULL;';
+END;
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'OPS.TaskItem', N'TenantId') IS NULL
+    BEGIN
+        ALTER TABLE OPS.TaskItem ADD TenantId UNIQUEIDENTIFIER NULL;
+        EXEC sp_executesql N'
+            DECLARE @FallbackTenantId UNIQUEIDENTIFIER = (SELECT TOP (1) TenantId FROM Core.Tenant WHERE IsDeleted=0 ORDER BY CreatedDateUtc);
+            UPDATE OPS.TaskItem SET TenantId=@FallbackTenantId WHERE TenantId IS NULL;';
+    END;
+    IF COL_LENGTH(N'OPS.TaskItem', N'AccountId') IS NULL ALTER TABLE OPS.TaskItem ADD AccountId UNIQUEIDENTIFIER NULL;
+END;
+""";
+
+    private const string Migration0238ClientAccountRelationshipAccountIdRepair = """
+IF OBJECT_ID(N'Client.AccountRelationship', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountRelationship', N'AccountId') IS NULL
+        ALTER TABLE Client.AccountRelationship ADD AccountId UNIQUEIDENTIFIER NULL;
+
+    IF COL_LENGTH(N'Client.AccountRelationship', N'SourceAccountId') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountRelationship SET AccountId=SourceAccountId WHERE AccountId IS NULL;';
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id=OBJECT_ID(N'Client.AccountRelationship')
+          AND name=N'IX_AccountRelationship_Account_0238'
+    )
+        EXEC(N'CREATE INDEX IX_AccountRelationship_Account_0238 ON Client.AccountRelationship(TenantId,AccountId,IsActive) WHERE IsDeleted=0;');
+END;
+""";
+
+    private const string Migration0239ClientAccount360SupportTablesRepair = """
+IF OBJECT_ID(N'Client.AccountStakeholder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountStakeholder
+    (
+        AccountStakeholderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountStakeholder_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        StakeholderRoleCode NVARCHAR(50) NOT NULL,
+        OwnershipPercentage DECIMAL(5,2) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Primary_0239 DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountStakeholder_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountStakeholder_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountStakeholder_Contact_0239 FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT CK_AccountStakeholder_Ownership_0239 CHECK (OwnershipPercentage IS NULL OR (OwnershipPercentage >= 0 AND OwnershipPercentage <= 100))
+    );
+    CREATE UNIQUE INDEX UX_AccountStakeholder_Role_0239 ON Client.AccountStakeholder(TenantId,AccountId,ContactId,StakeholderRoleCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountCommunicationPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountCommunicationPreference
+    (
+        AccountCommunicationPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountCommunicationPreference_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        CommunicationPurposeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        PreferenceStatusCode NVARCHAR(50) NOT NULL,
+        PreferredTimeZoneCode NVARCHAR(100) NULL,
+        PreferredStartTime TIME NULL,
+        PreferredEndTime TIME NULL,
+        ConsentSourceCode NVARCHAR(50) NULL,
+        ConsentDateUtc DATETIME2 NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountCommunicationPreference_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountCommunicationPreference_Contact_0239 FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE UNIQUE INDEX UX_AccountCommunicationPreference_0239 ON Client.AccountCommunicationPreference(TenantId,AccountId,ContactId,CommunicationPurposeCode,ChannelCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountServiceAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountServiceAssignment
+    (
+        AccountServiceAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountServiceAssignment_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        AssignmentRoleCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Primary_0239 DEFAULT 0,
+        EffectiveDate DATE NOT NULL CONSTRAINT DF_AccountServiceAssignment_Effective_0239 DEFAULT CONVERT(date,SYSUTCDATETIME()),
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountServiceAssignment_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountServiceAssignment_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountServiceAssignment_User_0239 FOREIGN KEY (UserId) REFERENCES IAM.[User](UserId)
+    );
+    CREATE UNIQUE INDEX UX_AccountServiceAssignment_0239 ON Client.AccountServiceAssignment(TenantId,AccountId,UserId,AssignmentRoleCode) WHERE IsDeleted=0;
+END;
+""";
+
     private const string Migration0235PolicyLifecycleServicingHardening = """
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
 
@@ -21035,5 +21838,920 @@ BEGIN
     WHERE tx.IsDeleted = 0
       AND NOT EXISTS (SELECT 1 FROM Policy.PolicyStatusHistory existing WHERE existing.TenantId = tx.TenantId AND existing.PolicyId = tx.PolicyId AND existing.StatusScopeCode = N'Policy' AND existing.NewStatusCode = bp.Status AND existing.IsDeleted = 0);
 END;
+""";
+
+    private const string Migration0240PolicyCertificateDocumentWorkflowEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'Policy.CertificateWorkflowOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateWorkflowOption
+    (
+        CertificateWorkflowOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateWorkflowOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateHolder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateHolder
+    (
+        CertificateHolderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateHolder PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        HolderCode NVARCHAR(60) NOT NULL,
+        LegalName NVARCHAR(200) NOT NULL,
+        AddressLine1 NVARCHAR(200) NULL,
+        AddressLine2 NVARCHAR(200) NULL,
+        City NVARCHAR(100) NULL,
+        StateProvince NVARCHAR(100) NULL,
+        PostalCode NVARCHAR(30) NULL,
+        CountryCode NVARCHAR(10) NULL,
+        ContactName NVARCHAR(160) NULL,
+        EmailAddress NVARCHAR(320) NULL,
+        PhoneNumber NVARCHAR(50) NULL,
+        PreferredDeliveryMethodCode NVARCHAR(50) NULL,
+        DefaultWording NVARCHAR(MAX) NULL,
+        RequiresAdditionalInsured BIT NOT NULL CONSTRAINT DF_CertificateHolder_AI DEFAULT 0,
+        RequiresWaiverOfSubrogation BIT NOT NULL CONSTRAINT DF_CertificateHolder_Waiver DEFAULT 0,
+        RequiresPrimaryNonContributory BIT NOT NULL CONSTRAINT DF_CertificateHolder_Primary DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CertificateHolder_Active DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateHolder_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateHolder_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentTemplateDefinition', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentTemplateDefinition
+    (
+        DocumentTemplateDefinitionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentTemplateDefinition PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TemplateCode NVARCHAR(100) NOT NULL,
+        TemplateName NVARCHAR(240) NOT NULL,
+        DocumentTypeCode NVARCHAR(80) NOT NULL,
+        FormNumber NVARCHAR(30) NULL,
+        LineOfBusinessCode NVARCHAR(80) NULL,
+        Description NVARCHAR(1000) NULL,
+        IsLicensedContent BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Licensed DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Active DEFAULT 1,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Version DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentTemplateVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentTemplateVersion
+    (
+        DocumentTemplateVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentTemplateVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTemplateDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        EditionCode NVARCHAR(50) NULL,
+        ContentFormatCode NVARCHAR(50) NOT NULL,
+        TemplateContent NVARCHAR(MAX) NULL,
+        StoragePath NVARCHAR(1000) NULL,
+        MergeFieldSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Fields DEFAULT N'{}',
+        ChangeSummary NVARCHAR(1000) NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Status DEFAULT N'Draft',
+        EffectiveDateUtc DATETIME2 NULL,
+        RetiredDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateRequest
+    (
+        CertificateRequestId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateRequest PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RequestNumber NVARCHAR(60) NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyNumber NVARCHAR(80) NULL,
+        CertificateHolderId UNIQUEIDENTIFIER NULL,
+        RequestedDocumentTypeCode NVARCHAR(80) NOT NULL,
+        RequestedWording NVARCHAR(MAX) NULL,
+        AdditionalInsured BIT NOT NULL CONSTRAINT DF_CertificateRequest_AI DEFAULT 0,
+        WaiverOfSubrogation BIT NOT NULL CONSTRAINT DF_CertificateRequest_Waiver DEFAULT 0,
+        PrimaryNonContributory BIT NOT NULL CONSTRAINT DF_CertificateRequest_Primary DEFAULT 0,
+        SourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CertificateRequest_Source DEFAULT N'Agency',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CertificateRequest_Status DEFAULT N'Submitted',
+        PriorityCode NVARCHAR(30) NOT NULL CONSTRAINT DF_CertificateRequest_Priority DEFAULT N'Normal',
+        NeededByDateUtc DATETIME2 NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        RequestedByName NVARCHAR(200) NULL,
+        RequestedByEmail NVARCHAR(320) NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        CompletedCertificateId UNIQUEIDENTIFIER NULL,
+        SubmittedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRequest_Submitted DEFAULT SYSUTCDATETIME(),
+        CompletedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRequest_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateRequest_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.GeneratedDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.GeneratedDocument
+    (
+        GeneratedDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_GeneratedDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentNumber NVARCHAR(80) NOT NULL,
+        DocumentTypeCode NVARCHAR(80) NOT NULL,
+        EntityTypeCode NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NULL,
+        TemplateDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_GeneratedDocument_Version DEFAULT 1,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_GeneratedDocument_Status DEFAULT N'Generated',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_GeneratedDocument_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_GeneratedDocument_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.GeneratedDocumentVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.GeneratedDocumentVersion
+    (
+        GeneratedDocumentVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_GeneratedDocumentVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        GeneratedDocumentId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTemplateVersionId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        MergeDataJson NVARCHAR(MAX) NOT NULL,
+        RenderedContent VARBINARY(MAX) NULL,
+        StoragePath NVARCHAR(1000) NULL,
+        ContentType NVARCHAR(200) NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_ContentType DEFAULT N'application/pdf',
+        ContentHash NVARCHAR(128) NULL,
+        FileSizeBytes BIGINT NULL,
+        ChangeSummary NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateDelivery', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateDelivery
+    (
+        CertificateDeliveryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateDelivery PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NOT NULL,
+        GeneratedDocumentVersionId UNIQUEIDENTIFIER NULL,
+        DeliveryMethodCode NVARCHAR(50) NOT NULL,
+        RecipientName NVARCHAR(200) NULL,
+        RecipientAddress NVARCHAR(500) NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_CertificateDelivery_Status DEFAULT N'Queued',
+        ProviderMessageId NVARCHAR(240) NULL,
+        QueuedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateDelivery_Queued DEFAULT SYSUTCDATETIME(),
+        SentDateUtc DATETIME2 NULL,
+        DeliveredDateUtc DATETIME2 NULL,
+        FailedDateUtc DATETIME2 NULL,
+        FailureReason NVARCHAR(2000) NULL,
+        AttemptCount INT NOT NULL CONSTRAINT DF_CertificateDelivery_Attempts DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateDelivery_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateDelivery_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateRenewalSchedule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateRenewalSchedule
+    (
+        CertificateRenewalScheduleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateRenewalSchedule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NOT NULL,
+        CertificateHolderId UNIQUEIDENTIFIER NULL,
+        RenewalLeadDays INT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Lead DEFAULT 30,
+        NextRunDateUtc DATETIME2 NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Status DEFAULT N'Scheduled',
+        AutoGenerate BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Auto DEFAULT 0,
+        AutoDeliver BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Deliver DEFAULT 0,
+        LastRunDateUtc DATETIME2 NULL,
+        LastResultCode NVARCHAR(50) NULL,
+        LastError NVARCHAR(2000) NULL,
+        LockedUntilDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateAuditEvent
+    (
+        CertificateAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateAuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NULL,
+        CertificateRequestId UNIQUEIDENTIFIER NULL,
+        EventTypeCode NVARCHAR(80) NOT NULL,
+        EventDescription NVARCHAR(1000) NOT NULL,
+        OldValueJson NVARCHAR(MAX) NULL,
+        NewValueJson NVARCHAR(MAX) NULL,
+        ActorUserId UNIQUEIDENTIFIER NULL,
+        ActorName NVARCHAR(200) NULL,
+        CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CertificateAuditEvent_Correlation DEFAULT NEWID(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateAuditEvent_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateHolderId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateHolderId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateRequestId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateRequestId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'DocumentTemplateVersionId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD DocumentTemplateVersionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'GeneratedDocumentId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD GeneratedDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'PrimaryNonContributory') IS NULL ALTER TABLE Policy.PolicyCertificate ADD PrimaryNonContributory BIT NOT NULL CONSTRAINT DF_PolicyCertificate_Primary_0240 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'HolderSpecificWording') IS NULL ALTER TABLE Policy.PolicyCertificate ADD HolderSpecificWording NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateWorkflowOption') AND name = N'UX_CertificateWorkflowOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_CertificateWorkflowOption_Tenant_Group_Code ON Policy.CertificateWorkflowOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateHolder') AND name = N'UX_CertificateHolder_Tenant_Code') CREATE UNIQUE INDEX UX_CertificateHolder_Tenant_Code ON Policy.CertificateHolder(TenantId, HolderCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentTemplateDefinition') AND name = N'UX_DocumentTemplateDefinition_Tenant_Code') CREATE UNIQUE INDEX UX_DocumentTemplateDefinition_Tenant_Code ON DMS.DocumentTemplateDefinition(TenantId, TemplateCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentTemplateVersion') AND name = N'UX_DocumentTemplateVersion_Definition_Version') CREATE UNIQUE INDEX UX_DocumentTemplateVersion_Definition_Version ON DMS.DocumentTemplateVersion(DocumentTemplateDefinitionId, VersionNumber) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateRequest') AND name = N'UX_CertificateRequest_Tenant_Number') CREATE UNIQUE INDEX UX_CertificateRequest_Tenant_Number ON Policy.CertificateRequest(TenantId, RequestNumber) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateRenewalSchedule') AND name = N'IX_CertificateRenewalSchedule_Due') CREATE INDEX IX_CertificateRenewalSchedule_Due ON Policy.CertificateRenewalSchedule(StatusCode, NextRunDateUtc, LockedUntilDateUtc, IsDeleted) INCLUDE (TenantId, CertificateId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'IX_CertificateDelivery_Certificate') CREATE INDEX IX_CertificateDelivery_Certificate ON Policy.CertificateDelivery(TenantId, CertificateId, CreatedDateUtc DESC) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'IX_CertificateDelivery_Queue') CREATE INDEX IX_CertificateDelivery_Queue ON Policy.CertificateDelivery(StatusCode, QueuedDateUtc, AttemptCount) INCLUDE (TenantId, CertificateId, GeneratedDocumentVersionId, DeliveryMethodCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateAuditEvent') AND name = N'IX_CertificateAuditEvent_Certificate') CREATE INDEX IX_CertificateAuditEvent_Certificate ON Policy.CertificateAuditEvent(TenantId, CertificateId, CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'DMS.DocumentTemplateVersion') AND name = N'CK_DocumentTemplateVersion_ContentSource') ALTER TABLE DMS.DocumentTemplateVersion ADD CONSTRAINT CK_DocumentTemplateVersion_ContentSource CHECK (NULLIF(LTRIM(RTRIM(TemplateContent)), N'') IS NOT NULL OR NULLIF(LTRIM(RTRIM(StoragePath)), N'') IS NOT NULL OR ContentFormatCode = N'LicensedExternal');
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'Policy.CertificateRenewalSchedule') AND name = N'CK_CertificateRenewalSchedule_LeadDays') ALTER TABLE Policy.CertificateRenewalSchedule ADD CONSTRAINT CK_CertificateRenewalSchedule_LeadDays CHECK (RenewalLeadDays BETWEEN 1 AND 365);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'CK_CertificateDelivery_Attempts') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT CK_CertificateDelivery_Attempts CHECK (AttemptCount >= 0);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DocumentTemplateVersion_Definition') ALTER TABLE DMS.DocumentTemplateVersion ADD CONSTRAINT FK_DocumentTemplateVersion_Definition FOREIGN KEY (DocumentTemplateDefinitionId) REFERENCES DMS.DocumentTemplateDefinition(DocumentTemplateDefinitionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocument_TemplateDefinition') ALTER TABLE DMS.GeneratedDocument ADD CONSTRAINT FK_GeneratedDocument_TemplateDefinition FOREIGN KEY (TemplateDefinitionId) REFERENCES DMS.DocumentTemplateDefinition(DocumentTemplateDefinitionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocumentVersion_Document') ALTER TABLE DMS.GeneratedDocumentVersion ADD CONSTRAINT FK_GeneratedDocumentVersion_Document FOREIGN KEY (GeneratedDocumentId) REFERENCES DMS.GeneratedDocument(GeneratedDocumentId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocumentVersion_TemplateVersion') ALTER TABLE DMS.GeneratedDocumentVersion ADD CONSTRAINT FK_GeneratedDocumentVersion_TemplateVersion FOREIGN KEY (DocumentTemplateVersionId) REFERENCES DMS.DocumentTemplateVersion(DocumentTemplateVersionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateDelivery_Certificate') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT FK_CertificateDelivery_Certificate FOREIGN KEY (CertificateId) REFERENCES Policy.PolicyCertificate(CertificateId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateDelivery_GeneratedVersion') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT FK_CertificateDelivery_GeneratedVersion FOREIGN KEY (GeneratedDocumentVersionId) REFERENCES DMS.GeneratedDocumentVersion(GeneratedDocumentVersionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateRenewalSchedule_Certificate') ALTER TABLE Policy.CertificateRenewalSchedule ADD CONSTRAINT FK_CertificateRenewalSchedule_Certificate FOREIGN KEY (CertificateId) REFERENCES Policy.PolicyCertificate(CertificateId);
+
+SELECT DISTINCT TenantId INTO #CertificateWorkflowTenants
+FROM
+(
+    SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0
+    UNION SELECT TenantId FROM Policy.PolicyCertificate WHERE IsDeleted = 0
+) tenants;
+
+CREATE TABLE #CertificateOptions (OptionGroupCode NVARCHAR(80), OptionCode NVARCHAR(100), DisplayName NVARCHAR(200), Description NVARCHAR(1000), IsDefault BIT, SortOrder INT);
+INSERT INTO #CertificateOptions VALUES
+(N'CertificateType', N'ACORD25', N'ACORD 25 / Certificate of Liability Insurance', N'Licensed ACORD 25 certificate workflow.', 1, 10),
+(N'CertificateType', N'EOI', N'Evidence of Insurance', N'General evidence of insurance workflow.', 0, 20),
+(N'CertificateType', N'ACORD27', N'ACORD 27 / Evidence of Property Insurance', N'Licensed property evidence workflow.', 0, 30),
+(N'CertificateType', N'ACORD28', N'ACORD 28 / Evidence of Commercial Property', N'Licensed commercial property evidence workflow.', 0, 40),
+(N'DocumentType', N'Application', N'ACORD Application', N'Application document generated from a versioned tenant template.', 0, 10),
+(N'DocumentType', N'Binder', N'Binder', N'Binder or temporary evidence of coverage.', 0, 20),
+(N'DocumentType', N'Certificate', N'Certificate', N'Certificate of insurance.', 1, 30),
+(N'DocumentType', N'CancellationRequest', N'Cancellation Request', N'Insured or agency cancellation request.', 0, 40),
+(N'DocumentType', N'PolicyChangeRequest', N'Policy Change Request', N'Policy change or endorsement request.', 0, 50),
+(N'DocumentType', N'Evidence', N'Evidence Form', N'Evidence of insurance or property coverage.', 0, 60),
+(N'DocumentType', N'Proposal', N'Proposal Document', N'Agency proposal document.', 0, 70),
+(N'DocumentType', N'QuoteProposal', N'Quote Proposal', N'Quote comparison and proposal.', 0, 80),
+(N'DocumentType', N'RenewalSummary', N'Renewal Summary', N'Renewal coverage and premium summary.', 0, 90),
+(N'DocumentType', N'Custom', N'Custom Agency Template', N'Tenant-authored custom document template.', 0, 100),
+(N'DeliveryMethod', N'Email', N'Email', N'Deliver through the configured email provider.', 1, 10),
+(N'DeliveryMethod', N'Portal', N'Self-Service Portal', N'Publish to the certificate holder or insured portal.', 0, 20),
+(N'DeliveryMethod', N'Download', N'Secure Download', N'Generate a secure download.', 0, 30),
+(N'DeliveryMethod', N'Print', N'Print / Mail', N'Prepare for physical delivery.', 0, 40),
+(N'RequestPriority', N'Normal', N'Normal', N'Standard service priority.', 1, 10),
+(N'RequestPriority', N'Urgent', N'Urgent', N'Urgent certificate request.', 0, 20),
+(N'RenewalLeadDays', N'30', N'30 days', N'Begin renewal processing 30 days before expiration.', 1, 10),
+(N'RenewalLeadDays', N'60', N'60 days', N'Begin renewal processing 60 days before expiration.', 0, 20),
+(N'RenewalLeadDays', N'90', N'90 days', N'Begin renewal processing 90 days before expiration.', 0, 30);
+
+INSERT INTO Policy.CertificateWorkflowOption (CertificateWorkflowOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #CertificateWorkflowTenants t CROSS JOIN #CertificateOptions o
+WHERE NOT EXISTS (SELECT 1 FROM Policy.CertificateWorkflowOption x WHERE x.TenantId = t.TenantId AND x.OptionGroupCode = o.OptionGroupCode AND x.OptionCode = o.OptionCode AND x.IsDeleted = 0);
+
+CREATE TABLE #DocumentTemplates (TemplateCode NVARCHAR(100), TemplateName NVARCHAR(240), DocumentTypeCode NVARCHAR(80), FormNumber NVARCHAR(30), IsLicensedContent BIT, SortOrder INT);
+INSERT INTO #DocumentTemplates VALUES
+(N'ACORD25', N'ACORD 25 Certificate of Liability Insurance', N'Certificate', N'25', 1, 10),
+(N'EOI', N'Evidence of Insurance', N'Evidence', NULL, 0, 20),
+(N'APPLICATION', N'Insurance Application', N'Application', NULL, 0, 30),
+(N'BINDER', N'Insurance Binder', N'Binder', NULL, 0, 40),
+(N'CANCELLATION', N'Cancellation Request', N'CancellationRequest', NULL, 0, 50),
+(N'POLICY_CHANGE', N'Policy Change Request', N'PolicyChangeRequest', NULL, 0, 60),
+(N'PROPOSAL', N'Agency Proposal', N'Proposal', NULL, 0, 70),
+(N'QUOTE_PROPOSAL', N'Quote Proposal', N'QuoteProposal', NULL, 0, 80),
+(N'RENEWAL_SUMMARY', N'Renewal Summary', N'RenewalSummary', NULL, 0, 90);
+
+INSERT INTO DMS.DocumentTemplateDefinition (DocumentTemplateDefinitionId, TenantId, TemplateCode, TemplateName, DocumentTypeCode, FormNumber, Description, IsLicensedContent, IsActive, CurrentVersionNumber, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, d.TemplateCode, d.TemplateName, d.DocumentTypeCode, d.FormNumber, CONCAT(d.TemplateName, N' tenant template definition.'), d.IsLicensedContent, 1, 1, SYSUTCDATETIME(), 0
+FROM #CertificateWorkflowTenants t CROSS JOIN #DocumentTemplates d
+WHERE NOT EXISTS (SELECT 1 FROM DMS.DocumentTemplateDefinition x WHERE x.TenantId = t.TenantId AND x.TemplateCode = d.TemplateCode AND x.IsDeleted = 0);
+
+INSERT INTO DMS.DocumentTemplateVersion (DocumentTemplateVersionId, TenantId, DocumentTemplateDefinitionId, VersionNumber, EditionCode, ContentFormatCode, TemplateContent, MergeFieldSchemaJson, ChangeSummary, StatusCode, EffectiveDateUtc, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), d.TenantId, d.DocumentTemplateDefinitionId, 1, CASE WHEN d.FormNumber IS NOT NULL THEN N'Tenant Licensed Edition' ELSE N'1.0' END,
+       CASE WHEN d.IsLicensedContent = 1 THEN N'LicensedExternal' ELSE N'Html' END,
+       CASE WHEN d.IsLicensedContent = 1 THEN NULL ELSE N'<article data-template="' + d.TemplateCode + N'"><h1>{{DocumentTitle}}</h1><section>{{Body}}</section></article>' END,
+       N'{"required":["DocumentTitle","Body"],"optional":["PolicyNumber","AccountName","HolderName","EffectiveDate","ExpirationDate"]}',
+       N'Initial enterprise template version.', N'Published', SYSUTCDATETIME(), SYSUTCDATETIME(), 0
+FROM DMS.DocumentTemplateDefinition d
+WHERE d.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM DMS.DocumentTemplateVersion v WHERE v.DocumentTemplateDefinitionId = d.DocumentTemplateDefinitionId AND v.VersionNumber = 1 AND v.IsDeleted = 0);
+
+INSERT INTO Policy.CertificateHolder (CertificateHolderId, TenantId, HolderCode, LegalName, AddressLine1, DefaultWording, RequiresAdditionalInsured, RequiresWaiverOfSubrogation, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), c.TenantId, CONCAT(N'H-', LEFT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 12)), c.HolderName, NULLIF(c.HolderAddress, N''), NULLIF(c.Description, N''), c.AdditionalInsured, c.WaiverSubrogation, 1, MIN(c.CreatedDateUtc), MAX(c.CreatedByUserId), 0
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(c.HolderName)), N'') IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateHolder h WHERE h.TenantId = c.TenantId AND h.LegalName = c.HolderName AND ISNULL(h.AddressLine1, N'') = ISNULL(NULLIF(c.HolderAddress, N''), N'') AND h.IsDeleted = 0)
+GROUP BY c.TenantId, c.HolderName, c.HolderAddress, c.Description, c.AdditionalInsured, c.WaiverSubrogation;
+
+UPDATE c
+SET CertificateHolderId = h.CertificateHolderId,
+    HolderSpecificWording = COALESCE(c.HolderSpecificWording, h.DefaultWording),
+    ModifiedDateUtc = COALESCE(c.ModifiedDateUtc, SYSUTCDATETIME())
+FROM Policy.PolicyCertificate c
+OUTER APPLY (SELECT TOP 1 CertificateHolderId, DefaultWording FROM Policy.CertificateHolder h WHERE h.TenantId = c.TenantId AND h.LegalName = c.HolderName AND ISNULL(h.AddressLine1, N'') = ISNULL(NULLIF(c.HolderAddress, N''), N'') AND h.IsDeleted = 0 ORDER BY h.CreatedDateUtc) h
+WHERE c.CertificateHolderId IS NULL AND h.CertificateHolderId IS NOT NULL AND c.IsDeleted = 0;
+
+INSERT INTO Policy.CertificateRenewalSchedule (CertificateRenewalScheduleId, TenantId, CertificateId, CertificateHolderId, RenewalLeadDays, NextRunDateUtc, StatusCode, AutoGenerate, AutoDeliver, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), c.TenantId, c.CertificateId, c.CertificateHolderId, 30, DATEADD(day, -30, CONVERT(DATETIME2, c.ExpirationDate)), N'Scheduled', 0, 0, SYSUTCDATETIME(), c.CreatedByUserId, 0
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0 AND c.Status IN (N'Issued', N'Pending')
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateRenewalSchedule r WHERE r.CertificateId = c.CertificateId AND r.IsDeleted = 0);
+
+INSERT INTO Policy.CertificateAuditEvent (CertificateAuditEventId, TenantId, CertificateId, EventTypeCode, EventDescription, NewValueJson, ActorUserId, ActorName, CreatedDateUtc)
+SELECT NEWID(), c.TenantId, c.CertificateId, N'Synchronized', N'Existing certificate synchronized into the enterprise certificate workflow.',
+       JSON_OBJECT(N'CertificateNumber': c.CertificateNumber, N'HolderId': c.CertificateHolderId, N'Status': c.Status), c.CreatedByUserId, c.IssuedBy, SYSUTCDATETIME()
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateAuditEvent a WHERE a.CertificateId = c.CertificateId AND a.EventTypeCode = N'Synchronized');
+""";
+
+    private const string Migration0243BillingAgencyBillReceivablesEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Billing') EXEC(N'CREATE SCHEMA Billing');
+
+IF OBJECT_ID(N'Billing.AgencyBillOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillOption
+    (
+        AgencyBillOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        NumericValue DECIMAL(18,4) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_AgencyBillOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.FinanceCompany', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.FinanceCompany
+    (
+        FinanceCompanyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_FinanceCompany PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CompanyCode NVARCHAR(50) NOT NULL,
+        CompanyName NVARCHAR(200) NOT NULL,
+        ContactName NVARCHAR(160) NULL,
+        EmailAddress NVARCHAR(254) NULL,
+        PhoneNumber NVARCHAR(50) NULL,
+        RemittanceInstructions NVARCHAR(1000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_FinanceCompany_Active DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FinanceCompany_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_FinanceCompany_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReceivable', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReceivable
+    (
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReceivable PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReceivableNumber NVARCHAR(50) NOT NULL,
+        SourceTypeCode NVARCHAR(50) NOT NULL,
+        SourceInvoiceId UNIQUEIDENTIFIER NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        BillingTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_BillingType DEFAULT N'AgencyBill',
+        CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Currency DEFAULT N'USD',
+        TransactionDate DATE NOT NULL,
+        DueDate DATE NOT NULL,
+        OriginalAmount DECIMAL(18,2) NOT NULL,
+        AllocatedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Allocated DEFAULT 0,
+        AdjustedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Adjusted DEFAULT 0,
+        BalanceAmount AS (OriginalAmount + AdjustedAmount - AllocatedAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Status DEFAULT N'Open',
+        DelinquencyStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Delinquency DEFAULT N'Current',
+        FinanceCompanyId UNIQUEIDENTIFIER NULL,
+        Notes NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReceivable_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReceivable_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillInstallment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillInstallment
+    (
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillInstallment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        InstallmentNumber INT NOT NULL,
+        DueDate DATE NOT NULL,
+        InstallmentAmount DECIMAL(18,2) NOT NULL,
+        AllocatedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillInstallment_Allocated DEFAULT 0,
+        BalanceAmount AS (InstallmentAmount - AllocatedAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillInstallment_Status DEFAULT N'Scheduled',
+        GraceDate DATE NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillInstallment_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillInstallment_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillPaymentAllocation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillPaymentAllocation
+    (
+        AgencyBillPaymentAllocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillPaymentAllocation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PaymentId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NULL,
+        AllocationAmount DECIMAL(18,2) NOT NULL,
+        AllocationDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAllocation_Date DEFAULT SYSUTCDATETIME(),
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_AgencyBillAllocation_Status DEFAULT N'Applied',
+        ReversalOfAllocationId UNIQUEIDENTIFIER NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAllocation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillAllocation_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.PremiumTrustTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.PremiumTrustTransaction
+    (
+        PremiumTrustTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PremiumTrustTransaction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TrustAccountCode NVARCHAR(50) NOT NULL,
+        TransactionTypeCode NVARCHAR(50) NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NULL,
+        PaymentId UNIQUEIDENTIFIER NULL,
+        PaymentAllocationId UNIQUEIDENTIFIER NULL,
+        TransactionDate DATE NOT NULL,
+        Amount DECIMAL(18,2) NOT NULL,
+        DirectionCode NVARCHAR(10) NOT NULL,
+        ReferenceNumber NVARCHAR(100) NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Status DEFAULT N'Posted',
+        ReversalOfTransactionId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillLateNotice', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillLateNotice
+    (
+        AgencyBillLateNoticeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillLateNotice PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NULL,
+        NoticeLevelCode NVARCHAR(40) NOT NULL,
+        NoticeDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Date DEFAULT SYSUTCDATETIME(),
+        DeliveryMethodCode NVARCHAR(40) NOT NULL,
+        RecipientAddress NVARCHAR(254) NULL,
+        AmountDue DECIMAL(18,2) NOT NULL,
+        DueDate DATE NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Status DEFAULT N'Prepared',
+        DeliveryReference NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.NonPaymentCancellationReferral', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.NonPaymentCancellationReferral
+    (
+        NonPaymentCancellationReferralId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_NonPaymentReferral PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReferralNumber NVARCHAR(50) NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyCancellationId UNIQUEIDENTIFIER NULL,
+        ReferralDateUtc DATETIME2 NOT NULL CONSTRAINT DF_NonPaymentReferral_Date DEFAULT SYSUTCDATETIME(),
+        RequestedEffectiveDate DATE NULL,
+        AmountDue DECIMAL(18,2) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_NonPaymentReferral_Status DEFAULT N'PendingReview',
+        ReviewNotes NVARCHAR(2000) NULL,
+        ReviewedDateUtc DATETIME2 NULL,
+        ReviewedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_NonPaymentReferral_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_NonPaymentReferral_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReconciliation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReconciliation
+    (
+        AgencyBillReconciliationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReconciliation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReconciliationNumber NVARCHAR(50) NOT NULL,
+        StatementReference NVARCHAR(100) NOT NULL,
+        StatementDate DATE NOT NULL,
+        PeriodStartDate DATE NULL,
+        PeriodEndDate DATE NULL,
+        StatementAmount DECIMAL(18,2) NOT NULL,
+        SubledgerAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Subledger DEFAULT 0,
+        VarianceAmount AS (StatementAmount - SubledgerAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Status DEFAULT N'Draft',
+        CompletedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReconciliationLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReconciliationLine
+    (
+        AgencyBillReconciliationLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReconciliationLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReconciliationId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NULL,
+        PaymentAllocationId UNIQUEIDENTIFIER NULL,
+        StatementLineReference NVARCHAR(100) NULL,
+        StatementAmount DECIMAL(18,2) NOT NULL,
+        SubledgerAmount DECIMAL(18,2) NOT NULL,
+        VarianceAmount AS (StatementAmount - SubledgerAmount) PERSISTED,
+        MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Status DEFAULT N'Unmatched',
+        ExceptionReason NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.FinanceAgreement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.FinanceAgreement
+    (
+        FinanceAgreementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_FinanceAgreement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        FinanceCompanyId UNIQUEIDENTIFIER NOT NULL,
+        AgreementNumber NVARCHAR(100) NOT NULL,
+        FinancedAmount DECIMAL(18,2) NOT NULL,
+        DownPaymentAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_FinanceAgreement_DownPayment DEFAULT 0,
+        FundingStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_FinanceAgreement_Funding DEFAULT N'Pending',
+        ExpectedFundingDate DATE NULL,
+        FundedDate DATE NULL,
+        CancellationProtectionDate DATE NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_FinanceAgreement_Status DEFAULT N'Active',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FinanceAgreement_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_FinanceAgreement_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillAuditEvent
+    (
+        AgencyBillAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillAuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EntityTypeCode NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NOT NULL,
+        EventTypeCode NVARCHAR(80) NOT NULL,
+        EventDescription NVARCHAR(1000) NOT NULL,
+        OldValueJson NVARCHAR(MAX) NULL,
+        NewValueJson NVARCHAR(MAX) NULL,
+        CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_AgencyBillAudit_Correlation DEFAULT NEWID(),
+        ActorUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAudit_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillOption') AND name=N'UX_AgencyBillOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_AgencyBillOption_Tenant_Group_Code ON Billing.AgencyBillOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.FinanceCompany') AND name=N'UX_FinanceCompany_Tenant_Code') CREATE UNIQUE INDEX UX_FinanceCompany_Tenant_Code ON Billing.FinanceCompany(TenantId,CompanyCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_Tenant_Number') CREATE UNIQUE INDEX UX_AgencyBillReceivable_Tenant_Number ON Billing.AgencyBillReceivable(TenantId,ReceivableNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_SourceInvoice') CREATE UNIQUE INDEX UX_AgencyBillReceivable_SourceInvoice ON Billing.AgencyBillReceivable(TenantId,SourceInvoiceId) WHERE SourceInvoiceId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_PolicyTerm') CREATE UNIQUE INDEX UX_AgencyBillReceivable_PolicyTerm ON Billing.AgencyBillReceivable(TenantId,PolicyTermId) WHERE PolicyTermId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'IX_AgencyBillReceivable_WorkQueue') CREATE INDEX IX_AgencyBillReceivable_WorkQueue ON Billing.AgencyBillReceivable(TenantId,StatusCode,DueDate) INCLUDE(AccountId,OriginalAmount,AllocatedAmount,DelinquencyStageCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'UX_AgencyBillInstallment_Receivable_Number') CREATE UNIQUE INDEX UX_AgencyBillInstallment_Receivable_Number ON Billing.AgencyBillInstallment(AgencyBillReceivableId,InstallmentNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'IX_AgencyBillInstallment_Due') CREATE INDEX IX_AgencyBillInstallment_Due ON Billing.AgencyBillInstallment(TenantId,StatusCode,DueDate) INCLUDE(AgencyBillReceivableId,InstallmentAmount,AllocatedAmount) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillPaymentAllocation') AND name=N'IX_AgencyBillAllocation_Payment') CREATE INDEX IX_AgencyBillAllocation_Payment ON Billing.AgencyBillPaymentAllocation(TenantId,PaymentId,StatusCode) INCLUDE(AgencyBillReceivableId,AllocationAmount) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PremiumTrustTransaction') AND name=N'IX_PremiumTrustTransaction_Ledger') CREATE INDEX IX_PremiumTrustTransaction_Ledger ON Billing.PremiumTrustTransaction(TenantId,TrustAccountCode,TransactionDate) INCLUDE(Amount,DirectionCode,StatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.NonPaymentCancellationReferral') AND name=N'UX_NonPaymentReferral_Tenant_Number') CREATE UNIQUE INDEX UX_NonPaymentReferral_Tenant_Number ON Billing.NonPaymentCancellationReferral(TenantId,ReferralNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReconciliation') AND name=N'UX_AgencyBillReconciliation_Tenant_Number') CREATE UNIQUE INDEX UX_AgencyBillReconciliation_Tenant_Number ON Billing.AgencyBillReconciliation(TenantId,ReconciliationNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.FinanceAgreement') AND name=N'UX_FinanceAgreement_Tenant_Number') CREATE UNIQUE INDEX UX_FinanceAgreement_Tenant_Number ON Billing.FinanceAgreement(TenantId,AgreementNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillAuditEvent') AND name=N'IX_AgencyBillAudit_Entity') CREATE INDEX IX_AgencyBillAudit_Entity ON Billing.AgencyBillAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'CK_AgencyBillReceivable_Amounts') ALTER TABLE Billing.AgencyBillReceivable ADD CONSTRAINT CK_AgencyBillReceivable_Amounts CHECK (OriginalAmount >= 0 AND AllocatedAmount >= 0);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'CK_AgencyBillInstallment_Amounts') ALTER TABLE Billing.AgencyBillInstallment ADD CONSTRAINT CK_AgencyBillInstallment_Amounts CHECK (InstallmentNumber > 0 AND InstallmentAmount >= 0 AND AllocatedAmount >= 0 AND AllocatedAmount <= InstallmentAmount);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillPaymentAllocation') AND name=N'CK_AgencyBillPaymentAllocation_Amount') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT CK_AgencyBillPaymentAllocation_Amount CHECK (AllocationAmount > 0);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.PremiumTrustTransaction') AND name=N'CK_PremiumTrustTransaction_Direction') ALTER TABLE Billing.PremiumTrustTransaction ADD CONSTRAINT CK_PremiumTrustTransaction_Direction CHECK (Amount > 0 AND DirectionCode IN (N'Debit',N'Credit'));
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillReceivable_FinanceCompany') ALTER TABLE Billing.AgencyBillReceivable ADD CONSTRAINT FK_AgencyBillReceivable_FinanceCompany FOREIGN KEY(FinanceCompanyId) REFERENCES Billing.FinanceCompany(FinanceCompanyId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillInstallment_Receivable') ALTER TABLE Billing.AgencyBillInstallment ADD CONSTRAINT FK_AgencyBillInstallment_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillAllocation_Receivable') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT FK_AgencyBillAllocation_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillAllocation_Installment') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT FK_AgencyBillAllocation_Installment FOREIGN KEY(AgencyBillInstallmentId) REFERENCES Billing.AgencyBillInstallment(AgencyBillInstallmentId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_LateNotice_Receivable') ALTER TABLE Billing.AgencyBillLateNotice ADD CONSTRAINT FK_LateNotice_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_NonPaymentReferral_Receivable') ALTER TABLE Billing.NonPaymentCancellationReferral ADD CONSTRAINT FK_NonPaymentReferral_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillReconciliationLine_Header') ALTER TABLE Billing.AgencyBillReconciliationLine ADD CONSTRAINT FK_AgencyBillReconciliationLine_Header FOREIGN KEY(AgencyBillReconciliationId) REFERENCES Billing.AgencyBillReconciliation(AgencyBillReconciliationId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_FinanceAgreement_Receivable') ALTER TABLE Billing.FinanceAgreement ADD CONSTRAINT FK_FinanceAgreement_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_FinanceAgreement_Company') ALTER TABLE Billing.FinanceAgreement ADD CONSTRAINT FK_FinanceAgreement_Company FOREIGN KEY(FinanceCompanyId) REFERENCES Billing.FinanceCompany(FinanceCompanyId);
+
+SELECT DISTINCT TenantId INTO #AgencyBillTenants FROM
+(
+    SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0
+    UNION SELECT TenantId FROM Billing.Invoice WHERE IsDeleted=0
+) t;
+
+CREATE TABLE #AgencyBillOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(80),DisplayName NVARCHAR(160),Description NVARCHAR(500),NumericValue DECIMAL(18,4),IsDefault BIT,SortOrder INT);
+INSERT INTO #AgencyBillOptions VALUES
+(N'DelinquencyStage',N'Current',N'Current',N'Obligation is not past due.',0,1,10),
+(N'DelinquencyStage',N'Late1',N'First Notice',N'First late-notice stage.',10,0,20),
+(N'DelinquencyStage',N'Late2',N'Final Notice',N'Final late-notice stage.',20,0,30),
+(N'DelinquencyStage',N'CancellationReview',N'Cancellation Review',N'Eligible for a human-reviewed non-payment referral.',30,0,40),
+(N'NoticeDeliveryMethod',N'Email',N'Email',N'Deliver through the configured email provider.',NULL,1,10),
+(N'NoticeDeliveryMethod',N'Portal',N'Portal',N'Publish to the insured portal.',NULL,0,20),
+(N'TrustAccount',N'PREMIUM_TRUST',N'Premium Trust Account',N'Default premium fiduciary ledger account code.',NULL,1,10),
+(N'InstallmentFrequency',N'Monthly',N'Monthly',N'Monthly installment schedule.',1,1,10),
+(N'InstallmentFrequency',N'Quarterly',N'Quarterly',N'Quarterly installment schedule.',3,0,20);
+
+INSERT INTO Billing.AgencyBillOption(AgencyBillOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,NumericValue,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.NumericValue,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0
+FROM #AgencyBillTenants t CROSS JOIN #AgencyBillOptions o
+WHERE NOT EXISTS(SELECT 1 FROM Billing.AgencyBillOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillReceivable(AgencyBillReceivableId,TenantId,ReceivableNumber,SourceTypeCode,SourceInvoiceId,AccountId,BillingTypeCode,CurrencyCode,TransactionDate,DueDate,OriginalAmount,AllocatedAmount,AdjustedAmount,StatusCode,DelinquencyStageCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),i.TenantId,CONCAT(N'ABR-',i.InvoiceNumber),N'BillingInvoice',i.InvoiceId,i.AccountId,N'AgencyBill',N'USD',CONVERT(date,i.CreatedDateUtc),DATEADD(day,30,CONVERT(date,i.CreatedDateUtc)),i.TotalAmount,
+       CASE WHEN i.BalanceAmount BETWEEN 0 AND i.TotalAmount THEN i.TotalAmount-i.BalanceAmount ELSE 0 END,0,
+       CASE WHEN i.BalanceAmount<=0 THEN N'Paid' WHEN i.BalanceAmount<i.TotalAmount THEN N'PartiallyPaid' ELSE N'Open' END,
+       CASE WHEN i.BalanceAmount>0 AND DATEADD(day,30,CONVERT(date,i.CreatedDateUtc))<CONVERT(date,SYSUTCDATETIME()) THEN N'Late1' ELSE N'Current' END,
+       COALESCE(i.CreatedDateUtc,SYSUTCDATETIME()),NULL,0
+FROM Billing.Invoice i
+WHERE i.IsDeleted=0 AND i.TotalAmount>=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillReceivable r WHERE r.TenantId=i.TenantId AND r.SourceInvoiceId=i.InvoiceId AND r.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillReceivable(AgencyBillReceivableId,TenantId,ReceivableNumber,SourceTypeCode,PolicyId,PolicyTermId,AccountId,CarrierId,BillingTypeCode,CurrencyCode,TransactionDate,DueDate,OriginalAmount,AllocatedAmount,AdjustedAmount,StatusCode,DelinquencyStageCode,Notes,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),pt.TenantId,CONCAT(N'ABR-POL-',LEFT(REPLACE(CONVERT(NVARCHAR(36),pt.PolicyTermId),N'-',N''),20)),N'PolicyTerm',pt.PolicyId,pt.PolicyTermId,bp.AccountId,bp.CarrierId,N'AgencyBill',N'USD',CONVERT(date,pt.EffectiveDate),DATEADD(day,30,CONVERT(date,pt.EffectiveDate)),COALESCE(pt.TotalCost,pt.WrittenPremium,0),0,0,N'Open',
+       CASE WHEN DATEADD(day,30,CONVERT(date,pt.EffectiveDate))<CONVERT(date,SYSUTCDATETIME()) THEN N'Late1' ELSE N'Current' END,N'Synchronized from agency-bill policy term.',COALESCE(pt.CreatedDateUtc,SYSUTCDATETIME()),NULL,0
+FROM Policy.PolicyTerm pt
+JOIN Submissions.BoundPolicy bp ON bp.TenantId=pt.TenantId AND bp.PolicyId=pt.PolicyId AND bp.IsDeleted=0
+WHERE pt.IsDeleted=0 AND UPPER(REPLACE(ISNULL(pt.BillingTypeCode,N''),N' ',N'')) IN (N'AGENCYBILL',N'AGENCY') AND COALESCE(pt.TotalCost,pt.WrittenPremium,0)>0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillReceivable r WHERE r.TenantId=pt.TenantId AND r.PolicyTermId=pt.PolicyTermId AND r.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillInstallment(AgencyBillInstallmentId,TenantId,AgencyBillReceivableId,InstallmentNumber,DueDate,InstallmentAmount,AllocatedAmount,StatusCode,GraceDate,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),r.TenantId,r.AgencyBillReceivableId,1,r.DueDate,r.OriginalAmount,r.AllocatedAmount,
+       CASE WHEN r.BalanceAmount<=0 THEN N'Paid' WHEN r.AllocatedAmount>0 THEN N'PartiallyPaid' WHEN r.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN N'PastDue' ELSE N'Scheduled' END,
+       DATEADD(day,10,r.DueDate),r.CreatedDateUtc,0
+FROM Billing.AgencyBillReceivable r
+WHERE r.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillInstallment x WHERE x.AgencyBillReceivableId=r.AgencyBillReceivableId AND x.InstallmentNumber=1 AND x.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillPaymentAllocation(AgencyBillPaymentAllocationId,TenantId,PaymentId,AgencyBillReceivableId,AgencyBillInstallmentId,AllocationAmount,AllocationDateUtc,StatusCode,Notes,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),p.TenantId,p.PaymentId,r.AgencyBillReceivableId,inst.AgencyBillInstallmentId,
+       CASE WHEN pa.AppliedAmount>r.OriginalAmount THEN r.OriginalAmount ELSE pa.AppliedAmount END,COALESCE(pa.AppliedDateUtc,p.CreatedDateUtc,SYSUTCDATETIME()),N'Applied',N'Synchronized from invoice payment application.',COALESCE(pa.AppliedDateUtc,p.CreatedDateUtc,SYSUTCDATETIME()),COALESCE(pa.CreatedByUserId,p.CreatedByUserId),0
+FROM Billing.Payment p
+JOIN Billing.PaymentApplication pa ON pa.PaymentId=p.PaymentId
+JOIN Billing.AgencyBillReceivable r ON r.TenantId=p.TenantId AND r.SourceInvoiceId=pa.InvoiceId AND r.IsDeleted=0
+OUTER APPLY(SELECT TOP 1 AgencyBillInstallmentId FROM Billing.AgencyBillInstallment x WHERE x.AgencyBillReceivableId=r.AgencyBillReceivableId AND x.IsDeleted=0 ORDER BY x.InstallmentNumber) inst
+WHERE p.IsDeleted=0 AND pa.AppliedAmount>0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillPaymentAllocation a WHERE a.TenantId=p.TenantId AND a.PaymentId=p.PaymentId AND a.AgencyBillReceivableId=r.AgencyBillReceivableId AND a.StatusCode=N'Applied' AND a.IsDeleted=0);
+
+INSERT INTO Billing.PremiumTrustTransaction(PremiumTrustTransactionId,TenantId,TrustAccountCode,TransactionTypeCode,AgencyBillReceivableId,PaymentId,PaymentAllocationId,TransactionDate,Amount,DirectionCode,ReferenceNumber,StatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),a.TenantId,N'PREMIUM_TRUST',N'PremiumReceipt',a.AgencyBillReceivableId,a.PaymentId,a.AgencyBillPaymentAllocationId,CONVERT(date,a.AllocationDateUtc),a.AllocationAmount,N'Credit',p.ReferenceNumber,N'Posted',a.CreatedDateUtc,a.CreatedByUserId,0
+FROM Billing.AgencyBillPaymentAllocation a
+LEFT JOIN Billing.Payment p ON p.PaymentId=a.PaymentId AND p.TenantId=a.TenantId
+WHERE a.StatusCode=N'Applied' AND a.IsDeleted=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.PremiumTrustTransaction t WHERE t.TenantId=a.TenantId AND t.PaymentAllocationId=a.AgencyBillPaymentAllocationId AND t.StatusCode=N'Posted' AND t.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillAuditEvent(AgencyBillAuditEventId,TenantId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,ActorUserId,CreatedDateUtc)
+SELECT NEWID(),r.TenantId,N'Receivable',r.AgencyBillReceivableId,N'LegacySynchronized',N'Existing invoice synchronized into the agency-bill subledger.',JSON_OBJECT(N'SourceInvoiceId':r.SourceInvoiceId,N'ReceivableNumber':r.ReceivableNumber,N'OriginalAmount':r.OriginalAmount),r.CreatedByUserId,SYSUTCDATETIME()
+FROM Billing.AgencyBillReceivable r
+WHERE r.SourceInvoiceId IS NOT NULL AND r.IsDeleted=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillAuditEvent a WHERE a.EntityTypeCode=N'Receivable' AND a.EntityId=r.AgencyBillReceivableId AND a.EventTypeCode=N'LegacySynchronized');
+""";
+
+    private const string Migration0244ClaimsServicingEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'Claims') EXEC(N'CREATE SCHEMA Claims');
+
+IF OBJECT_ID(N'Claims.ClaimOption',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimOption(ClaimOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimOption PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,OptionGroupCode NVARCHAR(80) NOT NULL,OptionCode NVARCHAR(80) NOT NULL,DisplayName NVARCHAR(160) NOT NULL,Description NVARCHAR(500) NULL,IsDefault BIT NOT NULL CONSTRAINT DF_ClaimOption_Default DEFAULT 0,IsActive BIT NOT NULL CONSTRAINT DF_ClaimOption_Active DEFAULT 1,SortOrder INT NOT NULL CONSTRAINT DF_ClaimOption_Sort DEFAULT 0,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimOption_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimOption_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimAdjuster',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimAdjuster(ClaimAdjusterId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimAdjuster PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,AdjusterTypeCode NVARCHAR(50) NOT NULL,AdjusterName NVARCHAR(200) NOT NULL,CompanyName NVARCHAR(200) NULL,EmailAddress NVARCHAR(254) NULL,PhoneNumber NVARCHAR(50) NULL,LicenseNumber NVARCHAR(80) NULL,IsPrimary BIT NOT NULL CONSTRAINT DF_ClaimAdjuster_Primary DEFAULT 0,AssignmentStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimAdjuster_Status DEFAULT N'Active',AssignedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAdjuster_Assigned DEFAULT SYSUTCDATETIME(),ReleasedDateUtc DATETIME2 NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAdjuster_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimAdjuster_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimParty',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimParty(ClaimPartyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimParty PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,ContactId UNIQUEIDENTIFIER NULL,PartyTypeCode NVARCHAR(50) NOT NULL,DisplayName NVARCHAR(200) NOT NULL,OrganizationName NVARCHAR(200) NULL,EmailAddress NVARCHAR(254) NULL,PhoneNumber NVARCHAR(50) NULL,AddressJson NVARCHAR(MAX) NULL,PreferredContactMethodCode NVARCHAR(50) NULL,IsPrimary BIT NOT NULL CONSTRAINT DF_ClaimParty_Primary DEFAULT 0,IsActive BIT NOT NULL CONSTRAINT DF_ClaimParty_Active DEFAULT 1,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimParty_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimParty_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimFinancialTransaction',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimFinancialTransaction(ClaimFinancialTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimFinancialTransaction PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,TransactionTypeCode NVARCHAR(50) NOT NULL,TransactionDate DATE NOT NULL,Amount DECIMAL(18,2) NOT NULL,CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_ClaimFinancial_Currency DEFAULT N'USD',CoverageCode NVARCHAR(80) NULL,PayeeClaimPartyId UNIQUEIDENTIFIER NULL,ReferenceNumber NVARCHAR(100) NULL,StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimFinancial_Status DEFAULT N'Posted',ReversalOfTransactionId UNIQUEIDENTIFIER NULL,Description NVARCHAR(1000) NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimFinancial_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimFinancial_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimNote',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimNote(ClaimNoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimNote PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,NoteTypeCode NVARCHAR(50) NOT NULL,Subject NVARCHAR(200) NOT NULL,NoteText NVARCHAR(MAX) NOT NULL,IsPinned BIT NOT NULL CONSTRAINT DF_ClaimNote_Pinned DEFAULT 0,IsConfidential BIT NOT NULL CONSTRAINT DF_ClaimNote_Confidential DEFAULT 0,NoteDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimNote_Date DEFAULT SYSUTCDATETIME(),CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimNote_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,CreatedByName NVARCHAR(200) NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimNote_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimTask',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimTask(ClaimTaskId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimTask PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,OpsTaskItemId UNIQUEIDENTIFIER NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,TaskTypeCode NVARCHAR(50) NOT NULL,Title NVARCHAR(200) NOT NULL,Description NVARCHAR(2000) NULL,PriorityCode NVARCHAR(50) NOT NULL,StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimTask_Status DEFAULT N'Open',AssignedToUserId UNIQUEIDENTIFIER NULL,AssignedToName NVARCHAR(200) NULL,DueDate DATE NULL,CompletedDateUtc DATETIME2 NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimTask_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimTask_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimDocumentLink',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimDocumentLink(ClaimDocumentLinkId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimDocumentLink PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,DocumentId UNIQUEIDENTIFIER NOT NULL,DocumentRoleCode NVARCHAR(80) NOT NULL,Description NVARCHAR(500) NULL,LinkedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimDocumentLink_Date DEFAULT SYSUTCDATETIME(),LinkedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimDocumentLink_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.LossRun',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.LossRun(LossRunId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LossRun PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,AccountId UNIQUEIDENTIFIER NOT NULL,PolicyId UNIQUEIDENTIFIER NULL,CarrierId UNIQUEIDENTIFIER NULL,LossRunNumber NVARCHAR(50) NOT NULL,AsOfDate DATE NOT NULL,PeriodStartDate DATE NULL,PeriodEndDate DATE NULL,SourceDocumentId UNIQUEIDENTIFIER NULL,SourceFileName NVARCHAR(260) NULL,SourceFileHash NVARCHAR(128) NULL,ImportStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LossRun_ImportStatus DEFAULT N'Pending',TotalClaimCount INT NOT NULL CONSTRAINT DF_LossRun_Count DEFAULT 0,TotalIncurred DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Incurred DEFAULT 0,TotalReserved DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Reserved DEFAULT 0,TotalPaid DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Paid DEFAULT 0,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LossRun_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_LossRun_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.LossRunLine',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.LossRunLine(LossRunLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LossRunLine PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,LossRunId UNIQUEIDENTIFIER NOT NULL,LineNumber INT NOT NULL,ClaimId UNIQUEIDENTIFIER NULL,CarrierClaimNumber NVARCHAR(80) NULL,PolicyNumber NVARCHAR(50) NULL,ClaimantName NVARCHAR(200) NULL,DateOfLoss DATE NULL,ClaimStatusCode NVARCHAR(50) NULL,LossDescription NVARCHAR(1000) NULL,IncurredAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Incurred DEFAULT 0,ReserveAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Reserve DEFAULT 0,PaidAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Paid DEFAULT 0,MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LossRunLine_Match DEFAULT N'Unmatched',ValidationErrorsJson NVARCHAR(MAX) NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LossRunLine_Created DEFAULT SYSUTCDATETIME(),IsDeleted BIT NOT NULL CONSTRAINT DF_LossRunLine_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimStatusHistory',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimStatusHistory(ClaimStatusHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimStatusHistory PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,OldStatusCode NVARCHAR(50) NULL,NewStatusCode NVARCHAR(50) NOT NULL,ReasonCode NVARCHAR(80) NULL,Notes NVARCHAR(1000) NULL,ChangedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimStatusHistory_Date DEFAULT SYSUTCDATETIME(),ChangedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimStatusHistory_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimAuditEvent',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimAuditEvent(ClaimAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimAuditEvent PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NULL,EntityTypeCode NVARCHAR(80) NOT NULL,EntityId UNIQUEIDENTIFIER NOT NULL,EventTypeCode NVARCHAR(80) NOT NULL,EventDescription NVARCHAR(1000) NOT NULL,OldValueJson NVARCHAR(MAX) NULL,NewValueJson NVARCHAR(MAX) NULL,CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ClaimAudit_Correlation DEFAULT NEWID(),ActorUserId UNIQUEIDENTIFIER NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAudit_Created DEFAULT SYSUTCDATETIME());
+END;
+
+IF COL_LENGTH(N'Claims.Claim',N'PolicyLinkStatusCode') IS NULL ALTER TABLE Claims.Claim ADD PolicyLinkStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Claim_PolicyLinkStatus DEFAULT N'Unverified';
+IF COL_LENGTH(N'Claims.Claim',N'AccountLinkStatusCode') IS NULL ALTER TABLE Claims.Claim ADD AccountLinkStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Claim_AccountLinkStatus DEFAULT N'Unverified';
+IF COL_LENGTH(N'Claims.Claim',N'CarrierId') IS NULL ALTER TABLE Claims.Claim ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Claims.Claim',N'PrimaryAdjusterId') IS NULL ALTER TABLE Claims.Claim ADD PrimaryAdjusterId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimOption') AND name=N'UX_ClaimOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_ClaimOption_Tenant_Group_Code ON Claims.ClaimOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.Claim') AND name=N'UX_Claim_Tenant_Number') CREATE UNIQUE INDEX UX_Claim_Tenant_Number ON Claims.Claim(TenantId,ClaimNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.Claim') AND name=N'IX_Claim_ServiceQueue') CREATE INDEX IX_Claim_ServiceQueue ON Claims.Claim(TenantId,Status,FollowUpDueDate,Priority) INCLUDE(AccountId,PolicyId,CarrierClaimNumber,TotalIncurred,TotalReserves,TotalPaid) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimAdjuster') AND name=N'IX_ClaimAdjuster_Claim') CREATE INDEX IX_ClaimAdjuster_Claim ON Claims.ClaimAdjuster(TenantId,ClaimId,IsPrimary,AssignmentStatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimParty') AND name=N'IX_ClaimParty_Claim') CREATE INDEX IX_ClaimParty_Claim ON Claims.ClaimParty(TenantId,ClaimId,PartyTypeCode,IsPrimary) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'UX_ClaimFinancial_SourceActivity') CREATE UNIQUE INDEX UX_ClaimFinancial_SourceActivity ON Claims.ClaimFinancialTransaction(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'IX_ClaimFinancial_Ledger') CREATE INDEX IX_ClaimFinancial_Ledger ON Claims.ClaimFinancialTransaction(TenantId,ClaimId,TransactionDate,TransactionTypeCode) INCLUDE(Amount,StatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimNote') AND name=N'UX_ClaimNote_SourceActivity') CREATE UNIQUE INDEX UX_ClaimNote_SourceActivity ON Claims.ClaimNote(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimTask') AND name=N'UX_ClaimTask_SourceActivity') CREATE UNIQUE INDEX UX_ClaimTask_SourceActivity ON Claims.ClaimTask(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimDocumentLink') AND name=N'UX_ClaimDocumentLink_Claim_Document') CREATE UNIQUE INDEX UX_ClaimDocumentLink_Claim_Document ON Claims.ClaimDocumentLink(TenantId,ClaimId,DocumentId) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRun') AND name=N'UX_LossRun_Tenant_Number') CREATE UNIQUE INDEX UX_LossRun_Tenant_Number ON Claims.LossRun(TenantId,LossRunNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRun') AND name=N'UX_LossRun_FileHash') CREATE UNIQUE INDEX UX_LossRun_FileHash ON Claims.LossRun(TenantId,SourceFileHash) WHERE SourceFileHash IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRunLine') AND name=N'UX_LossRunLine_Number') CREATE UNIQUE INDEX UX_LossRunLine_Number ON Claims.LossRunLine(LossRunId,LineNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimAuditEvent') AND name=N'IX_ClaimAudit_Entity') CREATE INDEX IX_ClaimAudit_Entity ON Claims.ClaimAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS(SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'CK_ClaimFinancial_Amount') ALTER TABLE Claims.ClaimFinancialTransaction ADD CONSTRAINT CK_ClaimFinancial_Amount CHECK(Amount>0);
+IF NOT EXISTS(SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Claims.LossRunLine') AND name=N'CK_LossRunLine_Amounts') ALTER TABLE Claims.LossRunLine ADD CONSTRAINT CK_LossRunLine_Amounts CHECK(IncurredAmount>=0 AND ReserveAmount>=0 AND PaidAmount>=0);
+
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimAdjuster_Claim') ALTER TABLE Claims.ClaimAdjuster ADD CONSTRAINT FK_ClaimAdjuster_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimParty_Claim') ALTER TABLE Claims.ClaimParty ADD CONSTRAINT FK_ClaimParty_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimFinancial_Claim') ALTER TABLE Claims.ClaimFinancialTransaction ADD CONSTRAINT FK_ClaimFinancial_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimNote_Claim') ALTER TABLE Claims.ClaimNote ADD CONSTRAINT FK_ClaimNote_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimTask_Claim') ALTER TABLE Claims.ClaimTask ADD CONSTRAINT FK_ClaimTask_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimDocumentLink_Claim') ALTER TABLE Claims.ClaimDocumentLink ADD CONSTRAINT FK_ClaimDocumentLink_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_LossRunLine_LossRun') ALTER TABLE Claims.LossRunLine ADD CONSTRAINT FK_LossRunLine_LossRun FOREIGN KEY(LossRunId) REFERENCES Claims.LossRun(LossRunId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimStatusHistory_Claim') ALTER TABLE Claims.ClaimStatusHistory ADD CONSTRAINT FK_ClaimStatusHistory_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+
+EXEC(N'CREATE OR ALTER PROCEDURE Claims.RecalculateClaimFinancials @TenantId UNIQUEIDENTIFIER,@ClaimId UNIQUEIDENTIFIER,@UserId UNIQUEIDENTIFIER=NULL AS
+BEGIN
+ SET NOCOUNT ON;
+ UPDATE c SET TotalReserves=CASE WHEN x.Reserves<0 THEN 0 ELSE x.Reserves END,TotalPaid=x.Paid,TotalIncurred=CASE WHEN x.Reserves+x.Paid-x.Recoveries<0 THEN 0 ELSE x.Reserves+x.Paid-x.Recoveries END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+ FROM Claims.Claim c CROSS APPLY(SELECT COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''ReserveSet'' THEN f.Amount WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''ReserveRelease'' THEN -f.Amount ELSE 0 END),0) Reserves,COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''Payment'' THEN f.Amount ELSE 0 END),0) Paid,COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''Recovery'' THEN f.Amount ELSE 0 END),0) Recoveries FROM Claims.ClaimFinancialTransaction f WHERE f.TenantId=@TenantId AND f.ClaimId=@ClaimId AND f.IsDeleted=0)x
+ WHERE c.TenantId=@TenantId AND c.ClaimId=@ClaimId AND c.IsDeleted=0;
+END');
+
+SELECT DISTINCT TenantId INTO #ClaimTenants FROM(SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0 UNION SELECT TenantId FROM Claims.Claim WHERE IsDeleted=0)t;
+CREATE TABLE #ClaimOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(80),DisplayName NVARCHAR(160),Description NVARCHAR(500),IsDefault BIT,SortOrder INT);
+INSERT #ClaimOptions VALUES
+(N'ClaimStatus',N'Open',N'Open',N'Claim is open for servicing.',1,10),(N'ClaimStatus',N'Acknowledged',N'Acknowledged',N'Carrier or agency acknowledged FNOL.',0,20),(N'ClaimStatus',N'UnderReview',N'Under Review',N'Claim is under coverage or liability review.',0,30),(N'ClaimStatus',N'PendingInfo',N'Pending Information',N'Additional information is required.',0,40),(N'ClaimStatus',N'InLitigation',N'In Litigation',N'Claim is in litigation.',0,50),(N'ClaimStatus',N'Subrogation',N'Subrogation',N'Subrogation recovery is active.',0,60),(N'ClaimStatus',N'Denied',N'Denied',N'Carrier denied the claim.',0,70),(N'ClaimStatus',N'Closed',N'Closed',N'Claim servicing is complete.',0,80),(N'ClaimStatus',N'Reopened',N'Reopened',N'Closed claim was reopened.',0,90),
+(N'ClaimPriority',N'Critical',N'Critical',N'Immediate claim response.',0,10),(N'ClaimPriority',N'High',N'High',N'High-priority claim response.',0,20),(N'ClaimPriority',N'Standard',N'Standard',N'Standard servicing priority.',1,30),(N'ClaimPriority',N'Low',N'Low',N'Low-priority servicing.',0,40),
+(N'PartyType',N'Claimant',N'Claimant',N'Person or organization asserting the claim.',1,10),(N'PartyType',N'Insured',N'Insured',N'Named insured or covered party.',0,20),(N'PartyType',N'Witness',N'Witness',N'Witness to the loss.',0,30),(N'PartyType',N'Attorney',N'Attorney',N'Legal representative.',0,40),(N'PartyType',N'Other',N'Other',N'Other claim contact.',0,50),
+(N'AdjusterType',N'Carrier',N'Carrier Adjuster',N'Adjuster assigned by the carrier.',1,10),(N'AdjusterType',N'Independent',N'Independent Adjuster',N'Independent adjusting firm.',0,20),(N'AdjusterType',N'Public',N'Public Adjuster',N'Adjuster representing the insured.',0,30),
+(N'FinancialTransactionType',N'ReserveSet',N'Reserve Set',N'Initial reserve or reserve increase.',1,10),(N'FinancialTransactionType',N'ReserveRelease',N'Reserve Release',N'Reserve reduction or release.',0,20),(N'FinancialTransactionType',N'Payment',N'Claim Payment',N'Indemnity or expense payment.',0,30),(N'FinancialTransactionType',N'Recovery',N'Recovery',N'Subrogation or salvage recovery.',0,40),
+(N'ActivityType',N'Communication',N'Communication',N'Carrier, claimant, or insured communication.',1,10),(N'ActivityType',N'Task',N'Task',N'Claim workflow activity.',0,20),(N'ActivityType',N'Reserve',N'Reserve',N'Reserve activity.',0,30),(N'ActivityType',N'Payment',N'Payment',N'Payment activity.',0,40),(N'ActivityType',N'Note',N'Note',N'Claim note activity.',0,50),(N'ActivityType',N'Coverage',N'Coverage',N'Coverage review activity.',0,60),(N'ActivityType',N'Legal',N'Legal',N'Legal activity.',0,70),(N'ActivityType',N'Investigation',N'Investigation',N'Investigation activity.',0,80),
+(N'LineOfBusiness',N'GeneralLiability',N'General Liability',N'General liability coverage.',1,10),(N'LineOfBusiness',N'CommercialAuto',N'Commercial Auto',N'Commercial auto coverage.',0,20),(N'LineOfBusiness',N'CommercialProperty',N'Commercial Property',N'Commercial property coverage.',0,30),(N'LineOfBusiness',N'WorkersComp',N'Workers Comp',N'Workers compensation coverage.',0,40),(N'LineOfBusiness',N'Umbrella',N'Umbrella',N'Umbrella coverage.',0,50),(N'LineOfBusiness',N'ProfessionalLiability',N'Professional Liability',N'Professional liability coverage.',0,60),(N'LineOfBusiness',N'PersonalAuto',N'Personal Auto',N'Personal auto coverage.',0,70),(N'LineOfBusiness',N'HomeDwelling',N'Home/Dwelling',N'Home and dwelling coverage.',0,80),
+(N'LossType',N'BodilyInjury',N'Bodily Injury',N'Bodily injury loss.',1,10),(N'LossType',N'PropertyDamage',N'Property Damage',N'Property damage loss.',0,20),(N'LossType',N'AutoCollision',N'Auto Collision',N'Auto collision loss.',0,30),(N'LossType',N'WorkersCompInjury',N'Workers Comp Injury',N'Workers compensation injury.',0,40),(N'LossType',N'Theft',N'Theft',N'Theft loss.',0,50),(N'LossType',N'Fire',N'Fire',N'Fire loss.',0,60),(N'LossType',N'WaterFlood',N'Water/Flood',N'Water or flood loss.',0,70),(N'LossType',N'WindHail',N'Wind/Hail',N'Wind or hail loss.',0,80),(N'LossType',N'Other',N'Other',N'Other classified loss.',0,90),
+(N'DocumentRole',N'FNOL',N'First Notice of Loss',N'FNOL form or intake evidence.',1,10),(N'DocumentRole',N'AdjusterReport',N'Adjuster Report',N'Carrier or independent adjuster report.',0,20),(N'DocumentRole',N'Photo',N'Loss Photo',N'Photographic loss evidence.',0,30),(N'DocumentRole',N'Correspondence',N'Correspondence',N'Claim correspondence.',0,40),(N'DocumentRole',N'LossRun',N'Loss Run',N'Carrier loss-run document.',0,50);
+INSERT Claims.ClaimOption(ClaimOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0 FROM #ClaimTenants t CROSS JOIN #ClaimOptions o WHERE NOT EXISTS(SELECT 1 FROM Claims.ClaimOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+EXEC(N'UPDATE c SET PolicyId=p.PolicyId,AccountId=p.AccountId,PolicyLinkStatusCode=N''Linked'',AccountLinkStatusCode=N''Linked'',ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT MIN(bp.PolicyId) PolicyId,MIN(bp.AccountId) AccountId FROM Submissions.BoundPolicy bp WHERE bp.TenantId=c.TenantId AND bp.PolicyNumber=c.PolicyNumber AND bp.IsDeleted=0 HAVING COUNT(1)=1)p
+WHERE c.IsDeleted=0 AND (c.PolicyLinkStatusCode<>N''Linked'' OR c.AccountLinkStatusCode<>N''Linked'');
+
+UPDATE c SET AccountId=a.AccountId,AccountLinkStatusCode=N''Linked'',ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT MIN(ca.AccountId) AccountId FROM Client.Account ca WHERE ca.TenantId=c.TenantId AND ca.AccountName=c.AccountName AND ca.IsDeleted=0 HAVING COUNT(1)=1)a
+WHERE c.IsDeleted=0 AND c.AccountLinkStatusCode<>N''Linked'' AND NOT EXISTS(SELECT 1 FROM Submissions.BoundPolicy bp WHERE bp.TenantId=c.TenantId AND bp.PolicyNumber=c.PolicyNumber AND bp.IsDeleted=0);');
+
+INSERT Claims.ClaimParty(ClaimPartyId,TenantId,ClaimId,ContactId,PartyTypeCode,DisplayName,EmailAddress,PhoneNumber,PreferredContactMethodCode,IsPrimary,IsActive,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,c.ClaimId,ct.ContactId,N'Claimant',c.PrimaryClaimant,ct.Email,ct.Phone,ct.PreferredContactMethod,1,1,SYSUTCDATETIME(),0
+FROM Claims.Claim c OUTER APPLY(SELECT TOP 1 ContactId,Email,Phone,PreferredContactMethod FROM Client.Contact x WHERE x.TenantId=c.TenantId AND x.AccountId=c.AccountId AND CONCAT(x.FirstName,N' ',x.LastName)=c.PrimaryClaimant AND x.IsDeleted=0 ORDER BY x.CreatedDateUtc)ct
+WHERE c.IsDeleted=0 AND NULLIF(LTRIM(RTRIM(c.PrimaryClaimant)),N'') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Claims.ClaimParty p WHERE p.ClaimId=c.ClaimId AND p.PartyTypeCode=N'Claimant' AND p.IsPrimary=1 AND p.IsDeleted=0);
+
+INSERT Claims.ClaimNote(ClaimNoteId,TenantId,ClaimId,SourceClaimActivityId,NoteTypeCode,Subject,NoteText,IsPinned,NoteDateUtc,CreatedDateUtc,CreatedByName,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,COALESCE(NULLIF(a.Category,N''),N'General'),COALESCE(NULLIF(a.Title,N''),N'Claim note'),COALESCE(NULLIF(a.Notes,N''),NULLIF(a.ActivityDescription,N''),N'Claim activity note.'),a.IsPinned,a.ActivityDate,COALESCE(a.CreatedDateUtc,a.ActivityDate),a.CreatedBy,0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0
+WHERE a.IsDeleted=0 AND a.ActivityType IN(N'Note',N'Communication',N'Claimant',N'Coverage',N'Legal',N'Investigation',N'FNOL') AND NOT EXISTS(SELECT 1 FROM Claims.ClaimNote n WHERE n.TenantId=c.TenantId AND n.SourceClaimActivityId=a.ClaimActivityId AND n.IsDeleted=0);
+
+INSERT Claims.ClaimTask(ClaimTaskId,TenantId,ClaimId,SourceClaimActivityId,TaskTypeCode,Title,Description,PriorityCode,StatusCode,AssignedToName,DueDate,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,COALESCE(NULLIF(a.Category,N''),N'FollowUp'),COALESCE(NULLIF(a.Title,N''),N'Claim follow-up'),COALESCE(NULLIF(a.Notes,N''),a.ActivityDescription),c.Priority,N'Open',a.Party,CONVERT(date,a.ActivityDate),COALESCE(a.CreatedDateUtc,a.ActivityDate),0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0 WHERE a.IsDeleted=0 AND a.ActivityType=N'Task' AND NOT EXISTS(SELECT 1 FROM Claims.ClaimTask t WHERE t.TenantId=c.TenantId AND t.SourceClaimActivityId=a.ClaimActivityId AND t.IsDeleted=0);
+
+INSERT Claims.ClaimFinancialTransaction(ClaimFinancialTransactionId,TenantId,ClaimId,SourceClaimActivityId,TransactionTypeCode,TransactionDate,Amount,CurrencyCode,ReferenceNumber,StatusCode,Description,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,CASE WHEN a.ActivityType=N'Payment' THEN N'Payment' WHEN COALESCE(a.Amount,0)>=COALESCE(a.PriorAmount,0) THEN N'ReserveSet' ELSE N'ReserveRelease' END,CONVERT(date,a.ActivityDate),ABS(COALESCE(a.Amount,0)-CASE WHEN a.ActivityType=N'Reserve' THEN COALESCE(a.PriorAmount,0) ELSE 0 END),N'USD',NULL,N'Posted',COALESCE(NULLIF(a.Notes,N''),a.Title),COALESCE(a.CreatedDateUtc,a.ActivityDate),0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0 WHERE a.IsDeleted=0 AND a.ActivityType IN(N'Reserve',N'Payment') AND COALESCE(a.Amount,0)<>CASE WHEN a.ActivityType=N'Reserve' THEN COALESCE(a.PriorAmount,0) ELSE 0 END AND NOT EXISTS(SELECT 1 FROM Claims.ClaimFinancialTransaction f WHERE f.TenantId=c.TenantId AND f.SourceClaimActivityId=a.ClaimActivityId AND f.IsDeleted=0);
+
+INSERT Claims.ClaimDocumentLink(ClaimDocumentLinkId,TenantId,ClaimId,DocumentId,DocumentRoleCode,Description,LinkedDateUtc,LinkedByUserId,IsDeleted)
+SELECT NEWID(),d.TenantId,d.EntityId,d.DocumentId,COALESCE(NULLIF(d.DocumentTypeCode,N''),N'Correspondence'),d.Description,d.CreatedDateUtc,d.CreatedByUserId,0 FROM DMS.Document d JOIN Claims.Claim c ON c.TenantId=d.TenantId AND c.ClaimId=d.EntityId AND c.IsDeleted=0 WHERE d.IsDeleted=0 AND d.EntityName IN(N'Claim',N'Claims.Claim') AND NOT EXISTS(SELECT 1 FROM Claims.ClaimDocumentLink l WHERE l.TenantId=d.TenantId AND l.ClaimId=d.EntityId AND l.DocumentId=d.DocumentId AND l.IsDeleted=0);
+
+INSERT Claims.ClaimStatusHistory(ClaimStatusHistoryId,TenantId,ClaimId,OldStatusCode,NewStatusCode,ReasonCode,Notes,ChangedDateUtc,ChangedByUserId,IsDeleted)
+SELECT NEWID(),c.TenantId,c.ClaimId,NULL,c.Status,N'LegacySynchronized',N'Baseline claim status synchronized from existing claim.',COALESCE(c.CreatedDateUtc,SYSUTCDATETIME()),c.CreatedByUserId,0 FROM Claims.Claim c WHERE c.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Claims.ClaimStatusHistory h WHERE h.ClaimId=c.ClaimId AND h.IsDeleted=0);
+
+EXEC(N'INSERT Claims.ClaimAuditEvent(ClaimAuditEventId,TenantId,ClaimId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,ActorUserId,CreatedDateUtc)
+SELECT NEWID(),c.TenantId,c.ClaimId,N''Claim'',c.ClaimId,N''LegacySynchronized'',N''Existing claim synchronized into enterprise claim servicing.'',JSON_OBJECT(N''ClaimNumber'':c.ClaimNumber,N''PolicyLinkStatus'':c.PolicyLinkStatusCode,N''AccountLinkStatus'':c.AccountLinkStatusCode),c.CreatedByUserId,SYSUTCDATETIME() FROM Claims.Claim c WHERE c.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Claims.ClaimAuditEvent a WHERE a.EntityTypeCode=N''Claim'' AND a.EntityId=c.ClaimId AND a.EventTypeCode=N''LegacySynchronized'');');
+
+UPDATE c SET TotalReserves=x.Reserves,TotalPaid=x.Paid,TotalIncurred=x.Reserves+x.Paid-x.Recoveries,ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'ReserveSet' THEN f.Amount WHEN f.TransactionTypeCode=N'ReserveRelease' THEN -f.Amount ELSE 0 END),0) Reserves,COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'Payment' THEN f.Amount ELSE 0 END),0) Paid,COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'Recovery' THEN f.Amount ELSE 0 END),0) Recoveries,COUNT(1) EntryCount FROM Claims.ClaimFinancialTransaction f WHERE f.ClaimId=c.ClaimId AND f.StatusCode=N'Posted' AND f.IsDeleted=0)x
+WHERE c.IsDeleted=0 AND x.EntryCount>0;
+
+-- Remove only the known operational examples introduced by migration 0112; reference configuration remains.
+UPDATE Claims.Claim SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND CreatedByUserId IS NULL;
+UPDATE Claims.ClaimParty SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimNote SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimTask SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimFinancialTransaction SET IsDeleted=1 WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.CatAffectedInsured SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE CatEventId IN(SELECT CatEventId FROM Claims.CatEvent WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail' AND IsDeleted=0);
+UPDATE Claims.CatEvent SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail';
 """;
 }

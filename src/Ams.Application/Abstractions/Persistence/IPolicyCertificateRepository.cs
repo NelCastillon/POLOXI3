@@ -7,7 +7,7 @@ namespace Ams.Application.Abstractions.Persistence;
 public interface IPolicyCertificateRepository
 {
     Task<PagedResult<PolicyCertificateDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? certificateType, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default);
-    Task<PolicyCertificateDto?> GetByIdAsync(Guid certificateId, CancellationToken cancellationToken = default);
+    Task<PolicyCertificateDto?> GetByIdAsync(Guid tenantId, Guid certificateId, CancellationToken cancellationToken = default);
     Task<PolicyCertificateDto?> GetByNumberAsync(Guid tenantId, string certificateNumber, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreatePolicyCertificateRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid certificateId, UpdatePolicyCertificateRequest request, CancellationToken cancellationToken = default);

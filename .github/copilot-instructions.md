@@ -29,6 +29,8 @@
 - For AMS search boxes, light mode glow can stay subtle, but dark mode search boxes should be made noticeably visible using a brighter blue-tinted surface, border, glow, icon, and placeholder styling.
 - When polishing UI in dark mode, fix white/light backgrounds and contrast/readability issues, not just decorative styling.
 - **When fixing UI/CSS issues, prefer removing the source CSS/markup that causes the problem instead of adding compensating overrides; if a style is not working because of overlap, remove the conflicting old CSS first.** User strongly prefers removal-based fixes over adding overrides; avoid using stronger CSS overrides like !important to compensate for conflicts, and remove/narrow conflicting CSS at the source instead.
+- Implement enterprise features using database-backed data only: no mock or hardcoded operational data; add or update tables and configuration/reference seeds as needed; synchronize all existing data into the authoritative model.
+- When adding platform pages or related workflows, also add discoverable navigation entries in NavSidebar under the correct functional section, including relevant portal and hub-center links.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
@@ -106,3 +108,12 @@
 - Background workers that dispatch quote or bind requests must be idempotent and retry-safe. Use request IDs, external transaction IDs, correlation IDs, retry counts, and status checks to prevent duplicate carrier submissions, duplicate quotes, duplicate bind confirmations, or duplicate policies.
 - Blazor UI should expose workflow actions based on backend-calculated eligibility, not duplicated client-side rules. Examples: enable `Request Quote` only when validation passes or missing items can be displayed; enable `Generate Proposal` only for usable approved quotes; enable `Request Bind` only when a selected quote and customer authorization exist; enable `Confirm Bind` only for submitted/acknowledged/reviewing bind requests.
 - Never delete unsuccessful markets, declined quote requests, rejected quotes, or superseded revisions as part of normal workflow. Preserve them for history, audit, remarketing, and E&O traceability.
+
+## Account 360 Guidelines
+- Account 360 must remain customer-level and include legal name/DBA, contacts, addresses and locations, owners/officers, communication preferences, service team and producer assignments, cross-policy account documents, activities/notes/tasks, and aggregated policies, claims, submissions, and opportunities.
+
+## Document Generation Guidelines
+- Certificate/EOI and ACORD/document-generation capabilities must be complete enterprise implementations using synchronized database-backed data, versioned templates/documents, and no mock or hardcoded UI data. Existing schema should be updated where possible; add and seed normalized tables only where needed.
+
+## General Guidelines
+- Enterprise implementations must use authoritative database-backed operational data only, with no mock, fabricated, randomized, or hardcoded operational records; add idempotent tables/configuration seeds when needed, update existing records, and synchronize all source data.

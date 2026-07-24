@@ -1021,45 +1021,6 @@ WHERE PortalAdminRecordId = @Id AND TenantId = @TenantId AND Kind = N'PortalActi
     public async Task<IActionResult> GetMyAccount([FromQuery] Guid tenantId, CancellationToken ct)
     {
         await EnsurePortalMyAccountProfileDataAsync(tenantId, ct);
-        const string sql = @"
-SELECT TOP 1 MyAccountProfileId AS Id,
-       TenantId,
-       AgencyName,
-       AdminName,
-       AdminEmail,
-       AdminRole,
-       AdminPhone,
-       TimeZone,
-       Locale,
-       PlanName,
-       PlanStatus,
-       RenewalDateUtc,
-       PortalUsers,
-       ActivePortalUsers,
-       PendingInvites,
-       OpenRequests,
-       UrgentRequests,
-       SharedDocuments,
-       StorageUsedGb,
-       StorageLimitGb,
-       MonthlyLoginCount,
-       MobileInstalls,
-       ChatSessions30d,
-       ApiCalls30d,
-       LastPortalPublishUtc,
-       LastAdminLoginUtc,
-       MfaEnabled,
-       SsoEnabled,
-       BrandingPublished,
-       MobileAppPublished,
-       ChatEnabled,
-       SupportEmail,
-       SupportPhone,
-       PortalDomain,
-       HealthJson,
-       ActivityJson
-FROM Portal.MyAccountProfile
-WHERE TenantId = @TenantId AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var account = await GetMyAccountDtoAsync(cn, tenantId, ct);
         return account is null ? NotFound() : Ok(account);

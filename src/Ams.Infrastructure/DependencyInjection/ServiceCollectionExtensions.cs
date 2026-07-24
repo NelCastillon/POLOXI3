@@ -1,6 +1,7 @@
 using Ams.Application;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Services;
 using Ams.Infrastructure.Configuration;
 using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
@@ -369,6 +370,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionDisputeRepository, CommissionDisputeRepository>();
         services.AddScoped<ICommissionPayoutStatementRepository, CommissionPayoutStatementRepository>();
         services.AddScoped<ICommissionAccrualEntryRepository, CommissionAccrualEntryRepository>();
+        services.AddScoped<ICommissionAccountingRepository, CommissionAccountingRepository>();
 
         services.AddScoped<ICommissionPlanVersionService, CommissionPlanVersionService>();
         services.AddScoped<ICommissionSplitRuleService, CommissionSplitRuleService>();
@@ -381,6 +383,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionDisputeService, CommissionDisputeService>();
         services.AddScoped<ICommissionPayoutStatementService, CommissionPayoutStatementService>();
         services.AddScoped<ICommissionAccrualEntryService, CommissionAccrualEntryService>();
+        services.AddScoped<ICommissionAccountingService, CommissionAccountingService>();
 
         // ── Compliance engines ───────────────────────────────────────────────
         services.AddScoped<IPolicyDocumentRepository, PolicyDocumentRepository>();
@@ -459,6 +462,8 @@ public static class ServiceCollectionExtensions
         // ── Policy Certificates Workflow ─────────────────────────────
         services.AddScoped<IPolicyCertificateRepository, PolicyCertificateRepository>();
         services.AddScoped<IPolicyCertificateService, PolicyCertificateService>();
+        services.AddScoped<ICertificateWorkflowRepository, CertificateWorkflowRepository>();
+        services.AddScoped<ICertificateWorkflowService, CertificateWorkflowService>();
 
         // ── Documents — E-Sign (Epic 11) ─────────────────────────────
         services.AddScoped<IESignRepository, ESignRepository>();

@@ -1,6 +1,7 @@
 using Ams.Infrastructure.DependencyInjection;
 using Ams.Worker.Automation;
 using Ams.Worker.Automation.Executors;
+using Ams.Worker.Certificates;
 using Ams.Worker.Payments;
 using Ams.Worker.Submissions;
 
@@ -22,6 +23,7 @@ builder.Services.AddHostedService<PaymentPlatformWorkerService>();
 builder.Services.AddHostedService<SubmitToMarketDispatchWorkerService>();
 builder.Services.AddHostedService<QuoteRequestFollowUpWorkerService>();
 builder.Services.AddHostedService<ApiRatingConnectorWorkerService>();
+builder.Services.AddHostedService<CertificateRenewalWorkerService>();
 
 var host = builder.Build();
 host.Run();

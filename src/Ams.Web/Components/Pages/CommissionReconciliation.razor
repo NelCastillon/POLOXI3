@@ -1,0 +1,172 @@
+@page "/commissions/reconciliation"
+@using System.Globalization
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+
+<PageTitle>Commission Reconciliation</PageTitle>
+
+<div class="commcfg-hero">
+    <div>
+        <span class="commcfg-eyebrow">Commission accounting</span>
+        <h2>Carrier Statement Reconciliation</h2>
+        <p>Import carrier statements, compare expected versus received commission, resolve exceptions, and generate producer payables from approved reconciliations.</p>
+    </div>
+    <div class="commcfg-hero-grid">
+        <button class="commcfg-quick-action" @onclick="SynchronizeAsync" disabled="@_busy"><i class="bi bi-arrow-repeat"></i> Sync expectations</button>
+        <button class="commcfg-quick-action" @onclick="GeneratePayablesAsync" disabled="@_busy"><i class="bi bi-cash-stack"></i> Generate payables</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="alert @(_error ? "alert-danger" : "alert-success")" role="alert">@_message</div>
+}
+
+@if (_workspace is not null)
+{
+    <section class="commcfg-kpi-grid" aria-label="Reconciliation metrics">
+        <div class="commcfg-kpi-card"><span class="commcfg-kpi-icon"><i class="bi bi-calculator"></i></span><span><strong>@Money(_workspace.Summary.TotalExpected)</strong><span>Expected</span><small>Policy commission receivables</small></span></div>
+        <div class="commcfg-kpi-card"><span class="commcfg-kpi-icon"><i class="bi bi-bank"></i></span><span><strong>@Money(_workspace.Summary.TotalReceived)</strong><span>Received</span><small>Carrier statement receipts</small></span></div>
+        <div class="commcfg-kpi-card"><span class="commcfg-kpi-icon"><i class="bi bi-arrow-left-right"></i></span><span><strong>@Money(_workspace.Summary.OpenVariance)</strong><span>Open variance</span><small>Expected less reconciled</small></span></div>
+        <div class="commcfg-kpi-card"><span class="commcfg-kpi-icon"><i class="bi bi-exclamation-triangle"></i></span><span><strong>@_workspace.Summary.OpenExceptionCount</strong><span>Exceptions</span><small>@_workspace.Summary.UnmatchedLineCount unmatched lines</small></span></div>
+        <div class="commcfg-kpi-card"><span class="commcfg-kpi-icon"><i class="bi bi-person-check"></i></span><span><strong>@Money(_workspace.Summary.PendingPayables)</strong><span>Pending payables</span><small>Awaiting accounting approval</small></span></div>
+    </section>
+}
+
+<section class="enterprise-grid-card mb-3">
+    <div class="sr-grid-toolbar"><div><strong>Import carrier statement</strong><span class="sr-filter-note">CSV data is validated and stored as immutable statement lines.</span></div></div>
+    <div class="p-3 row g-3">
+        <div class="col-md-3"><label class="form-label">Statement number</label><input class="form-control" @bind="_statementNumber" /></div>
+        <div class="col-md-3"><label class="form-label">Statement date</label><InputDate class="form-control" @bind-Value="_statementDate" /></div>
+        <div class="col-md-3"><label class="form-label">Billing type</label><select class="form-select" @bind="_billingType"><option value="">Select</option>@foreach (var option in Options("BillingType")){<option value="@option.OptionCode">@option.DisplayName</option>}</select></div>
+        <div class="col-md-3"><label class="form-label">Carrier statement CSV</label><InputFile class="form-control" OnChange="ReadFileAsync" accept=".csv,text/csv" /></div>
+        <div class="col-12"><button class="um-btn um-btn-primary" @onclick="ImportAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_csvContent))"><i class="bi bi-upload"></i> Import statement</button></div>
+    </div>
+</section>
+
+<section class="enterprise-grid-card mb-3">
+    <div class="sr-grid-toolbar"><div><strong>Carrier statements</strong><span class="sr-filter-note">Select Match to run deterministic policy, amount, and date matching.</span></div></div>
+    <div class="sr-table-scroll"><table class="sr-table"><thead><tr><th>Statement</th><th>Date</th><th>Status</th><th class="rl-preview-num">Received</th><th>Lines</th><th>Exceptions</th><th></th></tr></thead><tbody>
+        @foreach (var statement in _workspace?.Statements ?? [])
+        {
+            <tr @onclick="() => SelectStatementAsync(statement.CarrierCommissionStatementId)"><td><strong>@statement.StatementNumber</strong><small class="d-block">@statement.SourceFileName</small></td><td>@statement.StatementDate.ToString("d", CultureInfo.CurrentCulture)</td><td><span class="status-chip">@statement.ReconciliationStatusCode</span></td><td class="rl-preview-num">@Money(statement.NetReceivedAmount)</td><td>@statement.MatchedLineCount / @statement.LineCount</td><td>@statement.ExceptionCount</td><td><button class="um-btn um-btn-primary um-btn-sm" @onclick:stopPropagation="true" @onclick="() => MatchAsync(statement.CarrierCommissionStatementId)" disabled="@_busy">Match</button></td></tr>
+        }
+    </tbody></table></div>
+</section>
+
+@if (_selectedStatementId.HasValue)
+{
+    <section class="enterprise-grid-card mb-3">
+        <div class="sr-grid-toolbar"><div><strong>Selected statement lines</strong><span class="sr-filter-note">Validation and match status are shown for accounting review.</span></div></div>
+        <div class="sr-table-scroll"><table class="sr-table"><thead><tr><th>Line</th><th>Policy</th><th>Type</th><th class="rl-preview-num">Premium</th><th class="rl-preview-num">Net</th><th>Status</th><th>Validation</th></tr></thead><tbody>
+        @foreach (var line in _statementLines)
+        {
+            <tr><td>@line.LineNumber</td><td>@line.PolicyNumber<small class="d-block">@line.InsuredName</small></td><td>@line.TransactionTypeCode</td><td class="rl-preview-num">@Money(line.PremiumAmount)</td><td class="rl-preview-num">@Money(line.NetAmount)</td><td><span class="status-chip">@line.MatchStatusCode</span></td><td>@(string.IsNullOrWhiteSpace(line.ValidationErrorsJson) ? "Valid" : line.ValidationErrorsJson)</td></tr>
+        }
+        </tbody></table></div>
+    </section>
+}
+
+<section class="enterprise-grid-card mb-3">
+    <div class="sr-grid-toolbar"><div><strong>Approval queues</strong><span class="sr-filter-note">Approve proposed matches before generating payables, then approve calculated payables for payout.</span></div></div>
+    <div class="sr-table-scroll"><table class="sr-table"><thead><tr><th>Item</th><th>Method / Payee</th><th class="rl-preview-num">Amount</th><th class="rl-preview-num">Variance</th><th>Status</th><th></th></tr></thead><tbody>
+    @foreach (var match in (_workspace?.Matches ?? []).Where(x => x.StatusCode == "Proposed"))
+    {
+        <tr><td>Reconciliation match</td><td>@match.MatchMethodCode</td><td class="rl-preview-num">@Money(match.MatchedAmount)</td><td class="rl-preview-num">@Money(match.VarianceAmount)</td><td>@match.StatusCode</td><td><button class="um-btn um-btn-primary um-btn-sm" @onclick="() => ApproveMatchAsync(match.CommissionReconciliationMatchId)" disabled="@_busy">Approve match</button></td></tr>
+    }
+    @foreach (var payable in (_workspace?.Payables ?? []).Where(x => x.StatusCode == "PendingApproval"))
+    {
+        <tr><td>@payable.PayableNumber</td><td>@payable.PayeeName</td><td class="rl-preview-num">@Money(payable.NetPayableAmount)</td><td class="rl-preview-num">-</td><td>@payable.StatusCode</td><td><button class="um-btn um-btn-primary um-btn-sm" @onclick="() => ApprovePayableAsync(payable.CommissionPayableId)" disabled="@_busy">Approve payable</button></td></tr>
+    }
+    </tbody></table></div>
+</section>
+
+<section class="commcfg-layout">
+    <div class="enterprise-grid-card">
+        <div class="sr-grid-toolbar"><div><strong>Expected versus received</strong><span class="sr-filter-note">@(_workspace?.ExpectedReceivables.Count ?? 0) receivable(s)</span></div></div>
+        <div class="sr-table-scroll"><table class="sr-table"><thead><tr><th>Policy / account</th><th>Billing</th><th>Period</th><th class="rl-preview-num">Expected</th><th class="rl-preview-num">Received</th><th class="rl-preview-num">Variance</th><th>Status</th></tr></thead><tbody>
+            @foreach (var item in _workspace?.ExpectedReceivables ?? [])
+            {
+                <tr><td><strong>@item.PolicyNumber</strong><small class="d-block">@item.AccountName · @item.CarrierName</small></td><td>@item.BillingTypeCode</td><td>@item.StatementPeriodEnd.ToString("MMM yyyy", CultureInfo.CurrentCulture)</td><td class="rl-preview-num">@Money(item.ExpectedCommissionAmount)</td><td class="rl-preview-num">@Money(item.ReceivedCommissionAmount)</td><td class="rl-preview-num">@Money(item.ExpectedCommissionAmount-item.ReconciledCommissionAmount)</td><td><span class="status-chip">@item.StatusCode</span></td></tr>
+            }
+        </tbody></table></div>
+    </div>
+    <aside class="commcfg-admin-panel">
+        <div class="commcfg-detail-header"><div><span class="commcfg-eyebrow">Accounting work queue</span><h3>Open exceptions</h3></div></div>
+        @foreach (var item in (_workspace?.Exceptions ?? []).Where(x => x.StatusCode == "Open"))
+        {
+            <div class="commcfg-policy-card mb-2"><strong>@item.ExceptionNumber · @item.ExceptionTypeCode</strong><span>@item.Description</span><small>Variance: @(item.VarianceAmount.HasValue ? Money(item.VarianceAmount.Value) : "Not calculated")</small><button class="um-btn um-btn-ghost um-btn-sm mt-2" @onclick="() => ResolveAsync(item.CommissionReconciliationExceptionId)" disabled="@_busy">Resolve reviewed</button></div>
+        }
+    </aside>
+</section>
+
+@code {
+    private Guid _tenantId;
+    private CommissionAccountingWorkspaceDto? _workspace;
+    private bool _busy;
+    private bool _error;
+    private string? _message;
+    private string _statementNumber = string.Empty;
+    private DateOnly _statementDate = DateOnly.FromDateTime(DateTime.Today);
+    private string _billingType = string.Empty;
+    private string _csvContent = string.Empty;
+    private string _fileName = string.Empty;
+    private Guid? _selectedStatementId;
+    private IReadOnlyList<CarrierCommissionStatementLineDto> _statementLines = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tenantId = (await CurrentUser.RequireAsync()).TenantId;
+        await LoadAsync();
+    }
+
+    private IEnumerable<CommissionAccountingOptionDto> Options(string group) => _workspace?.Options.Where(x => x.OptionGroupCode == group) ?? [];
+    private async Task LoadAsync() => _workspace = await Api.GetCommissionAccountingWorkspaceAsync(_tenantId);
+
+    private async Task ReadFileAsync(InputFileChangeEventArgs args)
+    {
+        _fileName = args.File.Name;
+        using var reader = new StreamReader(args.File.OpenReadStream(10 * 1024 * 1024));
+        _csvContent = await reader.ReadToEndAsync();
+    }
+
+    private async Task ImportAsync() => await ExecuteAsync(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(_statementNumber)) throw new InvalidOperationException("Statement number is required.");
+        var result = await Api.ImportCarrierCommissionStatementAsync(new(_tenantId, null, _statementNumber.Trim(), _statementDate, null, null, string.IsNullOrWhiteSpace(_billingType) ? null : _billingType, "USD", _fileName, _csvContent, null, null));
+        _message = $"Imported {result?.ImportedLineCount ?? 0} statement lines.";
+        _csvContent = string.Empty;
+        await LoadAsync();
+    });
+
+    private async Task SelectStatementAsync(Guid statementId)
+    {
+        _selectedStatementId = statementId;
+        _statementLines = await Api.GetCarrierCommissionStatementLinesAsync(_tenantId, statementId) ?? [];
+    }
+
+    private async Task ApproveMatchAsync(Guid id) => await ExecuteAsync(async () => { await Api.ApproveCommissionMatchAsync(id, new(_tenantId, id, "Approved in commission reconciliation workspace.", null)); _message = "Reconciliation match approved."; await LoadAsync(); });
+    private async Task ApprovePayableAsync(Guid id) => await ExecuteAsync(async () => { await Api.ApproveCommissionPayableAsync(id, new(_tenantId, id, null)); _message = "Commission payable approved."; await LoadAsync(); });
+
+    private async Task MatchAsync(Guid statementId) => await ExecuteAsync(async () =>
+    {
+        var result = await Api.RunCommissionMatchingAsync(statementId, new(_tenantId, statementId, 1.00m, 45, null));
+        _message = $"Matched {(result?.ExactMatches ?? 0) + (result?.ToleranceMatches ?? 0)} line(s); {result?.UnmatchedLines ?? 0} remain unmatched.";
+        await LoadAsync();
+    });
+
+    private async Task SynchronizeAsync() => await ExecuteAsync(async () => { await Api.SynchronizeCommissionExpectedReceivablesAsync(new(_tenantId, null, null, null)); _message = "Expected receivables synchronized."; await LoadAsync(); });
+    private async Task GeneratePayablesAsync() => await ExecuteAsync(async () => { var ids = await Api.GenerateCommissionPayablesAsync(new(_tenantId, DateOnly.FromDateTime(DateTime.Today), null, "USD", null)); _message = $"Generated {ids?.Count ?? 0} payable(s) from approved matches and persisted allocations."; await LoadAsync(); });
+    private async Task ResolveAsync(Guid id) => await ExecuteAsync(async () => { await Api.ResolveCommissionReconciliationExceptionAsync(id, new(_tenantId, id, "Reviewed and resolved in the commission reconciliation workspace.", null)); _message = "Exception resolved."; await LoadAsync(); });
+
+    private async Task ExecuteAsync(Func<Task> action)
+    {
+        _busy = true; _error = false; _message = null;
+        try { await action(); }
+        catch (Exception ex) { _error = true; _message = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private static string Money(decimal value) => value.ToString("C2", CultureInfo.CurrentCulture);
+}

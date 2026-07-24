@@ -101,12 +101,13 @@
                     @if (_step == 0)
                     {
                         <section class="fnol-form-section">
-                            <div class="fnol-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Policy identity</strong><span>No policy lookup API is available, so enter verified policy details from the source policy record.</span></div></div>
+                            <div class="fnol-form-banner"><i class="bi bi-shield-check" aria-hidden="true"></i><div><strong>Authoritative policy identity</strong><span>Select a bound policy; insured and carrier identifiers are synchronized from the policy register.</span></div></div>
                             <div class="fnol-form-grid">
-                                <div class="fnol-field"><label>Policy Number <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.PolicyNumber" placeholder="Policy number" /></div>
-                                <div class="fnol-field"><label>Insured / Account <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.AccountName" placeholder="Named insured" /></div>
+                                <div class="fnol-field fnol-field-wide"><label>Bound Policy <span>*</span></label><InputSelect class="fnol-input" @bind-Value="_form.PolicyId" @bind-Value:after="ApplySelectedPolicy"><option value="@Guid.Empty">Select a bound policy</option>@foreach (var policy in _policies.OrderBy(p => p.AccountName).ThenBy(p => p.PolicyNumber)){<option value="@policy.PolicyId">@policy.PolicyNumber - @policy.AccountName - @policy.CarrierName</option>}</InputSelect></div>
+                                <div class="fnol-field"><label>Policy Number</label><InputText class="fnol-input" @bind-Value="_form.PolicyNumber" readonly /></div>
+                                <div class="fnol-field"><label>Insured / Account</label><InputText class="fnol-input" @bind-Value="_form.AccountName" readonly /></div>
                                 <div class="fnol-field"><label>Line of Business <span>*</span></label><InputSelect class="fnol-input" @bind-Value="_form.Lob"><option value="">Select LOB</option>@foreach (var lob in _lobs) { <option value="@lob">@lob</option> }</InputSelect></div>
-                                <div class="fnol-field"><label>Carrier <span>*</span></label><InputText class="fnol-input" @bind-Value="_form.Carrier" placeholder="Carrier" /></div>
+                                <div class="fnol-field"><label>Carrier</label><InputText class="fnol-input" @bind-Value="_form.Carrier" readonly /></div>
                                 <div class="fnol-field"><label>Policy Effective</label><InputDate class="fnol-input" @bind-Value="_form.PolicyEffectiveDate" /></div>
                                 <div class="fnol-field"><label>Policy Expiration</label><InputDate class="fnol-input" @bind-Value="_form.PolicyExpirationDate" /></div>
                             </div>
@@ -239,16 +240,18 @@
     private string? _loadError;
     private string _assignedClaimNumber = string.Empty;
     private FnolForm _form = new();
+    private List<PolicyRegisterDto> _policies = [];
+    private List<ClaimOptionDto> _options = [];
     private readonly List<FnolToast> _toasts = [];
 
     private readonly StepDef[] _steps = [new("Policy", "Policy Identity", "bi-shield-check"), new("Loss", "Loss Details", "bi-exclamation-triangle"), new("Claimant", "Claimant", "bi-people"), new("Coverage", "Coverage Review", "bi-shield-half"), new("Submit", "Assignment & Submit", "bi-person-gear")];
-    private readonly string[] _lobs = ["General Liability", "Commercial Auto", "Commercial Property", "Workers Comp", "Umbrella", "Professional Liab.", "Home/Dwelling", "Personal Auto"];
-    private readonly string[] _lossTypes = ["Bodily Injury", "Property Damage", "Auto Collision", "Auto Comprehensive", "Workers Comp Injury", "Product Liability", "Professional Error", "Theft", "Fire", "Water/Flood", "Wind/Hail", "Slip & Fall", "Equipment Breakdown", "Other"];
+    private IEnumerable<string> _lobs => OptionValues("LineOfBusiness");
+    private IEnumerable<string> _lossTypes => OptionValues("LossType");
     private readonly string[] _causesOfLoss = ["Slip & Fall", "Vehicle Collision", "Fire", "Water Damage", "Theft", "Wind/Hail", "Employee Injury", "Product Defect", "Professional Negligence", "Other"];
     private readonly string[] _injuryTypes = ["Bodily Injury", "Property Damage", "Medical Expenses", "Lost Wages", "Vehicle Damage", "Building Damage", "Equipment Loss", "Wrongful Death", "Unknown"];
     private readonly string[] _litigationStatuses = ["No", "Possible", "Attorney Retained", "Suit Filed"];
     private readonly string[] _thirdPartyOptions = ["No", "Yes - Known", "Yes - Unknown"];
-    private readonly string[] _priorities = ["Standard", "High", "Critical"];
+    private IEnumerable<string> _priorities => OptionValues("ClaimPriority");
     private readonly string[] _usStates = ["", "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"];
 
     private string StepTitle => _steps[_step].Title;
@@ -277,6 +280,9 @@
             _tenantId = _userContext.TenantId;
             _tenantAdminUserId = _userContext.UserId;
             _form.AssignedHandler = _userContext.TenantName ?? "Tenant user";
+            _options = await Api.GetClaimOptionsAsync(_tenantId) ?? [];
+            var policies = await Api.SearchPolicyRegisterAsync(_tenantId, pageSize: 500);
+            _policies = (policies?.Items ?? []).Where(p => p.PolicyId != Guid.Empty && p.AccountId != Guid.Empty && p.CarrierId != Guid.Empty).ToList();
         }
         catch (Exception ex)
         {
@@ -288,6 +294,13 @@
     private void PrevStep() { if (_step > 0) _step--; }
     private void GoToStep(int index) { if (index >= 0 && index < _steps.Length) _step = index; }
     private void ResetForm() { _form = new FnolForm { AssignedHandler = _userContext?.TenantName ?? "Tenant user" }; _step = 0; }
+    private IEnumerable<string> OptionValues(string group) => _options.Where(x => string.Equals(x.OptionGroupCode, group, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SortOrder).Select(x => x.DisplayName);
+    private void ApplySelectedPolicy()
+    {
+        var policy = _policies.FirstOrDefault(p => p.PolicyId == _form.PolicyId);
+        if (policy is null) return;
+        _form.AccountId = policy.AccountId; _form.CarrierId = policy.CarrierId; _form.PolicyNumber = policy.PolicyNumber; _form.AccountName = policy.AccountName; _form.Carrier = policy.CarrierName; _form.Lob = policy.LineOfBusiness; _form.PolicyEffectiveDate = policy.EffectiveDate; _form.PolicyExpirationDate = policy.ExpirationDate; _form.AssignedHandler = policy.AssignedToUserName ?? "Unassigned";
+    }
     private void StartAnother() { _showConfirm = false; ResetForm(); }
     private void CloseConfirm() => _showConfirm = false;
 
@@ -300,6 +313,9 @@
             var id = await Api.CreateClaimAsync(new CreateClaimRequest
             {
                 TenantId = _tenantId,
+                PolicyId = _form.PolicyId,
+                AccountId = _form.AccountId,
+                CarrierId = _form.CarrierId,
                 PolicyNumber = Normalize(_form.PolicyNumber) ?? string.Empty,
                 AccountName = Normalize(_form.AccountName) ?? string.Empty,
                 Lob = _form.Lob,
@@ -321,9 +337,13 @@
                 IsLitigation = _form.IsLitigation,
                 IsDisputed = _form.IsDisputed,
                 HasSubrogation = _form.HasSubrogation,
+                CarrierClaimNumber = Normalize(_form.CarrierClaimNumber),
+                ReportedBy = Normalize(_form.ReportedBy),
+                ClaimantEmail = Normalize(_form.PrimaryClaimantEmail),
+                ClaimantPhone = Normalize(_form.PrimaryClaimantPhone),
                 CreatedByUserId = _tenantAdminUserId
             });
-            var created = await Api.GetClaimDetailAsync(id);
+            var created = await Api.GetClaimDetailAsync(_tenantId, id);
             _assignedClaimNumber = created?.Claim.ClaimNumber ?? "Created";
             _showConfirm = true;
             await ShowToast($"Claim {_assignedClaimNumber} created.");
@@ -404,6 +424,9 @@
 
     private sealed class FnolForm
     {
+        [Required] public Guid PolicyId { get; set; }
+        public Guid AccountId { get; set; }
+        public Guid CarrierId { get; set; }
         [Required, StringLength(50)] public string PolicyNumber { get; set; } = string.Empty;
         [Required, StringLength(160)] public string AccountName { get; set; } = string.Empty;
         [Required, StringLength(80)] public string Lob { get; set; } = string.Empty;

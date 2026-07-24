@@ -24,81 +24,17 @@
 
 <EnterpriseDocumentPreview @ref="_documentPreview" />
 
-@if (_showUpload)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseUpload">
-        <div class="mt-modal dh-action-modal" role="dialog" aria-modal="true" aria-labelledby="dh-upload-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-upload" aria-hidden="true"></i>
-                <span id="dh-upload-title">Upload Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseUpload" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
-            </div>
-            <EditForm Model="_uploadForm" OnValidSubmit="SubmitUploadAsync" OnInvalidSubmit="NotifyValidationAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="dh-modal-intro">
-                        <span class="dh-modal-chip"><i class="bi bi-folder-check" aria-hidden="true"></i> Enterprise repository</span>
-                        <p>Upload, classify, retain, and audit tenant documents through the governed document workflow.</p>
-                    </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Document File <span class="text-danger">*</span></label>
-                            <InputFile OnChange="OnUploadFileChanged" />
-                            @if (_uploadFile is null && _uploadAttempted)
-                            {
-                                <div class="text-danger">A document file is required.</div>
-                            }
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>File Name <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.FileName" />
-                        </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_uploadForm.CategoryCode">
-                                @foreach (var category in UploadCategories)
-                                {
-                                    <option value="@category.Code">@category.Label</option>
-                                }
-                            </InputSelect>
-                        </div>
-                        <div class="um-field">
-                            <label>Document Type <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.DocumentTypeCode" />
-                        </div>
-                        <div class="um-field">
-                            <label>Linked Entity</label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.EntityName" placeholder="Account, Policy, Claim..." />
-                        </div>
-                        <div class="um-field">
-                            <label>Retention Date</label>
-                            <InputDate class="form-control" @bind-Value="_uploadForm.RetentionDate" />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Description</label>
-                            <InputTextArea class="form-control" rows="3" @bind-Value="_uploadForm.Description" />
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Tags</label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.Tags" placeholder="policy, certificate, renewal" />
-                        </div>
-                        <div class="um-field">
-                            <label>Uploaded By</label>
-                            <InputText class="form-control" @bind-Value="_uploadForm.UploadedByName" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseUpload" disabled="@_busy">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
-                        @if (_busy) { <span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span> }
-                        Upload Document
-                    </button>
-                </div>
-            </EditForm>
-        </div>
-    </div>
-}
+<EnterpriseDocumentUpload @bind-IsOpen="_showUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_tenantAdminUserId"
+                          Title="Upload Document"
+                          IntroText="Upload, classify, retain, and audit tenant documents through the governed document workflow."
+                          DefaultDocumentTypeCode="General"
+                          DefaultCategoryCode="Other"
+                          DefaultRetentionDate="@DateOnly.FromDateTime(DateTime.Today.AddYears(7))"
+                          AllowEntityNameEntry="true"
+                          OnUploaded="HandleDocumentUploadedAsync"
+                          OnUploadFailed="HandleDocumentUploadFailed" />
 
 @if (_showMetadata && _selected is not null)
 {
@@ -605,7 +541,6 @@
     private bool _showShareDialog;
     private bool _showRename;
     private bool _shareLinksVisible;
-    private bool _uploadAttempted;
     private bool _versionAttempted;
     private string _toastMessage = string.Empty;
     private string _toastKind = "success";
@@ -636,9 +571,7 @@
     private DocumentDto? _confirmTarget;
     private DocumentShareLinkDto? _revokeTarget;
     private EnterpriseDocumentPreview? _documentPreview;
-    private IBrowserFile? _uploadFile;
     private IBrowserFile? _versionFile;
-    private UploadFormModel _uploadForm = new();
     private MetadataFormModel _metadataForm = new();
     private VersionFormModel _versionForm = new();
     private ShareFormModel _shareForm = new();
@@ -689,8 +622,6 @@
         new("Contract", "Contract"),
         new("Other", "Other")
     ];
-
-    private static IEnumerable<CategoryOption> UploadCategories => Categories.Where(c => !string.IsNullOrEmpty(c.Code));
 
     protected override async Task OnInitializedAsync()
     {
@@ -851,64 +782,18 @@
 
     private void OpenUpload()
     {
-        _uploadAttempted = false;
-        _uploadFile = null;
-        _uploadForm = new UploadFormModel { CategoryCode = "Other", DocumentTypeCode = "General", RetentionDate = DateOnly.FromDateTime(DateTime.Today.AddYears(7)) };
         _showUpload = true;
     }
 
-    private void CloseUpload() => _showUpload = false;
-
-    private async Task SubmitUploadAsync()
+    private async Task HandleDocumentUploadedAsync(Guid id)
     {
-        _uploadAttempted = true;
-        if (_uploadFile is null)
-        {
-            ShowToast("A document file is required.", "danger");
-            return;
-        }
-
-        _busy = true;
-        try
-        {
-            await using var stream = _uploadFile.OpenReadStream(104_857_600);
-            var id = await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
-            {
-                TenantId = _tenantId,
-                DocumentTypeCode = _uploadForm.DocumentTypeCode,
-                CategoryCode = _uploadForm.CategoryCode,
-                FileName = _uploadForm.FileName,
-                OriginalFileName = _uploadFile.Name,
-                EntityName = _uploadForm.EntityName,
-                Description = _uploadForm.Description,
-                Tags = _uploadForm.Tags,
-                RetentionDate = _uploadForm.RetentionDate,
-                UploadedByName = _uploadForm.UploadedByName,
-                CreatedByUserId = _tenantAdminUserId,
-                Content = stream
-            });
-            _showUpload = false;
-            ShowToast("Document uploaded successfully.");
-            await LoadAsync();
-            var uploaded = _rows.FirstOrDefault(r => r.DocumentId == id);
-            if (uploaded is not null) await OpenDetailAsync(uploaded);
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Upload failed: {ex.Message}", "danger");
-        }
-        finally
-        {
-            _busy = false;
-        }
+        ShowToast("Document uploaded successfully.");
+        await LoadAsync();
+        var uploaded = _rows.FirstOrDefault(r => r.DocumentId == id);
+        if (uploaded is not null) await OpenDetailAsync(uploaded);
     }
 
-    private void OnUploadFileChanged(InputFileChangeEventArgs args)
-    {
-        _uploadFile = args.File;
-        if (string.IsNullOrWhiteSpace(_uploadForm.FileName)) _uploadForm.FileName = _uploadFile.Name;
-        if (string.IsNullOrWhiteSpace(_uploadForm.DocumentTypeCode)) _uploadForm.DocumentTypeCode = GuessDocumentType(_uploadFile.Name);
-    }
+    private void HandleDocumentUploadFailed(string message) => ShowToast(message, "danger");
 
     private async Task OpenDetailAsync(DocumentDto row)
     {
@@ -1337,17 +1222,6 @@
         _ => "dh-tone-neutral"
     };
 
-    private static string GuessDocumentType(string fileName)
-    {
-        var name = fileName.ToLowerInvariant();
-        if (name.Contains("certificate") || name.Contains("coi")) return "Certificate";
-        if (name.Contains("endorsement")) return "Endorsement";
-        if (name.Contains("binder")) return "Binder";
-        if (name.Contains("policy") || name.Contains("declaration")) return "Policy";
-        if (name.Contains("claim")) return "Claim";
-        return "General";
-    }
-
     private static string FormatSize(long? bytes)
     {
         if (bytes is null) return "?";
@@ -1376,18 +1250,6 @@
     private sealed record DocumentModule(string Title, string Description, string Url, string Icon, string Type);
     private sealed record CategoryOption(string Code, string Label);
     private sealed record CategoryMetric(string Key, int Count);
-
-    private sealed class UploadFormModel
-    {
-        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
-        [Required, StringLength(80)] public string CategoryCode { get; set; } = "Other";
-        [Required, StringLength(80)] public string DocumentTypeCode { get; set; } = "General";
-        [StringLength(100)] public string? EntityName { get; set; }
-        public DateOnly? RetentionDate { get; set; }
-        [StringLength(1000)] public string? Description { get; set; }
-        [StringLength(500)] public string? Tags { get; set; }
-        [StringLength(160)] public string? UploadedByName { get; set; }
-    }
 
     private sealed class MetadataFormModel
     {

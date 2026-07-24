@@ -7,7 +7,8 @@ namespace Ams.Application.Abstractions.Services;
 public interface IClaimsService
 {
     Task<PagedResult<ClaimDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lob, string? catCode, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default);
-    Task<ClaimDetailDto?> GetDetailAsync(Guid claimId, CancellationToken cancellationToken = default);
+    Task<ClaimDetailDto?> GetDetailAsync(Guid tenantId, Guid claimId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ClaimOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateClaimRequest request, CancellationToken cancellationToken = default);
     Task UpdateStatusAsync(Guid claimId, UpdateClaimStatusRequest request, CancellationToken cancellationToken = default);
     Task UpdateFollowUpAsync(Guid claimId, UpdateClaimFollowUpRequest request, CancellationToken cancellationToken = default);
@@ -19,4 +20,14 @@ public interface IClaimsService
     Task<int> ApplyGeoTagAsync(Guid catEventId, string? states, string? counties, string? zips, string? lob, decimal? minTiv, CancellationToken cancellationToken = default);
     Task<int> SendCatBlastAsync(CatBlastRequest request, CancellationToken cancellationToken = default);
     Task<Guid> CreateFastCatFnolAsync(FastCatFnolRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> AssignAdjusterAsync(AssignClaimAdjusterRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> UpsertPartyAsync(UpsertClaimPartyRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreateFinancialTransactionAsync(CreateClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> ReverseFinancialTransactionAsync(ReverseClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreateNoteAsync(CreateClaimNoteRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreateTaskAsync(CreateClaimTaskRequest request, CancellationToken cancellationToken = default);
+    Task CompleteTaskAsync(CompleteClaimTaskRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> LinkDocumentAsync(LinkClaimDocumentRequest request, CancellationToken cancellationToken = default);
+    Task<LossRunImportResultDto> ImportLossRunAsync(ImportLossRunRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LossRunDto>> GetLossRunsAsync(Guid tenantId, Guid? accountId, CancellationToken cancellationToken = default);
 }

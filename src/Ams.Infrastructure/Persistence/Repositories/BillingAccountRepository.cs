@@ -56,56 +56,6 @@ END
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Billing.AccountSettings') AND name = N'IX_BillingAccountSettings_Tenant')
     CREATE INDEX IX_BillingAccountSettings_Tenant ON Billing.AccountSettings(TenantId, IsDeleted, BillingModeCode, AutopayEnrolled);
 
-IF NOT EXISTS (SELECT 1 FROM Client.Account WHERE TenantId=@TenantId AND AccountNumber LIKE N'BA-%')
-BEGIN
-    DECLARE @SeedAccountTypeCode NVARCHAR(50) =
-    (
-        SELECT TOP 1 AccountTypeCode
-        FROM Client.Account
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND AccountTypeCode IS NOT NULL
-        ORDER BY CreatedDateUtc DESC
-    );
-
-    DECLARE @AccountSeed TABLE
-    (
-        AccountNumber NVARCHAR(50), AccountName NVARCHAR(300), AccountTypeCode NVARCHAR(50),
-        MainEmail NVARCHAR(300), MainPhone NVARCHAR(50), StatusCode NVARCHAR(50),
-        SegmentCode NVARCHAR(50), LifecycleStageCode NVARCHAR(50), Industry NVARCHAR(100), StatusCodeId INT
-    );
-
-    INSERT INTO @AccountSeed
-    VALUES
-    (N'BA-001',N'Acme Corp',@SeedAccountTypeCode,N'billing@acmecorp.example',N'(555) 700-1001',N'Active',N'MidMarket',N'Customer',N'Manufacturing',1),
-    (N'BA-002',N'Green Valley LLC',@SeedAccountTypeCode,N'ap@greenvalley.example',N'(555) 700-1002',N'Active',N'SMB',N'Customer',N'Real Estate',1),
-    (N'BA-003',N'Harbor Logistics Inc.',@SeedAccountTypeCode,N'finance@harborlogistics.example',N'(555) 700-1003',N'Active',N'Enterprise',N'Customer',N'Transportation',1),
-    (N'BA-004',N'Westside Properties',@SeedAccountTypeCode,N'accounting@westside.example',N'(555) 700-1004',N'Delinquent',N'MidMarket',N'Customer',N'Real Estate',2),
-    (N'BA-005',N'Riverdale Medical Group',@SeedAccountTypeCode,N'billing@riverdalemed.example',N'(555) 700-1005',N'Suspended',N'MidMarket',N'Customer',N'Healthcare',3);
-
-    IF @SeedAccountTypeCode IS NOT NULL AND COL_LENGTH(N'Client.Account', N'StatusCodeId') IS NOT NULL
-    BEGIN
-        INSERT INTO Client.Account (AccountId,TenantId,AccountNumber,AccountName,AccountTypeCode,MainEmail,MainPhone,StatusCode,StatusCodeId,SegmentCode,LifecycleStageCode,Industry,CreatedDateUtc,IsDeleted)
-        SELECT NEWID(),@TenantId,AccountNumber,AccountName,AccountTypeCode,MainEmail,MainPhone,StatusCode,StatusCodeId,SegmentCode,LifecycleStageCode,Industry,SYSUTCDATETIME(),0
-        FROM @AccountSeed;
-    END
-    ELSE IF @SeedAccountTypeCode IS NOT NULL
-    BEGIN
-        INSERT INTO Client.Account (AccountId,TenantId,AccountNumber,AccountName,AccountTypeCode,MainEmail,MainPhone,StatusCode,SegmentCode,LifecycleStageCode,Industry,CreatedDateUtc,IsDeleted)
-        SELECT NEWID(),@TenantId,AccountNumber,AccountName,AccountTypeCode,MainEmail,MainPhone,StatusCode,SegmentCode,LifecycleStageCode,Industry,SYSUTCDATETIME(),0
-        FROM @AccountSeed;
-    END
-END
-
-INSERT INTO Billing.AccountSettings (AccountId,TenantId,BillingModeCode,PaymentTermsCode,DefaultPaymentMethodCode,CreditLimit,AutopayEnrolled,CreatedDateUtc,IsDeleted)
-SELECT a.AccountId, a.TenantId,
-       CASE ROW_NUMBER() OVER (ORDER BY a.CreatedDateUtc) % 3 WHEN 0 THEN N'Agency Bill' WHEN 1 THEN N'Direct Bill' ELSE N'EFT' END,
-       CASE ROW_NUMBER() OVER (ORDER BY a.CreatedDateUtc) % 4 WHEN 0 THEN N'Net 15' WHEN 1 THEN N'Net 30' WHEN 2 THEN N'Net 45' ELSE N'Due on Receipt' END,
-       CASE ROW_NUMBER() OVER (ORDER BY a.CreatedDateUtc) % 4 WHEN 0 THEN N'Check' WHEN 1 THEN N'ACH' WHEN 2 THEN N'Credit Card' ELSE N'Wire Transfer' END,
-       CASE ROW_NUMBER() OVER (ORDER BY a.CreatedDateUtc) % 4 WHEN 0 THEN 10000 WHEN 1 THEN 25000 WHEN 2 THEN 50000 ELSE 15000 END,
-       CASE ROW_NUMBER() OVER (ORDER BY a.CreatedDateUtc) % 2 WHEN 0 THEN 1 ELSE 0 END,
-       SYSUTCDATETIME(), 0
-FROM Client.Account a
-WHERE a.TenantId=@TenantId AND a.IsDeleted=0
-  AND NOT EXISTS (SELECT 1 FROM Billing.AccountSettings s WHERE s.AccountId=a.AccountId);
 ";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -157,14 +107,14 @@ SELECT a.AccountId,
        a.TenantId,
        a.AccountNumber,
        a.AccountName,
-       COALESCE(s.BillingModeCode, N'Direct Bill') AS BillingModeCode,
+       COALESCE(s.BillingModeCode, N'Not Configured') AS BillingModeCode,
        COALESCE(inv.BilledAmount, 0) AS BilledAmount,
        COALESCE(inv.OutstandingAmount, 0) AS OutstandingAmount,
        COALESCE(s.CreditLimit, 0) AS CreditLimit,
        COALESCE(s.AutopayEnrolled, 0) AS AutopayEnrolled,
        a.StatusCode,
        CASE
-           WHEN COALESCE(s.BillingModeCode, N'Direct Bill') = N'Agency Bill' THEN inv.NextOpenDueDate
+            WHEN s.BillingModeCode = N'Agency Bill' THEN inv.NextOpenDueDate
            ELSE NULL
        END AS NextRemittanceDueDate
 FROM Client.Account a

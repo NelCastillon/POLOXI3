@@ -56,4 +56,60 @@ public sealed class AccountsController : ControllerBase
         var contacts = await _service.GetContactsByAccountIdAsync(id, cancellationToken);
         return Ok(contacts);
     }
+
+    [HttpGet("{id:guid}/360")]
+    public async Task<IActionResult> GetAccount360(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var account = await _service.GetAccount360Async(tenantId, id, cancellationToken);
+        return account is null ? NotFound() : Ok(account);
+    }
+
+    [HttpPost("{id:guid}/360/named-insureds")]
+    public async Task<IActionResult> UpsertNamedInsured(Guid id, [FromBody] UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertNamedInsuredAsync(request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/360/locations")]
+    public async Task<IActionResult> UpsertLocation(Guid id, [FromBody] UpsertAccountLocationRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertLocationAsync(request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/360/vehicles")]
+    public async Task<IActionResult> UpsertVehicle(Guid id, [FromBody] UpsertAccountVehicleRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertVehicleAsync(request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/360/drivers")]
+    public async Task<IActionResult> UpsertDriver(Guid id, [FromBody] UpsertAccountDriverRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertDriverAsync(request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/360/properties")]
+    public async Task<IActionResult> UpsertProperty(Guid id, [FromBody] UpsertAccountPropertyRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertPropertyAsync(request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/360/schedule-items")]
+    public async Task<IActionResult> UpsertScheduleItem(Guid id, [FromBody] UpsertAccountScheduleItemRequest request, CancellationToken cancellationToken)
+    {
+        if (id != request.AccountId) return BadRequest("Account route does not match request.");
+        return Ok(await _service.UpsertScheduleItemAsync(request, cancellationToken));
+    }
+
+    [HttpDelete("{id:guid}/360/{entityType}/{entityId:guid}")]
+    public async Task<IActionResult> DeleteAccount360Item(Guid id, string entityType, Guid entityId, [FromQuery] Guid tenantId, [FromQuery] Guid? userId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteAccount360ItemAsync(tenantId, id, entityType, entityId, userId, cancellationToken);
+        return NoContent();
+    }
 }

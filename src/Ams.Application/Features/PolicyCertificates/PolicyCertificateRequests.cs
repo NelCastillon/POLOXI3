@@ -18,6 +18,9 @@ public sealed record CreatePolicyCertificateRequest(
     bool AdditionalInsured,
     bool WaiverSubrogation,
     [StringLength(2000)] string Description,
+    Guid? CertificateHolderId,
+    bool PrimaryNonContributory,
+    string? HolderSpecificWording,
     Guid? CreatedByUserId);
 
 public sealed record UpdatePolicyCertificateRequest(
@@ -36,6 +39,9 @@ public sealed record UpdatePolicyCertificateRequest(
     bool AdditionalInsured,
     bool WaiverSubrogation,
     [StringLength(2000)] string Description,
+    Guid? CertificateHolderId,
+    bool PrimaryNonContributory,
+    string? HolderSpecificWording,
     Guid? ModifiedByUserId);
 
 public sealed record RevokePolicyCertificateRequest(

@@ -176,6 +176,6 @@ public class CreateLeadDocumentRequest
 
 public sealed class UpdateLeadDocumentRequest : CreateLeadDocumentRequest
 {
-    public Guid DocumentId { get; set; }
+    public new Guid DocumentId { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 }

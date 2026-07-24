@@ -6,6 +6,7 @@ public sealed class AccountDto
     public Guid TenantId { get; set; }
     public string AccountNumber { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
+    public string? DbaName { get; set; }
     public string AccountTypeCode { get; set; } = string.Empty;
     public string? MainEmail { get; set; }
     public string? MainPhone { get; set; }
