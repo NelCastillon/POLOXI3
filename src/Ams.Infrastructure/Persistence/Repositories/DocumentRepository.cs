@@ -201,7 +201,27 @@ VALUES (@ShareLinkId, @TenantId, @DocumentId, @Token, @CreatedByUserId, @Expires
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         if (!await TableExistsAsync(cn, DocumentAccessLogTable, cancellationToken)) return [];
 
-        const string sql = "SELECT TOP(@Top) AccessLogId, TenantId, DocumentId, UserId, ShareLinkId, ActionCode, IpAddress, AccessDateUtc FROM DMS.DocumentAccessLog WHERE DocumentId = @DocumentId ORDER BY AccessDateUtc DESC;";
+        const string sql = @"
+SELECT TOP(@Top)
+    log.AccessLogId,
+    log.TenantId,
+    COALESCE(NULLIF(tenant.TenantName, N''), N'Unknown tenant') AS TenantName,
+    log.DocumentId,
+    log.UserId,
+    CASE
+        WHEN log.UserId IS NULL AND log.ShareLinkId IS NOT NULL THEN N'Secure share recipient'
+        WHEN log.UserId IS NULL THEN N'System'
+        ELSE COALESCE(NULLIF([user].DisplayName, N''), NULLIF([user].FullName, N''), NULLIF([user].UserName, N''), NULLIF([user].Email, N''), N'Former user')
+    END AS UserName,
+    log.ShareLinkId,
+    log.ActionCode,
+    log.IpAddress,
+    log.AccessDateUtc
+FROM DMS.DocumentAccessLog log
+LEFT JOIN Core.Tenant tenant ON tenant.TenantId = log.TenantId
+LEFT JOIN IAM.[User] [user] ON [user].UserId = log.UserId AND [user].TenantId = log.TenantId
+WHERE log.DocumentId = @DocumentId
+ORDER BY log.AccessDateUtc DESC;";
         var rows = await cn.QueryAsync<DocumentAccessLogDto>(new CommandDefinition(sql, new { DocumentId = documentId, Top = top }, cancellationToken: cancellationToken));
         return rows.AsList();
     }
