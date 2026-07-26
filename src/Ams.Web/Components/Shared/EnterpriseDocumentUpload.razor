@@ -2,6 +2,8 @@
 @using Ams.Application.Common.Dtos
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 @if (IsOpen)
 {
@@ -34,13 +36,13 @@
                         </div>
                     }
 
-                    <div class="edu-drop-zone @(_dragActive ? "edu-drop-zone--active" : string.Empty) @(_fileError is not null ? "edu-drop-zone--invalid" : string.Empty)"
+                    <div @ref="_dropZone" class="edu-drop-zone @(_dragActive ? "edu-drop-zone--active" : string.Empty) @(_fileError is not null ? "edu-drop-zone--invalid" : string.Empty)"
                          @ondragenter="ActivateDropZone"
                          @ondragover="ActivateDropZone"
                          @ondragleave="DeactivateDropZone"
                          @ondrop="DeactivateDropZone"
                          @ondragover:preventDefault="true">
-                        <InputFile class="edu-file-input" OnChange="SelectFile" accept="@Accept" />
+                        <InputFile @ref="_fileInput" class="edu-file-input" OnChange="SelectFile" accept="@Accept" />
                         @if (_file is null)
                         {
                             <span class="edu-upload-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></span>
@@ -168,6 +170,10 @@
     private string? _loadError;
     private string? _resolvedUploadedByName;
     private bool _wasOpen;
+    private bool _dropZoneInitialized;
+    private ElementReference _dropZone;
+    private InputFile? _fileInput;
+    private IJSObjectReference? _dropModule;
 
     [Parameter] public bool IsOpen { get; set; }
     [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
@@ -200,11 +206,36 @@
     {
         if (IsOpen && !_wasOpen)
         {
+            _dropZoneInitialized = false;
             Reset();
             await LoadOptionsAsync();
         }
 
         _wasOpen = IsOpen;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!IsOpen || _dropZoneInitialized || _fileInput is null)
+            return;
+
+        _dropModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/EnterpriseDocumentUpload.razor.js");
+        await _dropModule.InvokeVoidAsync("initialize", _dropZone, _fileInput.Element);
+        _dropZoneInitialized = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dropModule is null)
+            return;
+
+        try
+        {
+            await _dropModule.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 
     private void Reset()
@@ -245,7 +276,6 @@
             _documentTypes = (await groupsTask)?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
             _resolvedUploadedByName ??= (await userTask)?.FullName;
 
-            EnsureDefaultOption(_categories, DefaultCategoryCode, "Selected category");
             EnsureDefaultOption(_documentTypes, DefaultDocumentTypeCode, "Selected document type");
 
             if (_categories.Count == 0 || _documentTypes.Count == 0)

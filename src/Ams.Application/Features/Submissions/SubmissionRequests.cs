@@ -35,7 +35,7 @@ public sealed record SubmissionActionResult(Guid Id, string Message);
 
 public sealed record AddSubmissionNoteRequest(
     Guid TenantId,
-    [property: Required, StringLength(1000)]
+    [param: Required, StringLength(1000)]
     string Notes,
     Guid? CreatedByUserId);
 
