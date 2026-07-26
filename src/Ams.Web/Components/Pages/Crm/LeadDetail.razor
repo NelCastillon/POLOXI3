@@ -29,6 +29,19 @@
 
 <EnterpriseDocumentPreview @ref="_documentPreview" />
 
+<EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_currentUserId"
+                          EntityName="CRM.Lead"
+                          EntityId="LeadId"
+                          Title="Upload Lead Document"
+                          IntroText="Upload and classify applications, statements, loss runs, and other supporting lead documents."
+                          DefaultDocumentTypeCode="LEAD"
+                          DefaultCategoryCode="CRM"
+                          DefaultTags="Lead"
+                          OnUploaded="HandleLeadDocumentUploadedAsync"
+                          OnUploadFailed="HandleLeadDocumentUploadFailed" />
+
 @if (_showEdit)
 {
     <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseEdit">
@@ -610,7 +623,7 @@ else
                     else if (_activeTab == 5)
                     {
                         <div class="ldd-tab-body">
-                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_documents.Count document(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Document)"><i class="bi bi-folder-plus" aria-hidden="true"></i> Add document</button></div>
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_documents.Count document(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenDocumentUpload"><i class="bi bi-folder-plus" aria-hidden="true"></i> Add document</button></div>
                             @if (_documents.Count == 0)
                             {
                                 @EmptyState("bi-folder2-open", "No documents", "Applications, statements, loss runs, and supporting lead documents will appear here.")
@@ -709,6 +722,7 @@ else
     private bool _showAssign;
     private bool _showConvert;
     private bool _showTabForm;
+    private bool _showDocumentUpload;
     private string? _loadError;
     private int _activeTab;
     private bool _toastVisible;
@@ -935,6 +949,37 @@ else
 
     private void SetTab(int index) => _activeTab = index;
     private void HideToast() => _toastVisible = false;
+    private void OpenDocumentUpload() => _showDocumentUpload = true;
+
+    private async Task HandleLeadDocumentUploadedAsync(Guid documentId)
+    {
+        var document = await Api.GetDocumentByIdAsync(documentId);
+        if (document is null)
+        {
+            ShowToast("danger", "The document was uploaded, but its lead record could not be created.");
+            return;
+        }
+
+        var extension = Path.GetExtension(document.FileName).TrimStart('.').ToLowerInvariant();
+        await Api.CreateLeadDocumentAsync(LeadId, new CreateLeadDocumentRequest
+        {
+            DocumentId = documentId,
+            TenantId = _lead?.TenantId ?? _tenantId,
+            LeadId = LeadId,
+            FileName = document.FileName,
+            Extension = extension,
+            Category = document.CategoryCode,
+            SizeKb = Math.Max(1, (int)Math.Ceiling((document.FileSizeBytes ?? 0) / 1024m)),
+            UploadedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+            UploadedAt = document.CreatedDateUtc
+        });
+
+        await LoadAsync();
+        ShowToast("success", "Lead document uploaded successfully.");
+    }
+
+    private void HandleLeadDocumentUploadFailed(string message) => ShowToast("danger", message);
+
     private void CloseTabForm()
     {
         _showTabForm = false;

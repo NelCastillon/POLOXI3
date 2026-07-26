@@ -11,6 +11,19 @@
 
 <PageTitle>@(_submission is null ? "Submission Detail" : $"{_submission.SubmissionNumber} - Submission Detail")</PageTitle>
 
+<EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
+                          TenantId="@(_submission?.TenantId ?? Guid.Empty)"
+                          CreatedByUserId="_currentUser?.UserId"
+                          EntityName="Submission"
+                          EntityId="SubmissionId"
+                          Title="Upload Submission Document"
+                          IntroText="Upload and classify applications, loss runs, schedules, and other supporting submission documents."
+                          DefaultDocumentTypeCode="SUBMISSION"
+                          DefaultCategoryCode="SUBMISSIONS"
+                          DefaultTags="Submission"
+                          OnUploaded="HandleSubmissionDocumentUploadedAsync"
+                          OnUploadFailed="HandleSubmissionDocumentUploadFailed" />
+
 @if (_loading)
 {
     <div class="sdd-loading"><span class="sdd-spinner"></span><span>Loading submission detail...</span></div>
@@ -111,7 +124,7 @@ else
                         }
                         @if (_activeTab == 4)
                         {
-                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("document")'><i class="bi bi-upload" aria-hidden="true"></i> Upload Document</button>
+                            <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="OpenDocumentUpload"><i class="bi bi-upload" aria-hidden="true"></i> Upload Document</button>
                         }
                         @if (_activeTab == 6)
                         {
@@ -918,25 +931,6 @@ else
                              <label class="sdd-field"><span>Recipient</span><InputText class="form-control" @bind-Value="_actionForm.Recipient" /></label>
                              <label class="sdd-field"><span>Client Decision</span><InputSelect class="form-select" @bind-Value="_actionForm.ClientDecision">@foreach (var option in _proposalClientDecisionOptions) { <option value="@option.OptionCode">@option.OptionName</option> }</InputSelect></label>
                          }
-                        @if (_actionMode == "document")
-                        {
-                            <label class="sdd-field">
-                                <span>Category</span>
-                                <InputText class="form-control" @bind-Value="_actionForm.DocumentCategoryCode" />
-                            </label>
-                            <label class="sdd-field">
-                                <span>Document Type</span>
-                                <InputText class="form-control" @bind-Value="_actionForm.DocumentTypeCode" />
-                            </label>
-                            <label class="sdd-field sdd-field--full">
-                                <span>File <em>*</em></span>
-                                <InputFile OnChange="OnDocumentSelected" />
-                                @if (_selectedDocumentFile is not null)
-                                {
-                                    <small>@_selectedDocumentFile.Name - @FormatBytes(_selectedDocumentFile.Size)</small>
-                                }
-                            </label>
-                        }
                         <label class="sdd-field sdd-field--full">
                             <span>@ActionNotesLabel <em>*</em></span>
                             <InputTextArea class="form-control" rows="4" @bind-Value="_actionForm.Notes" />
@@ -1137,6 +1131,7 @@ else
     bool _loading = true;
     bool _actionBusy;
     bool _showActionDialog;
+    bool _showDocumentUpload;
     bool _showConfirmDialog;
     bool _showQuoteRequestPopup;
     bool _showReadinessGatePopup;
@@ -1160,7 +1155,6 @@ else
     SubmissionMarketDto? _pendingRemoveMarket;
     SubmissionIntakeQuestionDto? _waiverTarget;
     CurrentUserContextModel? _currentUser;
-    IBrowserFile? _selectedDocumentFile;
 
     SubmissionDto? _submission;
     SubmissionPackagePreviewDto? _packagePreview;
@@ -1541,9 +1535,28 @@ else
         {
             _actionForm.TaskTypeCode = _taskTemplates[0].TaskTypeCode;
         }
-        _selectedDocumentFile = null;
         _showActionDialog = true;
     }
+
+    void OpenDocumentUpload() => _showDocumentUpload = true;
+
+    async Task HandleSubmissionDocumentUploadedAsync(Guid documentId)
+    {
+        if (_submission is null) return;
+
+        var document = await Api.GetDocumentByIdAsync(documentId);
+        await Api.AddSubmissionNoteAsync(
+            SubmissionId,
+            new AddSubmissionNoteRequest(
+                _submission.TenantId,
+                $"Document attached: {document?.FileName ?? documentId.ToString()}.",
+                _currentUser?.UserId));
+
+        await LoadAsync();
+        ShowToast("Submission document uploaded successfully.");
+    }
+
+    void HandleSubmissionDocumentUploadFailed(string message) => ShowToast(message, true);
 
     void OpenMarketPackageDialog(SubmissionMarketDto market)
     {
@@ -1781,11 +1794,6 @@ else
             {
                 await Api.CreateSubmissionFollowUpTaskAsync(SubmissionId, new CreateSubmissionFollowUpTaskRequest(_submission.TenantId, _actionForm.TaskTitle, _actionForm.Notes, _actionForm.Priority ?? "Medium", _actionForm.AssignedToUserId, ToDateOnly(_actionForm.TaskDueDate), _currentUser?.UserId));
                 ShowToast("Follow-up task created.");
-            }
-            else if (_actionMode == "document")
-            {
-                await UploadSelectedDocumentAsync(_submission);
-                ShowToast("Document uploaded and attached.");
             }
             else if (_actionMode == "note")
             {
@@ -2202,32 +2210,6 @@ else
     }
 
     void NotifyActionValidation() => ShowToast("Complete required action fields.", true);
-
-    void OnDocumentSelected(InputFileChangeEventArgs e) => _selectedDocumentFile = e.File;
-
-    async Task UploadSelectedDocumentAsync(SubmissionDto submission)
-    {
-        if (_selectedDocumentFile is null)
-            throw new InvalidOperationException("Select a document file to upload.");
-
-        await using var stream = _selectedDocumentFile.OpenReadStream(104_857_600);
-        await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
-        {
-            TenantId = submission.TenantId,
-            DocumentTypeCode = string.IsNullOrWhiteSpace(_actionForm.DocumentTypeCode) ? "Submission" : _actionForm.DocumentTypeCode,
-            CategoryCode = string.IsNullOrWhiteSpace(_actionForm.DocumentCategoryCode) ? "Submission" : _actionForm.DocumentCategoryCode,
-            FileName = _selectedDocumentFile.Name,
-            OriginalFileName = _selectedDocumentFile.Name,
-            EntityName = "Submission",
-            EntityId = SubmissionId,
-            Description = _actionForm.Notes,
-            UploadedByName = ResolveUserName(_currentUser?.UserId),
-            CreatedByUserId = _currentUser?.UserId,
-            Content = stream
-        });
-
-        await Api.AddSubmissionNoteAsync(SubmissionId, new AddSubmissionNoteRequest(submission.TenantId, $"Document attached: {_selectedDocumentFile.Name}.", _currentUser?.UserId));
-    }
 
     int CalculateImportanceScore()
     {

@@ -15,6 +15,19 @@
 
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
 
+<EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_currentUserId"
+                          EntityName="Policy"
+                          EntityId="PolicyId"
+                          Title="Upload Policy Document"
+                          IntroText="Upload and classify declarations, certificates, endorsements, binders, and other supporting policy documents."
+                          DefaultDocumentTypeCode="POLICY"
+                          DefaultCategoryCode="POLICY"
+                          DefaultTags="Policy"
+                          OnUploaded="HandlePolicyDocumentUploadedAsync"
+                          OnUploadFailed="HandlePolicyDocumentUploadFailed" />
+
 @if (_loading)
 {
     <div class="pd-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading policy?</span></div>
@@ -391,7 +404,7 @@ else
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_documents.Count document(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentForm">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentUpload">
                                 <i class="bi bi-upload" aria-hidden="true"></i> Upload
                             </button>
                         </div>
@@ -1582,61 +1595,6 @@ else
     </div>
 }
 
-@if (_showDocForm)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDocumentForm">
-        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-doc-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-upload" aria-hidden="true"></i>
-                <span id="pd-doc-title">Upload Policy Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDocumentForm"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <EditForm Model="_docForm" OnValidSubmit="SaveDocumentAsync" OnInvalidSubmit="NotifyValidationAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="pd-modal-intro">
-                        <span class="pd-modal-chip"><i class="bi bi-folder-check" aria-hidden="true"></i> Document governance</span>
-                        <p>Register policy documents, generate an activity entry, and update the audit trail.</p>
-                    </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Document Name <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_docForm.Name" />
-                        </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_docForm.Category">
-                                <option value="Policy">Policy</option>
-                                <option value="Certificate">Certificate</option>
-                                <option value="Endorsement">Endorsement</option>
-                                <option value="Billing">Billing</option>
-                                <option value="Claims">Claims</option>
-                            </InputSelect>
-                        </div>
-                        <div class="um-field">
-                            <label>File Type</label>
-                            <InputSelect class="form-select" @bind-Value="_docForm.FileType">
-                                <option value="PDF">PDF</option>
-                                <option value="DOCX">DOCX</option>
-                                <option value="XLSX">XLSX</option>
-                                <option value="PNG">PNG</option>
-                            </InputSelect>
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Notes</label>
-                            <InputTextArea class="form-control" rows="3" @bind-Value="_docForm.Notes" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDocumentForm">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Upload</button>
-                </div>
-            </EditForm>
-        </div>
-    </div>
-}
-
 @if (_showClaimForm)
 {
     <div class="mt-modal-backdrop" role="presentation" @onclick="CloseClaimForm">
@@ -1900,13 +1858,12 @@ else
     private bool         _showRiskForm = false;
     private bool         _showActForm  = false;
     private bool         _showCommForm = false;
-    private bool         _showDocForm  = false;
+    private bool         _showDocumentUpload;
     private bool         _showClaimForm = false;
     private CoverageRow? _selectedCoverage;
     private CoverageForm _coverageForm = new();
     private EditContext  _coverageEditContext = new(new CoverageForm());
     private RiskItemForm _riskForm     = new();
-    private DocumentForm _docForm      = new();
     private ClaimForm    _claimForm    = new();
     private ActivityForm _actForm      = new();
     private CommForm     _commForm     = new();
@@ -2006,9 +1963,10 @@ else
         var cancellationsTask = Api.GetPolicyCancellationCenterAsync(_tenantId);
         var certificatesTask = Api.SearchPolicyCertificatesAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
         var documentsTask = Api.SearchPolicyDocumentsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var enterpriseDocumentsTask = Api.GetDocumentsByEntityAsync(_tenantId, "Policy", PolicyId);
         var submissionsTask = Api.SearchSubmissionsAsync(_tenantId, _policy.SubmissionRef, pageSize: 25);
 
-        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, submissionsTask);
+        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, enterpriseDocumentsTask, submissionsTask);
 
         var endorsements = endorsementsTask.Result?.Endorsements
             .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
@@ -2034,6 +1992,8 @@ else
             .OrderByDescending(x => x.CreatedDateUtc)
             .Select(MapDocumentRow)
             .ToList();
+        _documents.AddRange((enterpriseDocumentsTask.Result ?? []).Select(MapEnterpriseDocumentRow));
+        _documents = _documents.OrderByDescending(x => x.UploadedAt).ToList();
 
         _submissions = (submissionsTask.Result?.Items ?? [])
             .Where(x => x.SubmissionId.ToString().Equals(_policy.SubmissionRef, StringComparison.OrdinalIgnoreCase) || string.Equals(x.SubmissionNumber, _policy.SubmissionRef, StringComparison.OrdinalIgnoreCase))
@@ -2139,6 +2099,25 @@ else
             OpenClaims = 0,
         };
     }
+
+    private static DocRow MapEnterpriseDocumentRow(DocumentDto document) => new()
+    {
+        DocumentId = document.DocumentId,
+        Name = document.FileName,
+        Category = document.CategoryCode,
+        FileType = Path.GetExtension(document.FileName).TrimStart('.').ToUpperInvariant() is { Length: > 0 } extension ? extension : "Record",
+        FileSize = FormatDocumentSize(document.FileSizeBytes),
+        UploadedAt = document.CreatedDateUtc,
+        UploadedBy = document.UploadedByName ?? "System"
+    };
+
+    private static string FormatDocumentSize(long? bytes) => bytes switch
+    {
+        null => "Unknown size",
+        < 1024 => $"{bytes} B",
+        < 1_048_576 => $"{bytes / 1024d:F1} KB",
+        _ => $"{bytes / 1_048_576d:F1} MB"
+    };
 
     private static EndorsementRow MapEndorsementRow(PolicyEndorsementDto endorsement) => new()
     {
@@ -3102,23 +3081,17 @@ else
         await ShowToast("Risk item added.");
     }
 
-    private void OpenDocumentForm()
+    private void OpenDocumentUpload() => _showDocumentUpload = true;
+
+    private async Task HandlePolicyDocumentUploadedAsync(Guid documentId)
     {
-        _docForm = new DocumentForm();
-        _showDocForm = true;
+        await LoadPolicyRelatedDataAsync();
+        var document = _documents.FirstOrDefault(x => x.DocumentId == documentId);
+        AddAuditEntry("Document Uploaded", "Documents", "-", document?.Name ?? documentId.ToString());
+        await ShowToast("Policy document uploaded successfully.");
     }
 
-    private void CloseDocumentForm() => _showDocForm = false;
-
-    private async Task SaveDocumentAsync()
-    {
-        var doc = NewDocument(_docForm.Name.Trim(), _docForm.Category, _docForm.FileType, EstimateFileSize(_docForm.FileType));
-        _documents.Insert(0, doc);
-        _activities.Insert(0, NewActivity($"Document uploaded: {doc.Name}", "Note", "Portal", "Completed", _docForm.Notes));
-        AddAuditEntry("Document Uploaded", "Documents", "?", doc.Name);
-        _showDocForm = false;
-        await ShowToast("Document uploaded.");
-    }
+    private Task HandlePolicyDocumentUploadFailed(string message) => ShowErrorToast(message);
 
     private async Task DownloadDocumentAsync(DocRow doc)
     {

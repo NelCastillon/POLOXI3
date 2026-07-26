@@ -57,7 +57,9 @@
 - For Producer and CSR pages, retrieve the user list and filter by the user's Role field to get Producer and CSR lists.
 - For `/workbench/producer`, the page is intentionally viewed and used as the Tenant Admin User; workbench data should remain scoped to the Tenant Admin User while avoiding mock/default/computed data.
 - For CRM Leads detail actions, place Edit, Assign, and Disqualify in a single row above a full-width Convert button. Render the Convert button as full-width below the action row and center its content.
+- For CRM Lead detail document uploads, reuse `EnterpriseDocumentUpload` and default Document Type to `Lead`, Category to `CRM`, and Tags to `Lead` (singular).
 - For Blazor popups/forms in this repository, remove required field validation message components when requested; avoid showing required validation messages in the Document Group popup.
+- On CRM Lead detail pages, document uploads should reuse the Policy Upload Document component/pattern and default the Tags field to `Leads`.
 
 ## AMS CRM Workflow Hierarchy
 - The AMS CRM workflow hierarchy should be Lead (unqualified) → Account (organization/person master record) → Opportunity (revenue potential) → Submission (underwriting package) → SubmissionMarket → QuoteRequest → Quote → CustomerAuthorization/Proposal → BindRequest → Policy.
@@ -78,7 +80,7 @@
 - Preserve this lifecycle even for immediate API rating: create `QuoteRequest` → send carrier/rater request → receive response → create `Quote` only if pricing is returned.
 - Support both workflow models: personal-lines/API carriers may expose a single `Request Quote` user action that internally creates `SubmissionMarket`, creates `QuoteRequest`, calls the API, and creates `Quote` only on quote response; commercial-lines/manual markets should allow `Submit to Market` first, then `Request Quote` when underwriting requirements are satisfied.
 - Delivery method should drive workflow behavior. API/rater requests can dispatch automatically; email-based markets should generate/send request packages; portal/manual markets should create placement tasks and allow users to record external carrier reference numbers and responses.
-- Use event-driven/background processing for carrier communication where applicable: UI creates `QuoteRequest`, publishes or enqueues quote-request work, a background worker/carrier connector dispatches the request, and the system updates `QuoteRequest` to submitted, acknowledged, under review, quoted, declined, failed, or more information required.
+- Use event-driven/background processing for carrier communication where applicable: UI creates `QuoteRequest`, publishes or enqueues quote-request work, a background worker/carrier connector dispatches the request, and the system updates `QuoteRequest` to submitted, acknowledged, under review, quoted, declined, or more information required.
 - Submission status is independent from child `QuoteRequest`, `Quote`, `Proposal`, `BindRequest`, and `Policy` statuses. Submission status should summarize the overall workflow, not replace child record statuses.
 - Prefer deriving or synchronizing submission-level status from child records to avoid drift. Examples: no quote requests means ready for marketing; active quote requests and no quotes means marketing; at least one quote means quotes received; proposal created means proposal prepared; customer authorization/selected quote means customer accepted; bind in progress means binding; policy exists after confirmed bind means bound.
 - Status transitions should be enforced in backend application services, not only in Blazor UI. UI buttons should call backend actions that validate the current state, required child records, tenant scope, and authorization before changing workflow state.
@@ -108,13 +110,4 @@
 - Keep service boundaries clear: submission service manages submissions, submission markets, and quote requests; quote service manages returned quotes and quote review; binding service manages bind requests and carrier confirmation; policy service owns policy creation and servicing lifecycle after coverage is bound.
 - Background workers that dispatch quote or bind requests must be idempotent and retry-safe. Use request IDs, external transaction IDs, correlation IDs, retry counts, and status checks to prevent duplicate carrier submissions, duplicate quotes, duplicate bind confirmations, or duplicate policies.
 - Blazor UI should expose workflow actions based on backend-calculated eligibility, not duplicated client-side rules. Examples: enable `Request Quote` only when validation passes or missing items can be displayed; enable `Generate Proposal` only for usable approved quotes; enable `Request Bind` only when a selected quote and customer authorization exist; enable `Confirm Bind` only for submitted/acknowledged/reviewing bind requests.
-- Never delete unsuccessful markets, declined quote requests, rejected quotes, or superseded revisions as part of normal workflow. Preserve them for history, audit, remarketing, and E&O traceability.
-
-## Account 360 Guidelines
-- Account 360 must remain customer-level and include legal name/DBA, contacts, addresses and locations, owners/officers, communication preferences, service team and producer assignments, cross-policy account documents, activities/notes/tasks, and aggregated policies, claims, submissions, and opportunities.
-
-## Document Generation Guidelines
-- Certificate/EOI and ACORD/document-generation capabilities must be complete enterprise implementations using synchronized database-backed data, versioned templates/documents, and no mock or hardcoded UI data. Existing schema should be updated where possible; add and seed normalized tables only where needed.
-
-## General Guidelines
-- Enterprise implementations must use authoritative database-backed operational data only, with no mock, fabricated, randomized, or hardcoded operational records; add idempotent tables/configuration seeds when needed, update existing records, and synchronize all source data.
+- Never delete unsuccessful markets, declined quote requests, rejected quotes, or superseded revision

@@ -315,7 +315,7 @@ IF @CategoryId IS NULL
 BEGIN
     SET @CategoryId = NEWID();
     INSERT INTO DMS.DocumentCategory (DocumentCategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
-    VALUES (@CategoryId, @TenantId, @CategoryCode, @CategoryName, 1, @SortOrder, GETUTCDATE(), 0);
+    VALUES (@CategoryId, @TenantId, @KindId, @CategoryCode, @CategoryName, 1, @SortOrder, GETUTCDATE(), 0);
 END
 
 INSERT INTO DMS.DocumentGroup (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
