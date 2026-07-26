@@ -90,21 +90,71 @@ WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         return rows.AsList();
     }
 
+    public async Task<DocumentVersionDto?> GetVersionAsync(Guid documentId, Guid documentVersionId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return null;
+
+        const string sql = "SELECT DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc FROM DMS.DocumentVersion WHERE DocumentVersionId = @DocumentVersionId AND DocumentId = @DocumentId AND IsDeleted = 0;";
+        return await cn.QuerySingleOrDefaultAsync<DocumentVersionDto>(new CommandDefinition(sql, new { DocumentVersionId = documentVersionId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default)
     {
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return Guid.Empty;
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken))
+            throw new InvalidOperationException("Document version storage is not available.");
 
         const string sql = @"
+DECLARE @CurrentVersion INT;
 DECLARE @NextVersion INT;
-SELECT @NextVersion = ISNULL(MAX(VersionNumber), 0) + 1 FROM DMS.DocumentVersion WHERE DocumentId = @DocumentId AND IsDeleted = 0;
+
+SELECT @CurrentVersion = VersionNumber
+FROM DMS.Document WITH (UPDLOCK, HOLDLOCK)
+WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @CurrentVersion IS NULL
+    THROW 51000, 'The document was not found for the specified tenant.', 1;
+
+IF NOT EXISTS (
+    SELECT 1 FROM DMS.DocumentVersion
+    WHERE DocumentId = @DocumentId AND VersionNumber = @CurrentVersion AND IsDeleted = 0
+)
+BEGIN
+    INSERT INTO DMS.DocumentVersion (DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes,
+           N'Original version preserved when version control was enabled', CreatedByUserId, CreatedDateUtc, 0
+    FROM DMS.Document
+    WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;
+END;
+
+SELECT @NextVersion = CASE
+    WHEN ISNULL(MAX(VersionNumber), 0) >= @CurrentVersion THEN ISNULL(MAX(VersionNumber), 0) + 1
+    ELSE @CurrentVersion + 1
+END
+FROM DMS.DocumentVersion
+WHERE DocumentId = @DocumentId AND IsDeleted = 0;
 
 INSERT INTO DMS.DocumentVersion (DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc, IsDeleted)
 VALUES (@DocumentVersionId, @TenantId, @DocumentId, @NextVersion, @FileName, @StoragePath, @ContentType, @FileSizeBytes, @ChangeNotes, @CreatedByUserId, SYSUTCDATETIME(), 0);
 
-UPDATE DMS.Document SET VersionNumber = @NextVersion, FileName = @FileName, StoragePath = @StoragePath, ContentType = @ContentType, FileSizeBytes = @FileSizeBytes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
+UPDATE DMS.Document
+SET VersionNumber = @NextVersion, FileName = @FileName, StoragePath = @StoragePath, ContentType = @ContentType,
+    FileSizeBytes = @FileSizeBytes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId
+WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;";
         var id = Guid.NewGuid();
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentVersionId = id, request.TenantId, request.DocumentId, request.FileName, request.StoragePath, request.ContentType, request.FileSizeBytes, request.ChangeNotes, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        using var transaction = cn.BeginTransaction();
+        try
+        {
+            await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentVersionId = id, request.TenantId, request.DocumentId, request.FileName, request.StoragePath, request.ContentType, request.FileSizeBytes, request.ChangeNotes, request.CreatedByUserId }, transaction, cancellationToken: cancellationToken));
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+
         return id;
     }
 

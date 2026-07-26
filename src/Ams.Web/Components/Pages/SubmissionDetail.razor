@@ -2,6 +2,7 @@
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Documents
 @using Ams.Application.Features.Submissions
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
@@ -10,6 +11,8 @@
 @inject CurrentUserContext CurrentUser
 
 <PageTitle>@(_submission is null ? "Submission Detail" : $"{_submission.SubmissionNumber} - Submission Detail")</PageTitle>
+
+<EnterpriseDocumentPreview @ref="_documentPreview" />
 
 <EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
                           TenantId="@(_submission?.TenantId ?? Guid.Empty)"
@@ -23,6 +26,51 @@
                           DefaultTags="Submission"
                           OnUploaded="HandleSubmissionDocumentUploadedAsync"
                           OnUploadFailed="HandleSubmissionDocumentUploadFailed" />
+
+@if (_showDocumentMetadata && _selectedDocument is not null)
+{
+    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseDocumentMetadata">
+        <div class="sdd-modal sdd-document-modal" role="dialog" aria-modal="true" aria-labelledby="sdd-document-metadata-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                <span id="sdd-document-metadata-title">Edit Document Metadata</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDocumentMetadata" disabled="@_documentBusy" aria-label="Close document metadata dialog"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <EditForm Model="_documentMetadataForm" OnValidSubmit="SaveDocumentMetadataAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="sdd-modal-intro"><strong>@_selectedDocument.FileName</strong><span>Update searchable metadata and retention information.</span></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Description</label>
+                            <InputTextArea class="form-control" rows="4" @bind-Value="_documentMetadataForm.Description" />
+                            <ValidationMessage For="() => _documentMetadataForm.Description" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Tags</label>
+                            <InputText class="form-control" @bind-Value="_documentMetadataForm.Tags" />
+                            <ValidationMessage For="() => _documentMetadataForm.Tags" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Retention Date</label>
+                            <InputDate class="form-control" @bind-Value="_documentMetadataForm.RetentionDate" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDocumentMetadata" disabled="@_documentBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_documentBusy">
+                        @if (_documentBusy)
+                        {
+                            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                        }
+                        Save Metadata
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 
 @if (_loading)
 {
@@ -508,7 +556,17 @@ else
                              }
                             @foreach (var doc in _docs)
                             {
-                                <div class="sdd-doc-row"><i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i><div><strong>@doc.FileName</strong><small>@doc.CategoryCode - @FormatBytes(doc.FileSizeBytes) - @doc.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small></div><a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(doc.DocumentId)" title="Download"><i class="bi bi-download" aria-hidden="true"></i></a></div>
+                                <div class="sdd-doc-row">
+                                    <i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i>
+                                    <div><strong>@doc.FileName</strong><small>@doc.CategoryCode - @FormatBytes(doc.FileSizeBytes) - @doc.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small></div>
+                                    <div class="sdd-doc-actions" aria-label="Actions for @doc.FileName">
+                                        <button type="button" class="sdd-doc-open" title="Open document details" aria-label="Open details for @doc.FileName" @onclick="() => OpenDocument(doc)" @onclick:stopPropagation="true">Open <i class="bi bi-arrow-right-short" aria-hidden="true"></i></button>
+                                        <a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(doc.DocumentId)" title="Download" aria-label="Download @doc.FileName" @onclick:stopPropagation="true"><i class="bi bi-download" aria-hidden="true"></i></a>
+                                        <button type="button" class="sdd-icon-btn" title="Preview" aria-label="Preview @doc.FileName" @onclick="() => PreviewDocumentAsync(doc)" @onclick:stopPropagation="true"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        <button type="button" class="sdd-icon-btn" title="Edit metadata" aria-label="Edit metadata for @doc.FileName" @onclick="() => OpenDocumentMetadata(doc)" @onclick:stopPropagation="true"><i class="bi bi-pencil" aria-hidden="true"></i></button>
+                                        <button type="button" class="sdd-icon-btn sdd-icon-btn--danger" title="Delete" aria-label="Delete @doc.FileName" @onclick="() => ConfirmDeleteDocument(doc)" @onclick:stopPropagation="true"><i class="bi bi-trash" aria-hidden="true"></i></button>
+                                    </div>
+                                </div>
                             }
                             @if (!_docs.Any())
                             {
@@ -952,7 +1010,7 @@ else
         <div class="sdd-confirm" role="dialog" aria-modal="true" aria-labelledby="sdd-confirm-title" @onclick:stopPropagation="true">
             <div class="sdd-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
-                <span>Confirm submission action</span>
+                <span>@(_actionMode == "delete-document" ? "Confirm document action" : "Confirm submission action")</span>
                 <button type="button" class="sdd-icon-btn sdd-icon-btn--light ms-auto" @onclick="CloseConfirmDialog" disabled="@_actionBusy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
             </div>
             <div class="sdd-confirm__body">
@@ -1132,6 +1190,8 @@ else
     bool _actionBusy;
     bool _showActionDialog;
     bool _showDocumentUpload;
+    bool _showDocumentMetadata;
+    bool _documentBusy;
     bool _showConfirmDialog;
     bool _showQuoteRequestPopup;
     bool _showReadinessGatePopup;
@@ -1153,8 +1213,12 @@ else
     string _waiverReason = string.Empty;
     Guid? _selectedQuoteId;
     SubmissionMarketDto? _pendingRemoveMarket;
+    DocumentDto? _selectedDocument;
+    DocumentDto? _pendingDeleteDocument;
     SubmissionIntakeQuestionDto? _waiverTarget;
     CurrentUserContextModel? _currentUser;
+    EnterpriseDocumentPreview? _documentPreview;
+    DocumentMetadataForm _documentMetadataForm = new();
 
     SubmissionDto? _submission;
     SubmissionPackagePreviewDto? _packagePreview;
@@ -1235,8 +1299,8 @@ else
     IEnumerable<string> ImportanceReasons => BuildImportanceReasons();
     IReadOnlyList<string> ReadinessBlockingReasons => _readiness?.BlockingReasons ?? [];
     bool RequiresQuoteRequestReason => _actionMode == "quote" && !string.Equals(_actionForm.QuoteRequestActionCode, "InitialRequest", StringComparison.OrdinalIgnoreCase);
-    string ConfirmIconClass => _actionMode == "decline" || _actionMode == "remove-market" ? "sdd-confirm-icon sdd-confirm-icon--danger" : "sdd-confirm-icon";
-    string ConfirmButtonClass => _actionMode == "decline" || _actionMode == "remove-market" ? "sdd-btn sdd-btn--danger" : "sdd-btn sdd-btn--primary";
+    string ConfirmIconClass => _actionMode is "decline" or "remove-market" or "delete-document" ? "sdd-confirm-icon sdd-confirm-icon--danger" : "sdd-confirm-icon";
+    string ConfirmButtonClass => _actionMode is "decline" or "remove-market" or "delete-document" ? "sdd-btn sdd-btn--danger" : "sdd-btn sdd-btn--primary";
     string ActionNotesLabel => _actionMode switch
     {
         "decline" => "Decline Reason",
@@ -1540,6 +1604,74 @@ else
 
     void OpenDocumentUpload() => _showDocumentUpload = true;
 
+    void OpenDocument(DocumentDto document) => Nav.NavigateTo($"/documents/{document.DocumentId}");
+
+    async Task PreviewDocumentAsync(DocumentDto document)
+    {
+        if (_documentPreview is null) return;
+        await _documentPreview.OpenAsync(document.DocumentId, document.FileName, Path.GetExtension(document.FileName), document.ContentType);
+    }
+
+    void OpenDocumentMetadata(DocumentDto document)
+    {
+        _selectedDocument = document;
+        _documentMetadataForm = new DocumentMetadataForm
+        {
+            Description = document.Description,
+            Tags = document.Tags,
+            RetentionDate = document.RetentionDate
+        };
+        _showDocumentMetadata = true;
+    }
+
+    void CloseDocumentMetadata()
+    {
+        if (_documentBusy) return;
+        _showDocumentMetadata = false;
+        _selectedDocument = null;
+    }
+
+    async Task SaveDocumentMetadataAsync()
+    {
+        if (_selectedDocument is null) return;
+
+        _documentBusy = true;
+        try
+        {
+            await Api.UpdateDocumentMetadataAsync(new UpdateDocumentMetadataRequest
+            {
+                DocumentId = _selectedDocument.DocumentId,
+                Description = _documentMetadataForm.Description,
+                Tags = _documentMetadataForm.Tags,
+                RetentionDate = _documentMetadataForm.RetentionDate,
+                ModifiedByUserId = _currentUser?.UserId
+            });
+            _showDocumentMetadata = false;
+            _selectedDocument = null;
+            await LoadAsync();
+            ShowToast("Document metadata updated successfully.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Document metadata update failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _documentBusy = false;
+        }
+    }
+
+    void ConfirmDeleteDocument(DocumentDto document)
+    {
+        _pendingDeleteDocument = document;
+        _actionMode = "delete-document";
+        _actionTitle = "Delete Document";
+        _actionIcon = "bi-trash";
+        _confirmTitle = "Delete Document";
+        _confirmMessage = $"Permanently delete {document.FileName} from this submission and document storage?";
+        _showConfirmDialog = true;
+    }
+
     async Task HandleSubmissionDocumentUploadedAsync(Guid documentId)
     {
         if (_submission is null) return;
@@ -1733,6 +1865,7 @@ else
         if (_actionBusy) return;
         _showConfirmDialog = false;
         _pendingRemoveMarket = null;
+        _pendingDeleteDocument = null;
     }
 
     async Task ExecuteConfirmedActionAsync()
@@ -1830,6 +1963,11 @@ else
                 await Api.RemoveSubmissionMarketAsync(_pendingRemoveMarket.SubmissionMarketId);
                 ShowToast("Market removed.");
             }
+            else if (_actionMode == "delete-document" && _pendingDeleteDocument is not null)
+            {
+                await Api.DeleteDocumentAsync(_pendingDeleteDocument.DocumentId, _currentUser?.UserId);
+                ShowToast("Document deleted successfully.");
+            }
 
             await LoadAsync();
         }
@@ -1860,6 +1998,7 @@ else
             _actionBusy = false;
             _showConfirmDialog = false;
             _pendingRemoveMarket = null;
+            _pendingDeleteDocument = null;
         }
     }
 
@@ -2452,6 +2591,17 @@ else
     static string ActivityIcon(string type) => type switch { "SubmitToMarket" => "bi-send", "RequestQuote" => "bi-journal-text", "Decline" => "bi-x-circle", "Note" => "bi-sticky", "FollowUpTask" => "bi-list-check", "DocumentAttached" => "bi-file-earmark", "Assign" => "bi-person-check", _ => "bi-dot" };
     static string CommIcon(string type) => type switch { "Email" => "bi-envelope", "Call" => "bi-telephone", "Note" => "bi-sticky", "SMS" => "bi-chat-text", _ => "bi-chat" };
     static string DocIcon(string name) => System.IO.Path.GetExtension(name).ToLowerInvariant() switch { ".pdf" => "bi-file-earmark-pdf", ".doc" or ".docx" => "bi-file-earmark-word", ".xls" or ".xlsx" => "bi-file-earmark-spreadsheet", _ => "bi-file-earmark" };
+
+    sealed class DocumentMetadataForm
+    {
+        [StringLength(1000)]
+        public string? Description { get; set; }
+
+        [StringLength(500)]
+        public string? Tags { get; set; }
+
+        public DateOnly? RetentionDate { get; set; }
+    }
 
     sealed class ActionForm
     {

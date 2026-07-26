@@ -4,9 +4,11 @@
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime JS
 @using Ams.Application.Features.Documents
+@implements IAsyncDisposable
 
-<PageTitle>Document Detail ? AMS</PageTitle>
+<PageTitle>Document Detail — AMS</PageTitle>
 
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
 <EnterpriseDocumentPreview @ref="_documentPreview" />
@@ -15,7 +17,7 @@
 {
     @if (_loadError is not null)
     {
-        <div class="alert alert-danger dd-load-error" role="alert">
+        <div class="alert alert-danger dd-load-error" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
             <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
             <span>@_loadError</span>
             <button class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/documents")'>
@@ -27,7 +29,7 @@
     {
         <div class="dd-loading">
             <div class="um-spinner" aria-hidden="true"></div>
-            <p>Loading document intelligence workspace?</p>
+            <p>Loading document intelligence workspace…</p>
         </div>
     }
 }
@@ -47,7 +49,7 @@ else
             <div class="dd-hero-main">
                 <span class="dd-eyebrow"><i class="bi bi-folder2-open" aria-hidden="true"></i> Enterprise document control</span>
                 <h1>@_doc.FileName</h1>
-                <p>v@_doc.VersionNumber ? @_doc.CategoryCode ? @FormatSize(_doc.FileSizeBytes) ? Uploaded @_doc.CreatedDateUtc.ToString("MMM d, yyyy")</p>
+                <p>v@_doc.VersionNumber <span aria-hidden="true">·</span> @_doc.CategoryCode <span aria-hidden="true">·</span> @FormatSize(_doc.FileSizeBytes) <span aria-hidden="true">·</span> Uploaded @_doc.CreatedDateUtc.ToString("MMM d, yyyy")</p>
                 <div class="dd-hero-chips">
                     <span><i class="bi bi-building" aria-hidden="true"></i>@(_doc.EntityName ?? "Unassigned entity")</span>
                     <span><i class="bi bi-filetype-pdf" aria-hidden="true"></i>@(_doc.ContentType ?? "Unknown type")</span>
@@ -55,12 +57,13 @@ else
                 </div>
             </div>
             <div class="dd-hero-actions">
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents/esign")'><i class="bi bi-pen" aria-hidden="true"></i> E-Sign</button>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents/packets")'><i class="bi bi-collection-plus" aria-hidden="true"></i> Add to Packet</button>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenShare"><i class="bi bi-share" aria-hidden="true"></i> Share</button>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenRename"><i class="bi bi-pencil" aria-hidden="true"></i> Rename</button>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ArchiveAsync"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
-                <button class="um-btn um-btn-danger um-btn-sm" @onclick="DeleteAsync"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Documents</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents/esign")'><i class="bi bi-pen" aria-hidden="true"></i> E-Sign</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/documents/packets")'><i class="bi bi-collection-plus" aria-hidden="true"></i> Add to Packet</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenShare"><i class="bi bi-share" aria-hidden="true"></i> Share</button>
+                <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenRename"><i class="bi bi-pencil" aria-hidden="true"></i> Rename</button>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ArchiveAsync"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+                <button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick="OpenDeleteConfirm"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
             </div>
         </section>
 
@@ -170,14 +173,28 @@ else
                     }
                     else if (_activeTab == "versions")
                     {
-                        <div class="dd-tab-toolbar"><button class="um-btn um-btn-primary um-btn-sm" @onclick="() => _showNewVer = true"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Version</button></div>
+                        <div class="dd-tab-toolbar"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewVersion"><i class="bi bi-plus-circle" aria-hidden="true"></i> New Version</button></div>
                         <div class="sr-table-scroll dd-table-card">
                             <table class="sr-table dd-native-table">
-                                <thead><tr><th>Ver</th><th>File</th><th>Notes</th><th>Date</th><th>Source</th></tr></thead>
+                                <thead><tr><th>Ver</th><th>File</th><th>Size</th><th>Notes</th><th>Date</th><th>Source</th><th class="sr-actions-col">Actions</th></tr></thead>
                                 <tbody>
                                     @foreach (var row in VersionRows)
                                     {
-                                        <tr><td><span class="dd-version-badge">v@row.Version</span></td><td>@row.FileName</td><td>@row.Notes</td><td>@row.DateLabel</td><td><span class="dd-source-chip @row.SourceClass">@row.Source</span></td></tr>
+                                        <tr>
+                                            <td><span class="dd-version-badge">v@row.Version</span></td>
+                                            <td><div class="dd-version-file"><strong>@row.FileName</strong>@if (row.IsCurrent) { <span>Current</span> }</div></td>
+                                            <td>@row.SizeLabel</td><td>@row.Notes</td><td>@row.DateLabel</td><td><span class="dd-source-chip @row.SourceClass">@row.Source</span></td>
+                                            <td class="sr-actions-col">
+                                                @if (row.DocumentVersionId.HasValue)
+                                                {
+                                                    <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Download version v@row.Version" @onclick="() => DownloadVersion(row.DocumentVersionId.Value)"><i class="bi bi-download" aria-hidden="true"></i> Download</button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="dd-no-tags">—</span>
+                                                }
+                                            </td>
+                                        </tr>
                                     }
                                 </tbody>
                             </table>
@@ -194,7 +211,7 @@ else
                                     {
                                         <tr>
                                             <td><span class="dd-token">@row.Token</span></td><td>@row.ExpiresLabel</td><td>@row.AccessCount</td><td>@row.MaxAccessCount</td><td><span class="dd-status-badge @(row.IsRevoked ? "dd-st-archived" : "dd-st-active")">@(row.IsRevoked ? "Revoked" : "Active")</span></td>
-                                            <td class="sr-actions-col">@if (!row.IsRevoked && row.ShareLinkId.HasValue) { <button class="um-btn um-btn-danger um-btn-xs" @onclick="() => RevokeShareLinkAsync(row.ShareLinkId.Value)">Revoke</button> } else { <span class="dd-no-tags">?</span> }</td>
+                                            <td class="sr-actions-col">@if (!row.IsRevoked && row.ShareLinkId.HasValue) { <button type="button" class="um-btn um-btn-danger um-btn-xs" @onclick="() => RevokeShareLinkAsync(row.ShareLinkId.Value)">Revoke</button> } else { <span class="dd-no-tags">—</span> }</td>
                                         </tr>
                                     }
                                 </tbody>
@@ -234,11 +251,67 @@ else
 
 @if (_showNewVer)
 {
-    <div class="dd-modal-backdrop" role="presentation">
-        <div class="dd-modal" role="dialog" aria-modal="true" aria-labelledby="dd-version-title">
-            <div class="dd-modal-header"><h2 id="dd-version-title">Upload New Version</h2><button type="button" class="dd-modal-close" @onclick="() => _showNewVer = false" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
-            <div class="dd-form-grid"><label>File Name<input class="form-control" @bind="_verReq.FileName" /></label><label>Storage Path<input class="form-control" @bind="_verReq.StoragePath" /></label><label>Content Type<input class="form-control" @bind="_verReq.ContentType" /></label><label>Change Notes<textarea class="form-control" @bind="_verReq.ChangeNotes" rows="3"></textarea></label></div>
-            <div class="dd-modal-actions"><button class="um-btn um-btn-ghost" @onclick="() => _showNewVer = false">Cancel</button><button class="um-btn um-btn-primary" @onclick="SubmitVersionAsync">Upload Version</button></div>
+    <div class="dd-modal-backdrop" role="presentation" @onclick="CloseNewVersion">
+        <div class="dd-modal dd-version-modal" role="dialog" aria-modal="true" aria-labelledby="dd-version-title" aria-describedby="dd-version-description" @onclick:stopPropagation="true">
+            <div class="dd-modal-header">
+                <div><span class="dd-modal-eyebrow"><i class="bi bi-layers" aria-hidden="true"></i> Controlled versioning</span><h2 id="dd-version-title">Upload New Version</h2></div>
+                <button type="button" class="dd-modal-close" @onclick="CloseNewVersion" disabled="@_versionBusy" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+            </div>
+            <div class="dd-version-body">
+                <p id="dd-version-description" class="dd-version-intro">The selected file becomes the active document. Version v@(_doc?.VersionNumber ?? 1) remains secured in version history for audit and recovery.</p>
+                <div class="dd-version-transition" aria-label="Version transition">
+                    <span><small>Current</small><strong>v@(_doc?.VersionNumber ?? 1)</strong></span>
+                    <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                    <span class="dd-version-next"><small>New</small><strong>v@((_doc?.VersionNumber ?? 1) + 1)</strong></span>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_versionError))
+                {
+                    <div class="alert alert-danger dd-version-error" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_versionError</span></div>
+                }
+
+                <div class="dd-form-grid">
+                    <div class="dd-field-full">
+                        <label>Version File <span class="text-danger">*</span></label>
+                        <div @ref="_versionDropZone" class="dd-version-drop-zone @(_versionDragActive ? "dd-version-drop-zone--active" : string.Empty) @(_versionError is not null && _versionFile is null ? "dd-version-drop-zone--invalid" : string.Empty)"
+                             @ondragenter="ActivateVersionDropZone" @ondragover="ActivateVersionDropZone" @ondragleave="DeactivateVersionDropZone" @ondrop="DeactivateVersionDropZone"
+                             @ondragover:preventDefault="true" @ondrop:preventDefault="true">
+                            <InputFile @ref="_versionFileInput" class="dd-version-file-input" OnChange="OnVersionFileSelected" accept="@VersionFileAccept" disabled="@_versionBusy" />
+                            @if (_versionFile is null)
+                            {
+                                <span class="dd-version-upload-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></span>
+                                <strong>Drag and drop the new version here</strong>
+                                <span>or click to browse</span>
+                                <small>PDF, Office, CSV, or image files · Maximum 100 MB</small>
+                            }
+                            else
+                            {
+                                <span class="dd-version-upload-icon dd-version-file-icon"><i class="bi @DocIcon(_versionFile.ContentType)" aria-hidden="true"></i></span>
+                                <strong>@_versionFile.Name</strong>
+                                <span>@FormatSize(_versionFile.Size) · @(_versionFile.ContentType ?? "Unknown content type")</span>
+                                <small>Drop another file or click to replace</small>
+                                <i class="bi bi-check-circle-fill dd-version-file-check" aria-label="File accepted"></i>
+                            }
+                        </div>
+                    </div>
+                    <label class="dd-field-full">Display File Name <span class="text-danger">*</span>
+                        <input class="form-control" maxlength="260" @bind="_versionFileName" disabled="@_versionBusy" />
+                        <small>The extension must match the selected file.</small>
+                    </label>
+                    <label class="dd-field-full">Change Notes <span class="text-danger">*</span>
+                        <textarea class="form-control" maxlength="1000" @bind="_versionChangeNotes" rows="4" disabled="@_versionBusy" placeholder="Describe what changed, why it changed, and any review impact."></textarea>
+                        <small class="dd-character-count">@_versionChangeNotes.Length / 1,000</small>
+                    </label>
+                </div>
+                <div class="dd-version-assurance"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Audit protected.</strong> The prior file, uploader, timestamp, notes, and version number remain immutable in history.</span></div>
+            </div>
+            <div class="dd-modal-actions">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseNewVersion" disabled="@_versionBusy">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="SubmitVersionAsync" disabled="@_versionBusy">
+                    @if (_versionBusy) { <span class="spinner-border spinner-border-sm" aria-hidden="true"></span> }
+                    Upload v@((_doc?.VersionNumber ?? 1) + 1)
+                </button>
+            </div>
         </div>
     </div>
 }
@@ -265,6 +338,29 @@ else
     </div>
 }
 
+@if (_showDeleteConfirm && _doc is not null)
+{
+    <div class="dd-modal-backdrop" role="presentation" @onclick="CloseDeleteConfirm">
+        <div class="um-confirm-dialog dd-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dd-delete-title" aria-describedby="dd-delete-message" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+            <div class="dd-confirm-copy">
+                <h2 id="dd-delete-title">Delete document?</h2>
+                <p id="dd-delete-message">Permanently delete <strong>@_doc.FileName</strong> and its stored file? This action cannot be undone.</p>
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDeleteConfirm" disabled="@_deleteBusy">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_deleteBusy">
+                    @if (_deleteBusy)
+                    {
+                        <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                    }
+                    Delete Document
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     Guid TenantId { get; set; }
     Guid TenantAdminUserId { get; set; }
@@ -282,6 +378,11 @@ else
     private List<DocumentShareLinkDto>? _shareLinks;
     private List<DocumentAccessLogDto>? _accessLog;
     private string? _loadError;
+    private bool _showDeleteConfirm;
+    private bool _deleteBusy;
+    private bool _versionBusy;
+    private bool _versionDragActive;
+    private bool _versionDropZoneInitialized;
     private string _activeTab = "details";
 
     // Dialog flags
@@ -289,7 +390,19 @@ else
 
     // Request objects
     private UpdateDocumentMetadataRequest _metaReq  = new();
-    private CreateDocumentVersionRequest  _verReq   = new();
+    private IBrowserFile? _versionFile;
+    private ElementReference _versionDropZone;
+    private InputFile? _versionFileInput;
+    private IJSObjectReference? _versionDropModule;
+    private string _versionFileName = string.Empty;
+    private string _versionChangeNotes = string.Empty;
+    private string? _versionError;
+    private const long MaxVersionFileSizeBytes = 104_857_600;
+    private const string VersionFileAccept = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.tif,.tiff";
+    private static readonly HashSet<string> AllowedVersionExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".tif", ".tiff"
+    };
     private RenameDocumentRequest         _renameReq = new();
     private DateTime  _shareExpires   = DateTime.UtcNow.AddDays(7);
     private int?      _shareMaxAccess;
@@ -320,7 +433,7 @@ else
             {
                 return _versions
                     .OrderByDescending(x => x.VersionNumber)
-                    .Select(x => new VersionRow(x.VersionNumber, x.FileName ?? "Unnamed document", x.ChangeNotes ?? "No notes captured", x.CreatedDateUtc.ToString("MMM d, yyyy h:mm tt"), "API", "dd-source-api"))
+                    .Select(x => new VersionRow(x.DocumentVersionId, x.VersionNumber, x.FileName ?? "Unnamed document", FormatSize(x.FileSizeBytes), x.ChangeNotes ?? "No notes captured", x.CreatedDateUtc.ToString("MMM d, yyyy h:mm tt"), "Vault", "dd-source-api", x.VersionNumber == _doc?.VersionNumber))
                     .ToList();
             }
 
@@ -367,6 +480,22 @@ else
         await LoadAllAsync();
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_showNewVer || _versionDropZoneInitialized || _versionFileInput is null)
+            return;
+
+        _versionDropModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/EnterpriseDocumentUpload.razor.js");
+        await _versionDropModule.InvokeVoidAsync("initialize", _versionDropZone, _versionFileInput.Element);
+        _versionDropZoneInitialized = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_versionDropModule is not null)
+            await _versionDropModule.DisposeAsync();
+    }
+
     private async Task LoadAllAsync()
     {
         _loadError = null;
@@ -409,6 +538,9 @@ else
         if (_doc is null) return;
         Nav.NavigateTo(Api.GetDocumentDownloadUrl(_doc.DocumentId), forceLoad: true);
     }
+
+    private void DownloadVersion(Guid documentVersionId)
+        => Nav.NavigateTo(Api.GetDocumentVersionDownloadUrl(DocumentId, documentVersionId), forceLoad: true);
 
     private DocumentDto BuildSeedDocument() => new()
     {
@@ -458,10 +590,32 @@ else
         Nav.NavigateTo("/documents");
     }
 
-    private async Task DeleteAsync()
+    private void OpenDeleteConfirm() => _showDeleteConfirm = true;
+
+    private void CloseDeleteConfirm()
     {
-        await Api.DeleteDocumentAsync(DocumentId);
-        Nav.NavigateTo("/documents");
+        if (_deleteBusy) return;
+        _showDeleteConfirm = false;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        _deleteBusy = true;
+        try
+        {
+            await Api.DeleteDocumentAsync(DocumentId, TenantAdminUserId == Guid.Empty ? null : TenantAdminUserId);
+            await _toast.ShowAsync(new ToastModel { Content = "Document deleted successfully.", CssClass = "enterprise-toast-success" });
+            Nav.NavigateTo("/documents");
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Content = $"Delete failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
+        }
+        finally
+        {
+            _deleteBusy = false;
+            _showDeleteConfirm = false;
+        }
     }
 
     private async Task SubmitMetaAsync()
@@ -475,14 +629,93 @@ else
 
     private async Task SubmitVersionAsync()
     {
-        _verReq.TenantId   = _tenantId;
-        _verReq.DocumentId = DocumentId;
-        await Api.CreateDocumentVersionAsync(_verReq);
-        _verReq   = new();
+        _versionError = ValidateVersionUpload();
+        if (_versionError is not null) return;
+
+        _versionBusy = true;
+        try
+        {
+            await using var stream = _versionFile!.OpenReadStream(MaxVersionFileSizeBytes);
+            await Api.UploadDocumentVersionAsync(DocumentId, new ApiClient.UploadDocumentVersionRequest
+            {
+                FileName = _versionFileName.Trim(),
+                OriginalFileName = _versionFile.Name,
+                ChangeNotes = _versionChangeNotes.Trim(),
+                CreatedByUserId = _tenantAdminUserId == Guid.Empty ? null : _tenantAdminUserId,
+                Content = stream
+            });
+
+            _showNewVer = false;
+            _doc = await Api.GetDocumentByIdAsync(DocumentId);
+            _versions = (await Api.GetDocumentVersionsAsync(DocumentId))?.ToList() ?? [];
+            await _toast.ShowAsync(new ToastModel { Content = $"Version v{_doc?.VersionNumber} uploaded successfully.", CssClass = "enterprise-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            _versionError = ex.Message;
+        }
+        finally
+        {
+            _versionBusy = false;
+        }
+    }
+
+    private void OpenNewVersion()
+    {
+        _versionFile = null;
+        _versionFileName = _doc?.FileName ?? string.Empty;
+        _versionChangeNotes = string.Empty;
+        _versionError = null;
+        _versionDragActive = false;
+        _versionDropZoneInitialized = false;
+        _showNewVer = true;
+    }
+
+    private void CloseNewVersion()
+    {
+        if (_versionBusy) return;
         _showNewVer = false;
-        _doc      = await Api.GetDocumentByIdAsync(DocumentId);
-        _versions = (await Api.GetDocumentVersionsAsync(DocumentId))?.ToList() ?? [];
-        await _toast.ShowAsync(new ToastModel { Content = "New version uploaded.", CssClass = "enterprise-toast-success" });
+        _versionError = null;
+        _versionDragActive = false;
+    }
+
+    private void ActivateVersionDropZone() => _versionDragActive = true;
+
+    private void DeactivateVersionDropZone() => _versionDragActive = false;
+
+    private void OnVersionFileSelected(InputFileChangeEventArgs args)
+    {
+        _versionDragActive = false;
+        _versionError = null;
+        _versionFile = args.File;
+        _versionFileName = _versionFile.Name;
+
+        if (_versionFile.Size > MaxVersionFileSizeBytes)
+        {
+            _versionError = "The selected file exceeds the 100 MB upload limit.";
+            _versionFile = null;
+            return;
+        }
+
+        if (!AllowedVersionExtensions.Contains(Path.GetExtension(_versionFile.Name)))
+        {
+            _versionError = "The selected file type is not supported. Choose a PDF, Office document, CSV, or supported image file.";
+            _versionFile = null;
+        }
+    }
+
+    private string? ValidateVersionUpload()
+    {
+        if (_versionFile is null) return "Select the file to use for the new document version.";
+        if (_versionFile.Size <= 0) return "The selected file is empty.";
+        if (_versionFile.Size > MaxVersionFileSizeBytes) return "The selected file exceeds the 100 MB upload limit.";
+        if (string.IsNullOrWhiteSpace(_versionFileName)) return "Enter a display file name.";
+        if (_versionFileName.Trim().Length > 260) return "The display file name cannot exceed 260 characters.";
+        if (Path.GetExtension(_versionFileName).Length == 0) return "The display file name must include a file extension.";
+        if (!string.Equals(Path.GetExtension(_versionFileName), Path.GetExtension(_versionFile.Name), StringComparison.OrdinalIgnoreCase)) return "The display file name extension must match the selected file.";
+        if (string.IsNullOrWhiteSpace(_versionChangeNotes) || _versionChangeNotes.Trim().Length < 3) return "Enter meaningful change notes of at least 3 characters.";
+        if (_versionChangeNotes.Trim().Length > 1000) return "Change notes cannot exceed 1,000 characters.";
+        return null;
     }
 
     private void OpenShare()   => _showShare  = true;
@@ -516,9 +749,9 @@ else
 
     private IReadOnlyList<VersionRow> SeedVersionRows() =>
     [
-        new(_doc?.VersionNumber ?? 3, _doc?.FileName ?? "Policy Document.pdf", "Current enterprise-controlled version", (_doc?.CreatedDateUtc ?? DateTime.UtcNow.AddDays(-2)).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed"),
-        new(Math.Max((_doc?.VersionNumber ?? 3) - 1, 1), "Prior Policy Packet.pdf", "Renewal packet reviewed by account manager", DateTime.UtcNow.AddDays(-14).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed"),
-        new(1, "Original Submission.pdf", "Initial insured upload and OCR intake", DateTime.UtcNow.AddDays(-42).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed")
+        new(null, _doc?.VersionNumber ?? 3, _doc?.FileName ?? "Policy Document.pdf", FormatSize(_doc?.FileSizeBytes), "Current enterprise-controlled version", (_doc?.CreatedDateUtc ?? DateTime.UtcNow.AddDays(-2)).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed", true),
+        new(null, Math.Max((_doc?.VersionNumber ?? 3) - 1, 1), "Prior Policy Packet.pdf", "—", "Renewal packet reviewed by account manager", DateTime.UtcNow.AddDays(-14).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed", false),
+        new(null, 1, "Original Submission.pdf", "—", "Initial insured upload and OCR intake", DateTime.UtcNow.AddDays(-42).ToString("MMM d, yyyy h:mm tt"), "Seed", "dd-source-seed", false)
     ];
 
     private static IReadOnlyList<ShareRow> SeedShareRows() =>
@@ -612,7 +845,7 @@ else
 
     private sealed record TabModel(string Id, string Label, string Icon);
     private sealed record MetricModel(string Label, string Value, string Icon);
-    private sealed record VersionRow(int Version, string FileName, string Notes, string DateLabel, string Source, string SourceClass);
+    private sealed record VersionRow(Guid? DocumentVersionId, int Version, string FileName, string SizeLabel, string Notes, string DateLabel, string Source, string SourceClass, bool IsCurrent);
     private sealed record ShareRow(Guid? ShareLinkId, string Token, string ExpiresLabel, int AccessCount, int? MaxAccessCount, bool IsRevoked);
     private sealed record AuditRow(string Action, string User, string IpAddress, string DateLabel, string Source, string SourceClass);
 }

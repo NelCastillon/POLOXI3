@@ -18,6 +18,7 @@ public interface IDocumentRepository
 
     // ── Version control ──────────────────────────────────────
     Task<IReadOnlyList<DocumentVersionDto>> GetVersionsAsync(Guid documentId, CancellationToken cancellationToken = default);
+    Task<DocumentVersionDto?> GetVersionAsync(Guid documentId, Guid documentVersionId, CancellationToken cancellationToken = default);
     Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default);
 
     // ── Secure sharing ───────────────────────────────────────

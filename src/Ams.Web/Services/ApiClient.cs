@@ -3186,6 +3186,9 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<DocumentVersionDto>?> GetDocumentVersionsAsync(Guid documentId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<DocumentVersionDto>>($"api/documents/{documentId}/versions", cancellationToken);
 
+    public string GetDocumentVersionDownloadUrl(Guid documentId, Guid documentVersionId)
+        => new Uri(_httpClient.BaseAddress!, $"api/documents/{documentId}/versions/{documentVersionId}/download").ToString();
+
     public async Task<Guid> CreateDocumentVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/documents/versions", request, cancellationToken);
@@ -3202,7 +3205,7 @@ public sealed partial class ApiClient
 
         content.Add(new StreamContent(request.Content), "File", request.FileName ?? request.OriginalFileName);
         var response = await _httpClient.PostAsync($"api/documents/{documentId}/versions/upload", content, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
     }
 

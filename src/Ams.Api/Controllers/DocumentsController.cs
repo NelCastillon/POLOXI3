@@ -9,6 +9,12 @@ namespace Ams.Api.Controllers;
 [Route("api/[controller]")]
 public sealed class DocumentsController : ControllerBase
 {
+    private const long MaxVersionFileSizeBytes = 104_857_600;
+    private static readonly HashSet<string> AllowedVersionExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".tif", ".tiff"
+    };
+
     private readonly IDocumentService _service;
     private readonly IDocumentStorageService _storageService;
 
@@ -124,6 +130,19 @@ public sealed class DocumentsController : ControllerBase
     public async Task<IActionResult> GetVersions(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetVersionsAsync(id, cancellationToken));
 
+    [HttpGet("{id:guid}/versions/{versionId:guid}/download")]
+    public async Task<IActionResult> DownloadVersion(Guid id, Guid versionId, CancellationToken cancellationToken)
+    {
+        var version = await _service.GetVersionAsync(id, versionId, cancellationToken);
+        if (version is null) return NotFound();
+
+        var download = await _storageService.DownloadAsync(version.StoragePath, cancellationToken);
+        if (download is null) return NotFound();
+
+        await _service.LogAccessAsync(version.TenantId, id, GetCurrentUserId(), null, $"DownloadVersion:{version.VersionNumber}", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        return File(download.Content, download.ContentType ?? version.ContentType ?? "application/octet-stream", version.FileName);
+    }
+
     [HttpPost("versions")]
     public async Task<IActionResult> CreateVersion([FromBody] CreateDocumentVersionRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateVersionAsync(request, cancellationToken));
@@ -138,29 +157,52 @@ public sealed class DocumentsController : ControllerBase
         if (form.File is null || form.File.Length == 0)
             return BadRequest("A document version file is required.");
 
+        if (form.File.Length > MaxVersionFileSizeBytes)
+            return BadRequest("The document version file cannot exceed 100 MB.");
+
+        var originalFileName = Path.GetFileName(form.File.FileName);
+        var requestedFileName = Path.GetFileName(string.IsNullOrWhiteSpace(form.FileName) ? originalFileName : form.FileName.Trim());
+        if (string.IsNullOrWhiteSpace(requestedFileName) || requestedFileName.Length > 260)
+            return BadRequest("The version file name is required and cannot exceed 260 characters.");
+
+        var extension = Path.GetExtension(requestedFileName);
+        if (!AllowedVersionExtensions.Contains(extension))
+            return BadRequest("The selected file type is not supported. Upload a PDF, Office document, CSV, or supported image file.");
+
+        if (string.IsNullOrWhiteSpace(form.ChangeNotes) || form.ChangeNotes.Trim().Length is < 3 or > 1000)
+            return BadRequest("Change notes are required and must be between 3 and 1,000 characters.");
+
         await using var stream = form.File.OpenReadStream();
         var upload = await _storageService.UploadAsync(new DocumentStorageUploadRequest
         {
             TenantId = item.TenantId,
-            FileName = form.File.FileName,
+            FileName = originalFileName,
             ContentType = form.File.ContentType,
             Content = stream
         }, cancellationToken);
 
-        var versionId = await _service.CreateVersionAsync(new CreateDocumentVersionRequest
+        try
         {
-            TenantId = item.TenantId,
-            DocumentId = id,
-            FileName = form.FileName ?? form.File.FileName,
-            StoragePath = upload.StoragePath,
-            ContentType = upload.ContentType ?? form.File.ContentType,
-            FileSizeBytes = upload.FileSizeBytes,
-            ChangeNotes = form.ChangeNotes,
-            CreatedByUserId = form.CreatedByUserId
-        }, cancellationToken);
+            var versionId = await _service.CreateVersionAsync(new CreateDocumentVersionRequest
+            {
+                TenantId = item.TenantId,
+                DocumentId = id,
+                FileName = requestedFileName,
+                StoragePath = upload.StoragePath,
+                ContentType = upload.ContentType ?? form.File.ContentType,
+                FileSizeBytes = upload.FileSizeBytes,
+                ChangeNotes = form.ChangeNotes.Trim(),
+                CreatedByUserId = form.CreatedByUserId ?? GetCurrentUserId()
+            }, cancellationToken);
 
-        await _service.LogAccessAsync(item.TenantId, id, form.CreatedByUserId ?? GetCurrentUserId(), null, "UploadVersion", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
-        return Ok(versionId);
+            await _service.LogAccessAsync(item.TenantId, id, form.CreatedByUserId ?? GetCurrentUserId(), null, "UploadVersion", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+            return Ok(versionId);
+        }
+        catch
+        {
+            await _storageService.DeleteAsync(upload.StoragePath, cancellationToken);
+            throw;
+        }
     }
 
     // ── Secure sharing ───────────────────────────────────────
