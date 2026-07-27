@@ -77,6 +77,12 @@ VALUES
         }, cancellationToken: cancellationToken));
 
         await SyncPrimaryLeadContactAsync(cn, null, request.TenantId, id, request.FirstName, request.LastName, request.Email, request.Phone, request.CreatedByUserId, cancellationToken);
+        await SyncPhoneComplianceLinkAsync(cn, null, request.TenantId, id, null, "Lead", id, request.Phone, true, request.CreatedByUserId, cancellationToken);
+        var primaryContactId = await GetPrimaryLeadContactIdAsync(cn, null, request.TenantId, id, cancellationToken);
+        if (primaryContactId.HasValue)
+        {
+            await SyncPhoneComplianceLinkAsync(cn, null, request.TenantId, id, primaryContactId, "LeadContact", primaryContactId.Value, request.Phone, true, request.CreatedByUserId, cancellationToken);
+        }
 
         return id;
     }
@@ -92,6 +98,7 @@ VALUES
         if (lead is not null)
         {
             lead.Score = await CalculateLeadScoreAsync(cn, ToScoringInput(lead), lead.Score, cancellationToken);
+            await ApplyPhoneComplianceStatusAsync(cn, [lead], lead.TenantId, cancellationToken);
         }
 
         return lead;
@@ -123,6 +130,7 @@ VALUES
         {
             item.Score = await CalculateLeadScoreAsync(cn, ToScoringInput(item), item.Score, cancellationToken);
         }
+        await ApplyPhoneComplianceStatusAsync(cn, items, tenantId, cancellationToken);
 
         return new PagedResult<LeadDto>
         {
@@ -211,12 +219,31 @@ VALUES
         };
     }
 
-    public Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
-        => QueryListAsync<LeadEngagementOptionDto>(@"
+    public async Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(@"
+MERGE CRM.LeadEngagementOption AS target
+USING (VALUES
+    (@TenantId, N'LeadPriority', N'Hot', N'Hot', N'Highest priority lead requiring immediate action.', 10),
+    (@TenantId, N'LeadPriority', N'High', N'High', N'High priority lead or interest line.', 20),
+    (@TenantId, N'LeadPriority', N'Warm', N'Warm', N'Engaged lead with active nurture signals.', 30),
+    (@TenantId, N'LeadPriority', N'Medium', N'Medium', N'Medium priority lead or interest line.', 40),
+    (@TenantId, N'LeadPriority', N'Normal', N'Normal', N'Standard priority lead or interest line.', 50),
+    (@TenantId, N'LeadPriority', N'Cold', N'Cold', N'Low urgency lead with limited engagement.', 60),
+    (@TenantId, N'LeadPriority', N'Low', N'Low', N'Low priority lead or interest line.', 70)
+) AS source(TenantId, OptionType, Code, Label, Description, SortOrder)
+ON target.TenantId = source.TenantId AND target.OptionType = source.OptionType AND target.Code = source.Code AND target.IsDeleted = 0
+WHEN MATCHED AND target.IsActive = 0 THEN UPDATE SET IsActive = 1, Label = source.Label, Description = source.Description, SortOrder = source.SortOrder, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.OptionType, source.Code, source.Label, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), 0);", new { TenantId = tenantId }, cancellationToken: cancellationToken));
+
+        return (await cn.QueryAsync<LeadEngagementOptionDto>(new CommandDefinition(@"
 SELECT OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive
 FROM CRM.LeadEngagementOption
 WHERE TenantId = @TenantId AND IsDeleted = 0 AND IsActive = 1 AND (@OptionType IS NULL OR OptionType = @OptionType)
-ORDER BY OptionType, SortOrder, Label;", new { TenantId = tenantId, OptionType = EmptyToNull(optionType) }, cancellationToken);
+ORDER BY OptionType, SortOrder, Label;", new { TenantId = tenantId, OptionType = EmptyToNull(optionType) }, cancellationToken: cancellationToken))).AsList();
+    }
 
     public async Task<IReadOnlyList<LeadTypeDto>> GetLeadTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
@@ -333,6 +360,12 @@ WHERE LeadId = @LeadId AND IsDeleted = 0;";
                 request.Phone,
                 request.UpdatedByUserId,
                 cancellationToken);
+            await SyncPhoneComplianceLinkAsync(cn, null, current.TenantId, request.LeadId, null, "Lead", request.LeadId, request.Phone, true, request.UpdatedByUserId, cancellationToken);
+            var primaryContactId = await GetPrimaryLeadContactIdAsync(cn, null, current.TenantId, request.LeadId, cancellationToken);
+            if (primaryContactId.HasValue)
+            {
+                await SyncPhoneComplianceLinkAsync(cn, null, current.TenantId, request.LeadId, primaryContactId, "LeadContact", primaryContactId.Value, request.Phone, true, request.UpdatedByUserId, cancellationToken);
+            }
         }
     }
 
@@ -862,6 +895,7 @@ END;", new
         const string sql = @"INSERT INTO CRM.LeadContact (ContactId,TenantId,LeadId,FirstName,LastName,Title,Email,Phone,IsPrimary,CreatedByUserId,CreatedDateUtc,IsDeleted) VALUES (@ContactId,@TenantId,@LeadId,@FirstName,@LastName,@Title,@Email,@Phone,@IsPrimary,@CreatedByUserId,SYSUTCDATETIME(),0);";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { ContactId = id, request.TenantId, request.LeadId, request.FirstName, request.LastName, request.Title, request.Email, request.Phone, request.IsPrimary, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        await SyncPhoneComplianceLinkAsync(cn, null, request.TenantId, request.LeadId, id, "LeadContact", id, request.Phone, request.IsPrimary, request.CreatedByUserId, cancellationToken);
         return id;
     }
 
@@ -870,9 +904,21 @@ END;", new
         const string sql = @"UPDATE CRM.LeadContact SET FirstName=@FirstName,LastName=@LastName,Title=@Title,Email=@Email,Phone=@Phone,IsPrimary=@IsPrimary,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE ContactId=@ContactId AND IsDeleted=0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+        await SyncPhoneComplianceLinkAsync(cn, null, request.TenantId, request.LeadId, request.ContactId, "LeadContact", request.ContactId, request.Phone, request.IsPrimary, request.ModifiedByUserId, cancellationToken);
     }
 
-    public Task DeleteContactAsync(Guid contactId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => SoftDeleteAsync("CRM.LeadContact", "ContactId", contactId, modifiedByUserId, cancellationToken);
+    public async Task DeleteContactAsync(Guid contactId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.LeadContact
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE ContactId = @ContactId AND IsDeleted = 0;
+
+UPDATE CRM.PhoneEntityLink
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE EntityTypeCode = N'LeadContact' AND EntityId = @ContactId AND IsDeleted = 0;", new { ContactId = contactId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
 
     public Task<IReadOnlyList<LeadInterestLineDto>> GetInterestLinesAsync(Guid leadId, CancellationToken cancellationToken = default)
         => QueryListAsync<LeadInterestLineDto>("SELECT InterestLineId, TenantId, LeadId, LineOfBusiness, Carrier, CurrentCarrier, EstPremium, ExpiryDate, Priority, Notes, CreatedDateUtc, ModifiedDateUtc FROM CRM.LeadInterestLine WHERE LeadId = @LeadId AND IsDeleted = 0 ORDER BY CreatedDateUtc DESC;", new { LeadId = leadId }, cancellationToken);
@@ -906,6 +952,7 @@ END;", new
         const string sql = @"INSERT INTO CRM.LeadCommunication (CommunicationId,TenantId,LeadId,MessageThreadId,ThreadMessageId,Channel,Subject,Preview,Direction,DeliveryStatus,EngagementStatus,SentByUserId,SentAt,Opened,Clicked,IsAutomated,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES (@CommunicationId,@TenantId,@LeadId,@MessageThreadId,@ThreadMessageId,@Channel,@Subject,@Preview,@Direction,@DeliveryStatus,@EngagementStatus,@SentByUserId,@SentAt,@Opened,@Clicked,@IsAutomated,SYSUTCDATETIME(),@SentByUserId,0);";
         try
         {
+            await EnsureOutboundCommunicationAllowedAsync(cn, tx, request, cancellationToken);
             var sync = await UpsertCommunicationSyncAsync(cn, tx, request, id, null, null, cancellationToken);
             var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { CommunicationId = id, request.TenantId, request.LeadId, MessageThreadId = sync.ThreadId, ThreadMessageId = sync.MessageId, request.Channel, request.Subject, request.Preview, request.Direction, request.DeliveryStatus, request.EngagementStatus, request.SentByUserId, request.SentAt, request.Opened, request.Clicked, request.IsAutomated }, transaction: tx, cancellationToken: cancellationToken));
             if (affected == 0) throw new InvalidOperationException("Lead communication was not created.");
@@ -927,6 +974,7 @@ END;", new
         const string sql = @"UPDATE CRM.LeadCommunication SET MessageThreadId=@MessageThreadId,ThreadMessageId=@ThreadMessageId,Channel=@Channel,Subject=@Subject,Preview=@Preview,Direction=@Direction,DeliveryStatus=@DeliveryStatus,EngagementStatus=@EngagementStatus,SentByUserId=@SentByUserId,SentAt=@SentAt,Opened=@Opened,Clicked=@Clicked,IsAutomated=@IsAutomated,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE CommunicationId=@CommunicationId AND IsDeleted=0;";
         try
         {
+            await EnsureOutboundCommunicationAllowedAsync(cn, tx, request, cancellationToken);
             var sync = await UpsertCommunicationSyncAsync(cn, tx, request, request.CommunicationId, current?.MessageThreadId, current?.ThreadMessageId, cancellationToken);
             var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { request.CommunicationId, MessageThreadId = sync.ThreadId, ThreadMessageId = sync.MessageId, request.Channel, request.Subject, request.Preview, request.Direction, request.DeliveryStatus, request.EngagementStatus, request.SentByUserId, request.SentAt, request.Opened, request.Clicked, request.IsAutomated, request.ModifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
             if (affected == 0) throw new InvalidOperationException("Lead communication was not updated.");
@@ -971,6 +1019,7 @@ END;", new
         const string sql = @"INSERT INTO CRM.LeadCampaignEnrollment (EnrollmentId,TenantId,LeadId,CampaignId,CampaignName,CampaignType,Segment,Status,EnrolledAt,EmailsSent,EmailsOpen,Clicks,OpenRate,Conversions,Revenue,LastTouch,CreatedByUserId,CreatedDateUtc,IsDeleted) VALUES (@EnrollmentId,@TenantId,@LeadId,@CampaignId,@CampaignName,@CampaignType,@Segment,@Status,@EnrolledAt,@EmailsSent,@EmailsOpen,@Clicks,@OpenRate,@Conversions,@Revenue,@LastTouch,@CreatedByUserId,SYSUTCDATETIME(),0);";
         try
         {
+            await EnsureCampaignEnrollmentAllowedAsync(cn, tx, request, cancellationToken);
             var campaign = await UpsertCampaignSyncAsync(cn, tx, request, cancellationToken);
             var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { EnrollmentId = id, request.TenantId, request.LeadId, CampaignId = campaign.CampaignId, CampaignName = campaign.Name, CampaignType = campaign.Type, Segment = campaign.Segment, request.Status, request.EnrolledAt, request.EmailsSent, request.EmailsOpen, request.Clicks, OpenRate = campaign.OpenRate, Conversions = campaign.Conversions, Revenue = campaign.Revenue, request.LastTouch, request.CreatedByUserId }, transaction: tx, cancellationToken: cancellationToken));
             if (affected == 0) throw new InvalidOperationException("Lead campaign enrollment was not created.");
@@ -991,6 +1040,7 @@ END;", new
         const string sql = @"UPDATE CRM.LeadCampaignEnrollment SET CampaignId=@CampaignId,CampaignName=@CampaignName,CampaignType=@CampaignType,Segment=@Segment,Status=@Status,EnrolledAt=@EnrolledAt,EmailsSent=@EmailsSent,EmailsOpen=@EmailsOpen,Clicks=@Clicks,OpenRate=@OpenRate,Conversions=@Conversions,Revenue=@Revenue,LastTouch=@LastTouch,ModifiedByUserId=@ModifiedByUserId,ModifiedDateUtc=SYSUTCDATETIME() WHERE EnrollmentId=@EnrollmentId AND IsDeleted=0;";
         try
         {
+            await EnsureCampaignEnrollmentAllowedAsync(cn, tx, request, cancellationToken);
             var campaign = await UpsertCampaignSyncAsync(cn, tx, request, cancellationToken);
             var affected = await cn.ExecuteAsync(new CommandDefinition(sql, new { request.EnrollmentId, CampaignId = campaign.CampaignId, CampaignName = campaign.Name, CampaignType = campaign.Type, Segment = campaign.Segment, request.Status, request.EnrolledAt, request.EmailsSent, request.EmailsOpen, request.Clicks, OpenRate = campaign.OpenRate, Conversions = campaign.Conversions, Revenue = campaign.Revenue, request.LastTouch, request.ModifiedByUserId }, transaction: tx, cancellationToken: cancellationToken));
             if (affected == 0) throw new InvalidOperationException("Lead campaign enrollment was not updated.");
@@ -1798,6 +1848,23 @@ SET OpportunityId = @OpportunityId,
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0 AND OpportunityId IS NULL;", new { TenantId = tenantId, LeadId = leadId, OpportunityId = opportunityId, CreatedByUserId = createdByUserId }, transaction: transaction, cancellationToken: cancellationToken));
 
+    private static async Task ApplyPhoneComplianceStatusAsync(IDbConnection connection, IReadOnlyCollection<LeadDto> leads, Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (leads.Count == 0) return;
+        var statuses = (await connection.QueryAsync<LeadPhoneComplianceStatus>(new CommandDefinition(@"
+SELECT l.EntityId AS LeadId, p.OverallStatusCode AS PhoneComplianceStatusCode, p.IsCallAllowed, p.IsSmsAllowed
+FROM CRM.PhoneEntityLink l
+JOIN CRM.PhoneComplianceProfile p ON p.PhoneComplianceProfileId = l.PhoneComplianceProfileId AND p.TenantId = l.TenantId AND p.IsDeleted = 0
+WHERE l.TenantId = @TenantId AND l.EntityTypeCode = N'Lead' AND l.EntityId IN @LeadIds AND l.IsDeleted = 0;", new { TenantId = tenantId, LeadIds = leads.Select(l => l.LeadId).ToArray() }, cancellationToken: cancellationToken))).ToDictionary(x => x.LeadId);
+        foreach (var lead in leads)
+        {
+            if (!statuses.TryGetValue(lead.LeadId, out var status)) continue;
+            lead.PhoneComplianceStatusCode = status.PhoneComplianceStatusCode;
+            lead.IsCallAllowed = status.IsCallAllowed;
+            lead.IsSmsAllowed = status.IsSmsAllowed;
+        }
+    }
+
     private static string SanitizeNumberToken(string? value)
     {
         var token = string.IsNullOrWhiteSpace(value) ? Guid.NewGuid().ToString("N")[..10] : value.Trim();
@@ -1807,6 +1874,719 @@ WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0 AND Opportunit
         }
 
         return token.Length <= 42 ? token : token[..42];
+    }
+
+    public async Task<IReadOnlyList<PhoneComplianceReferenceDto>> GetPhoneComplianceReferencesAsync(Guid tenantId, string? referenceTypeCode = null, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT PhoneComplianceReferenceId, ReferenceTypeCode, Code, Name, Description, SortOrder
+FROM CRM.PhoneComplianceReference
+WHERE TenantId IN (@TenantId, @GlobalTenantId)
+  AND (@ReferenceTypeCode IS NULL OR ReferenceTypeCode = @ReferenceTypeCode)
+  AND IsActive = 1 AND IsDeleted = 0
+ORDER BY ReferenceTypeCode, SortOrder, Name;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<PhoneComplianceReferenceDto>(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId,
+            GlobalTenantId = Guid.Parse("00000000-0000-0000-0000-000000000001"),
+            ReferenceTypeCode = Clean(referenceTypeCode)
+        }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<PhoneComplianceWorkspaceDto> GetPhoneComplianceWorkspaceAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+;WITH LeadProfiles AS
+(
+    SELECT DISTINCT p.PhoneComplianceProfileId, p.TenantId, l.EntityId AS LeadId, ld.LeadNumber,
+           CONCAT(ld.FirstName, N' ', ld.LastName) AS LeadName, p.DisplayPhoneNumber, p.NormalizedPhoneNumber,
+           p.OverallStatusCode, p.IsCallAllowed, p.IsSmsAllowed, p.NextScreeningDueDateUtc
+    FROM CRM.PhoneComplianceProfile p
+    JOIN CRM.PhoneEntityLink l ON l.TenantId = p.TenantId AND l.PhoneComplianceProfileId = p.PhoneComplianceProfileId
+        AND l.EntityTypeCode = N'Lead' AND l.IsDeleted = 0
+    JOIN CRM.Lead ld ON ld.TenantId = l.TenantId AND ld.LeadId = l.EntityId AND ld.IsDeleted = 0
+    WHERE p.TenantId = @TenantId AND p.IsDeleted = 0
+)
+SELECT lp.PhoneComplianceProfileId, lp.TenantId, lp.LeadId, lp.LeadName, lp.LeadNumber,
+       lp.DisplayPhoneNumber, lp.NormalizedPhoneNumber, lp.OverallStatusCode, lp.IsCallAllowed, lp.IsSmsAllowed,
+       (SELECT COUNT(1) FROM CRM.PhoneSuppression s WHERE s.TenantId = lp.TenantId AND s.PhoneComplianceProfileId = lp.PhoneComplianceProfileId AND s.StatusCode = N'Active' AND s.EffectiveDateUtc <= SYSUTCDATETIME() AND (s.ExpirationDateUtc IS NULL OR s.ExpirationDateUtc > SYSUTCDATETIME()) AND s.IsDeleted = 0) AS ActiveSuppressionCount,
+       (SELECT COUNT(1) FROM CRM.PhoneConsent c WHERE c.TenantId = lp.TenantId AND c.PhoneComplianceProfileId = lp.PhoneComplianceProfileId AND c.StatusCode = N'Granted' AND c.EffectiveDateUtc <= SYSUTCDATETIME() AND (c.ExpirationDateUtc IS NULL OR c.ExpirationDateUtc > SYSUTCDATETIME()) AND c.IsDeleted = 0) AS ActiveConsentCount,
+       latest.ResultCode AS LatestScreeningResultCode, latest.ProviderCode AS LatestScreeningProviderCode,
+       latest.ScreenedDateUtc AS LastScreenedDateUtc, lp.NextScreeningDueDateUtc
+FROM LeadProfiles lp
+OUTER APPLY
+(
+    SELECT TOP 1 r.ResultCode, r.ProviderCode, r.ScreenedDateUtc
+    FROM CRM.PhoneScreeningResult r
+    WHERE r.TenantId = lp.TenantId AND r.PhoneComplianceProfileId = lp.PhoneComplianceProfileId AND r.IsDeleted = 0
+    ORDER BY r.ScreenedDateUtc DESC
+) latest
+ORDER BY CASE lp.OverallStatusCode WHEN N'Suppressed' THEN 0 WHEN N'PendingScreening' THEN 1 ELSE 2 END, lp.LeadName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var phones = (await cn.QueryAsync<PhoneComplianceRegistryRowDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+        var now = DateTime.UtcNow;
+        return new PhoneComplianceWorkspaceDto
+        {
+            TotalPhones = phones.Count,
+            SuppressedPhones = phones.Count(x => string.Equals(x.OverallStatusCode, "Suppressed", StringComparison.OrdinalIgnoreCase)),
+            PendingScreeningPhones = phones.Count(x => string.Equals(x.OverallStatusCode, "PendingScreening", StringComparison.OrdinalIgnoreCase)),
+            AllowedPhones = phones.Count(x => x.IsCallAllowed),
+            DueScreenings = phones.Count(x => !x.NextScreeningDueDateUtc.HasValue || x.NextScreeningDueDateUtc <= now),
+            FailedScreenings = phones.Count(x => string.Equals(x.LatestScreeningResultCode, "Failed", StringComparison.OrdinalIgnoreCase)),
+            Phones = phones
+        };
+    }
+
+    public async Task<IReadOnlyList<LeadPhoneComplianceDto>> GetPhoneComplianceAsync(Guid leadId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var lead = await cn.QuerySingleOrDefaultAsync<LeadDto>(new CommandDefinition(@"
+SELECT LeadId, TenantId, FirstName, LastName, Phone
+FROM CRM.Lead
+WHERE LeadId = @LeadId AND IsDeleted = 0;", new { LeadId = leadId }, cancellationToken: cancellationToken));
+        if (lead is null) return [];
+
+        await SyncPhoneComplianceLinkAsync(cn, null, lead.TenantId, leadId, null, "Lead", leadId, lead.Phone, true, null, cancellationToken);
+        var contacts = (await cn.QueryAsync<LeadContactDto>(new CommandDefinition(@"
+SELECT ContactId, TenantId, LeadId, FirstName, LastName, Phone, IsPrimary
+FROM CRM.LeadContact
+WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { LeadId = leadId, lead.TenantId }, cancellationToken: cancellationToken))).AsList();
+        foreach (var contact in contacts)
+        {
+            await SyncPhoneComplianceLinkAsync(cn, null, contact.TenantId, leadId, contact.ContactId, "LeadContact", contact.ContactId, contact.Phone, contact.IsPrimary, null, cancellationToken);
+        }
+
+        var items = (await cn.QueryAsync<LeadPhoneComplianceDto>(new CommandDefinition(@"
+SELECT p.PhoneComplianceProfileId, p.TenantId, @LeadId AS LeadId,
+       CASE WHEN l.EntityTypeCode = N'LeadContact' THEN l.EntityId END AS LeadContactId,
+       l.EntityTypeCode,
+       CASE WHEN l.EntityTypeCode = N'Lead' THEN CONCAT(ld.FirstName, N' ', ld.LastName)
+            ELSE CONCAT(c.FirstName, N' ', c.LastName) END AS EntityDisplayName,
+       p.NormalizedPhoneNumber, p.DisplayPhoneNumber, p.CountryCode, p.OverallStatusCode,
+       p.IsCallAllowed, p.IsSmsAllowed, l.IsPrimary, p.LastEvaluatedDateUtc, p.NextScreeningDueDateUtc
+FROM CRM.PhoneEntityLink l
+JOIN CRM.PhoneComplianceProfile p ON p.PhoneComplianceProfileId = l.PhoneComplianceProfileId AND p.IsDeleted = 0
+JOIN CRM.Lead ld ON ld.LeadId = @LeadId AND ld.TenantId = l.TenantId AND ld.IsDeleted = 0
+LEFT JOIN CRM.LeadContact c ON l.EntityTypeCode = N'LeadContact' AND c.ContactId = l.EntityId AND c.IsDeleted = 0
+WHERE l.TenantId = @TenantId AND l.IsDeleted = 0
+  AND ((l.EntityTypeCode = N'Lead' AND l.EntityId = @LeadId)
+       OR (l.EntityTypeCode = N'LeadContact' AND c.LeadId = @LeadId))
+ORDER BY l.IsPrimary DESC, EntityDisplayName;", new { LeadId = leadId, lead.TenantId }, cancellationToken: cancellationToken))).AsList();
+
+        foreach (var item in items)
+        {
+            item.Suppressions = (await cn.QueryAsync<PhoneSuppressionDto>(new CommandDefinition(@"
+SELECT PhoneSuppressionId, SourceCode, ReasonCode, ChannelCode, PurposeCode, JurisdictionCode, StatusCode,
+       EffectiveDateUtc, ExpirationDateUtc, RequestedDateUtc, Notes, EvidenceReference, RevokedDateUtc,
+       RevocationReason, CreatedDateUtc
+FROM CRM.PhoneSuppression
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId AND IsDeleted = 0
+ORDER BY EffectiveDateUtc DESC;", new { item.TenantId, item.PhoneComplianceProfileId }, cancellationToken: cancellationToken))).AsList();
+            item.Consents = (await cn.QueryAsync<PhoneConsentDto>(new CommandDefinition(@"
+SELECT PhoneConsentId, ConsentTypeCode, ChannelCode, PurposeCode, LegalBasisCode, StatusCode, CapturedDateUtc,
+       EffectiveDateUtc, ExpirationDateUtc, EvidenceTypeCode, EvidenceReference, ConsentText, ApprovedByUserId,
+       ApprovedDateUtc, RevokedDateUtc, RevocationReason, CreatedDateUtc
+FROM CRM.PhoneConsent
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId AND IsDeleted = 0
+ORDER BY CapturedDateUtc DESC;", new { item.TenantId, item.PhoneComplianceProfileId }, cancellationToken: cancellationToken))).AsList();
+            item.ScreeningResults = (await cn.QueryAsync<PhoneScreeningResultDto>(new CommandDefinition(@"
+SELECT TOP 20 PhoneScreeningResultId, PhoneScreeningBatchId, ProviderCode, RegistryCode, JurisdictionCode,
+       ResultCode, ScreenedDateUtc, ValidThroughDateUtc, ProviderReference, ErrorDetails
+FROM CRM.PhoneScreeningResult
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId AND IsDeleted = 0
+ORDER BY ScreenedDateUtc DESC;", new { item.TenantId, item.PhoneComplianceProfileId }, cancellationToken: cancellationToken))).AsList();
+        }
+
+        return items;
+    }
+
+    public async Task<Guid> CreatePhoneSuppressionAsync(CreatePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+    {
+        ValidateEffectiveDates(request.EffectiveDateUtc, request.ExpirationDateUtc);
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var profileId = await EnsureRequestPhoneLinkAsync(cn, tx, request.TenantId, request.LeadId, request.LeadContactId, request.PhoneNumber, request.CreatedByUserId, cancellationToken);
+            var id = Guid.NewGuid();
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneSuppression
+(PhoneSuppressionId, TenantId, PhoneComplianceProfileId, SourceCode, ReasonCode, ChannelCode, PurposeCode,
+ JurisdictionCode, StatusCode, EffectiveDateUtc, ExpirationDateUtc, RequestedDateUtc, Notes, EvidenceReference,
+ CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@PhoneSuppressionId, @TenantId, @PhoneComplianceProfileId, @SourceCode, @ReasonCode, @ChannelCode, @PurposeCode,
+ @JurisdictionCode, N'Active', @EffectiveDateUtc, @ExpirationDateUtc, @RequestedDateUtc, @Notes, @EvidenceReference,
+ SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+            {
+                PhoneSuppressionId = id,
+                request.TenantId,
+                PhoneComplianceProfileId = profileId,
+                SourceCode = Clean(request.SourceCode),
+                ReasonCode = Clean(request.ReasonCode),
+                ChannelCode = Clean(request.ChannelCode),
+                PurposeCode = Clean(request.PurposeCode),
+                JurisdictionCode = Clean(request.JurisdictionCode),
+                request.EffectiveDateUtc,
+                request.ExpirationDateUtc,
+                request.RequestedDateUtc,
+                Notes = Clean(request.Notes),
+                EvidenceReference = Clean(request.EvidenceReference),
+                request.CreatedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+            await RecalculatePhoneComplianceProfileAsync(cn, tx, request.TenantId, profileId, request.CreatedByUserId, cancellationToken);
+            tx.Commit();
+            return id;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    public async Task RevokePhoneSuppressionAsync(RevokePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var profileId = await cn.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT s.PhoneComplianceProfileId
+FROM CRM.PhoneSuppression s
+JOIN CRM.PhoneEntityLink l ON l.PhoneComplianceProfileId = s.PhoneComplianceProfileId AND l.TenantId = s.TenantId AND l.IsDeleted = 0
+WHERE s.PhoneSuppressionId = @PhoneSuppressionId AND s.TenantId = @TenantId AND s.IsDeleted = 0
+  AND ((l.EntityTypeCode = N'Lead' AND l.EntityId = @LeadId)
+       OR (l.EntityTypeCode = N'LeadContact' AND EXISTS (SELECT 1 FROM CRM.LeadContact c WHERE c.ContactId = l.EntityId AND c.LeadId = @LeadId AND c.IsDeleted = 0)));", request, transaction: tx, cancellationToken: cancellationToken));
+            if (!profileId.HasValue) throw new InvalidOperationException("The suppression record was not found for this lead and tenant.");
+
+            await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneSuppression
+SET StatusCode = N'Revoked', RevokedDateUtc = SYSUTCDATETIME(), RevokedByUserId = @RevokedByUserId,
+    RevocationReason = @RevocationReason, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RevokedByUserId
+WHERE PhoneSuppressionId = @PhoneSuppressionId AND TenantId = @TenantId AND IsDeleted = 0;", request, transaction: tx, cancellationToken: cancellationToken));
+            await RecalculatePhoneComplianceProfileAsync(cn, tx, request.TenantId, profileId.Value, request.RevokedByUserId, cancellationToken);
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<Guid> CreatePhoneConsentAsync(CreatePhoneConsentRequest request, CancellationToken cancellationToken = default)
+    {
+        ValidateEffectiveDates(request.EffectiveDateUtc, request.ExpirationDateUtc);
+        if (request.ApprovedByUserId.HasValue && !request.ApprovedDateUtc.HasValue) request.ApprovedDateUtc = DateTime.UtcNow;
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var profileId = await EnsureRequestPhoneLinkAsync(cn, tx, request.TenantId, request.LeadId, request.LeadContactId, request.PhoneNumber, request.CreatedByUserId, cancellationToken);
+            var id = Guid.NewGuid();
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneConsent
+(PhoneConsentId, TenantId, PhoneComplianceProfileId, ConsentTypeCode, ChannelCode, PurposeCode, LegalBasisCode,
+ StatusCode, CapturedDateUtc, EffectiveDateUtc, ExpirationDateUtc, EvidenceTypeCode, EvidenceReference, ConsentText,
+ ApprovedByUserId, ApprovedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@PhoneConsentId, @TenantId, @PhoneComplianceProfileId, @ConsentTypeCode, @ChannelCode, @PurposeCode, @LegalBasisCode,
+ N'Granted', @CapturedDateUtc, @EffectiveDateUtc, @ExpirationDateUtc, @EvidenceTypeCode, @EvidenceReference, @ConsentText,
+ @ApprovedByUserId, @ApprovedDateUtc, SYSUTCDATETIME(), @CreatedByUserId, 0);", new
+            {
+                PhoneConsentId = id,
+                request.TenantId,
+                PhoneComplianceProfileId = profileId,
+                ConsentTypeCode = Clean(request.ConsentTypeCode),
+                ChannelCode = Clean(request.ChannelCode),
+                PurposeCode = Clean(request.PurposeCode),
+                LegalBasisCode = Clean(request.LegalBasisCode),
+                request.CapturedDateUtc,
+                request.EffectiveDateUtc,
+                request.ExpirationDateUtc,
+                EvidenceTypeCode = Clean(request.EvidenceTypeCode),
+                EvidenceReference = Clean(request.EvidenceReference),
+                ConsentText = Clean(request.ConsentText),
+                request.ApprovedByUserId,
+                request.ApprovedDateUtc,
+                request.CreatedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+            await RecalculatePhoneComplianceProfileAsync(cn, tx, request.TenantId, profileId, request.CreatedByUserId, cancellationToken);
+            tx.Commit();
+            return id;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    public async Task RevokePhoneConsentAsync(RevokePhoneConsentRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var consent = await cn.QuerySingleOrDefaultAsync<(Guid PhoneComplianceProfileId, string ChannelCode)>(new CommandDefinition(@"
+SELECT c.PhoneComplianceProfileId, c.ChannelCode
+FROM CRM.PhoneConsent c
+JOIN CRM.PhoneEntityLink l ON l.PhoneComplianceProfileId = c.PhoneComplianceProfileId AND l.TenantId = c.TenantId AND l.IsDeleted = 0
+WHERE c.PhoneConsentId = @PhoneConsentId AND c.TenantId = @TenantId AND c.IsDeleted = 0
+  AND ((l.EntityTypeCode = N'Lead' AND l.EntityId = @LeadId)
+       OR (l.EntityTypeCode = N'LeadContact' AND EXISTS (SELECT 1 FROM CRM.LeadContact lc WHERE lc.ContactId = l.EntityId AND lc.LeadId = @LeadId AND lc.IsDeleted = 0)));", request, transaction: tx, cancellationToken: cancellationToken));
+            if (consent.PhoneComplianceProfileId == Guid.Empty) throw new InvalidOperationException("The consent record was not found for this lead and tenant.");
+
+            await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneConsent
+SET StatusCode = N'Revoked', RevokedDateUtc = SYSUTCDATETIME(), RevokedByUserId = @RevokedByUserId,
+    RevocationReason = @RevocationReason, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RevokedByUserId
+WHERE PhoneConsentId = @PhoneConsentId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF NOT EXISTS
+(
+    SELECT 1 FROM CRM.PhoneSuppression
+    WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+      AND SourceCode = N'InternalRequest' AND ReasonCode = N'ConsentRevoked' AND ChannelCode = @ChannelCode
+      AND StatusCode = N'Active' AND IsDeleted = 0
+)
+BEGIN
+    INSERT INTO CRM.PhoneSuppression
+    (PhoneSuppressionId, TenantId, PhoneComplianceProfileId, SourceCode, ReasonCode, ChannelCode, StatusCode,
+     EffectiveDateUtc, RequestedDateUtc, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, @PhoneComplianceProfileId, N'InternalRequest', N'ConsentRevoked', @ChannelCode, N'Active',
+     SYSUTCDATETIME(), SYSUTCDATETIME(), @RevocationReason, SYSUTCDATETIME(), @RevokedByUserId, 0);
+END;", new
+            {
+                request.PhoneConsentId,
+                request.TenantId,
+                request.RevokedByUserId,
+                request.RevocationReason,
+                consent.PhoneComplianceProfileId,
+                consent.ChannelCode
+            }, transaction: tx, cancellationToken: cancellationToken));
+            await RecalculatePhoneComplianceProfileAsync(cn, tx, request.TenantId, consent.PhoneComplianceProfileId, request.RevokedByUserId, cancellationToken);
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<PhoneContactEligibilityDto> EvaluatePhoneContactAsync(EvaluatePhoneContactRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var profileId = await EnsureRequestPhoneLinkAsync(cn, tx, request.TenantId, request.LeadId, request.LeadContactId, request.PhoneNumber, request.EvaluatedByUserId, cancellationToken);
+            var result = await EvaluatePhoneContactCoreAsync(cn, tx, profileId, request.TenantId, request.LeadId, request.LeadContactId, request.ChannelCode, request.PurposeCode, request.EvaluatedByUserId, request.CorrelationId, cancellationToken);
+            tx.Commit();
+            return result;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<DuePhoneScreeningDto>> GetDuePhoneScreeningsAsync(int batchSize, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP (@BatchSize) PhoneComplianceProfileId, TenantId, NormalizedPhoneNumber, NextScreeningDueDateUtc
+FROM CRM.PhoneComplianceProfile
+WHERE IsDeleted = 0 AND (NextScreeningDueDateUtc IS NULL OR NextScreeningDueDateUtc <= SYSUTCDATETIME())
+ORDER BY COALESCE(NextScreeningDueDateUtc, '19000101'), CreatedDateUtc;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<DuePhoneScreeningDto>(new CommandDefinition(sql, new { BatchSize = Math.Clamp(batchSize, 1, 1000) }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<Guid> RecordPhoneScreeningAsync(RecordPhoneScreeningRequest request, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = cn.BeginTransaction();
+        try
+        {
+            var ownsProfile = await cn.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1) FROM CRM.PhoneComplianceProfile
+WHERE PhoneComplianceProfileId = @PhoneComplianceProfileId AND TenantId = @TenantId AND IsDeleted = 0;", request, transaction: tx, cancellationToken: cancellationToken));
+            if (ownsProfile == 0) throw new InvalidOperationException("The phone compliance profile was not found for this tenant.");
+
+            var id = Guid.NewGuid();
+            await cn.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneScreeningResult
+(PhoneScreeningResultId, TenantId, PhoneComplianceProfileId, PhoneScreeningBatchId, ProviderCode, RegistryCode,
+ JurisdictionCode, ResultCode, ScreenedDateUtc, ValidThroughDateUtc, ProviderReference, RawResponseHash,
+ ErrorDetails, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@PhoneScreeningResultId, @TenantId, @PhoneComplianceProfileId, @PhoneScreeningBatchId, @ProviderCode, @RegistryCode,
+ @JurisdictionCode, @ResultCode, @ScreenedDateUtc, @ValidThroughDateUtc, @ProviderReference, @RawResponseHash,
+ @ErrorDetails, SYSUTCDATETIME(), @CreatedByUserId, 0);
+
+UPDATE CRM.PhoneComplianceProfile
+SET NextScreeningDueDateUtc = CASE
+        WHEN @ResultCode = N'Failed' THEN DATEADD(HOUR, 1, @ScreenedDateUtc)
+        WHEN @ResultCode = N'Unknown' THEN DATEADD(DAY, 1, @ScreenedDateUtc)
+        ELSE COALESCE(@ValidThroughDateUtc, DATEADD(DAY, 31, @ScreenedDateUtc))
+    END,
+    ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId
+WHERE PhoneComplianceProfileId = @PhoneComplianceProfileId AND TenantId = @TenantId;", new
+            {
+                PhoneScreeningResultId = id,
+                request.TenantId,
+                request.PhoneComplianceProfileId,
+                request.PhoneScreeningBatchId,
+                ProviderCode = Clean(request.ProviderCode),
+                RegistryCode = Clean(request.RegistryCode),
+                JurisdictionCode = Clean(request.JurisdictionCode),
+                ResultCode = Clean(request.ResultCode),
+                request.ScreenedDateUtc,
+                request.ValidThroughDateUtc,
+                ProviderReference = Clean(request.ProviderReference),
+                RawResponseHash = Clean(request.RawResponseHash),
+                ErrorDetails = Clean(request.ErrorDetails),
+                request.CreatedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+
+            if (string.Equals(request.ResultCode, "Matched", StringComparison.OrdinalIgnoreCase))
+            {
+                var sourceCode = request.RegistryCode.Contains("State", StringComparison.OrdinalIgnoreCase) ? "StateRegistry" : "FederalRegistry";
+                await cn.ExecuteAsync(new CommandDefinition(@"
+IF NOT EXISTS
+(
+    SELECT 1 FROM CRM.PhoneSuppression
+    WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+      AND SourceCode = @SourceCode AND ChannelCode = N'Call' AND StatusCode = N'Active'
+      AND ISNULL(JurisdictionCode, N'') = ISNULL(@JurisdictionCode, N'') AND IsDeleted = 0
+)
+BEGIN
+    INSERT INTO CRM.PhoneSuppression
+    (PhoneSuppressionId, TenantId, PhoneComplianceProfileId, SourceCode, ReasonCode, ChannelCode, JurisdictionCode,
+     StatusCode, EffectiveDateUtc, ExpirationDateUtc, EvidenceReference, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    VALUES
+    (NEWID(), @TenantId, @PhoneComplianceProfileId, @SourceCode, N'RegistryMatch', N'Call', @JurisdictionCode,
+     N'Active', @ScreenedDateUtc, @ValidThroughDateUtc, @ProviderReference, SYSUTCDATETIME(), @CreatedByUserId, 0);
+END;", new
+                {
+                    request.TenantId,
+                    request.PhoneComplianceProfileId,
+                    SourceCode = sourceCode,
+                    JurisdictionCode = Clean(request.JurisdictionCode),
+                    request.ScreenedDateUtc,
+                    request.ValidThroughDateUtc,
+                    ProviderReference = Clean(request.ProviderReference),
+                    request.CreatedByUserId
+                }, transaction: tx, cancellationToken: cancellationToken));
+            }
+            else if (string.Equals(request.ResultCode, "Clear", StringComparison.OrdinalIgnoreCase))
+            {
+                var sourceCode = request.RegistryCode.Contains("State", StringComparison.OrdinalIgnoreCase) ? "StateRegistry" : "FederalRegistry";
+                await cn.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneSuppression
+SET StatusCode = N'Revoked',
+    RevokedDateUtc = @ScreenedDateUtc,
+    RevocationReason = N'Superseded by a clear registry screening.',
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @CreatedByUserId
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+  AND SourceCode = @SourceCode AND ChannelCode = N'Call' AND StatusCode = N'Active'
+  AND ISNULL(JurisdictionCode, N'') = ISNULL(@JurisdictionCode, N'') AND IsDeleted = 0;", new
+                {
+                    request.TenantId,
+                    request.PhoneComplianceProfileId,
+                    SourceCode = sourceCode,
+                    JurisdictionCode = Clean(request.JurisdictionCode),
+                    request.ScreenedDateUtc,
+                    request.CreatedByUserId
+                }, transaction: tx, cancellationToken: cancellationToken));
+            }
+
+            await RecalculatePhoneComplianceProfileAsync(cn, tx, request.TenantId, request.PhoneComplianceProfileId, request.CreatedByUserId, cancellationToken);
+            tx.Commit();
+            return id;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    private static async Task<Guid> EnsureRequestPhoneLinkAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid leadId, Guid? leadContactId, string phoneNumber, Guid? userId, CancellationToken cancellationToken)
+    {
+        var validLead = await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1)
+FROM CRM.Lead l
+WHERE l.LeadId = @LeadId AND l.TenantId = @TenantId AND l.IsDeleted = 0
+  AND (@LeadContactId IS NULL OR EXISTS
+      (SELECT 1 FROM CRM.LeadContact c WHERE c.ContactId = @LeadContactId AND c.LeadId = l.LeadId AND c.TenantId = l.TenantId AND c.IsDeleted = 0));", new { TenantId = tenantId, LeadId = leadId, LeadContactId = leadContactId }, transaction: transaction, cancellationToken: cancellationToken));
+        if (validLead == 0) throw new InvalidOperationException("The lead or contact was not found for this tenant.");
+
+        var entityType = leadContactId.HasValue ? "LeadContact" : "Lead";
+        var entityId = leadContactId ?? leadId;
+        return await SyncPhoneComplianceLinkAsync(connection, transaction, tenantId, leadId, leadContactId, entityType, entityId, phoneNumber, !leadContactId.HasValue, userId, cancellationToken)
+            ?? throw new InvalidOperationException("A valid phone number is required.");
+    }
+
+    private static async Task<Guid?> SyncPhoneComplianceLinkAsync(IDbConnection connection, IDbTransaction? transaction, Guid tenantId, Guid leadId, Guid? leadContactId, string entityTypeCode, Guid entityId, string? phoneNumber, bool isPrimary, Guid? userId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(phoneNumber))
+        {
+            await connection.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneEntityLink
+SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @UserId
+WHERE TenantId = @TenantId AND EntityTypeCode = @EntityTypeCode AND EntityId = @EntityId AND IsDeleted = 0;", new { TenantId = tenantId, EntityTypeCode = entityTypeCode, EntityId = entityId, UserId = userId }, transaction: transaction, cancellationToken: cancellationToken));
+            return null;
+        }
+
+        var normalized = NormalizePhoneNumber(phoneNumber);
+        var profileId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT PhoneComplianceProfileId
+FROM CRM.PhoneComplianceProfile
+WHERE TenantId = @TenantId AND NormalizedPhoneNumber = @NormalizedPhoneNumber AND IsDeleted = 0;", new { TenantId = tenantId, NormalizedPhoneNumber = normalized }, transaction: transaction, cancellationToken: cancellationToken));
+        if (!profileId.HasValue)
+        {
+            profileId = Guid.NewGuid();
+            await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneComplianceProfile
+(PhoneComplianceProfileId, TenantId, NormalizedPhoneNumber, DisplayPhoneNumber, CountryCode, OverallStatusCode,
+ IsCallAllowed, IsSmsAllowed, NextScreeningDueDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(@PhoneComplianceProfileId, @TenantId, @NormalizedPhoneNumber, @DisplayPhoneNumber, N'US', N'PendingScreening',
+ 0, 0, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0);", new
+            {
+                PhoneComplianceProfileId = profileId.Value,
+                TenantId = tenantId,
+                NormalizedPhoneNumber = normalized,
+                DisplayPhoneNumber = phoneNumber.Trim(),
+                UserId = userId
+            }, transaction: transaction, cancellationToken: cancellationToken));
+        }
+
+        var existingProfileId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT PhoneComplianceProfileId
+FROM CRM.PhoneEntityLink
+WHERE TenantId = @TenantId AND EntityTypeCode = @EntityTypeCode AND EntityId = @EntityId AND IsDeleted = 0;", new { TenantId = tenantId, EntityTypeCode = entityTypeCode, EntityId = entityId }, transaction: transaction, cancellationToken: cancellationToken));
+        if (existingProfileId == profileId)
+        {
+            await connection.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneEntityLink
+SET IsPrimary = @IsPrimary,
+    ModifiedDateUtc = CASE WHEN IsPrimary = @IsPrimary THEN ModifiedDateUtc ELSE SYSUTCDATETIME() END,
+    ModifiedByUserId = CASE WHEN IsPrimary = @IsPrimary THEN ModifiedByUserId ELSE @UserId END
+WHERE TenantId = @TenantId AND EntityTypeCode = @EntityTypeCode AND EntityId = @EntityId AND IsDeleted = 0;
+
+UPDATE CRM.PhoneComplianceProfile
+SET DisplayPhoneNumber = @DisplayPhoneNumber
+WHERE PhoneComplianceProfileId = @PhoneComplianceProfileId AND DisplayPhoneNumber <> @DisplayPhoneNumber;", new
+            {
+                TenantId = tenantId,
+                EntityTypeCode = entityTypeCode,
+                EntityId = entityId,
+                IsPrimary = isPrimary,
+                UserId = userId,
+                DisplayPhoneNumber = phoneNumber.Trim(),
+                PhoneComplianceProfileId = profileId.Value
+            }, transaction: transaction, cancellationToken: cancellationToken));
+            return profileId;
+        }
+
+        await connection.ExecuteAsync(new CommandDefinition(@"
+UPDATE CRM.PhoneEntityLink
+SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @UserId
+WHERE TenantId = @TenantId AND EntityTypeCode = @EntityTypeCode AND EntityId = @EntityId AND IsDeleted = 0;", new { TenantId = tenantId, EntityTypeCode = entityTypeCode, EntityId = entityId, UserId = userId }, transaction: transaction, cancellationToken: cancellationToken));
+
+        await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneEntityLink
+(PhoneEntityLinkId, TenantId, PhoneComplianceProfileId, EntityTypeCode, EntityId, IsPrimary,
+ CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(NEWID(), @TenantId, @PhoneComplianceProfileId, @EntityTypeCode, @EntityId, @IsPrimary,
+ SYSUTCDATETIME(), @UserId, 0);", new
+        {
+            TenantId = tenantId,
+            PhoneComplianceProfileId = profileId.Value,
+            EntityTypeCode = entityTypeCode,
+            EntityId = entityId,
+            IsPrimary = isPrimary,
+            UserId = userId
+        }, transaction: transaction, cancellationToken: cancellationToken));
+        await RecalculatePhoneComplianceProfileAsync(connection, transaction, tenantId, profileId.Value, userId, cancellationToken);
+        return profileId;
+    }
+
+    private static async Task<Guid?> GetPrimaryLeadContactIdAsync(IDbConnection connection, IDbTransaction? transaction, Guid tenantId, Guid leadId, CancellationToken cancellationToken)
+        => await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT TOP 1 ContactId FROM CRM.LeadContact
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0
+ORDER BY IsPrimary DESC, CreatedDateUtc;", new { TenantId = tenantId, LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken));
+
+    private static async Task RecalculatePhoneComplianceProfileAsync(IDbConnection connection, IDbTransaction? transaction, Guid tenantId, Guid profileId, Guid? userId, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(@"
+DECLARE @CallSuppressed BIT = CASE WHEN EXISTS
+(
+    SELECT 1 FROM CRM.PhoneSuppression
+    WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+      AND ChannelCode IN (N'Call', N'All') AND StatusCode = N'Active' AND EffectiveDateUtc <= SYSUTCDATETIME()
+      AND (ExpirationDateUtc IS NULL OR ExpirationDateUtc > SYSUTCDATETIME()) AND IsDeleted = 0
+) THEN 1 ELSE 0 END;
+DECLARE @SmsSuppressed BIT = CASE WHEN EXISTS
+(
+    SELECT 1 FROM CRM.PhoneSuppression
+    WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+      AND ChannelCode IN (N'Sms', N'All') AND StatusCode = N'Active' AND EffectiveDateUtc <= SYSUTCDATETIME()
+      AND (ExpirationDateUtc IS NULL OR ExpirationDateUtc > SYSUTCDATETIME()) AND IsDeleted = 0
+) THEN 1 ELSE 0 END;
+DECLARE @HasValidClearScreening BIT = CASE WHEN EXISTS
+(
+    SELECT 1 FROM CRM.PhoneScreeningResult
+    WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+      AND ResultCode = N'Clear' AND ScreenedDateUtc <= SYSUTCDATETIME()
+      AND COALESCE(ValidThroughDateUtc, DATEADD(DAY, 31, ScreenedDateUtc)) > SYSUTCDATETIME() AND IsDeleted = 0
+) THEN 1 ELSE 0 END;
+
+UPDATE CRM.PhoneComplianceProfile
+SET IsCallAllowed = CASE WHEN @CallSuppressed = 1 OR @HasValidClearScreening = 0 THEN 0 ELSE 1 END,
+    IsSmsAllowed = CASE WHEN @SmsSuppressed = 1 OR @HasValidClearScreening = 0 THEN 0 ELSE 1 END,
+    OverallStatusCode = CASE WHEN @CallSuppressed = 1 OR @SmsSuppressed = 1 THEN N'Suppressed' WHEN @HasValidClearScreening = 1 THEN N'Allowed' ELSE N'PendingScreening' END,
+    LastEvaluatedDateUtc = SYSUTCDATETIME(), ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @UserId
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId AND IsDeleted = 0;", new { TenantId = tenantId, PhoneComplianceProfileId = profileId, UserId = userId }, transaction: transaction, cancellationToken: cancellationToken));
+    }
+
+    private static async Task<PhoneContactEligibilityDto> EvaluatePhoneContactCoreAsync(IDbConnection connection, IDbTransaction transaction, Guid profileId, Guid tenantId, Guid leadId, Guid? leadContactId, string channelCode, string purposeCode, Guid? userId, string? correlationId, CancellationToken cancellationToken)
+    {
+        var channel = Clean(channelCode) ?? "Call";
+        var purpose = Clean(purposeCode) ?? "Marketing";
+        var normalized = await connection.ExecuteScalarAsync<string>(new CommandDefinition(@"
+SELECT NormalizedPhoneNumber FROM CRM.PhoneComplianceProfile
+WHERE PhoneComplianceProfileId = @PhoneComplianceProfileId AND TenantId = @TenantId AND IsDeleted = 0;", new { PhoneComplianceProfileId = profileId, TenantId = tenantId }, transaction: transaction, cancellationToken: cancellationToken)) ?? string.Empty;
+        var suppression = await connection.QueryFirstOrDefaultAsync<(string SourceCode, string ReasonCode)>(new CommandDefinition(@"
+SELECT TOP 1 SourceCode, ReasonCode
+FROM CRM.PhoneSuppression
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+  AND ChannelCode IN (@ChannelCode, N'All') AND (PurposeCode IS NULL OR PurposeCode = @PurposeCode)
+  AND StatusCode = N'Active' AND EffectiveDateUtc <= SYSUTCDATETIME()
+  AND (ExpirationDateUtc IS NULL OR ExpirationDateUtc > SYSUTCDATETIME()) AND IsDeleted = 0
+ORDER BY CASE SourceCode WHEN N'InternalRequest' THEN 0 WHEN N'InvalidNumber' THEN 1 ELSE 2 END, EffectiveDateUtc DESC;", new { TenantId = tenantId, PhoneComplianceProfileId = profileId, ChannelCode = channel, PurposeCode = purpose }, transaction: transaction, cancellationToken: cancellationToken));
+
+        var hasValidClearScreening = await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1)
+FROM CRM.PhoneScreeningResult
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+  AND ResultCode = N'Clear' AND ScreenedDateUtc <= SYSUTCDATETIME()
+  AND COALESCE(ValidThroughDateUtc, DATEADD(DAY, 31, ScreenedDateUtc)) > SYSUTCDATETIME() AND IsDeleted = 0;", new { TenantId = tenantId, PhoneComplianceProfileId = profileId }, transaction: transaction, cancellationToken: cancellationToken)) > 0;
+
+        var hasSuppression = !string.IsNullOrWhiteSpace(suppression.SourceCode);
+        var canUseApprovedConsent = hasSuppression
+            && suppression.SourceCode is "FederalRegistry" or "StateRegistry" or "Provider"
+            && await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
+SELECT COUNT(1)
+FROM CRM.PhoneConsent
+WHERE TenantId = @TenantId AND PhoneComplianceProfileId = @PhoneComplianceProfileId
+  AND ChannelCode IN (@ChannelCode, N'All') AND PurposeCode = @PurposeCode AND StatusCode = N'Granted'
+  AND ApprovedByUserId IS NOT NULL AND ApprovedDateUtc IS NOT NULL
+  AND EffectiveDateUtc <= SYSUTCDATETIME() AND (ExpirationDateUtc IS NULL OR ExpirationDateUtc > SYSUTCDATETIME())
+  AND IsDeleted = 0;", new { TenantId = tenantId, PhoneComplianceProfileId = profileId, ChannelCode = channel, PurposeCode = purpose }, transaction: transaction, cancellationToken: cancellationToken)) > 0;
+
+        var isAllowed = (!hasSuppression && hasValidClearScreening) || canUseApprovedConsent;
+        var reasonCode = !hasSuppression && !hasValidClearScreening ? "ScreeningRequired" : !hasSuppression ? "NoActiveSuppression" : canUseApprovedConsent ? "ApprovedConsent" : suppression.ReasonCode;
+        var summary = !hasSuppression
+            ? hasValidClearScreening
+                ? "No active phone suppression applies to this channel and purpose."
+                : "Contact is blocked until a current clear registry screening is recorded."
+            : canUseApprovedConsent
+                ? "A purpose-specific approved consent record permits this contact despite the applicable registry suppression."
+                : $"Contact is blocked by {suppression.SourceCode}: {suppression.ReasonCode}.";
+        var result = new PhoneContactEligibilityDto
+        {
+            PhoneComplianceProfileId = profileId,
+            NormalizedPhoneNumber = normalized,
+            ChannelCode = channel,
+            PurposeCode = purpose,
+            IsAllowed = isAllowed,
+            DecisionCode = isAllowed ? "Allowed" : "Blocked",
+            ReasonCode = reasonCode,
+            DecisionSummary = summary,
+            EvaluatedDateUtc = DateTime.UtcNow
+        };
+
+        await connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO CRM.PhoneComplianceDecisionAudit
+(PhoneComplianceDecisionAuditId, TenantId, PhoneComplianceProfileId, LeadId, LeadContactId, ChannelCode,
+ PurposeCode, DecisionCode, ReasonCode, DecisionSummary, EvaluatedDateUtc, EvaluatedByUserId, CorrelationId,
+ CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+(NEWID(), @TenantId, @PhoneComplianceProfileId, @LeadId, @LeadContactId, @ChannelCode,
+ @PurposeCode, @DecisionCode, @ReasonCode, @DecisionSummary, @EvaluatedDateUtc, @EvaluatedByUserId, @CorrelationId,
+ SYSUTCDATETIME(), @EvaluatedByUserId, 0);", new
+        {
+            TenantId = tenantId,
+            PhoneComplianceProfileId = profileId,
+            LeadId = leadId,
+            LeadContactId = leadContactId,
+            result.ChannelCode,
+            result.PurposeCode,
+            result.DecisionCode,
+            result.ReasonCode,
+            result.DecisionSummary,
+            result.EvaluatedDateUtc,
+            EvaluatedByUserId = userId,
+            CorrelationId = Clean(correlationId)
+        }, transaction: transaction, cancellationToken: cancellationToken));
+        return result;
+    }
+
+    private static async Task EnsureOutboundCommunicationAllowedAsync(IDbConnection connection, IDbTransaction transaction, CreateLeadCommunicationRequest request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(request.Direction, "Outbound", StringComparison.OrdinalIgnoreCase)) return;
+        var channel = request.Channel switch
+        {
+            var value when value.Equals("Call", StringComparison.OrdinalIgnoreCase) || value.Equals("Phone", StringComparison.OrdinalIgnoreCase) || value.Equals("Voice", StringComparison.OrdinalIgnoreCase) => "Call",
+            var value when value.Equals("Sms", StringComparison.OrdinalIgnoreCase) || value.Equals("Text", StringComparison.OrdinalIgnoreCase) => "Sms",
+            _ => null
+        };
+        if (channel is null) return;
+
+        var phone = await connection.QuerySingleOrDefaultAsync<(string? Phone, Guid TenantId)>(new CommandDefinition(@"
+SELECT Phone, TenantId FROM CRM.Lead
+WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { request.LeadId, request.TenantId }, transaction: transaction, cancellationToken: cancellationToken));
+        if (string.IsNullOrWhiteSpace(phone.Phone)) throw new InvalidOperationException("Outbound phone communication requires a lead phone number.");
+        var profileId = await EnsureRequestPhoneLinkAsync(connection, transaction, request.TenantId, request.LeadId, null, phone.Phone, request.SentByUserId, cancellationToken);
+        var decision = await EvaluatePhoneContactCoreAsync(connection, transaction, profileId, request.TenantId, request.LeadId, null, channel, "Marketing", request.SentByUserId, null, cancellationToken);
+        if (!decision.IsAllowed) throw new InvalidOperationException($"Do Not Call compliance blocked this communication: {decision.DecisionSummary}");
+    }
+
+    private static async Task EnsureCampaignEnrollmentAllowedAsync(IDbConnection connection, IDbTransaction transaction, CreateLeadCampaignEnrollmentRequest request, CancellationToken cancellationToken)
+    {
+        var phone = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(@"
+SELECT Phone FROM CRM.Lead
+WHERE LeadId = @LeadId AND TenantId = @TenantId AND IsDeleted = 0;", new { request.LeadId, request.TenantId }, transaction: transaction, cancellationToken: cancellationToken));
+        if (string.IsNullOrWhiteSpace(phone)) return;
+        var profileId = await EnsureRequestPhoneLinkAsync(connection, transaction, request.TenantId, request.LeadId, null, phone, request.CreatedByUserId, cancellationToken);
+        var decision = await EvaluatePhoneContactCoreAsync(connection, transaction, profileId, request.TenantId, request.LeadId, null, "Call", "Marketing", request.CreatedByUserId, null, cancellationToken);
+        if (!decision.IsAllowed) throw new InvalidOperationException($"Do Not Call compliance blocked campaign enrollment: {decision.DecisionSummary}");
+    }
+
+    private static string NormalizePhoneNumber(string phoneNumber)
+    {
+        var digits = new string(phoneNumber.Where(char.IsDigit).ToArray());
+        if (digits.Length == 10) digits = $"1{digits}";
+        if (digits.Length is < 8 or > 15 || (digits.Length == 11 && digits[0] != '1'))
+            throw new InvalidOperationException("Phone number must contain a valid country code and subscriber number.");
+        return $"+{digits}";
+    }
+
+    private static void ValidateEffectiveDates(DateTime effectiveDateUtc, DateTime? expirationDateUtc)
+    {
+        if (expirationDateUtc.HasValue && expirationDateUtc <= effectiveDateUtc)
+            throw new InvalidOperationException("Expiration must be later than the effective date.");
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -1938,6 +2718,14 @@ ORDER BY PointValue DESC, RuleName;";
     private sealed record ConvertedAccountDefaults(string? AccountTypeCode, string? StatusCode, int? StatusCodeId, string? LifecycleStageCode);
 
     private sealed record CommunicationSync(Guid ThreadId, Guid MessageId);
+
+    private sealed class LeadPhoneComplianceStatus
+    {
+        public Guid LeadId { get; set; }
+        public string PhoneComplianceStatusCode { get; set; } = string.Empty;
+        public bool IsCallAllowed { get; set; }
+        public bool IsSmsAllowed { get; set; }
+    }
 
     private sealed record CampaignSync(Guid CampaignId, string Name, string Type, string Status, string Segment, decimal OpenRate, int Conversions, decimal Revenue);
 

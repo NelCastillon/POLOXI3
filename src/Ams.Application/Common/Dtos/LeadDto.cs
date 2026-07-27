@@ -21,6 +21,9 @@ public sealed class LeadDto
     public DateTime? QualifiedDate { get; set; }
     public int StatusCode { get; set; }
     public Guid? AssignedToUserId { get; set; }
+    public string PhoneComplianceStatusCode { get; set; } = "Unknown";
+    public bool IsCallAllowed { get; set; }
+    public bool IsSmsAllowed { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
 }

@@ -281,6 +281,9 @@ public sealed partial class DatabaseMigrator
         new("0243_Billing_AgencyBillReceivables_Enterprise", Migration0243BillingAgencyBillReceivablesEnterprise),
         new("0244_Claims_Servicing_Enterprise", Migration0244ClaimsServicingEnterprise),
         new("0245_Enterprise_WorkflowRelationshipIntegrity", Migration0245EnterpriseWorkflowRelationshipIntegrity),
+        new("0246_CRM_Lead_DoNotCall_Compliance", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0056_LeadDoNotCallCompliance.sql")),
+        new("0247_CRM_Lead_DoNotCall_Compliance_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0057_LeadDoNotCallComplianceHardening.sql")),
+        new("0248_CRM_LeadPriority_SeedSync", Migration0248CrmLeadPrioritySeedSync),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -3871,12 +3874,14 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
         try
         {
             var sql = NormalizeMigrationSql(migration.Sql);
-            if (!string.IsNullOrWhiteSpace(sql))
-                await cn.ExecuteAsync(sql, transaction: tx);
+            foreach (var batch in SplitMigrationBatches(sql))
+            {
+                await cn.ExecuteAsync(new CommandDefinition(batch, transaction: tx, cancellationToken: cancellationToken));
+            }
 
-            await cn.ExecuteAsync(
+            await cn.ExecuteAsync(new CommandDefinition(
                 "INSERT INTO dbo._Migrations (Name) VALUES (@Name);",
-                new { migration.Name }, transaction: tx);
+                new { migration.Name }, transaction: tx, cancellationToken: cancellationToken));
             tx.Commit();
         }
         catch (SqlException ex) when (CanSkipMissingObjectMigration(migration, ex))
@@ -3906,8 +3911,31 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
             match => $"{match.Groups["indent"].Value}IF OBJECT_ID(N'{match.Groups["table"].Value}', N'U') IS NOT NULL AND COL_LENGTH(N'{match.Groups["table"].Value}', N'{match.Groups["column"].Value}') IS NULL ALTER TABLE");
     }
 
+    private static IEnumerable<string> SplitMigrationBatches(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            yield break;
+
+        foreach (var batch in SqlBatchSeparatorRegex().Split(sql))
+        {
+            if (!string.IsNullOrWhiteSpace(batch))
+                yield return batch;
+        }
+    }
+
+    private static string LoadEmbeddedMigration(string resourceName)
+    {
+        using var stream = typeof(DatabaseMigrator).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded migration resource '{resourceName}' was not found.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     [GeneratedRegex(@"(?m)^(?<indent>\s*)IF\s+COL_LENGTH\(N'(?<table>[^']+)'\s*,\s*N'(?<column>[^']+)'\)\s+IS\s+NULL\s+ALTER\s+TABLE", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UnguardedAlterTableRegex();
+
+    [GeneratedRegex(@"(?im)^\s*GO\s*(?:--[^\r\n]*)?\r?$", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlBatchSeparatorRegex();
 
     private static bool CanSkipMissingObjectMigration(Migration migration, SqlException exception)
     {
@@ -22831,5 +22859,93 @@ IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.Paym
  CREATE UNIQUE INDEX IX_PaymentApplication_Payment_Invoice ON Billing.PaymentApplication(PaymentId,InvoiceId);
 IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PaymentApplication') AND name=N'IX_PaymentApplication_Invoice')
  CREATE INDEX IX_PaymentApplication_Invoice ON Billing.PaymentApplication(InvoiceId,PaymentId) INCLUDE(AppliedAmount,AppliedDateUtc);
+""";
+
+private const string Migration0248CrmLeadPrioritySeedSync = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadEngagementOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadEngagementOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadEngagementOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionType NVARCHAR(50) NOT NULL,
+        Code NVARCHAR(100) NOT NULL,
+        Label NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadEngagementOption_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadEngagementOption_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadEngagementOption') AND name = N'UX_LeadEngagementOption_TypeCode')
+    CREATE UNIQUE INDEX UX_LeadEngagementOption_TypeCode ON CRM.LeadEngagementOption(TenantId, OptionType, Code) WHERE IsDeleted = 0;
+
+DECLARE @PriorityTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT DISTINCT TenantId FROM CRM.Lead WHERE TenantId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @PriorityTenants t WHERE t.TenantId = CRM.Lead.TenantId);
+IF OBJECT_ID(N'CRM.LeadInterestLine', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT DISTINCT TenantId FROM CRM.LeadInterestLine WHERE TenantId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @PriorityTenants t WHERE t.TenantId = CRM.LeadInterestLine.TenantId);
+
+DECLARE @PrioritySource TABLE
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    Code NVARCHAR(100) NOT NULL,
+    Label NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (TenantId, Code)
+);
+
+INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+SELECT t.TenantId, p.Code, p.Label, p.Description, p.SortOrder
+FROM @PriorityTenants t
+CROSS JOIN (VALUES
+    (N'Hot', N'Hot', N'Highest priority lead requiring immediate action.', 10),
+    (N'High', N'High', N'High priority lead or interest line.', 20),
+    (N'Warm', N'Warm', N'Engaged lead with active nurture signals.', 30),
+    (N'Medium', N'Medium', N'Medium priority lead or interest line.', 40),
+    (N'Normal', N'Normal', N'Standard priority lead or interest line.', 50),
+    (N'Cold', N'Cold', N'Low urgency lead with limited engagement.', 60),
+    (N'Low', N'Low', N'Low priority lead or interest line.', 70)
+) p(Code, Label, Description, SortOrder);
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+BEGIN
+    UPDATE CRM.Lead SET PriorityCode = N'Normal' WHERE NULLIF(LTRIM(RTRIM(PriorityCode)), N'') IS NULL;
+    INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+    SELECT DISTINCT l.TenantId, LTRIM(RTRIM(l.PriorityCode)), LTRIM(RTRIM(l.PriorityCode)), N'Priority synchronized from existing lead data.', 900
+    FROM CRM.Lead l
+    WHERE NULLIF(LTRIM(RTRIM(l.PriorityCode)), N'') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM @PrioritySource p WHERE p.TenantId = l.TenantId AND p.Code = LTRIM(RTRIM(l.PriorityCode)));
+END;
+
+IF OBJECT_ID(N'CRM.LeadInterestLine', N'U') IS NOT NULL
+BEGIN
+    UPDATE CRM.LeadInterestLine SET Priority = N'Medium' WHERE NULLIF(LTRIM(RTRIM(Priority)), N'') IS NULL;
+    INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+    SELECT DISTINCT i.TenantId, LTRIM(RTRIM(i.Priority)), LTRIM(RTRIM(i.Priority)), N'Priority synchronized from existing coverage interest data.', 910
+    FROM CRM.LeadInterestLine i
+    WHERE NULLIF(LTRIM(RTRIM(i.Priority)), N'') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM @PrioritySource p WHERE p.TenantId = i.TenantId AND p.Code = LTRIM(RTRIM(i.Priority)));
+END;
+
+MERGE CRM.LeadEngagementOption AS target
+USING @PrioritySource AS source
+ON target.TenantId = source.TenantId AND target.OptionType = N'LeadPriority' AND target.Code = source.Code AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET
+    Label = source.Label,
+    Description = source.Description,
+    SortOrder = source.SortOrder,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, N'LeadPriority', source.Code, source.Label, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), 0);
 """;
 }

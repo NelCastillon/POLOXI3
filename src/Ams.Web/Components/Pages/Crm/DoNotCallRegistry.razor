@@ -1,0 +1,403 @@
+@page "/crm/compliance/do-not-call"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>Do Not Call Registry</PageTitle>
+
+<AppPageHeader Title="Do Not Call Registry"
+               Subtitle="Executive compliance oversight and controlled registry operations"
+               Icon="bi-telephone-x-fill">
+    <Actions>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button class="um-btn um-btn-ghost" @onclick="ExportRegistryAsync" disabled="@(_loading || FilteredCount == 0)"><i class="bi bi-download"></i> Export report</button>
+        <a class="um-btn um-btn-primary" href="/crm/compliance/do-not-call/screening"><i class="bi bi-shield-check"></i> Screening Operations</a>
+    </Actions>
+</AppPageHeader>
+
+<section class="dnc-command-bar">
+    <div>
+        <span class="dnc-eyebrow">Compliance posture</span>
+        <div class="dnc-posture-line">
+            <span class="dnc-posture-badge @PostureTone"><i class="bi @PostureIcon"></i> @PostureLabel</span>
+            <span>@PostureSummary</span>
+        </div>
+    </div>
+    <div class="dnc-asof"><i class="bi bi-database-check"></i><span>Authoritative tenant registry<br /><strong>As of @DateTime.Now.ToString("MMM d, yyyy · h:mm tt")</strong></span></div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="dnc-alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_error</span></div>
+}
+@if (!string.IsNullOrWhiteSpace(_operationMessage))
+{
+    <div class="dnc-operation-message @(_operationFailed ? "danger" : "success")"><i class="bi @(_operationFailed ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")"></i><span>@_operationMessage</span><button type="button" @onclick="() => _operationMessage = null" aria-label="Dismiss"><i class="bi bi-x-lg"></i></button></div>
+}
+
+<div class="dnc-kpis" role="group" aria-label="Filter registry by compliance status">
+    <button type="button" class="dnc-kpi dnc-kpi--blue @KpiActiveClass(string.Empty)" @onclick="() => ApplyKpiFilter(string.Empty)" aria-pressed="@IsKpiActive(string.Empty)">
+        <span class="dnc-kpi-icon"><i class="bi bi-telephone"></i></span>
+        <span class="dnc-kpi-content"><span class="dnc-kpi-label">Total Phones</span><strong>@_workspace.TotalPhones.ToString("N0")</strong><span class="dnc-kpi-detail">All registry records</span></span>
+        <span class="dnc-kpi-action">View all <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dnc-kpi dnc-kpi--red @SuppressedKpiClass" @onclick="ApplySuppressedKpiFilter" aria-pressed="@IsSuppressedKpiActive">
+        <span class="dnc-kpi-icon"><i class="bi bi-telephone-x-fill"></i></span>
+        <span class="dnc-kpi-content"><span class="dnc-kpi-label">Suppressed</span><strong>@_workspace.SuppressedPhones.ToString("N0")</strong><span class="dnc-kpi-detail">Outreach restricted</span></span>
+        <span class="dnc-kpi-action">Filter <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dnc-kpi dnc-kpi--amber @PendingKpiClass" @onclick="ApplyPendingKpiFilter" aria-pressed="@IsPendingKpiActive">
+        <span class="dnc-kpi-icon"><i class="bi bi-hourglass-split"></i></span>
+        <span class="dnc-kpi-content"><span class="dnc-kpi-label">Pending Screening</span><strong>@_workspace.PendingScreeningPhones.ToString("N0")</strong><span class="dnc-kpi-detail">Review required</span></span>
+        <span class="dnc-kpi-action">Filter <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dnc-kpi dnc-kpi--green @AllowedKpiClass" @onclick="ApplyAllowedKpiFilter" aria-pressed="@IsAllowedKpiActive">
+        <span class="dnc-kpi-icon"><i class="bi bi-telephone-check-fill"></i></span>
+        <span class="dnc-kpi-content"><span class="dnc-kpi-label">Call Cleared</span><strong>@_workspace.AllowedPhones.ToString("N0")</strong><span class="dnc-kpi-detail">Eligible for outreach</span></span>
+        <span class="dnc-kpi-action">Filter <i class="bi bi-arrow-right"></i></span>
+    </button>
+</div>
+
+<section class="dnc-insights" aria-label="Executive compliance insights">
+    <article class="dnc-insight dnc-insight--risk">
+        <div class="dnc-insight-head"><span><i class="bi bi-exclamation-octagon-fill"></i> Risk exposure</span><strong>@RiskExposureRate.ToString("0.0")%</strong></div>
+        <div class="dnc-meter"><span style="width:@PercentWidth(RiskExposureRate)"></span></div>
+        <p><strong>@RiskExposureCount.ToString("N0")</strong> phone records require suppression or screening controls before outreach.</p>
+    </article>
+    <article class="dnc-insight dnc-insight--coverage">
+        <div class="dnc-insight-head"><span><i class="bi bi-shield-check"></i> Screening coverage</span><strong>@ScreeningCoverageRate.ToString("0.0")%</strong></div>
+        <div class="dnc-meter"><span style="width:@PercentWidth(ScreeningCoverageRate)"></span></div>
+        <p><strong>@ScreenedPhoneCount.ToString("N0")</strong> of @_workspace.TotalPhones.ToString("N0") phones have a recorded screening result.</p>
+    </article>
+    <article class="dnc-insight dnc-insight--health">
+        <div class="dnc-insight-head"><span><i class="bi bi-activity"></i> Screening health</span><strong>@ScreeningHealthLabel</strong></div>
+        <div class="dnc-health-grid">
+            <span><strong>@_workspace.DueScreenings.ToString("N0")</strong> Due</span>
+            <span><strong>@_workspace.FailedScreenings.ToString("N0")</strong> Failed</span>
+            <span><strong>@ClearScreeningRate.ToString("0.0")%</strong> Clear rate</span>
+        </div>
+        <a href="/crm/compliance/do-not-call/screening">Open screening operations <i class="bi bi-arrow-right"></i></a>
+    </article>
+</section>
+
+<section class="dnc-card">
+    <div class="dnc-toolbar">
+        <div class="dnc-search"><i class="bi bi-search"></i><input placeholder="Search lead, number, or status..." value="@_search" @oninput="OnSearchChanged" /></div>
+        <select class="um-select" value="@_status" @onchange="OnStatusChanged"><option value="">All statuses</option><option>Suppressed</option><option>PendingScreening</option><option>Allowed</option></select>
+        <select class="um-select" value="@_screeningFilter" @onchange="OnScreeningFilterChanged" aria-label="Screening risk filter"><option value="">All screening states</option><option value="Due">Due or overdue</option><option value="Failed">Failed screening</option><option value="Never">Never screened</option><option value="Current">Current screening</option></select>
+        <select class="um-select" value="@_sort" @onchange="OnSortChanged" aria-label="Sort registry"><option value="Risk">Highest risk first</option><option value="Lead">Lead name</option><option value="Status">Compliance status</option><option value="Due">Next screening due</option><option value="Recent">Recently screened</option></select>
+        <span class="dnc-count"><strong>@FilteredCount</strong> record(s)</span>
+    </div>
+
+    @if (_selectedProfileIds.Count > 0)
+    {
+        <div class="dnc-selection-bar" role="status">
+            <div><span class="dnc-selection-count">@_selectedProfileIds.Count</span><strong> phone record(s) selected</strong><button type="button" @onclick="ClearSelection">Clear selection</button></div>
+            <div class="dnc-selection-actions"><span>Administrative actions</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenAddSuppression" disabled="@(!CanManageRegistry || _operationBusy)"><i class="bi bi-shield-plus"></i> Add suppression</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenRevokeSuppression" disabled="@(!CanManageRegistry || _operationBusy)"><i class="bi bi-shield-minus"></i> Revoke suppression</button></div>
+        </div>
+    }
+
+    @if (_loading)
+    {
+        <div class="dnc-state"><span class="um-spin"></span> Loading phone compliance registry...</div>
+    }
+    else if (!Filtered.Any())
+    {
+        <div class="dnc-state"><i class="bi bi-shield-check"></i><strong>No matching phone records</strong><span>Adjust the search or status filter.</span></div>
+    }
+    else
+    {
+        <div class="dnc-table-wrap">
+            <table class="dnc-table">
+                <thead><tr><th class="dnc-select-cell"><input type="checkbox" checked="@IsPageSelected" @onchange="TogglePageSelection" aria-label="Select all records on this page" /></th><th>Lead</th><th>Phone</th><th>Status</th><th>Permissions</th><th>Evidence</th><th>Latest Screening</th><th>Next Due</th><th></th></tr></thead>
+                <tbody>
+                @foreach (var row in PagedRows)
+                {
+                    <tr class="@(_selectedProfileIds.Contains(row.PhoneComplianceProfileId) ? "is-selected" : null)">
+                        <td class="dnc-select-cell" data-label="Select"><input type="checkbox" checked="@_selectedProfileIds.Contains(row.PhoneComplianceProfileId)" @onchange="args => ToggleRowSelection(row.PhoneComplianceProfileId, args)" aria-label="Select @row.LeadName phone record" /></td>
+                        <td data-label="Lead"><strong>@row.LeadName</strong><small>@row.LeadNumber</small></td>
+                        <td data-label="Phone"><span class="dnc-phone">@row.DisplayPhoneNumber</span><small>@row.NormalizedPhoneNumber</small></td>
+                        <td data-label="Status"><span class="dnc-badge @StatusClass(row.OverallStatusCode)">@StatusLabel(row.OverallStatusCode)</span></td>
+                        <td data-label="Permissions"><div class="dnc-permissions"><span class="@(row.IsCallAllowed ? "ok" : "blocked")"><i class="bi bi-telephone"></i> Call</span><span class="@(row.IsSmsAllowed ? "ok" : "blocked")"><i class="bi bi-chat-dots"></i> SMS</span></div></td>
+                        <td data-label="Evidence"><div class="dnc-evidence"><span title="Active suppressions"><i class="bi bi-shield-x"></i> @row.ActiveSuppressionCount</span><span title="Active consent"><i class="bi bi-file-earmark-check"></i> @row.ActiveConsentCount</span></div></td>
+                        <td data-label="Latest Screening"><strong>@Safe(row.LatestScreeningResultCode)</strong><small>@Safe(row.LatestScreeningProviderCode) · @DateText(row.LastScreenedDateUtc)</small></td>
+                        <td data-label="Next Due">@DateText(row.NextScreeningDueDateUtc)</td>
+                        <td><div class="dnc-row-actions">@if (CanManageRegistry) { <button class="dnc-icon-btn" title="Manage suppression" aria-label="Manage suppression for @row.LeadName" @onclick="() => SelectAndManage(row)"><i class="bi bi-shield-lock"></i></button> }<button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenLead(row.LeadId)"><i class="bi bi-box-arrow-up-right"></i> Review</button></div></td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+        <div class="dnc-pager" aria-label="DNC registry pagination">
+            <div class="dnc-page-summary">Showing <strong>@FirstRowNumber-@LastRowNumber</strong> of <strong>@FilteredCount</strong> records <span>· @PageSize per page</span></div>
+            <div class="dnc-page-controls">
+                <button type="button" class="dnc-page-btn" @onclick="FirstPage" disabled="@(_pageNumber == 1)" title="First page" aria-label="First page"><i class="bi bi-chevron-bar-left"></i></button>
+                <button type="button" class="dnc-page-btn" @onclick="PreviousPage" disabled="@(_pageNumber == 1)" title="Previous page" aria-label="Previous page"><i class="bi bi-chevron-left"></i></button>
+                <span class="dnc-page-indicator">Page <strong>@_pageNumber</strong> of <strong>@TotalPages</strong></span>
+                <button type="button" class="dnc-page-btn" @onclick="NextPage" disabled="@(_pageNumber == TotalPages)" title="Next page" aria-label="Next page"><i class="bi bi-chevron-right"></i></button>
+                <button type="button" class="dnc-page-btn" @onclick="LastPage" disabled="@(_pageNumber == TotalPages)" title="Last page" aria-label="Last page"><i class="bi bi-chevron-bar-right"></i></button>
+            </div>
+        </div>
+    }
+</section>
+
+<AppModal Visible="_showSuppressionDialog" Width="620px" IsModal="true" ShowCloseIcon="true">
+    <div class="dnc-dialog">
+        <header><span class="dnc-dialog-icon danger"><i class="bi bi-shield-plus"></i></span><div><h2>Add phone suppression</h2><p>Apply an auditable outreach restriction to @_selectedProfileIds.Count phone record(s).</p></div></header>
+        <div class="dnc-dialog-body">
+            <div class="dnc-dialog-warning"><i class="bi bi-info-circle-fill"></i><span>This immediately updates call and SMS eligibility according to the selected channel.</span></div>
+            <div class="dnc-form-grid">
+                <label><span>Source <b>*</b></span><select class="um-select" @bind="_suppressionForm.SourceCode"><option value="">Select source</option>@foreach (var item in ComplianceOptions("SuppressionSource")) { <option value="@item.Code">@item.Name</option> }</select></label>
+                <label><span>Reason <b>*</b></span><select class="um-select" @bind="_suppressionForm.ReasonCode"><option value="">Select reason</option>@foreach (var item in ComplianceOptions("SuppressionReason")) { <option value="@item.Code">@item.Name</option> }</select></label>
+                <label><span>Channel <b>*</b></span><select class="um-select" @bind="_suppressionForm.ChannelCode"><option value="">Select channel</option>@foreach (var item in ComplianceOptions("Channel")) { <option value="@item.Code">@item.Name</option> }</select></label>
+                <label><span>Evidence reference</span><input class="um-input" @bind="_suppressionForm.EvidenceReference" maxlength="500" placeholder="Case, request, or document reference" /></label>
+                <label class="dnc-form-wide"><span>Administrative notes</span><textarea class="um-input" @bind="_suppressionForm.Notes" maxlength="1000" rows="3" placeholder="Explain the business and compliance context"></textarea></label>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_dialogError)) { <div class="dnc-form-error"><i class="bi bi-exclamation-circle"></i> @_dialogError</div> }
+        </div>
+        <footer><button class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_operationBusy">Cancel</button><button class="um-btn um-btn-danger" @onclick="ApplySuppressionsAsync" disabled="@_operationBusy">@if (_operationBusy) { <span class="um-spin"></span> } Apply suppression</button></footer>
+    </div>
+</AppModal>
+
+<AppModal Visible="_showRevokeDialog" Width="540px" IsModal="true" ShowCloseIcon="true">
+    <div class="dnc-dialog">
+        <header><span class="dnc-dialog-icon warning"><i class="bi bi-shield-minus"></i></span><div><h2>Revoke active suppressions</h2><p>Recalculate compliance for @_selectedProfileIds.Count selected phone record(s).</p></div></header>
+        <div class="dnc-dialog-body">
+            <div class="dnc-dialog-warning warning"><i class="bi bi-exclamation-triangle-fill"></i><span>Every matching active suppression will be revoked. This may permit future outreach after all remaining compliance checks pass.</span></div>
+            <label class="dnc-revoke-reason"><span>Revocation reason <b>*</b></span><textarea class="um-input" @bind="_revocationReason" maxlength="500" rows="3" placeholder="Document the authorized reason for this change"></textarea></label>
+            @if (!string.IsNullOrWhiteSpace(_dialogError)) { <div class="dnc-form-error"><i class="bi bi-exclamation-circle"></i> @_dialogError</div> }
+        </div>
+        <footer><button class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_operationBusy">Cancel</button><button class="um-btn um-btn-warning" @onclick="RevokeSuppressionsAsync" disabled="@_operationBusy">@if (_operationBusy) { <span class="um-spin"></span> } Revoke suppressions</button></footer>
+    </div>
+</AppModal>
+
+@code {
+    private PhoneComplianceWorkspaceDto _workspace = new();
+    private bool _loading = true;
+    private string? _error;
+    private string _search = string.Empty;
+    private string _status = string.Empty;
+    private string _screeningFilter = string.Empty;
+    private string _sort = "Risk";
+    private const int PageSize = 20;
+    private int _pageNumber = 1;
+    private readonly HashSet<Guid> _selectedProfileIds = [];
+    private CurrentUserContextModel? _currentUser;
+    private List<PhoneComplianceReferenceDto> _complianceReferences = [];
+    private bool _showSuppressionDialog;
+    private bool _showRevokeDialog;
+    private bool _operationBusy;
+    private bool _operationFailed;
+    private string? _operationMessage;
+    private string? _dialogError;
+    private string _revocationReason = string.Empty;
+    private SuppressionForm _suppressionForm = new();
+
+    private IEnumerable<PhoneComplianceRegistryRowDto> Filtered
+    {
+        get
+        {
+            var rows = _workspace.Phones.Where(x =>
+                (string.IsNullOrWhiteSpace(_status) || string.Equals(x.OverallStatusCode, _status, StringComparison.OrdinalIgnoreCase)) &&
+                MatchesScreeningFilter(x) &&
+                (string.IsNullOrWhiteSpace(_search) || x.LeadName.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.LeadNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.DisplayPhoneNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.NormalizedPhoneNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || x.OverallStatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase)));
+
+            return _sort switch
+            {
+                "Lead" => rows.OrderBy(x => x.LeadName).ThenBy(x => x.DisplayPhoneNumber),
+                "Status" => rows.OrderBy(x => x.OverallStatusCode).ThenBy(x => x.LeadName),
+                "Due" => rows.OrderBy(x => x.NextScreeningDueDateUtc ?? DateTime.MaxValue).ThenBy(x => x.LeadName),
+                "Recent" => rows.OrderByDescending(x => x.LastScreenedDateUtc ?? DateTime.MinValue).ThenBy(x => x.LeadName),
+                _ => rows.OrderByDescending(RiskScore).ThenBy(x => x.NextScreeningDueDateUtc ?? DateTime.MaxValue).ThenBy(x => x.LeadName)
+            };
+        }
+    }
+    private int FilteredCount => Filtered.Count();
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredCount / (double)PageSize));
+    private IEnumerable<PhoneComplianceRegistryRowDto> PagedRows => Filtered.Skip((_pageNumber - 1) * PageSize).Take(PageSize);
+    private int FirstRowNumber => FilteredCount == 0 ? 0 : ((_pageNumber - 1) * PageSize) + 1;
+    private int LastRowNumber => Math.Min(_pageNumber * PageSize, FilteredCount);
+    private bool CanManageRegistry => _currentUser?.IsTenantAdministrator == true;
+    private bool IsPageSelected => PagedRows.Any() && PagedRows.All(x => _selectedProfileIds.Contains(x.PhoneComplianceProfileId));
+    private int RiskExposureCount => _workspace.SuppressedPhones + _workspace.PendingScreeningPhones;
+    private int ScreenedPhoneCount => _workspace.Phones.Count(x => x.LastScreenedDateUtc.HasValue);
+    private int ClearScreeningCount => _workspace.Phones.Count(x => string.Equals(x.LatestScreeningResultCode, "Clear", StringComparison.OrdinalIgnoreCase));
+    private double RiskExposureRate => Percentage(RiskExposureCount, _workspace.TotalPhones);
+    private double ScreeningCoverageRate => Percentage(ScreenedPhoneCount, _workspace.TotalPhones);
+    private double ClearScreeningRate => Percentage(ClearScreeningCount, ScreenedPhoneCount);
+    private string PostureLabel => _workspace.FailedScreenings > 0 ? "Attention required" : _workspace.DueScreenings > 0 || _workspace.PendingScreeningPhones > 0 ? "Action recommended" : "Controls healthy";
+    private string PostureTone => _workspace.FailedScreenings > 0 ? "danger" : _workspace.DueScreenings > 0 || _workspace.PendingScreeningPhones > 0 ? "warning" : "success";
+    private string PostureIcon => _workspace.FailedScreenings > 0 ? "bi-exclamation-triangle-fill" : _workspace.DueScreenings > 0 || _workspace.PendingScreeningPhones > 0 ? "bi-shield-exclamation" : "bi-shield-check";
+    private string PostureSummary => _workspace.FailedScreenings > 0 ? $"{_workspace.FailedScreenings:N0} screening failures require review." : _workspace.DueScreenings > 0 ? $"{_workspace.DueScreenings:N0} screenings are due for refresh." : "No immediate screening exceptions are reported.";
+    private string ScreeningHealthLabel => _workspace.FailedScreenings > 0 ? "Degraded" : _workspace.DueScreenings > 0 ? "Monitor" : "Healthy";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Do Not Call Registry", "/crm/compliance/do-not-call"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _currentUser = await CurrentUser.RequireAsync();
+            var workspaceTask = Api.GetPhoneComplianceWorkspaceAsync(_currentUser.TenantId);
+            var referencesTask = Api.GetPhoneComplianceReferencesAsync(_currentUser.TenantId);
+            await Task.WhenAll(workspaceTask, referencesTask);
+            _workspace = await workspaceTask ?? new();
+            _complianceReferences = [.. await referencesTask ?? []];
+            _selectedProfileIds.RemoveWhere(id => _workspace.Phones.All(x => x.PhoneComplianceProfileId != id));
+            _pageNumber = Math.Min(_pageNumber, TotalPages);
+        }
+        catch (Exception ex) { _error = $"Unable to load the DNC registry: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private bool IsKpiActive(string status) => string.Equals(_status, status, StringComparison.OrdinalIgnoreCase) && (status.Length > 0 || string.IsNullOrWhiteSpace(_screeningFilter));
+    private string KpiActiveClass(string status) => IsKpiActive(status) ? "is-active" : string.Empty;
+    private bool IsSuppressedKpiActive => IsKpiActive("Suppressed");
+    private bool IsPendingKpiActive => IsKpiActive("PendingScreening");
+    private bool IsAllowedKpiActive => IsKpiActive("Allowed");
+    private string SuppressedKpiClass => KpiActiveClass("Suppressed");
+    private string PendingKpiClass => KpiActiveClass("PendingScreening");
+    private string AllowedKpiClass => KpiActiveClass("Allowed");
+    private void ApplySuppressedKpiFilter() => ApplyKpiFilter("Suppressed");
+    private void ApplyPendingKpiFilter() => ApplyKpiFilter("PendingScreening");
+    private void ApplyAllowedKpiFilter() => ApplyKpiFilter("Allowed");
+    private void ApplyKpiFilter(string status)
+    {
+        var isAlreadyActive = IsKpiActive(status);
+        _status = status.Length > 0 && isAlreadyActive ? string.Empty : status;
+        _screeningFilter = string.Empty;
+        _pageNumber = 1;
+        _selectedProfileIds.Clear();
+    }
+    private static string StatusClass(string value) => value switch { "Suppressed" => "danger", "Allowed" => "success", _ => "warning" };
+    private static string StatusLabel(string value) => value == "PendingScreening" ? "Pending Screening" : value;
+    private static string DateText(DateTime? value) => value?.ToLocalTime().ToString("MMM d, yyyy g") ?? "Not scheduled";
+    private static string Safe(string? value) => string.IsNullOrWhiteSpace(value) ? "No result" : value;
+    private static double Percentage(int value, int total) => total == 0 ? 0 : value * 100d / total;
+    private static string PercentWidth(double value) => $"{Math.Clamp(value, 0, 100):0.#}%";
+    private bool MatchesScreeningFilter(PhoneComplianceRegistryRowDto row) => _screeningFilter switch
+    {
+        "Due" => row.NextScreeningDueDateUtc.HasValue && row.NextScreeningDueDateUtc <= DateTime.UtcNow,
+        "Failed" => string.Equals(row.LatestScreeningResultCode, "Failed", StringComparison.OrdinalIgnoreCase) || string.Equals(row.LatestScreeningResultCode, "Error", StringComparison.OrdinalIgnoreCase),
+        "Never" => !row.LastScreenedDateUtc.HasValue,
+        "Current" => row.LastScreenedDateUtc.HasValue && (!row.NextScreeningDueDateUtc.HasValue || row.NextScreeningDueDateUtc > DateTime.UtcNow),
+        _ => true
+    };
+    private static int RiskScore(PhoneComplianceRegistryRowDto row)
+    {
+        var score = row.OverallStatusCode switch { "Suppressed" => 400, "PendingScreening" => 300, _ => 0 };
+        if (!row.LastScreenedDateUtc.HasValue) score += 100;
+        if (row.NextScreeningDueDateUtc <= DateTime.UtcNow) score += 75;
+        if (string.Equals(row.LatestScreeningResultCode, "Failed", StringComparison.OrdinalIgnoreCase) || string.Equals(row.LatestScreeningResultCode, "Error", StringComparison.OrdinalIgnoreCase)) score += 150;
+        return score;
+    }
+    private void OpenLead(Guid leadId) => Nav.NavigateTo($"/crm/leads/{leadId}");
+    private void OnSearchChanged(ChangeEventArgs args) { _search = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnStatusChanged(ChangeEventArgs args) { _status = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnScreeningFilterChanged(ChangeEventArgs args) { _screeningFilter = args.Value?.ToString() ?? string.Empty; _pageNumber = 1; }
+    private void OnSortChanged(ChangeEventArgs args) { _sort = args.Value?.ToString() ?? "Risk"; _pageNumber = 1; }
+    private void ToggleRowSelection(Guid profileId, ChangeEventArgs args) { if (args.Value is true) _selectedProfileIds.Add(profileId); else _selectedProfileIds.Remove(profileId); }
+    private void TogglePageSelection(ChangeEventArgs args) { foreach (var row in PagedRows) { if (args.Value is true) _selectedProfileIds.Add(row.PhoneComplianceProfileId); else _selectedProfileIds.Remove(row.PhoneComplianceProfileId); } }
+    private void ClearSelection() => _selectedProfileIds.Clear();
+    private IEnumerable<PhoneComplianceReferenceDto> ComplianceOptions(string type) => _complianceReferences.Where(x => string.Equals(x.ReferenceTypeCode, type, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SortOrder);
+    private string FirstReferenceCode(string type) => ComplianceOptions(type).FirstOrDefault()?.Code ?? string.Empty;
+    private void SelectAndManage(PhoneComplianceRegistryRowDto row)
+    {
+        _selectedProfileIds.Clear();
+        _selectedProfileIds.Add(row.PhoneComplianceProfileId);
+        if (row.ActiveSuppressionCount > 0) OpenRevokeSuppression(); else OpenAddSuppression();
+    }
+    private void OpenAddSuppression()
+    {
+        if (!CanManageRegistry || _selectedProfileIds.Count == 0) return;
+        _dialogError = null;
+        _suppressionForm = new() { SourceCode = FirstReferenceCode("SuppressionSource"), ReasonCode = FirstReferenceCode("SuppressionReason"), ChannelCode = FirstReferenceCode("Channel") };
+        _showSuppressionDialog = true;
+    }
+    private void OpenRevokeSuppression()
+    {
+        if (!CanManageRegistry || _selectedProfileIds.Count == 0) return;
+        _dialogError = null;
+        _revocationReason = string.Empty;
+        _showRevokeDialog = true;
+    }
+    private void CloseDialogs() { if (_operationBusy) return; _showSuppressionDialog = false; _showRevokeDialog = false; _dialogError = null; }
+    private async Task ApplySuppressionsAsync()
+    {
+        if (_currentUser is null || !CanManageRegistry) return;
+        if (string.IsNullOrWhiteSpace(_suppressionForm.SourceCode) || string.IsNullOrWhiteSpace(_suppressionForm.ReasonCode) || string.IsNullOrWhiteSpace(_suppressionForm.ChannelCode)) { _dialogError = "Source, reason, and channel are required."; return; }
+        var selected = _workspace.Phones.Where(x => _selectedProfileIds.Contains(x.PhoneComplianceProfileId)).ToList();
+        await ExecuteBulkAsync(selected, async row => await Api.CreateLeadPhoneSuppressionAsync(row.LeadId, new CreatePhoneSuppressionRequest
+        {
+            TenantId = _currentUser.TenantId, LeadId = row.LeadId, PhoneNumber = row.DisplayPhoneNumber,
+            SourceCode = _suppressionForm.SourceCode, ReasonCode = _suppressionForm.ReasonCode, ChannelCode = _suppressionForm.ChannelCode,
+            EffectiveDateUtc = DateTime.UtcNow, RequestedDateUtc = DateTime.UtcNow,
+            EvidenceReference = TrimOrNull(_suppressionForm.EvidenceReference), Notes = TrimOrNull(_suppressionForm.Notes), CreatedByUserId = _currentUser.UserId
+        }), "suppression(s) applied");
+    }
+    private async Task RevokeSuppressionsAsync()
+    {
+        if (_currentUser is null || !CanManageRegistry) return;
+        if (string.IsNullOrWhiteSpace(_revocationReason)) { _dialogError = "A revocation reason is required."; _showRevokeDialog = true; return; }
+        var selected = _workspace.Phones.Where(x => _selectedProfileIds.Contains(x.PhoneComplianceProfileId)).ToList();
+        await ExecuteBulkAsync(selected, async row =>
+        {
+            var phones = await Api.GetLeadPhoneComplianceAsync(row.LeadId) ?? [];
+            var phone = phones.FirstOrDefault(x => x.PhoneComplianceProfileId == row.PhoneComplianceProfileId);
+            var active = phone?.Suppressions.Where(x => string.Equals(x.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).ToList() ?? [];
+            if (active.Count == 0) throw new InvalidOperationException("No active suppression was found.");
+            foreach (var suppression in active)
+                await Api.RevokeLeadPhoneSuppressionAsync(row.LeadId, suppression.PhoneSuppressionId, new RevokePhoneSuppressionRequest { TenantId = _currentUser.TenantId, LeadId = row.LeadId, PhoneSuppressionId = suppression.PhoneSuppressionId, RevocationReason = _revocationReason.Trim(), RevokedByUserId = _currentUser.UserId });
+        }, "phone record(s) had active suppressions revoked");
+    }
+    private async Task ExecuteBulkAsync(IReadOnlyList<PhoneComplianceRegistryRowDto> rows, Func<PhoneComplianceRegistryRowDto, Task> action, string successLabel)
+    {
+        _operationBusy = true; _dialogError = null; var succeeded = 0; var failures = new List<string>();
+        try
+        {
+            foreach (var row in rows) { try { await action(row); succeeded++; } catch (Exception ex) { failures.Add($"{row.LeadName}: {ex.Message}"); } }
+            _operationFailed = failures.Count > 0;
+            _operationMessage = failures.Count == 0 ? $"{succeeded:N0} {successLabel}." : $"{succeeded:N0} succeeded; {failures.Count:N0} failed. {string.Join(" ", failures.Take(2))}";
+            _showSuppressionDialog = false; _showRevokeDialog = false; _selectedProfileIds.Clear();
+            await LoadAsync();
+        }
+        finally { _operationBusy = false; }
+    }
+    private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private async Task ExportRegistryAsync()
+    {
+        var csv = new System.Text.StringBuilder();
+        csv.AppendLine("Lead,Lead Number,Phone,Normalized Phone,Status,Call Allowed,SMS Allowed,Active Suppressions,Active Consents,Screening Result,Screening Provider,Last Screened UTC,Next Screening Due UTC");
+        foreach (var row in Filtered)
+        {
+            csv.AppendLine(string.Join(',', Csv(row.LeadName), Csv(row.LeadNumber), Csv(row.DisplayPhoneNumber), Csv(row.NormalizedPhoneNumber), Csv(StatusLabel(row.OverallStatusCode)), Csv(row.IsCallAllowed ? "Yes" : "No"), Csv(row.IsSmsAllowed ? "Yes" : "No"), row.ActiveSuppressionCount, row.ActiveConsentCount, Csv(row.LatestScreeningResultCode), Csv(row.LatestScreeningProviderCode), Csv(row.LastScreenedDateUtc?.ToString("O")), Csv(row.NextScreeningDueDateUtc?.ToString("O"))));
+        }
+        var bytes = System.Text.Encoding.UTF8.GetBytes(csv.ToString());
+        await Js.InvokeVoidAsync("amsDownload.downloadBase64", $"dnc-compliance-registry-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        _operationFailed = false;
+        _operationMessage = $"Exported {FilteredCount:N0} registry records from the active view.";
+    }
+    private static string Csv(object? value) => "\"" + (value?.ToString()?.Replace("\"", "\"\"") ?? string.Empty) + "\"";
+    private void FirstPage() => _pageNumber = 1;
+    private void PreviousPage() => _pageNumber = Math.Max(1, _pageNumber - 1);
+    private void NextPage() => _pageNumber = Math.Min(TotalPages, _pageNumber + 1);
+    private void LastPage() => _pageNumber = TotalPages;
+
+    private sealed class SuppressionForm
+    {
+        public string SourceCode { get; set; } = string.Empty;
+        public string ReasonCode { get; set; } = string.Empty;
+        public string ChannelCode { get; set; } = string.Empty;
+        public string? EvidenceReference { get; set; }
+        public string? Notes { get; set; }
+    }
+}

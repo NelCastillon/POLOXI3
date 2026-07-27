@@ -112,3 +112,6 @@
 - Blazor UI should expose workflow actions based on backend-calculated eligibility, not duplicated client-side rules. Examples: enable `Request Quote` only when validation passes or missing items can be displayed; enable `Generate Proposal` only for usable approved quotes; enable `Request Bind` only when a selected quote and customer authorization exist; enable `Confirm Bind` only for submitted/acknowledged/reviewing bind requests.
 - Never delete unsuccessful markets, declined quote requests, rejected quotes, or superseded revisions.
 - Avoid repetitive process narration or output loops; keep implementation progress concise and proceed directly with validation.
+
+## Shared Validation Rules
+- Prefer shared/global validation rules and attributes instead of component-scoped validation implementations.

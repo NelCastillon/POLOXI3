@@ -1000,6 +1000,48 @@ public sealed partial class ApiClient
     public Task<LeadDto?> GetLeadByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<LeadDto>($"api/leads/{id}", cancellationToken);
 
+    public Task<IReadOnlyList<PhoneComplianceReferenceDto>?> GetPhoneComplianceReferencesAsync(Guid tenantId, string? referenceTypeCode = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<PhoneComplianceReferenceDto>>($"api/leads/phone-compliance/references?tenantId={tenantId}&referenceTypeCode={Uri.EscapeDataString(referenceTypeCode ?? string.Empty)}", cancellationToken);
+
+    public Task<PhoneComplianceWorkspaceDto?> GetPhoneComplianceWorkspaceAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PhoneComplianceWorkspaceDto>($"api/leads/phone-compliance/workspace?tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<LeadPhoneComplianceDto>?> GetLeadPhoneComplianceAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadPhoneComplianceDto>>($"api/leads/{leadId}/phone-compliance", cancellationToken);
+
+    public async Task<Guid> CreateLeadPhoneSuppressionAsync(Guid leadId, CreatePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/phone-compliance/suppressions", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task RevokeLeadPhoneSuppressionAsync(Guid leadId, Guid phoneSuppressionId, RevokePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/phone-compliance/suppressions/{phoneSuppressionId}/revoke", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<Guid> CreateLeadPhoneConsentAsync(Guid leadId, CreatePhoneConsentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/phone-compliance/consents", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken: cancellationToken);
+    }
+
+    public async Task RevokeLeadPhoneConsentAsync(Guid leadId, Guid phoneConsentId, RevokePhoneConsentRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/phone-compliance/consents/{phoneConsentId}/revoke", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<PhoneContactEligibilityDto> EvaluateLeadPhoneContactAsync(Guid leadId, EvaluatePhoneContactRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/leads/{leadId}/phone-compliance/evaluate", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PhoneContactEligibilityDto>(cancellationToken: cancellationToken))!;
+    }
+
     public Task<IReadOnlyList<LeadScoreFactorDto>?> GetLeadScoreFactorsAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<LeadScoreFactorDto>>($"api/leads/{id}/score-factors", cancellationToken);
 
