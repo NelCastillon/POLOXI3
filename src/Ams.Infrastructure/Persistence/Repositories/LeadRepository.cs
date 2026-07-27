@@ -2346,6 +2346,31 @@ WHERE TenantId = @TenantId AND EntityTypeCode = @EntityTypeCode AND EntityId = @
         }
 
         var normalized = NormalizePhoneNumber(phoneNumber);
+        if (string.Equals(entityTypeCode, "LeadContact", StringComparison.OrdinalIgnoreCase))
+        {
+            var leadPhone = await connection.ExecuteScalarAsync<string?>(new CommandDefinition(@"
+SELECT Phone
+FROM CRM.Lead
+WHERE TenantId = @TenantId AND LeadId = @LeadId AND IsDeleted = 0;", new { TenantId = tenantId, LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken));
+            if (!string.IsNullOrWhiteSpace(leadPhone) && string.Equals(NormalizePhoneNumber(leadPhone), normalized, StringComparison.Ordinal))
+            {
+                var duplicateProfileId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
+SELECT PhoneComplianceProfileId
+FROM CRM.PhoneEntityLink
+WHERE TenantId = @TenantId AND EntityTypeCode = N'LeadContact' AND EntityId = @EntityId AND IsDeleted = 0;
+
+UPDATE CRM.PhoneEntityLink
+SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @UserId
+WHERE TenantId = @TenantId AND EntityTypeCode = N'LeadContact' AND EntityId = @EntityId AND IsDeleted = 0;", new { TenantId = tenantId, EntityId = entityId, UserId = userId }, transaction: transaction, cancellationToken: cancellationToken));
+                if (duplicateProfileId.HasValue)
+                {
+                    await RecalculatePhoneComplianceProfileAsync(connection, transaction, tenantId, duplicateProfileId.Value, userId, cancellationToken);
+                }
+
+                return await SyncPhoneComplianceLinkAsync(connection, transaction, tenantId, leadId, null, "Lead", leadId, leadPhone, true, userId, cancellationToken);
+            }
+        }
+
         var profileId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(@"
 SELECT PhoneComplianceProfileId
 FROM CRM.PhoneComplianceProfile
