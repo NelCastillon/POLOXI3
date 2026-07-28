@@ -18,19 +18,28 @@ public sealed class PolicyCreationRepository : IPolicyCreationRepository
     public async Task<Guid> CreatePolicyFromConfirmedBindAsync(PolicyCreationFromConfirmedBindRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
 DECLARE @PolicyId UNIQUEIDENTIFIER;
 DECLARE @Now DATETIME2 = SYSUTCDATETIME();
+DECLARE @OpportunityId UNIQUEIDENTIFIER;
+DECLARE @OpportunityStageId UNIQUEIDENTIFIER;
+DECLARE @OpportunitySubmissionId UNIQUEIDENTIFIER;
+DECLARE @SynchronizedPolicyNumber NVARCHAR(80);
+DECLARE @SynchronizedPolicyStatus NVARCHAR(50);
+DECLARE @SynchronizedBoundDateUtc DATETIME2;
+DECLARE @OpportunityStageChanged BIT = 0;
 
 SELECT @PolicyId = PolicyId
-FROM Submissions.PolicyBindTransaction
+FROM Submissions.PolicyBindTransaction WITH (UPDLOCK, HOLDLOCK)
 WHERE PolicyBindTransactionId = @PolicyBindTransactionId
   AND TenantId = @TenantId
   AND IsDeleted = 0;
 
 IF @PolicyId IS NOT NULL
 BEGIN
-    SELECT @PolicyId;
-    RETURN;
+    GOTO SynchronizeOpportunity;
 END;
 
 DECLARE @CreatesPolicy BIT;
@@ -60,6 +69,12 @@ DECLARE @AssignedToUserId UNIQUEIDENTIFIER;
 DECLARE @Deductible DECIMAL(18,2);
 DECLARE @Limit DECIMAL(18,2);
 DECLARE @CoverageNotes NVARCHAR(1000);
+DECLARE @RenewalRetentionCaseId UNIQUEIDENTIFIER;
+DECLARE @SourcePolicyId UNIQUEIDENTIFIER;
+DECLARE @SourcePolicyTermId UNIQUEIDENTIFIER;
+DECLARE @SourceCarrierId UNIQUEIDENTIFIER;
+DECLARE @IsIncumbentRenewal BIT = 0;
+DECLARE @TermNumber INT = 1;
 
 SELECT @CreatesPolicy = pbs.CreatesPolicy,
        @SubmissionId = pbt.SubmissionId,
@@ -108,20 +123,55 @@ SET @PolicyTermId = NEWID();
 SET @LineOfBusiness = COALESCE(@LineOfBusiness, N'Package');
 SET @NamedInsured = COALESCE(@NamedInsured, N'Named Insured');
 
-SET @PolicyId = NEWID();
+SELECT @RenewalRetentionCaseId = rc.RetentionCaseId,
+       @SourcePolicyId = rc.PolicyId,
+       @SourcePolicyTermId = rc.SourcePolicyTermId,
+       @SourceCarrierId = sourcePolicy.CarrierId
+FROM Renewal.RetentionCase rc WITH (UPDLOCK, HOLDLOCK)
+LEFT JOIN Submissions.BoundPolicy sourcePolicy ON sourcePolicy.PolicyId = rc.PolicyId AND sourcePolicy.TenantId = rc.TenantId AND sourcePolicy.IsDeleted = 0
+WHERE rc.TenantId = @TenantId
+  AND rc.RenewalSubmissionId = @SubmissionId
+  AND rc.IsDeleted = 0;
+
+IF @RenewalRetentionCaseId IS NOT NULL AND @SourcePolicyId IS NOT NULL AND @SourceCarrierId = @CarrierId
+BEGIN
+    SET @IsIncumbentRenewal = 1;
+    SET @PolicyId = @SourcePolicyId;
+    SELECT @TermNumber = ISNULL(MAX(TermNumber), 0) + 1 FROM Policy.PolicyTerm WITH (UPDLOCK, HOLDLOCK) WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND IsDeleted = 0;
+END
+ELSE
+BEGIN
+    SET @PolicyId = NEWID();
+END;
 
 INSERT INTO Submissions.BoundPolicy
     (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId,
-     PolicyNumber, Status, IssueStatus, CoverageStatus, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IssuedDateUtc, PolicySourceCode, PolicySourceReason, PolicySourceNotes, PolicyBindTransactionId, IsDeleted)
-VALUES
+     PolicyNumber, Status, IssueStatus, CoverageStatus, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IssuedDateUtc, PolicySourceCode, PolicySourceReason, PolicySourceNotes, PolicyBindTransactionId, RenewalRetentionCaseId, PriorPolicyId, IsDeleted)
+SELECT
     (@PolicyId, @SubmissionId, @QuoteId, @TenantId, @AccountId, @CarrierId,
      COALESCE(@PolicyNumber, @BinderNumber, @CarrierReferenceNumber, 'POL-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS VARCHAR), 5)),
-     @IssueStatus, @IssueStatus, @CoverageStatus, @AnnualPremium, @EffectiveDate, @ExpirationDate, @BoundDateUtc, @IssuedDateUtc, @PolicySourceCode, @PolicySourceReason, @PolicySourceNotes, @PolicyBindTransactionId, 0);
+     @IssueStatus, @IssueStatus, @CoverageStatus, @AnnualPremium, @EffectiveDate, @ExpirationDate, @BoundDateUtc, @IssuedDateUtc, @PolicySourceCode, @PolicySourceReason, @PolicySourceNotes, @PolicyBindTransactionId, @RenewalRetentionCaseId, CASE WHEN @RenewalRetentionCaseId IS NOT NULL THEN @SourcePolicyId ELSE NULL END, 0)
+WHERE @IsIncumbentRenewal = 0;
+
+IF @IsIncumbentRenewal = 1
+BEGIN
+    UPDATE Submissions.BoundPolicy
+    SET Status = @IssueStatus,
+        IssueStatus = @IssueStatus,
+        CoverageStatus = @CoverageStatus,
+        AnnualPremium = @AnnualPremium,
+        EffectiveDate = @EffectiveDate,
+        ExpirationDate = @ExpirationDate,
+        BoundDateUtc = @BoundDateUtc,
+        IssuedDateUtc = @IssuedDateUtc,
+        RenewalRetentionCaseId = @RenewalRetentionCaseId
+    WHERE PolicyId = @PolicyId AND TenantId = @TenantId AND IsDeleted = 0;
+END;
 
 INSERT INTO Policy.PolicyTerm
-    (PolicyTermId, TenantId, PolicyId, TermNumber, EffectiveDate, ExpirationDate, TermStatusCode, TransactionTypeCode, WrittenPremium, AnnualizedPremium, Taxes, Fees, Surcharges, TotalCost, BillingTypeCode, DataCompletenessCode, CreatedDateUtc, IsDeleted)
-SELECT @PolicyTermId, @TenantId, @PolicyId, 1, @EffectiveDate, @ExpirationDate, CASE WHEN @CoverageStatus = N'Bound' THEN N'Active' ELSE @CoverageStatus END, N'NewBusiness', @AnnualPremium, @AnnualPremium, NULL, NULL, NULL, @AnnualPremium, NULL, N'Partial', @Now, 0
-WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyTerm WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND TermNumber = 1 AND IsDeleted = 0);
+    (PolicyTermId, TenantId, PolicyId, TermNumber, EffectiveDate, ExpirationDate, TermStatusCode, TransactionTypeCode, WrittenPremium, AnnualizedPremium, Taxes, Fees, Surcharges, TotalCost, BillingTypeCode, DataCompletenessCode, RenewalRetentionCaseId, PriorPolicyTermId, CreatedDateUtc, IsDeleted)
+SELECT @PolicyTermId, @TenantId, @PolicyId, @TermNumber, @EffectiveDate, @ExpirationDate, CASE WHEN @CoverageStatus = N'Bound' THEN N'Active' ELSE @CoverageStatus END, CASE WHEN @RenewalRetentionCaseId IS NULL THEN N'NewBusiness' ELSE N'Renewal' END, @AnnualPremium, @AnnualPremium, NULL, NULL, NULL, @AnnualPremium, NULL, N'Partial', @RenewalRetentionCaseId, @SourcePolicyTermId, @Now, 0
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyTerm WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND TermNumber = @TermNumber AND IsDeleted = 0);
 
 INSERT INTO Policy.PolicyLine
     (PolicyLineId, TenantId, PolicyId, PolicyTermId, LineOfBusinessId, LineOfBusinessCode, LineOfBusinessName, PolicyLineStatusCode, WrittenPremium, CoverageSummary, LimitsSummary, DeductibleSummary, SortOrder, CreatedDateUtc, IsDeleted)
@@ -168,6 +218,28 @@ FROM Submissions.PolicyBindTransaction pbt
 INNER JOIN Submissions.BoundPolicy bp ON bp.PolicyId = @PolicyId
 WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId;
 
+IF @RenewalRetentionCaseId IS NOT NULL
+BEGIN
+    UPDATE Renewal.RetentionCase
+    SET RenewalPolicyBindTransactionId = @PolicyBindTransactionId,
+        ResultPolicyId = @PolicyId,
+        ResultPolicyTermId = @PolicyTermId,
+        Stage = N'Saved',
+        OutreachStatus = N'Accepted',
+        IsSaved = 1,
+        CompletedDateUtc = @Now,
+        ModifiedDateUtc = @Now,
+        ModifiedByUserId = @RequestedByUserId
+    WHERE RetentionCaseId = @RenewalRetentionCaseId AND TenantId = @TenantId AND IsDeleted = 0;
+
+    INSERT INTO Renewal.RetentionActivity
+        (RetentionActivityId, TenantId, RetentionCaseId, ActivityType, Subject, Outcome, Notes, ActivityDateUtc, CreatedByName, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, @RenewalRetentionCaseId, N'Bind', N'Renewal bound', N'Completed',
+           CASE WHEN @IsIncumbentRenewal = 1 THEN N'Carrier confirmation created the next policy term.' ELSE N'Carrier confirmation created a replacement policy.' END,
+           @Now, N'Policy Service', @Now, @RequestedByUserId, 0
+    WHERE NOT EXISTS (SELECT 1 FROM Renewal.RetentionActivity WHERE RetentionCaseId = @RenewalRetentionCaseId AND Subject = N'Renewal bound' AND IsDeleted = 0);
+END;
+
 UPDATE Submissions.Quote
 SET Status = CASE WHEN QuoteId = @QuoteId THEN N'Bound' ELSE N'Not Selected' END,
     IsSelected = CASE WHEN QuoteId = @QuoteId THEN 1 ELSE 0 END,
@@ -207,6 +279,125 @@ INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, 
 SELECT NEWID(), @TenantId, CONCAT(N'TASK-', FORMAT(@Now, N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 6)),
        v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', CASE WHEN @SubmissionId IS NULL THEN N'Policy' ELSE N'Submission' END, COALESCE(@SubmissionId, @PolicyId), @AccountId, DATEADD(day, 7, CONVERT(date, @Now)), @Now, 0
 FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect policy', N'Attach issued policy.'), (N'Collect invoice', N'Attach invoice.'), (N'Collect certificates', N'Attach certificates.'), (N'Collect evidence of insurance', N'Attach evidence of insurance.'), (N'Collect endorsements', N'Attach required endorsements.')) v(Title, Description);
+
+SynchronizeOpportunity:
+
+SELECT @OpportunityId = s.OpportunityId,
+       @SynchronizedPolicyNumber = p.PolicyNumber,
+       @SynchronizedPolicyStatus = p.Status,
+       @SynchronizedBoundDateUtc = p.BoundDateUtc
+FROM Submissions.BoundPolicy p
+INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId
+                                  AND s.TenantId = p.TenantId
+                                  AND s.IsDeleted = 0
+WHERE p.PolicyId = @PolicyId
+  AND p.TenantId = @TenantId
+  AND p.IsDeleted = 0;
+
+IF @OpportunityId IS NOT NULL AND @OpportunityId <> '00000000-0000-0000-0000-000000000000'
+BEGIN
+    SELECT TOP 1 @OpportunitySubmissionId = source.SubmissionId
+    FROM CRM.OpportunitySubmission source
+    INNER JOIN Submissions.BoundPolicy p ON p.PolicyId = @PolicyId
+    INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId
+    WHERE source.TenantId = @TenantId
+      AND source.OpportunityId = @OpportunityId
+      AND source.IsDeleted = 0
+      AND (source.LineOfBusiness = s.LineOfBusiness OR source.SubmissionNumber = s.SubmissionNumber)
+    ORDER BY CASE WHEN source.Status = N'Bound' THEN 0 ELSE 1 END,
+             source.ModifiedDateUtc DESC,
+             source.CreatedDateUtc DESC;
+
+    INSERT INTO CRM.OpportunityBoundPolicy
+        (OpportunityBoundPolicyId, TenantId, OpportunityId, OpportunitySubmissionId, SubmissionId, QuoteId, PolicyId, PolicyNumber, BindingStatus, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), p.TenantId, @OpportunityId, @OpportunitySubmissionId, p.SubmissionId, p.QuoteId, p.PolicyId, p.PolicyNumber, p.Status, p.BoundDateUtc, @Now, @RequestedByUserId, 0
+    FROM Submissions.BoundPolicy p
+    WHERE p.PolicyId = @PolicyId
+      AND p.TenantId = @TenantId
+      AND p.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM CRM.OpportunityBoundPolicy existing WITH (UPDLOCK, HOLDLOCK)
+          WHERE existing.PolicyId = p.PolicyId
+            AND existing.IsDeleted = 0
+      );
+
+    SELECT TOP 1 @OpportunityStageId = OpportunityStageId
+    FROM CRM.OpportunityStage
+    WHERE TenantId = @TenantId
+      AND IsActive = 1
+      AND (StageName = N'Closed Won' OR StageCode = N'CLOSED_WON')
+    ORDER BY SortOrder, StageName;
+
+    IF @OpportunityStageId IS NULL
+        THROW 52107, 'The active Closed Won opportunity stage is not configured for this tenant.', 1;
+
+    UPDATE CRM.Opportunity
+    SET StageName = N'Closed Won',
+        OpportunityStageId = @OpportunityStageId,
+        ForecastCategoryCode = N'Closed',
+        ModifiedDateUtc = @Now,
+        ModifiedByUserId = @RequestedByUserId
+    WHERE OpportunityId = @OpportunityId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0
+      AND (StageName <> N'Closed Won'
+           OR OpportunityStageId <> @OpportunityStageId
+           OR OpportunityStageId IS NULL
+           OR ForecastCategoryCode <> N'Closed'
+           OR ForecastCategoryCode IS NULL);
+
+    IF @@ROWCOUNT > 0 SET @OpportunityStageChanged = 1;
+
+    UPDATE CRM.OpportunityWorkflowEvent
+    SET IsDeleted = 1,
+        ModifiedDateUtc = @Now,
+        ModifiedByUserId = @RequestedByUserId
+    WHERE TenantId = @TenantId
+      AND OpportunityId = @OpportunityId
+      AND EventType = N'PolicyBindingRequired'
+      AND IsDeleted = 0;
+
+    IF @OpportunityStageChanged = 1
+       AND NOT EXISTS
+       (
+           SELECT 1
+           FROM CRM.OpportunityWorkflowEvent
+           WHERE TenantId = @TenantId
+             AND OpportunityId = @OpportunityId
+             AND EventType = N'Stage'
+             AND RelatedEntityName = N'BoundPolicy'
+             AND RelatedEntityId = @PolicyId
+             AND IsDeleted = 0
+       )
+    BEGIN
+        INSERT INTO CRM.OpportunityWorkflowEvent
+            (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES
+            (NEWID(), @TenantId, @OpportunityId, N'Stage', N'Moved to Closed Won', CONCAT(N'Opportunity automatically moved to Closed Won after carrier-confirmed policy ', @SynchronizedPolicyNumber, N' was created.'), N'BoundPolicy', @PolicyId, @Now, @Now, @RequestedByUserId, 0);
+    END;
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM CRM.OpportunityWorkflowEvent
+        WHERE TenantId = @TenantId
+          AND OpportunityId = @OpportunityId
+          AND EventType = N'PolicyBound'
+          AND RelatedEntityName = N'BoundPolicy'
+          AND RelatedEntityId = @PolicyId
+          AND IsDeleted = 0
+    )
+    BEGIN
+        INSERT INTO CRM.OpportunityWorkflowEvent
+            (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES
+            (NEWID(), @TenantId, @OpportunityId, N'PolicyBound', N'Bound policy created', CONCAT(N'Carrier-confirmed policy ', @SynchronizedPolicyNumber, N' was linked to the opportunity and synchronized to Closed Won.'), N'BoundPolicy', @PolicyId, @Now, @Now, @RequestedByUserId, 0);
+    END;
+END;
+
+COMMIT TRANSACTION;
 
 SELECT @PolicyId;";
 

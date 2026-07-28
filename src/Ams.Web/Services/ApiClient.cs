@@ -969,6 +969,15 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public async Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/present", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<ProposalWorkflowOptionDto>?> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalWorkflowOptionDto>>($"api/submissions/proposal-options?tenantId={tenantId}", cancellationToken);
+
     public async Task ApproveCommissionPayableAsync(Guid payableId, ApproveCommissionPayableRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/commission-accounting/payables/{payableId}/approve", request, cancellationToken);

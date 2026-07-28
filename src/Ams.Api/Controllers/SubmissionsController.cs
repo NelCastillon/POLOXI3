@@ -43,6 +43,17 @@ public sealed class SubmissionsController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("proposals/{proposalId:guid}/present")]
+    public async Task<IActionResult> PresentProposal(Guid proposalId, [FromBody] ProposalPresentationRequest request, CancellationToken cancellationToken)
+    {
+        await _service.PresentProposalAsync(proposalId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpGet("proposal-options")]
+    public async Task<IActionResult> GetProposalOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetProposalWorkflowOptionsAsync(tenantId, cancellationToken));
+
     [HttpPatch("{id:guid}/assign")]
     public async Task<IActionResult> Assign(Guid id, [FromBody] AssignSubmissionRequest request, CancellationToken cancellationToken)
     {

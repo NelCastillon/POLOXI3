@@ -684,35 +684,6 @@ BEGIN
     );
 END;
 
-IF COL_LENGTH(N'Submissions.Proposal', N'DeliveryMethod') IS NULL ALTER TABLE Submissions.Proposal ADD DeliveryMethod NVARCHAR(50) NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'Recipient') IS NULL ALTER TABLE Submissions.Proposal ADD Recipient NVARCHAR(320) NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'SentDateUtc') IS NULL ALTER TABLE Submissions.Proposal ADD SentDateUtc DATETIME2 NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'SentByUserId') IS NULL ALTER TABLE Submissions.Proposal ADD SentByUserId UNIQUEIDENTIFIER NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'ClientDecision') IS NULL ALTER TABLE Submissions.Proposal ADD ClientDecision NVARCHAR(50) NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'DecisionNotes') IS NULL ALTER TABLE Submissions.Proposal ADD DecisionNotes NVARCHAR(1000) NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'DecisionDateUtc') IS NULL ALTER TABLE Submissions.Proposal ADD DecisionDateUtc DATETIME2 NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'DecidedByUserId') IS NULL ALTER TABLE Submissions.Proposal ADD DecidedByUserId UNIQUEIDENTIFIER NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'DocumentId') IS NULL ALTER TABLE Submissions.Proposal ADD DocumentId UNIQUEIDENTIFIER NULL;
-IF COL_LENGTH(N'Submissions.Proposal', N'CustomIntroduction') IS NULL ALTER TABLE Submissions.Proposal ADD CustomIntroduction NVARCHAR(2000) NULL;
-
-IF OBJECT_ID(N'Submissions.ProposalQuote', N'U') IS NULL
-BEGIN
-    CREATE TABLE Submissions.ProposalQuote
-    (
-        ProposalQuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ProposalQuote PRIMARY KEY DEFAULT NEWID(),
-        ProposalId UNIQUEIDENTIFIER NOT NULL,
-        QuoteId UNIQUEIDENTIFIER NOT NULL,
-        SubmissionId UNIQUEIDENTIFIER NOT NULL,
-        TenantId UNIQUEIDENTIFIER NOT NULL,
-        SortOrder INT NOT NULL CONSTRAINT DF_ProposalQuote_SortOrder DEFAULT 0,
-        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ProposalQuote_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
-        IsDeleted BIT NOT NULL CONSTRAINT DF_ProposalQuote_IsDeleted DEFAULT 0
-    );
-END;
-
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.ProposalQuote') AND name = N'UX_ProposalQuote_Proposal_Quote')
-    EXEC(N'CREATE UNIQUE INDEX UX_ProposalQuote_Proposal_Quote ON Submissions.ProposalQuote(ProposalId, QuoteId) WHERE IsDeleted = 0;');
-
 IF OBJECT_ID(N'Submissions.CustomerAuthorization', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.CustomerAuthorization
@@ -4357,11 +4328,30 @@ VALUES (NEWID(), @SubmissionId, @TenantId, N'QuoteSelected', @Reason, SYSUTCDATE
     public async Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT ProposalId, SubmissionId, TenantId, Title, Status, PdfUrl, HtmlContent, CreatedDateUtc, GeneratedDateUtc
+SELECT ProposalId, SubmissionId, TenantId, Title, Status, VersionNumber, PdfUrl, HtmlContent, CustomIntroduction,
+       DeliveryMethod, Recipient, SentDateUtc, PresentedDateUtc, ClientDecision, DecisionNotes, DecisionDateUtc,
+       CreatedDateUtc, GeneratedDateUtc
 FROM   Submissions.Proposal
-WHERE  ProposalId = @ProposalId AND IsDeleted = 0;";
+WHERE  ProposalId = @ProposalId AND IsDeleted = 0;
+
+SELECT q.QuoteId, q.QuoteNumber, c.CarrierName, q.AnnualPremium, q.Deductible, q.[Limit], q.CoverageNotes, q.IsSelected, pq.SortOrder
+FROM Submissions.ProposalQuote pq
+INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.IsDeleted = 0
+INNER JOIN Core.Carrier c ON c.CarrierId = q.CarrierId AND c.IsDeleted = 0
+WHERE pq.ProposalId = @ProposalId AND pq.IsDeleted = 0
+ORDER BY pq.SortOrder;
+
+SELECT ProposalLifecycleEventId, EventCode, EventDetail, EventDateUtc
+FROM Submissions.ProposalLifecycleEvent
+WHERE ProposalId = @ProposalId AND IsDeleted = 0
+ORDER BY EventDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.QuerySingleOrDefaultAsync<ProposalDto>(new CommandDefinition(sql, new { ProposalId = proposalId }, cancellationToken: cancellationToken));
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { ProposalId = proposalId }, cancellationToken: cancellationToken));
+        var proposal = await multi.ReadSingleOrDefaultAsync<ProposalDto>();
+        if (proposal is null) return null;
+        proposal.Quotes = (await multi.ReadAsync<ProposalQuoteDto>()).AsList();
+        proposal.Events = (await multi.ReadAsync<ProposalLifecycleEventDto>()).AsList();
+        return proposal;
     }
 
     public async Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
@@ -4387,6 +4377,17 @@ ORDER BY p.CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
         return (await cn.QueryAsync<ProposalWorkflowDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT ProposalWorkflowOptionId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, SortOrder
+FROM Submissions.ProposalWorkflowOption
+WHERE TenantId = @TenantId AND IsActive = 1 AND IsDeleted = 0
+ORDER BY OptionGroupCode, SortOrder, DisplayName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<ProposalWorkflowOptionDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
 
     public async Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
@@ -4448,23 +4449,21 @@ DECLARE @Html NVARCHAR(MAX) = CONCAT(
     COALESCE(@QuoteRows, N'<tr><td colspan=""6"">No quote options were available.</td></tr>'),
     N'</tbody></table></body></html>');
 
-INSERT INTO Submissions.Proposal
-    (ProposalId, SubmissionId, TenantId, Title, Status, PdfUrl, HtmlContent, CustomIntroduction, CreatedDateUtc, GeneratedDateUtc, IsDeleted)
-VALUES
-    (@ProposalId, @SubmissionId, @TenantId, @Title, N'Generated', CONCAT(N'dms://proposal/', CONVERT(nvarchar(36), @ProposalId)), @Html, @CustomIntroduction, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+DECLARE @VersionNumber INT = ISNULL((SELECT MAX(VersionNumber) FROM Submissions.Proposal WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0), 0) + 1;
 
-INSERT INTO Submissions.ProposalQuote (ProposalQuoteId, ProposalId, QuoteId, SubmissionId, TenantId, SortOrder, CreatedDateUtc, IsDeleted)
-SELECT NEWID(), @ProposalId, QuoteId, @SubmissionId, @TenantId, SortOrder, SYSUTCDATETIME(), 0
+INSERT INTO Submissions.Proposal
+    (ProposalId, SubmissionId, TenantId, Title, Status, VersionNumber, PdfUrl, HtmlContent, CustomIntroduction, CreatedDateUtc, CreatedByUserId, GeneratedDateUtc, IsDeleted)
+VALUES
+    (@ProposalId, @SubmissionId, @TenantId, @Title, N'Generated', @VersionNumber, CONCAT(N'dms://proposal/', CONVERT(nvarchar(36), @ProposalId)), @Html, @CustomIntroduction, SYSUTCDATETIME(), @GeneratedByUserId, SYSUTCDATETIME(), 0);
+
+INSERT INTO Submissions.ProposalQuote (ProposalQuoteId, ProposalId, QuoteId, SubmissionId, TenantId, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @ProposalId, QuoteId, @SubmissionId, @TenantId, SortOrder, SYSUTCDATETIME(), @GeneratedByUserId, 0
 FROM @QuoteScope;
 
-UPDATE q
-SET Status = N'Presented',
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @GeneratedByUserId
-FROM Submissions.Quote q
-INNER JOIN @QuoteScope qs ON qs.QuoteId = q.QuoteId
-WHERE q.Status = N'Approved for Presentation'
-  AND q.IsDeleted = 0;
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Generated', CONCAT(@Title, N' version ', @VersionNumber, N' generated.'), SYSUTCDATETIME(), SYSUTCDATETIME(), @GeneratedByUserId, 0);
 
 UPDATE Submissions.Submission
 SET Status = N'Proposal Prepared',
@@ -4502,23 +4501,22 @@ VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalGenerated', CONCAT(@Title, 
         const string sql = @"
 DECLARE @SubmissionId UNIQUEIDENTIFIER;
 UPDATE Submissions.Proposal
-SET Status = N'Sent',
+SET Status = N'Delivered',
     DeliveryMethod = @DeliveryMethod,
     Recipient = @Recipient,
     SentDateUtc = SYSUTCDATETIME(),
     SentByUserId = @SentByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @SentByUserId,
     @SubmissionId = SubmissionId
-WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0 AND Status IN (N'Generated', N'Delivered');
 
 IF @SubmissionId IS NULL THROW 52016, 'Proposal was not found for delivery.', 1;
 
-UPDATE q
-SET Status = CASE WHEN q.Status IN (N'Bound', N'Selected') THEN q.Status ELSE N'Presented' END,
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @SentByUserId
-FROM Submissions.Quote q
-INNER JOIN Submissions.ProposalQuote pq ON pq.QuoteId = q.QuoteId AND pq.ProposalId = @ProposalId AND pq.IsDeleted = 0
-WHERE q.IsDeleted = 0;
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Delivered', CONCAT(N'Proposal delivered by ', @DeliveryMethod, N' to ', @Recipient, N'.'), SYSUTCDATETIME(), SYSUTCDATETIME(), @SentByUserId, 0);
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDelivered', CONCAT(N'Proposal sent by ', @DeliveryMethod, N' to ', @Recipient), SYSUTCDATETIME(), @SentByUserId, N'Proposal', @ProposalId, N'User', 0);
@@ -4529,6 +4527,55 @@ SELECT @SubmissionId;";
         await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Delivered", "Proposal Delivered", $"Proposal sent by {request.DeliveryMethod} to {request.Recipient}.", "Proposal", proposalId, request.SentByUserId, cancellationToken);
     }
 
+    public async Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+
+UPDATE Submissions.Proposal
+SET Status = N'Presented',
+    PresentedDateUtc = SYSUTCDATETIME(),
+    PresentedByUserId = @PresentedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @PresentedByUserId,
+    @SubmissionId = SubmissionId
+WHERE ProposalId = @ProposalId
+  AND TenantId = @TenantId
+  AND IsDeleted = 0
+  AND Status IN (N'Delivered', N'Presented');
+
+IF @SubmissionId IS NULL THROW 52038, 'Proposal must be delivered before it can be presented.', 1;
+
+UPDATE q
+SET Status = CASE WHEN q.Status IN (N'Bound', N'Selected') THEN q.Status ELSE N'Presented' END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @PresentedByUserId
+FROM Submissions.Quote q
+INNER JOIN Submissions.ProposalQuote pq ON pq.QuoteId = q.QuoteId AND pq.ProposalId = @ProposalId AND pq.IsDeleted = 0
+WHERE q.IsDeleted = 0;
+
+UPDATE Submissions.Submission
+SET Status = N'Presented', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @PresentedByUserId
+WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0
+  AND Status NOT IN (N'Customer Accepted', N'Binding', N'Bound', N'Lost', N'Cancelled', N'Closed');
+
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Presented', @PresentationNotes, SYSUTCDATETIME(), SYSUTCDATETIME(), @PresentedByUserId, 0);
+
+INSERT INTO Submissions.SubmissionActionLog
+    (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES
+    (NEWID(), @SubmissionId, @TenantId, N'ProposalPresented', @PresentationNotes, SYSUTCDATETIME(), @PresentedByUserId, N'Proposal', @ProposalId, N'User', 0);
+
+SELECT @SubmissionId;";
+
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.PresentationNotes, request.PresentedByUserId }, cancellationToken: cancellationToken));
+        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Presented", "Proposal Presented", "Proposal Presented", request.PresentationNotes, "Proposal", proposalId, request.PresentedByUserId, cancellationToken);
+    }
+
     public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
     {
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -4536,31 +4583,37 @@ SELECT @SubmissionId;";
         const string sql = @"
 DECLARE @SubmissionId UNIQUEIDENTIFIER;
 UPDATE Submissions.Proposal
-SET Status = CASE WHEN @Decision = N'Accepted' THEN N'Accepted' WHEN @Decision = N'Rejected' THEN N'Rejected' WHEN @Decision = N'Needs revision' THEN N'Needs Revision' ELSE N'Pending Decision' END,
+SET Status = CASE WHEN @Decision = N'Accepted' THEN N'Accepted' WHEN @Decision IN (N'Declined', N'Rejected') THEN N'Declined' ELSE N'Pending Decision' END,
     ClientDecision = @Decision,
     DecisionNotes = @DecisionNotes,
     DecisionDateUtc = SYSUTCDATETIME(),
     DecidedByUserId = @DecidedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @DecidedByUserId,
     @SubmissionId = SubmissionId
-WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0 AND Status IN (N'Presented', N'Accepted', N'Declined');
 
 IF @SubmissionId IS NULL THROW 52017, 'Proposal was not found for decision.', 1;
 
 IF @Decision = N'Accepted'
 BEGIN
-    IF NOT EXISTS
-    (
-        SELECT 1
-        FROM Submissions.ProposalQuote pq
-        INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.IsDeleted = 0
-        WHERE pq.ProposalId = @ProposalId AND pq.IsDeleted = 0 AND q.IsSelected = 1
-    )
+    IF @SelectedQuoteId IS NULL OR NOT EXISTS (SELECT 1 FROM Submissions.ProposalQuote WHERE ProposalId = @ProposalId AND QuoteId = @SelectedQuoteId AND IsDeleted = 0)
         THROW 52037, 'Customer acceptance requires a selected quote from the proposal.', 1;
+    IF NULLIF(@AuthorizationMethodCode, N'') IS NULL
+        THROW 52039, 'Customer acceptance requires a database-backed authorization method.', 1;
+    IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'CustomerAuthorizationMethod' AND OptionCode = @AuthorizationMethodCode AND IsActive = 1 AND IsDeleted = 0)
+        THROW 52040, 'Customer authorization method is not configured for this tenant.', 1;
 
-    UPDATE Submissions.Quote SET Status = CASE WHEN IsSelected = 1 THEN N'Selected' ELSE N'Not Selected' END WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+    UPDATE Submissions.Quote SET Status = CASE WHEN QuoteId = @SelectedQuoteId THEN N'Selected' ELSE N'Not Selected' END, IsSelected = CASE WHEN QuoteId = @SelectedQuoteId THEN 1 ELSE 0 END WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+    IF NOT EXISTS (SELECT 1 FROM Submissions.CustomerAuthorization WHERE TenantId = @TenantId AND SubmissionId = @SubmissionId AND QuoteId = @SelectedQuoteId AND ProposalId = @ProposalId AND IsDeleted = 0)
+        INSERT INTO Submissions.CustomerAuthorization
+            (CustomerAuthorizationId, TenantId, SubmissionId, QuoteId, ProposalId, AuthorizationMethodCode, AuthorizationReference, AuthorizationNotes, AuthorizedByName, AuthorizedDateUtc, DocumentId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        VALUES
+            (NEWID(), @TenantId, @SubmissionId, @SelectedQuoteId, @ProposalId, @AuthorizationMethodCode, @AuthorizationReference, @DecisionNotes, @AuthorizedByName, COALESCE(@AuthorizedDateUtc, SYSUTCDATETIME()), @AuthorizationDocumentId, SYSUTCDATETIME(), @DecidedByUserId, 0);
 END;
 
-IF @Decision = N'Rejected'
+IF @Decision IN (N'Declined', N'Rejected')
 BEGIN
     UPDATE Submissions.Submission
     SET Status = N'Lost',
@@ -4569,16 +4622,21 @@ BEGIN
     WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0 AND Status NOT IN (N'Bound', N'Cancelled', N'Closed');
 END;
 
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, CASE WHEN @Decision = N'Accepted' THEN N'Accepted' ELSE N'Declined' END, @DecisionNotes, SYSUTCDATETIME(), SYSUTCDATETIME(), @DecidedByUserId, 0);
+
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDecision', CONCAT(@Decision, N'. ', COALESCE(@DecisionNotes, N'')), SYSUTCDATETIME(), @DecidedByUserId, N'Proposal', @ProposalId, N'User', 0);
 
 SELECT @SubmissionId;";
-        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.Decision, request.DecisionNotes, DecidedByUserId = request.DecidedByUserId }, cancellationToken: cancellationToken));
-        if (!string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase))
+        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.Decision, request.DecisionNotes, DecidedByUserId = request.DecidedByUserId, request.SelectedQuoteId, request.AuthorizationMethodCode, request.AuthorizationReference, request.AuthorizedByName, request.AuthorizedDateUtc, AuthorizationDocumentId = request.AuthorizationDocumentId }, cancellationToken: cancellationToken));
+        if (!string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) && !string.Equals(request.Decision, "Declined", StringComparison.OrdinalIgnoreCase))
         {
             await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = submissionId, request.TenantId }, cancellationToken: cancellationToken));
         }
-        var stageName = string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) ? "Lost" : "Proposal";
+        var stageName = string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) || string.Equals(request.Decision, "Declined", StringComparison.OrdinalIgnoreCase) ? "Lost" : "Customer Accepted";
         await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, stageName, "Proposal Decision", "Proposal Decision", $"{request.Decision}. {request.DecisionNotes}".Trim(), "Proposal", proposalId, request.DecidedByUserId, cancellationToken);
     }
 

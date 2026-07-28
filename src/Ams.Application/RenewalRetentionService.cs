@@ -14,6 +14,12 @@ public sealed class RenewalRetentionService : IRenewalRetentionService
     public Task<RenewalRetentionCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetCenterAsync(tenantId, cancellationToken);
 
+    public Task<RenewalInitiationResultDto> InitiateEligibleAsync(InitiateEligibleRenewalsRequest request, CancellationToken cancellationToken = default)
+        => _repository.InitiateEligibleAsync(request, cancellationToken);
+
+    public Task LaunchPlacementAsync(Guid retentionCaseId, LaunchRenewalPlacementRequest request, CancellationToken cancellationToken = default)
+        => _repository.LaunchPlacementAsync(retentionCaseId, request, cancellationToken);
+
     public Task<RenewalRetentionDetailDto?> GetDetailAsync(Guid retentionCaseId, CancellationToken cancellationToken = default)
         => _repository.GetDetailAsync(retentionCaseId, cancellationToken);
 

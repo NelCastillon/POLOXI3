@@ -449,6 +449,27 @@ ORDER BY SortOrder, ActionTitle;";
     public async Task UpdateAsync(Guid id, UpdateOpportunityRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+IF @StageName = N'Closed Won'
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM CRM.Opportunity o
+       INNER JOIN Submissions.Submission s ON s.OpportunityId = o.OpportunityId AND s.TenantId = o.TenantId AND s.IsDeleted = 0
+       INNER JOIN Submissions.BoundPolicy p ON p.SubmissionId = s.SubmissionId AND p.TenantId = o.TenantId AND p.IsDeleted = 0
+       WHERE o.OpportunityId = @OpportunityId
+         AND o.IsDeleted = 0
+   )
+   AND NOT EXISTS
+   (
+       SELECT 1
+       FROM CRM.Opportunity o
+       INNER JOIN CRM.OpportunityBoundPolicy link ON link.OpportunityId = o.OpportunityId AND link.TenantId = o.TenantId AND link.IsDeleted = 0
+       INNER JOIN Submissions.BoundPolicy p ON p.PolicyId = link.PolicyId AND p.TenantId = o.TenantId AND p.IsDeleted = 0
+       WHERE o.OpportunityId = @OpportunityId
+         AND o.IsDeleted = 0
+   )
+    THROW 51005, 'Closed Won requires a bound policy. Select a quote, capture customer authorization, complete the bind request, and wait for carrier confirmation first.', 1;
+
 UPDATE CRM.Opportunity
 SET OpportunityName = @OpportunityName,
     EstimatedAmount = @EstimatedAmount,
@@ -456,7 +477,15 @@ SET OpportunityName = @OpportunityName,
     WinProbability = @WinProbability,
     ForecastCategoryCode = @ForecastCategoryCode,
     StageName = @StageName,
-    OwnerUserId = @OwnerUserId,
+    OpportunityStageId = COALESCE((
+        SELECT TOP 1 stage.OpportunityStageId
+        FROM CRM.OpportunityStage stage
+        WHERE stage.TenantId = CRM.Opportunity.TenantId
+          AND stage.IsActive = 1
+          AND (stage.StageName = @StageName OR stage.StageCode = UPPER(REPLACE(@StageName, N' ', N'_')))
+        ORDER BY stage.SortOrder, stage.StageName
+    ), OpportunityStageId),
+    OwnerUserId = COALESCE(@OwnerUserId, OwnerUserId),
     Description = @Description,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
@@ -503,11 +532,31 @@ BEGIN TRY
     IF @TenantId IS NULL
         THROW 51001, 'Opportunity was not found.', 1;
 
+    IF @Stage = N'Closed Won'
+       AND NOT EXISTS
+       (
+           SELECT 1
+           FROM Submissions.Submission s
+           INNER JOIN Submissions.BoundPolicy p ON p.SubmissionId = s.SubmissionId AND p.TenantId = s.TenantId AND p.IsDeleted = 0
+           WHERE s.OpportunityId = @OpportunityId
+             AND s.TenantId = @TenantId
+             AND s.IsDeleted = 0
+       )
+       AND NOT EXISTS
+       (
+           SELECT 1
+           FROM CRM.OpportunityBoundPolicy link
+           INNER JOIN Submissions.BoundPolicy p ON p.PolicyId = link.PolicyId AND p.TenantId = link.TenantId AND p.IsDeleted = 0
+           WHERE link.OpportunityId = @OpportunityId
+             AND link.TenantId = @TenantId
+             AND link.IsDeleted = 0
+       )
+        THROW 51005, 'Closed Won requires a bound policy. Select a quote, capture customer authorization, complete the bind request, and wait for carrier confirmation first.', 1;
+
     SELECT TOP 1 @OpportunityStageId = OpportunityStageId
     FROM CRM.OpportunityStage
     WHERE TenantId = @TenantId
       AND IsActive = 1
-      AND IsDeleted = 0
       AND (StageName = @Stage OR StageCode = UPPER(REPLACE(@Stage, N' ', N'_')))
     ORDER BY SortOrder, StageName;
 
@@ -652,7 +701,9 @@ BEGIN TRY
             IF @SubmissionId IS NULL
             BEGIN
                 SET @SubmissionId = NEWID();
-                SET @SubmissionNumber = COALESCE(@SubmissionNumber, CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(10)), 5)));
+
+                IF @SubmissionNumber IS NULL
+                    SET @SubmissionNumber = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(10)), 5));
 
                 WHILE EXISTS (SELECT 1 FROM Submissions.Submission WHERE TenantId = @TenantId AND SubmissionNumber = @SubmissionNumber AND IsDeleted = 0)
                     SET @SubmissionNumber = CONCAT(N'SUB-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS NVARCHAR(10)), 5));
@@ -912,6 +963,9 @@ END CATCH;";
     public async Task<Guid> UpsertLineAsync(UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 51000, 'Opportunity was not found for the selected tenant.', 1;
+
 IF @OpportunityLineId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine WHERE OpportunityLineId = @OpportunityLineId AND OpportunityId = @OpportunityId AND IsDeleted = 0)
     THROW 51001, 'Opportunity line does not belong to this opportunity.', 1;
 
@@ -1023,6 +1077,10 @@ UPDATE CRM.OpportunitySubmissionLine
 SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
 WHERE OpportunityLineId = @OpportunityLineId AND IsDeleted = 0;
 
+UPDATE Submissions.SubmissionLine
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE OpportunityLineId = @OpportunityLineId AND IsDeleted = 0;
+
 IF @OpportunityId IS NOT NULL
 BEGIN
     DECLARE @NextPrimary UNIQUEIDENTIFIER = NULL;
@@ -1057,7 +1115,21 @@ SELECT @OpportunityId;";
     public async Task<Guid> UpsertActivityAsync(UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-IF @ActivityId IS NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunityActivity WHERE ActivityId = @ActivityId AND IsDeleted = 0)
+IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 51000, 'Opportunity was not found for the selected tenant.', 1;
+
+IF @ActivityId IS NOT NULL AND NOT EXISTS
+(
+    SELECT 1
+    FROM CRM.OpportunityActivity
+    WHERE ActivityId = @ActivityId
+      AND OpportunityId = @OpportunityId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0
+)
+    THROW 51001, 'Activity does not belong to this opportunity.', 1;
+
+IF @ActivityId IS NULL
 BEGIN
     SET @ActivityId = NEWID();
     INSERT INTO CRM.OpportunityActivity (ActivityId, TenantId, OpportunityId, ActivityTypeCode, Subject, Notes, ActivityDate, CreatedByUserId, CreatedDateUtc, IsDeleted)
@@ -1159,6 +1231,17 @@ WHERE o.OpportunityId = @OpportunityId
 
 IF @AccountId IS NULL
     THROW 51001, 'Opportunity was not found for submission creation.', 1;
+
+IF @SubmissionId IS NOT NULL AND NOT EXISTS
+(
+    SELECT 1
+    FROM CRM.OpportunitySubmission
+    WHERE SubmissionId = @SubmissionId
+      AND OpportunityId = @OpportunityId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0
+)
+    THROW 51003, 'Submission does not belong to this opportunity.', 1;
 
 SET @ExpirationDate = DATEADD(year, 1, @EffectiveDate);
 
@@ -1304,7 +1387,34 @@ SELECT @SubmissionId;";
 
     public async Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
-        const string sql = "UPDATE CRM.OpportunitySubmission SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME() WHERE SubmissionId = @SubmissionId;";
+        const string sql = @"
+SET XACT_ABORT ON;
+
+IF EXISTS (SELECT 1 FROM Submissions.SubmissionMarket WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+   OR EXISTS (SELECT 1 FROM Submissions.QuoteRequest WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+   OR EXISTS (SELECT 1 FROM Submissions.Quote WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+   OR EXISTS (SELECT 1 FROM Submissions.BoundPolicy WHERE SubmissionId = @SubmissionId AND IsDeleted = 0)
+    THROW 51004, 'Submission cannot be deleted after market, quote, or binding workflow has started.', 1;
+
+BEGIN TRANSACTION;
+
+UPDATE CRM.OpportunitySubmissionLine
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+UPDATE Submissions.SubmissionLine
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+UPDATE CRM.OpportunitySubmission
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+UPDATE Submissions.Submission
+SET IsDeleted = 1, ModifiedByUserId = @ModifiedByUserId, ModifiedDateUtc = SYSUTCDATETIME()
+WHERE SubmissionId = @SubmissionId AND IsDeleted = 0;
+
+COMMIT TRANSACTION;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var target = await cn.QuerySingleOrDefaultAsync<WorkflowTarget>(new CommandDefinition("SELECT TenantId, OpportunityId FROM CRM.OpportunitySubmission WHERE SubmissionId = @SubmissionId;", new { SubmissionId = submissionId }, cancellationToken: cancellationToken));
         await cn.ExecuteAsync(new CommandDefinition(sql, new { SubmissionId = submissionId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
@@ -1315,7 +1425,21 @@ SELECT @SubmissionId;";
     public async Task<Guid> UpsertCompetitorAsync(UpsertOpportunityCompetitorRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-IF @CompetitorId IS NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunityCompetitor WHERE CompetitorId = @CompetitorId AND IsDeleted = 0)
+IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 51000, 'Opportunity was not found for the selected tenant.', 1;
+
+IF @CompetitorId IS NOT NULL AND NOT EXISTS
+(
+    SELECT 1
+    FROM CRM.OpportunityCompetitor
+    WHERE CompetitorId = @CompetitorId
+      AND OpportunityId = @OpportunityId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0
+)
+    THROW 51001, 'Competitor does not belong to this opportunity.', 1;
+
+IF @CompetitorId IS NULL
 BEGIN
     SET @CompetitorId = NEWID();
     INSERT INTO CRM.OpportunityCompetitor (CompetitorId, TenantId, OpportunityId, Name, Strength, CreatedByUserId, CreatedDateUtc, IsDeleted)

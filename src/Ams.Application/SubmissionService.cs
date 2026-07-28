@@ -200,11 +200,17 @@ public sealed class SubmissionService : ISubmissionService
     public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _repository.GetProposalsAsync(submissionId, cancellationToken);
 
+    public Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalWorkflowOptionsAsync(tenantId, cancellationToken);
+
     public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         => _repository.GenerateProposalAsync(request, cancellationToken);
 
     public Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
         => _repository.DeliverProposalAsync(proposalId, request, cancellationToken);
+
+    public Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
+        => _repository.PresentProposalAsync(proposalId, request, cancellationToken);
 
     public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
         => _repository.RecordProposalDecisionAsync(proposalId, request, cancellationToken);

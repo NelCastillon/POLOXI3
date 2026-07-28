@@ -4,6 +4,7 @@ using Ams.Worker.Automation.Executors;
 using Ams.Worker.Certificates;
 using Ams.Worker.Compliance;
 using Ams.Worker.Payments;
+using Ams.Worker.Renewals;
 using Ams.Worker.Submissions;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -26,6 +27,7 @@ builder.Services.AddHostedService<QuoteRequestFollowUpWorkerService>();
 builder.Services.AddHostedService<ApiRatingConnectorWorkerService>();
 builder.Services.AddHostedService<CertificateRenewalWorkerService>();
 builder.Services.AddHostedService<LeadDncScreeningWorker>();
+builder.Services.AddHostedService<PolicyRenewalInitiationWorkerService>();
 
 var host = builder.Build();
 host.Run();

@@ -222,13 +222,28 @@ public sealed record ProposalDeliveryRequest(
     string Recipient,
     Guid? SentByUserId);
 
+public sealed record ProposalPresentationRequest(
+    Guid TenantId,
+    [property: StringLength(1000)]
+    string? PresentationNotes,
+    Guid? PresentedByUserId);
+
 public sealed record ProposalDecisionRequest(
     Guid TenantId,
     [property: Required, StringLength(50)]
     string Decision,
     [property: StringLength(1000)]
     string? DecisionNotes,
-    Guid? DecidedByUserId);
+    Guid? DecidedByUserId,
+    Guid? SelectedQuoteId = null,
+    [property: StringLength(50)]
+    string? AuthorizationMethodCode = null,
+    [property: StringLength(200)]
+    string? AuthorizationReference = null,
+    [property: StringLength(200)]
+    string? AuthorizedByName = null,
+    DateTime? AuthorizedDateUtc = null,
+    Guid? AuthorizationDocumentId = null);
 
 public sealed record SubmitSubmissionToMarketRequest(
     Guid TenantId,

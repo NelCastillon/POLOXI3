@@ -1,501 +1,157 @@
 @page "/quotes/proposal/{SubmissionId:guid}"
 @namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject Ams.Web.Services.CurrentUserContext CurrentUser
 
-<PageTitle>Proposal Builder ? AMS</PageTitle>
-
+<PageTitle>Proposal Workflow - AMS</PageTitle>
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
 
-@if (_loading)
+<AppPageHeader Icon="bi-file-earmark-richtext" Title="Proposal Workflow" Subtitle="Generate, deliver, present, and record customer acceptance using submission and quote data." OnBack="GoBack" OnRefresh="LoadAsync" />
+
+@if (!string.IsNullOrWhiteSpace(_loadError))
 {
-    <div class="pb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Building proposal?</span></div>
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+}
+else if (_loading)
+{
+    <div class="um-loading"><div class="um-spinner"></div><span>Loading proposal workflow...</span></div>
 }
 else
 {
-    <!-- -- HEADER --------------------------------------------------- -->
-    <div class="pb-header">
-        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="GoBack">
-            <i class="bi bi-arrow-left" aria-hidden="true"></i> Back
-        </button>
-        <div class="pb-header-title">
-            <i class="bi bi-file-earmark-richtext pb-title-icon" aria-hidden="true"></i>
-            <div>
-                <h1 class="pb-h1">Proposal Builder</h1>
-                <span class="pb-sub">@_submissionNo ? @_account ? @_lob</span>
-            </div>
+    <div class="pc-kpi-strip">
+        @Kpi("Versions", _proposals.Count.ToString(), "bi-layers")
+        @Kpi("Generated", _proposals.Count(x => x.Status == "Generated").ToString(), "bi-file-earmark-check")
+        @Kpi("Delivered", _proposals.Count(x => x.Status == "Delivered").ToString(), "bi-send-check")
+        @Kpi("Accepted", _proposals.Count(x => x.Status == "Accepted").ToString(), "bi-check-circle")
+    </div>
+
+    <div class="um-card mb-3">
+        <div class="um-card-header"><div><h2>Submission</h2><p>@_submission?.SubmissionNumber · @_submission?.AccountName · @_submission?.LineOfBusiness</p></div></div>
+        <div class="um-card-body d-flex gap-2 flex-wrap">
+            <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any())"><i class="bi bi-plus-lg"></i> Generate Proposal</button>
+            <button class="um-btn um-btn-ghost" @onclick="OpenQuoteComparison"><i class="bi bi-columns-gap"></i> Compare Quotes</button>
+            <button class="um-btn um-btn-ghost" @onclick="GoBack"><i class="bi bi-journal-text"></i> Submission</button>
         </div>
-        <div class="pb-header-actions">
-            @if (_step < 3)
+    </div>
+
+    <div class="um-card">
+        <div class="um-card-header"><div><h2>Proposal Versions</h2><p>Each version preserves its quote selection and lifecycle history.</p></div></div>
+        <div class="um-card-body">
+            @if (_proposals.Count == 0)
             {
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevStep" disabled="@(_step == 0)">
-                    <i class="bi bi-chevron-left" aria-hidden="true"></i> Back
-                </button>
-                <button class="um-btn um-btn-primary um-btn-sm" @onclick="NextStep">
-                    @(_step == 2 ? "Preview" : "Next") <i class="bi bi-chevron-right" aria-hidden="true"></i>
-                </button>
+                <div class="um-empty-state"><i class="bi bi-file-earmark-richtext"></i><strong>No proposals generated</strong><span>Generate a proposal from approved presentation-ready quotes.</span></div>
             }
             else
             {
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="PrevStep">
-                    <i class="bi bi-chevron-left" aria-hidden="true"></i> Back
-                </button>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="ExportPdf">
-                    <i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> Export PDF
-                </button>
-                <button class="um-btn um-btn-ghost um-btn-sm" @onclick="EmailProposal">
-                    <i class="bi bi-envelope" aria-hidden="true"></i> Email
-                </button>
-                <button class="um-btn um-btn-success um-btn-sm" @onclick='() => Nav.NavigateTo("/quotes/bind")'>
-                    <i class="bi bi-shield-check" aria-hidden="true"></i> Proceed to Bind
-                </button>
+                <div class="table-responsive">
+                    <table class="table enterprise-table align-middle">
+                        <thead><tr><th>Proposal</th><th>Status</th><th>Delivery</th><th>Decision</th><th class="text-end">Actions</th></tr></thead>
+                        <tbody>
+                        @foreach (var item in _proposals)
+                        {
+                            <tr @ondblclick="() => ViewAsync(item.ProposalId)">
+                                <td><strong>@item.Title</strong><div class="text-muted small">@item.DocumentFileName</div></td>
+                                <td><span class="um-status-pill">@item.Status</span></td>
+                                <td>@(item.SentDateUtc?.ToLocalTime().ToString("g") ?? "Not delivered")<div class="text-muted small">@item.DeliveryMethod @item.Recipient</div></td>
+                                <td>@(item.ClientDecision ?? "Pending")</td>
+                                <td class="text-end">
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewAsync(item.ProposalId)"><i class="bi bi-eye"></i> View</button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Generated"))" @onclick="() => OpenDeliver(item)"><i class="bi bi-send"></i> Deliver</button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Delivered"))" @onclick="() => PresentAsync(item)"><i class="bi bi-person-video3"></i> Present</button>
+                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Presented"))" @onclick="() => OpenDecision(item)"><i class="bi bi-check2-circle"></i> Decision</button>
+                                </td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
             }
         </div>
     </div>
 
-    <!-- -- STEP PROGRESS ------------------------------------------- -->
-    <div class="pb-steps">
-        @foreach (var (label, idx) in _stepLabels.Select((l,i) => (l,i)))
-        {
-            <div class="pb-step @(_step == idx ? "pb-step-active" : _step > idx ? "pb-step-done" : "")">
-                <div class="pb-step-dot">
-                    @if (_step > idx) { <i class="bi bi-check" aria-hidden="true"></i> }
-                    else { <span>@(idx+1)</span> }
+    @if (_selected is not null)
+    {
+        <div class="um-card mt-3">
+            <div class="um-card-header"><div><h2>@_selected.Title · Version @_selected.VersionNumber</h2><p>@_selected.Status · Generated @_selected.GeneratedDateUtc?.ToLocalTime().ToString("g")</p></div></div>
+            <div class="um-card-body">
+                <div class="row g-3">
+                    <div class="col-lg-8"><div class="border rounded p-3">@((MarkupString)(_selected.HtmlContent ?? ""))</div></div>
+                    <div class="col-lg-4">
+                        <h3 class="h6">Included Quotes</h3>
+                        @foreach (var quote in _selected.Quotes)
+                        {
+                            <div class="border rounded p-2 mb-2"><strong>@quote.CarrierName</strong><div>@quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</div><small>Limit @quote.Limit?.ToString("C0") · Deductible @quote.Deductible?.ToString("C0")</small></div>
+                        }
+                        <h3 class="h6 mt-3">Lifecycle</h3>
+                        @foreach (var evt in _selected.Events)
+                        {
+                            <div class="border-start ps-2 mb-2"><strong>@evt.EventCode</strong><div class="small">@evt.EventDateUtc.ToLocalTime().ToString("g")</div><div class="small text-muted">@evt.EventDetail</div></div>
+                        }
+                    </div>
                 </div>
-                <span class="pb-step-label">@label</span>
             </div>
-            @if (idx < _stepLabels.Length - 1)
-            {
-                <div class="pb-step-connector @(_step > idx ? "pb-conn-done" : "")"></div>
-            }
-        }
+        </div>
+    }
+}
+
+@if (_dialog is not null)
+{
+    <div class="um-modal-backdrop" @onclick="CloseDialog"></div>
+    <div class="um-modal" role="dialog" aria-modal="true">
+        <div class="um-modal-header"><i class="bi bi-file-earmark-richtext"></i><span>@_dialog</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_form" OnValidSubmit="SaveDialogAsync"><DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                @if (_dialog == "Generate Proposal")
+                {
+                    <div class="um-form-field"><label>Title</label><InputText class="form-control" @bind-Value="_form.Title" /></div>
+                    <div class="um-form-field um-form-field--full"><label>Introduction</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Notes" /></div>
+                    <div class="um-form-field um-form-field--full"><label>Quotes</label>@foreach (var quote in _quotes){<label class="d-block"><input type="checkbox" checked="@_form.QuoteIds.Contains(quote.QuoteId)" @onchange="e => ToggleQuote(quote.QuoteId, (bool)e.Value!)" /> @quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</label>}</div>
+                }
+                else if (_dialog == "Deliver Proposal")
+                {
+                    <div class="um-form-field"><label>Delivery Method</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("DeliveryMethod")){<option value="@option.OptionCode">@option.DisplayName</option>}</InputSelect></div>
+                    <div class="um-form-field"><label>Recipient</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
+                }
+                else
+                {
+                    <div class="um-form-field"><label>Decision</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("Decision")){<option value="@option.OptionCode">@option.DisplayName</option>}</InputSelect></div>
+                    @if (_form.OptionCode == "Accepted")
+                    {
+                        <div class="um-form-field"><label>Selected Quote</label><InputSelect class="form-select" @bind-Value="_form.SelectedQuoteId">@foreach(var quote in _selected?.Quotes ?? []){<option value="@quote.QuoteId">@quote.CarrierName · @quote.QuoteNumber</option>}</InputSelect></div>
+                        <div class="um-form-field"><label>Authorization Method</label><InputSelect class="form-select" @bind-Value="_form.AuthorizationMethodCode">@foreach(var option in _authorizationMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></div>
+                        <div class="um-form-field"><label>Authorized By</label><InputText class="form-control" @bind-Value="_form.AuthorizedByName" /></div>
+                        <div class="um-form-field"><label>Reference</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
+                    }
+                    <div class="um-form-field um-form-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" /></div>
+                }
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
+        </EditForm>
     </div>
-
-    <!-- -- STEP CONTENT --------------------------------------------- -->
-    @if (_step == 0)
-    {
-        <!-- STEP 1: Select Quote -->
-        <div class="pb-step-body">
-            <h2 class="pb-step-h2">Select Quote to Propose</h2>
-            <p class="pb-step-intro">Choose the quote to feature in the client proposal. You may include alternatives.</p>
-            <div class="pb-quote-select-grid">
-                @foreach (var q in _quotes)
-                {
-                    <div class="pb-qsel-card @(q.Selected ? "pb-qsel-active" : "")"
-                         @onclick="() => SelectQuote(q)">
-                        <div class="pb-qsel-head">
-                            <div class="pb-qsel-carrier">@q.Carrier</div>
-                            <div class="pb-qsel-prem">@q.Premium.ToString("C0")</div>
-                        </div>
-                        <div class="pb-qsel-meta">
-                            <span>@q.QuoteNo</span>
-                            <span>Exp @q.ExpDate.ToString("MM/dd/yy")</span>
-                            @if (q.IsRecommended) { <span class="pb-qsel-rec"><i class="bi bi-trophy-fill" aria-hidden="true"></i> Recommended</span> }
-                        </div>
-                        <div class="pb-qsel-check">
-                            <i class="bi @(q.Selected ? "bi-check-circle-fill pb-check-on" : "bi-circle pb-check-off")" aria-hidden="true"></i>
-                            @(q.Selected ? "Primary" : "Include as Alternative")
-                        </div>
-                    </div>
-                }
-            </div>
-        </div>
-    }
-    else if (_step == 1)
-    {
-        <!-- STEP 2: Customize -->
-        <div class="pb-step-body">
-            <h2 class="pb-step-h2">Customize Proposal Content</h2>
-            <div class="pb-custom-grid">
-                <!-- Cover page -->
-                <div class="pb-custom-section">
-                    <div class="pb-custom-section-head">
-                        <i class="bi bi-file-earmark" aria-hidden="true"></i> Cover Page
-                    </div>
-                    <div class="pb-custom-fields">
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Agency Name</label>
-                            <input class="e-input" @bind="_proposal.AgencyName" />
-                        </div>
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Agency Logo Text / Tagline</label>
-                            <input class="e-input" @bind="_proposal.AgencyTagline" />
-                        </div>
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Prepared For (Client Name)</label>
-                            <input class="e-input" @bind="_proposal.PreparedFor" />
-                        </div>
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Prepared By (Agent)</label>
-                            <input class="e-input" @bind="_proposal.PreparedBy" />
-                        </div>
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Proposal Date</label>
-                            <AppDatePicker TValue="DateTime" @bind-Value="_proposal.ProposalDate" Format="MM/dd/yyyy" />
-                        </div>
-                        <div class="pb-field">
-                            <label class="pb-field-lbl">Cover Color Theme</label>
-                            <select class="e-input" @bind="_proposal.Theme">
-                                <option>Professional Blue</option>
-                                <option>Executive Dark</option>
-                                <option>Clean White</option>
-                                <option>Agency Brand</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Sections to include -->
-                <div class="pb-custom-section">
-                    <div class="pb-custom-section-head">
-                        <i class="bi bi-layout-text-sidebar" aria-hidden="true"></i> Sections to Include
-                    </div>
-                    <div class="pb-custom-fields">
-                        @foreach (var sec in _proposalSections)
-                        {
-                            <label class="pb-section-toggle">
-                                <AppCheckBox @bind-Checked="sec.Included" />
-                                <span class="pb-section-lbl">@sec.Label</span>
-                                @if (sec.IsRecommended) { <span class="pb-section-rec">Recommended</span> }
-                            </label>
-                        }
-                    </div>
-                </div>
-
-                <!-- Cover letter -->
-                <div class="pb-custom-section pb-full-col">
-                    <div class="pb-custom-section-head">
-                        <i class="bi bi-envelope" aria-hidden="true"></i> Cover Letter
-                    </div>
-                    <div class="pb-rte-wrap">
-                        <AppRichTextEditor @bind-Value="_proposal.CoverLetter"
-                                          Placeholder="Enter a personalized cover letter to the client?"
-                                          Height="220px">
-                        </AppRichTextEditor>
-                    </div>
-                </div>
-
-                <!-- Advisor notes -->
-                <div class="pb-custom-section pb-full-col">
-                    <div class="pb-custom-section-head">
-                        <i class="bi bi-person-badge" aria-hidden="true"></i> Agent Recommendation Notes
-                    </div>
-                    <div class="pb-rte-wrap">
-                        <AppRichTextEditor @bind-Value="_proposal.AdvisorNotes"
-                                          Placeholder="Why you are recommending this carrier and coverage structure?"
-                                          Height="160px">
-                        </AppRichTextEditor>
-                    </div>
-                </div>
-            </div>
-        </div>
-    }
-    else if (_step == 2)
-    {
-        <!-- STEP 3: Summary review -->
-        <div class="pb-step-body">
-            <h2 class="pb-step-h2">Review Before Preview</h2>
-            <div class="pb-review-grid">
-                <div class="pb-review-card">
-                    <div class="pb-rev-head">Cover Page</div>
-                    @RevRow("Agency",    _proposal.AgencyName)
-                    @RevRow("Prepared For", _proposal.PreparedFor)
-                    @RevRow("Prepared By",  _proposal.PreparedBy)
-                    @RevRow("Date",         _proposal.ProposalDate.ToString("MMMM d, yyyy"))
-                    @RevRow("Theme",        _proposal.Theme)
-                </div>
-                <div class="pb-review-card">
-                    <div class="pb-rev-head">Sections</div>
-                    @foreach (var sec in _proposalSections)
-                    {
-                        <div class="pb-rev-row">
-                            <i class="bi @(sec.Included ? "bi-check-circle-fill pb-rev-on" : "bi-circle pb-rev-off")" aria-hidden="true"></i>
-                            <span class="@(!sec.Included ? "pb-rev-excluded" : "")">@sec.Label</span>
-                        </div>
-                    }
-                </div>
-                <div class="pb-review-card pb-full-col">
-                    <div class="pb-rev-head">Selected Quote</div>
-                    @foreach (var q in _quotes.Where(q => q.Selected))
-                    {
-                        @RevRow("Carrier", q.Carrier)
-                        @RevRow("Quote #", q.QuoteNo)
-                        @RevRow("Annual Premium", q.Premium.ToString("C0"))
-                        @RevRow("Expiry", q.ExpDate.ToString("MM/dd/yyyy"))
-                    }
-                </div>
-            </div>
-        </div>
-    }
-    else
-    {
-        <!-- STEP 4: Preview -->
-        <div class="pb-preview-wrap">
-            <div class="pb-preview-doc">
-                <!-- Cover page -->
-                <div class="pb-prev-cover pb-prev-cover-@CssTheme(_proposal.Theme)">
-                    <div class="pb-prev-cover-agency">@_proposal.AgencyName</div>
-                    <div class="pb-prev-cover-tagline">@_proposal.AgencyTagline</div>
-                    <div class="pb-prev-cover-divider"></div>
-                    <div class="pb-prev-cover-title">Insurance Proposal</div>
-                    <div class="pb-prev-cover-lob">@_lob</div>
-                    <div class="pb-prev-cover-client">Prepared for: @_proposal.PreparedFor</div>
-                    <div class="pb-prev-cover-meta">
-                        Prepared by @_proposal.PreparedBy ? @_proposal.ProposalDate.ToString("MMMM d, yyyy")
-                    </div>
-                </div>
-
-                <!-- Cover letter -->
-                @if (_proposalSections.Any(s => s.Label == "Cover Letter" && s.Included))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">Dear @_proposal.PreparedFor,</h2>
-                        <p class="pb-prev-body">@_proposal.CoverLetter</p>
-                    </div>
-                }
-
-                <!-- Executive summary -->
-                @if (_proposalSections.Any(s => s.Label == "Executive Summary" && s.Included))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">Executive Summary</h2>
-                        @foreach (var q in _quotes.Where(q => q.Selected))
-                        {
-                            <div class="pb-prev-exec-box">
-                                <div class="pb-prev-exec-carrier">@q.Carrier ? @q.QuoteNo</div>
-                                <div class="pb-prev-exec-prem">@q.Premium.ToString("C0")<span> / year</span></div>
-                                <div class="pb-prev-exec-limits">@q.Limits</div>
-                            </div>
-                        }
-                    </div>
-                }
-
-                <!-- Coverage summary table -->
-                @if (_proposalSections.Any(s => s.Label == "Coverage Summary" && s.Included))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">Coverage Summary</h2>
-                        <table class="pb-prev-table">
-                            <thead><tr><th>Coverage</th><th>Limit</th><th>Deductible</th></tr></thead>
-                            <tbody>
-                                @foreach (var row in _previewCoverages)
-                                {
-                                    <tr><td>@row.Coverage</td><td>@row.Limit</td><td>@row.Deductible</td></tr>
-                                }
-                            </tbody>
-                        </table>
-                    </div>
-                }
-
-                <!-- Premium breakdown -->
-                @if (_proposalSections.Any(s => s.Label == "Premium Breakdown" && s.Included))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">Premium Breakdown</h2>
-                        <table class="pb-prev-table">
-                            <thead><tr><th>Coverage Element</th><th>Premium</th></tr></thead>
-                            <tbody>
-                                @foreach (var prem in _previewPremLines)
-                                {
-                                    <tr class="@(prem.IsTotal ? "pb-prev-total" : "")">
-                                        <td>@prem.Label</td>
-                                        <td>@prem.Amount.ToString("C0")</td>
-                                    </tr>
-                                }
-                            </tbody>
-                        </table>
-                    </div>
-                }
-
-                <!-- Advisor recommendation -->
-                @if (_proposalSections.Any(s => s.Label == "Agent Recommendation" && s.Included) && !string.IsNullOrEmpty(_proposal.AdvisorNotes))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">Our Recommendation</h2>
-                        <div class="pb-prev-rec-box">
-                            <i class="bi bi-person-badge" aria-hidden="true"></i>
-                            <p class="pb-prev-body">@_proposal.AdvisorNotes</p>
-                        </div>
-                    </div>
-                }
-
-                <!-- Carrier info -->
-                @if (_proposalSections.Any(s => s.Label == "Carrier Profile" && s.Included))
-                {
-                    <div class="pb-prev-section">
-                        <h2 class="pb-prev-sec-h">About the Carrier</h2>
-                        @foreach (var q in _quotes.Where(x => x.Selected))
-                        {
-                            <div class="pb-prev-carrier-info">
-                                <div class="pb-prev-ci-name">@q.Carrier</div>
-                                <div class="pb-prev-ci-rating">AM Best: A+ (XV) ? Fortune 500 ? Over 160 years in business</div>
-                            </div>
-                        }
-                    </div>
-                }
-
-                <!-- Footer -->
-                <div class="pb-prev-footer">
-                    <span>@_proposal.AgencyName ? Confidential Client Proposal</span>
-                    <span>@_proposal.ProposalDate.ToString("yyyy")</span>
-                </div>
-            </div>
-        </div>
-    }
 }
 
 @code {
     [Parameter] public Guid SubmissionId { get; set; }
+    SubmissionDto? _submission; List<QuoteComparisonDto> _quotes=[]; List<ProposalWorkflowDto> _proposals=[]; List<ProposalWorkflowOptionDto> _options=[]; List<SubmissionReferenceOptionDto> _authorizationMethods=[];
+    ProposalDto? _selected; ProposalWorkflowDto? _target; Ams.Web.Services.CurrentUserContextModel? _currentUser; EnterpriseToast? _toast; bool _loading=true,_saving; string? _loadError,_dialog; FormModel _form=new();
 
-    EnterpriseToast _toast = default!;
-
-    bool   _loading      = true;
-    int    _step         = 0;
-    string _submissionNo = "";
-    string _account      = "";
-    string _lob          = "";
-
-    readonly string[] _stepLabels = { "Select Quote", "Customize", "Review", "Preview" };
-
-    sealed class QuoteOpt
-    {
-        public string   Carrier       { get; set; } = "";
-        public string   QuoteNo       { get; set; } = "";
-        public decimal  Premium       { get; set; }
-        public DateTime ExpDate       { get; set; }
-        public bool     IsRecommended { get; set; }
-        public bool     Selected      { get; set; }
-        public string   Limits        { get; set; } = "";
-    }
-
-    sealed class ProposalConfig
-    {
-        public string   AgencyName    { get; set; } = "Thornton & Associates Insurance";
-        public string   AgencyTagline { get; set; } = "Protecting What Matters Most";
-        public string   PreparedFor   { get; set; } = "";
-        public string   PreparedBy    { get; set; } = "Maria Santos, CPCU";
-        public DateTime ProposalDate  { get; set; } = DateTime.Today;
-        public string   Theme         { get; set; } = "Professional Blue";
-        public string   CoverLetter   { get; set; } = "";
-        public string   AdvisorNotes  { get; set; } = "";
-    }
-
-    sealed class ProposalSection
-    {
-        public string Label         { get; set; } = "";
-        public bool   Included      { get; set; }
-        public bool   IsRecommended { get; set; }
-    }
-
-    sealed class PrevCov  { public string Coverage{get;set;}=""; public string Limit{get;set;}=""; public string Deductible{get;set;}=""; }
-    sealed class PrevPrem { public string Label{get;set;}=""; public decimal Amount{get;set;} public bool IsTotal{get;set;} }
-
-    List<QuoteOpt>      _quotes          = new();
-    ProposalConfig      _proposal        = new();
-    List<ProposalSection> _proposalSections = new();
-    List<PrevCov>       _previewCoverages = new();
-    List<PrevPrem>      _previewPremLines = new();
-
-    protected override async Task OnInitializedAsync()
-    {
-        Breadcrumbs.SetCrumbs(
-            new("Home","/"), new("Submissions","/submissions"),
-            new("Submission",$"/submissions/{SubmissionId}"),
-            new("Proposal",$"/quotes/proposal/{SubmissionId}"));
-        await Task.Delay(0);
-        BuildStub();
-        _loading = false;
-    }
-
-    void BuildStub()
-    {
-        _submissionNo = "SUB-2025-0042";
-        _account      = "Sullivan Mfg. LLC";
-        _lob          = "General Liability";
-
-        _quotes = new()
-        {
-            new QuoteOpt { Carrier="Travelers Indemnity", QuoteNo="TRV-2025-88421", Premium=17_250m, ExpDate=new DateTime(2025,8,15), IsRecommended=true, Selected=true, Limits="$2M/$4M GL + Products/CO" },
-            new QuoteOpt { Carrier="Hartford Fire & Cas.", QuoteNo="HFD-2025-14822", Premium=18_900m, ExpDate=new DateTime(2025,8,1), Limits="$2M/$4M GL Broad Form" },
-        };
-
-        _proposal = new ProposalConfig
-        {
-            PreparedFor  = "Sullivan Manufacturing, LLC",
-            CoverLetter  = "Dear Robert,\n\nThank you for the opportunity to present your 2025-2026 insurance renewal. After a thorough market analysis and submission to our preferred carrier partners, we are pleased to present the following recommendation for your General Liability coverage.\n\nOur team has carefully evaluated appetite, limits, exclusions, and market intelligence to identify the best value for your organization.\n\nPlease do not hesitate to contact us with any questions.",
-            AdvisorNotes = "Based on our market analysis, Travelers Indemnity represents the optimal combination of price, coverage breadth, and carrier strength for Sullivan Manufacturing. The quote includes full products-completed operations limits with no XCU exclusion ? critical for your class of business.",
-        };
-
-        _proposalSections = new()
-        {
-            new() { Label="Cover Letter",       Included=true,  IsRecommended=true  },
-            new() { Label="Executive Summary",  Included=true,  IsRecommended=true  },
-            new() { Label="Coverage Summary",   Included=true,  IsRecommended=true  },
-            new() { Label="Premium Breakdown",  Included=true,  IsRecommended=true  },
-            new() { Label="Agent Recommendation",Included=true, IsRecommended=true  },
-            new() { Label="Carrier Profile",    Included=true,  IsRecommended=false },
-            new() { Label="Loss History",       Included=false, IsRecommended=false },
-            new() { Label="Next Steps / Action Items", Included=true, IsRecommended=true },
-        };
-
-        _previewCoverages = new()
-        {
-            new() { Coverage="General Liability",         Limit="$2,000,000 per occurrence", Deductible="$0" },
-            new() { Coverage="General Aggregate",         Limit="$4,000,000",                Deductible="$0" },
-            new() { Coverage="Products / Completed Ops",  Limit="$2,000,000 per occurrence", Deductible="$0" },
-            new() { Coverage="Personal & Adv. Injury",    Limit="$2,000,000",                Deductible="$0" },
-            new() { Coverage="Hired & Non-Owned Auto",    Limit="$1,000,000",                Deductible="$1,000" },
-            new() { Coverage="Fire Legal Liability",      Limit="$100,000",                  Deductible="$0" },
-        };
-
-        _previewPremLines = new()
-        {
-            new() { Label="General Liability",      Amount=8_500  },
-            new() { Label="Products/Completed Ops", Amount=4_750  },
-            new() { Label="HNOA",                   Amount=1_200  },
-            new() { Label="Endorsements",           Amount=600    },
-            new() { Label="Policy Fee",             Amount=200    },
-            new() { Label="Total Annual Premium",   Amount=17_250, IsTotal=true },
-        };
-    }
-
-    void SelectQuote(QuoteOpt q)
-    {
-        foreach (var x in _quotes) x.Selected = false;
-        q.Selected = true;
-    }
-
-    void NextStep() { if (_step < 3) _step++; }
-    void PrevStep() { if (_step > 0) _step--; }
-    void GoBack()   => Nav.NavigateTo($"/submissions/{SubmissionId}");
-
-    async Task ExportPdf()
-    {
-        await _toast.ShowAsync(new ToastModel
-        {
-            Title="Exported", Content="Proposal PDF downloaded.",CssClass="enterprise-toast-success"
-        });
-    }
-
-    async Task EmailProposal()
-    {
-        await _toast.ShowAsync(new ToastModel
-        {
-            Title="Sent", Content="Proposal emailed to client.",CssClass="enterprise-toast-success"
-        });
-    }
-
-    static string CssTheme(string t) => t switch
-    {
-        "Executive Dark" => "dark",
-        "Clean White"    => "white",
-        "Agency Brand"   => "brand",
-        _                => "blue"
-    };
-
-    RenderFragment RevRow(string lbl, string val) =>
-        @<div class="pb-rev-row">
-            <span class="pb-rev-lbl">@lbl</span>
-            <span class="pb-rev-val">@val</span>
-        </div>;
+    protected override async Task OnInitializedAsync(){ Breadcrumbs.SetCrumbs(new("Home","/"),new("Submissions","/submissions"),new("Submission",$"/submissions/{SubmissionId}"),new("Proposal Workflow",$"/quotes/proposal/{SubmissionId}")); await LoadAsync(); }
+    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList(); if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
+    RenderFragment Kpi(string label,string value,string icon)=>b=>{b.OpenElement(0,"div");b.AddAttribute(1,"class","pc-kpi-card");b.AddMarkupContent(2,$"<i class='bi {icon}'></i><strong>{value}</strong><span>{label}</span>");b.CloseElement();};
+    IEnumerable<ProposalWorkflowOptionDto> Options(string group)=>_options.Where(x=>x.OptionGroupCode==group).OrderBy(x=>x.SortOrder);
+    static bool HasStatus(ProposalWorkflowDto item, string status) => string.Equals(item.Status, status, StringComparison.OrdinalIgnoreCase);
+    void OpenGenerate(){_target=null;_form=new(){Title=$"{_submission?.AccountName} Insurance Proposal",QuoteIds=_quotes.Where(x=>x.IsProposalReady).Select(x=>x.QuoteId).ToHashSet()};_dialog="Generate Proposal";}
+    void OpenDeliver(ProposalWorkflowDto item){_target=item;_form=new(){OptionCode=Options("DeliveryMethod").FirstOrDefault(x=>x.IsDefault)?.OptionCode??Options("DeliveryMethod").FirstOrDefault()?.OptionCode??"",Recipient=item.Recipient??""};_dialog="Deliver Proposal";}
+    async Task OpenDecision(ProposalWorkflowDto item){await ViewAsync(item.ProposalId);_target=item;_form=new(){OptionCode=Options("Decision").FirstOrDefault()?.OptionCode??"Accepted",SelectedQuoteId=_selected?.Quotes.FirstOrDefault(x=>x.IsSelected)?.QuoteId??_selected?.Quotes.FirstOrDefault()?.QuoteId,AuthorizationMethodCode=_authorizationMethods.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorizationMethods.FirstOrDefault()?.OptionCode??""};_dialog="Customer Decision";}
+    async Task ViewAsync(Guid id)=>_selected=await Api.GetProposalByIdAsync(id);
+    async Task PresentAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.PresentProposalAsync(item.ProposalId,new(user.TenantId,"Proposal presented to customer.",user.UserId));await LoadAsync();await Success("Proposal presented.");}catch(Exception ex){await Error(ex.Message);}}
+    async Task SaveDialogAsync(){try{_saving=true;var user=_currentUser??=await CurrentUser.RequireAsync();if(_dialog=="Generate Proposal")await Api.GenerateProposalAsync(new(SubmissionId,user.TenantId,_form.Title,_form.QuoteIds.ToArray(),_form.Notes,user.UserId));else if(_dialog=="Deliver Proposal"&&_target is not null)await Api.DeliverProposalAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Recipient,user.UserId));else if(_target is not null)await Api.RecordProposalDecisionAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Notes,user.UserId,_form.SelectedQuoteId,_form.AuthorizationMethodCode,_form.Recipient,_form.AuthorizedByName,DateTime.UtcNow));CloseDialog();await LoadAsync();await Success("Proposal workflow updated.");}catch(Exception ex){await Error(ex.Message);}finally{_saving=false;}}
+    void ToggleQuote(Guid id,bool selected){if(selected)_form.QuoteIds.Add(id);else _form.QuoteIds.Remove(id);} void CloseDialog(){_dialog=null;_target=null;} void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}"); void OpenQuoteComparison()=>Nav.NavigateTo($"/quotes/compare/{SubmissionId}");
+    Task Success(string text)=>_toast!.ShowAsync(new(){Title="Success",Content=text,CssClass="enterprise-toast-success"}); Task Error(string text)=>_toast!.ShowAsync(new(){Title="Error",Content=text,CssClass="enterprise-toast-danger"});
+    sealed class FormModel{[Required,StringLength(200)]public string Title{get;set;}="";public HashSet<Guid> QuoteIds{get;set;}=[];[Required]public string OptionCode{get;set;}="";[Required,StringLength(320)]public string Recipient{get;set;}="";public string? Notes{get;set;}public Guid? SelectedQuoteId{get;set;}public string? AuthorizationMethodCode{get;set;}public string? AuthorizedByName{get;set;}}
 }

@@ -37,6 +37,7 @@
         </div>
         <div class="rrc-hero-actions">
             <button type="button" class="rrc-btn rrc-btn-ghost" @onclick="OpenRenewals"><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renewals</button>
+            <button type="button" class="rrc-btn rrc-btn-ghost" @onclick="InitiateEligibleAsync" disabled="@_saving"><i class="bi bi-calendar2-check" aria-hidden="true"></i> Sync Expiring Policies</button>
             <button type="button" class="rrc-btn rrc-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
             <button type="button" class="rrc-btn rrc-btn-primary" @onclick="OpenNewCase"><i class="bi bi-plus-lg" aria-hidden="true"></i> New Case</button>
         </div>
@@ -293,6 +294,18 @@
                         </div>
                     </div>
                     <div class="rrc-action-row">
+                        @if (!_selected.RenewalSubmissionId.HasValue)
+                        {
+                            <button type="button" class="rrc-btn rrc-btn-primary rrc-btn-sm" @onclick="() => LaunchPlacementAsync(_selected)" disabled="@_saving"><i class="bi bi-rocket-takeoff" aria-hidden="true"></i> Launch Placement</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="rrc-btn rrc-btn-primary rrc-btn-sm" @onclick="() => OpenSubmission(_selected)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Submission</button>
+                        }
+                        @if (_selected.RenewalOpportunityId.HasValue)
+                        {
+                            <button type="button" class="rrc-btn rrc-btn-ghost rrc-btn-sm" @onclick="() => OpenOpportunity(_selected)"><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity</button>
+                        }
                         <button type="button" class="rrc-btn rrc-btn-primary rrc-btn-sm" @onclick="() => OpenStageDialog(_selected)"><i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i> Advance Stage</button>
                         <button type="button" class="rrc-btn rrc-btn-ghost rrc-btn-sm" @onclick="() => OpenActivityDialog(_selected)"><i class="bi bi-lightning" aria-hidden="true"></i> Log Activity</button>
                         <button type="button" class="rrc-btn rrc-btn-ghost rrc-btn-sm" @onclick="() => OpenOfferDialog(_selected)"><i class="bi bi-gift" aria-hidden="true"></i> Add Offer</button>
@@ -453,11 +466,12 @@
     private CaseForm _caseForm = new();
     private readonly List<RetentionToast> _toasts = [];
 
-    private static readonly string[] StageOptions = ["Intake", "Retention Desk", "Offer Strategy", "Proposal Ready", "Remarket", "Executive Escalation", "Saved", "Lost"];
-    private static readonly string[] OutreachOptions = ["Not Started", "Needs Outreach", "Client Contacted", "Producer Follow-Up", "Proposal Sent", "Executive Review", "Accepted", "Declined"];
-    private static readonly string[] SentimentOptions = ["Promoter", "Positive", "Neutral", "Concerned", "Frustrated", "At Risk"];
-    private static readonly string[] ActivityOptions = ["Call", "Email", "Meeting", "Remarket", "Escalation", "Offer", "Bind", "Note"];
     private static readonly string[] _tabs = ["Board", "Worklist", "Offers", "Activity", "Analytics"];
+    private List<RenewalWorkflowOptionDto> _workflowOptions = [];
+    private IEnumerable<string> StageOptions => OptionValues("Stage");
+    private IEnumerable<string> OutreachOptions => OptionValues("OutreachStatus");
+    private IEnumerable<string> SentimentOptions => OptionValues("Sentiment");
+    private IEnumerable<string> ActivityOptions => OptionValues("ActivityType");
 
     private List<RenewalRetentionCaseDto> Filtered => _cases.Where(c =>
         (string.IsNullOrWhiteSpace(_search) || c.AccountName.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.PolicyNumber.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Carrier.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Producer.Contains(_search, StringComparison.OrdinalIgnoreCase) || c.Csr.Contains(_search, StringComparison.OrdinalIgnoreCase) || (c.RiskDrivers?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)) &&
@@ -482,6 +496,7 @@
     private IEnumerable<string> ProducerOptions => _cases.Select(c => c.Producer).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     private IEnumerable<string> PriorityOptions => _cases.Select(c => c.Priority).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     private IEnumerable<string> StageGroups => StageOptions.Concat(StageFilterOptions).Distinct(StringComparer.OrdinalIgnoreCase);
+    private IEnumerable<string> OptionValues(string group) => _workflowOptions.Where(x => x.OptionGroupCode == group).OrderBy(x => x.SortOrder).Select(x => x.OptionCode);
     private decimal PremiumAtRisk => _cases.Where(c => !c.IsSaved && !string.Equals(c.Stage, "Saved", StringComparison.OrdinalIgnoreCase)).Sum(c => c.CurrentPremium);
     private decimal SavedPremium => _cases.Where(c => c.IsSaved || string.Equals(c.Stage, "Saved", StringComparison.OrdinalIgnoreCase)).Sum(c => c.ProposedPremium ?? c.CurrentPremium);
     private int CriticalCount => _cases.Count(c => string.Equals(c.Priority, "Critical", StringComparison.OrdinalIgnoreCase) || c.IsEscalated);
@@ -518,6 +533,7 @@
             _cases = data.Cases.ToList();
             _activities = data.Activities.ToList();
             _offers = data.Offers.ToList();
+            _workflowOptions = data.Options.ToList();
             _selected = _selected is null ? _cases.OrderBy(c => c.ExpirationDate).FirstOrDefault() : _cases.FirstOrDefault(c => c.RetentionCaseId == _selected.RetentionCaseId) ?? _cases.FirstOrDefault();
             _lastRefreshUtc = DateTime.UtcNow;
         }
@@ -552,6 +568,46 @@
     {
         if (item.AccountId.HasValue)
             Nav.NavigateTo($"/accounts/{item.AccountId.Value}");
+    }
+
+    private void OpenOpportunity(RenewalRetentionCaseDto item)
+    {
+        if (item.RenewalOpportunityId.HasValue)
+            Nav.NavigateTo($"/crm/opportunities/{item.RenewalOpportunityId.Value}");
+    }
+
+    private void OpenSubmission(RenewalRetentionCaseDto item)
+    {
+        if (item.RenewalSubmissionId.HasValue)
+            Nav.NavigateTo($"/submissions/{item.RenewalSubmissionId.Value}");
+    }
+
+    private async Task InitiateEligibleAsync()
+    {
+        try
+        {
+            _saving = true;
+            _userContext ??= await CurrentUser.RequireAsync();
+            var result = await Api.InitiateEligibleRenewalsAsync(new(_userContext.TenantId, "RetentionCenter", _userContext.UserId));
+            await LoadAsync();
+            await ShowToast($"Created {result.CreatedCases} renewal case(s) from {result.EligiblePolicyTerms} eligible policy term(s).");
+        }
+        catch (Exception ex) { await ShowToast($"Renewal initiation failed: {ex.Message}", "rrc-toast-danger"); }
+        finally { _saving = false; }
+    }
+
+    private async Task LaunchPlacementAsync(RenewalRetentionCaseDto item)
+    {
+        try
+        {
+            _saving = true;
+            _userContext ??= await CurrentUser.RequireAsync();
+            await Api.LaunchRenewalPlacementAsync(item.RetentionCaseId, new(_userContext.TenantId, _userContext.UserId));
+            await LoadAsync();
+            await ShowToast("Renewal Opportunity and Submission are ready.");
+        }
+        catch (Exception ex) { await ShowToast($"Renewal placement failed: {ex.Message}", "rrc-toast-danger"); }
+        finally { _saving = false; }
     }
 
     private List<RenewalRetentionActivityDto> CaseActivities(Guid id) => _activities.Where(a => a.RetentionCaseId == id).OrderByDescending(a => a.ActivityDateUtc).ToList();
