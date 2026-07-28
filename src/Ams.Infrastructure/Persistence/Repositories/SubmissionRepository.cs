@@ -178,6 +178,28 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM Agency.CarrierExternalConnector existing WHERE existing.TenantId = @TenantId AND existing.CarrierId IS NULL AND existing.ConnectorCode = N'API_RATING_JSON' AND existing.IsDeleted = 0);
 END;
 
+IF @TenantId IS NOT NULL AND OBJECT_ID(N'Submissions.ProposalDeliveryProvider', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.ProposalDeliveryProvider
+        (ProposalDeliveryProviderId, TenantId, DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, IsConfigured, IsActive, MaxAttempts, RetryDelaySeconds, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), @TenantId, seed.DeliveryMethodCode, seed.ProviderCode, seed.HandlerCode, seed.DisplayName,
+           seed.IsConfigured, 1, seed.MaxAttempts, seed.RetryDelaySeconds, SYSUTCDATETIME(), 0
+    FROM (VALUES
+        (N'Email', N'TenantSmtp', N'Smtp', N'Tenant SMTP', CAST(0 AS bit), 5, 300),
+        (N'Portal', N'AmsPortal', N'Portal', N'AMS Customer Portal', CAST(1 AS bit), 3, 60),
+        (N'ESignature', N'TenantESignature', N'ESignature', N'Tenant E-Signature', CAST(0 AS bit), 5, 300),
+        (N'InPerson', N'ManualDelivery', N'Manual', N'In-Person / Manual Delivery', CAST(1 AS bit), 1, 10)
+    ) seed(DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, IsConfigured, MaxAttempts, RetryDelaySeconds)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.ProposalDeliveryProvider existing
+        WHERE existing.TenantId = @TenantId
+          AND existing.DeliveryMethodCode = seed.DeliveryMethodCode
+          AND existing.IsDeleted = 0
+    );
+END;
+
 IF @TenantId IS NOT NULL AND OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL
 BEGIN
     INSERT INTO Agency.CarrierSetting
@@ -1120,14 +1142,16 @@ IF @OpportunityId IS NOT NULL AND @OpportunityId <> '00000000-0000-0000-0000-000
 BEGIN
     DECLARE @StageId UNIQUEIDENTIFIER = (SELECT TOP 1 OpportunityStageId FROM CRM.OpportunityStage WHERE TenantId = @TenantId AND StageName = @StageName AND IsActive = 1 ORDER BY SortOrder, StageName);
 
-    UPDATE CRM.Opportunity
-    SET StageName = @StageName,
-        OpportunityStageId = COALESCE(@StageId, OpportunityStageId),
+    UPDATE opportunity
+    SET StageName = stage.StageName,
+        OpportunityStageId = stage.OpportunityStageId,
         ForecastCategoryCode = CASE WHEN @StageName IN (N'Won', N'Bound', N'Closed Won') THEN N'Closed Won' WHEN @StageName IN (N'Lost', N'Declined', N'Closed Lost') THEN N'Closed Lost' ELSE COALESCE(NULLIF(ForecastCategoryCode, N''), N'Pipeline') END,
         ModifiedDateUtc = SYSUTCDATETIME(),
         ModifiedByUserId = @UserId
-    WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0
-      AND COALESCE(StageName, N'') NOT IN (N'Closed Won', N'Closed Lost');
+    FROM CRM.Opportunity opportunity
+    INNER JOIN CRM.OpportunityStage stage ON stage.OpportunityStageId = @StageId
+    WHERE opportunity.OpportunityId = @OpportunityId AND opportunity.TenantId = @TenantId AND opportunity.IsDeleted = 0
+      AND COALESCE(opportunity.StageName, N'') NOT IN (N'Closed Won', N'Closed Lost');
 
     INSERT INTO CRM.OpportunityWorkflowEvent (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
     VALUES (NEWID(), @TenantId, @OpportunityId, @EventType, @EventTitle, @EventDetail, @RelatedEntityName, @RelatedEntityId, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, 0);
@@ -4325,36 +4349,48 @@ VALUES (NEWID(), @SubmissionId, @TenantId, N'QuoteSelected', @Reason, SYSUTCDATE
 
     // ── Proposals ─────────────────────────────────────────────────────
 
-    public async Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
+    public async Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 SELECT ProposalId, SubmissionId, TenantId, Title, Status, VersionNumber, PdfUrl, HtmlContent, CustomIntroduction,
-       DeliveryMethod, Recipient, SentDateUtc, PresentedDateUtc, ClientDecision, DecisionNotes, DecisionDateUtc,
+       DeliveryMethod, Recipient, DeliveryStatus, LastDeliveryDispatchId, SentDateUtc, PresentedDateUtc, ClientDecision, DecisionNotes, DecisionDateUtc,
        CreatedDateUtc, GeneratedDateUtc
 FROM   Submissions.Proposal
-WHERE  ProposalId = @ProposalId AND IsDeleted = 0;
+WHERE  ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
 SELECT q.QuoteId, q.QuoteNumber, c.CarrierName, q.AnnualPremium, q.Deductible, q.[Limit], q.CoverageNotes, q.IsSelected, pq.SortOrder
 FROM Submissions.ProposalQuote pq
 INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.IsDeleted = 0
 INNER JOIN Core.Carrier c ON c.CarrierId = q.CarrierId AND c.IsDeleted = 0
-WHERE pq.ProposalId = @ProposalId AND pq.IsDeleted = 0
+WHERE pq.ProposalId = @ProposalId AND pq.TenantId = @TenantId AND pq.IsDeleted = 0
 ORDER BY pq.SortOrder;
 
 SELECT ProposalLifecycleEventId, EventCode, EventDetail, EventDateUtc
 FROM Submissions.ProposalLifecycleEvent
-WHERE ProposalId = @ProposalId AND IsDeleted = 0
-ORDER BY EventDateUtc DESC;";
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0
+ORDER BY EventDateUtc DESC;
+
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       COALESCE(provider.DisplayName, d.DeliveryMethodCode) AS ProviderName, d.Recipient, d.StatusCode,
+       d.AttemptCount, d.MaxAttempts, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.ErrorCode, d.ErrorMessage, d.CreatedDateUtc,
+       CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = d.ProposalDeliveryProviderId AND provider.IsDeleted = 0
+WHERE d.ProposalId = @ProposalId AND d.TenantId = @TenantId AND d.IsDeleted = 0
+ORDER BY d.CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { ProposalId = proposalId }, cancellationToken: cancellationToken));
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken));
         var proposal = await multi.ReadSingleOrDefaultAsync<ProposalDto>();
         if (proposal is null) return null;
         proposal.Quotes = (await multi.ReadAsync<ProposalQuoteDto>()).AsList();
         proposal.Events = (await multi.ReadAsync<ProposalLifecycleEventDto>()).AsList();
+        proposal.Deliveries = (await multi.ReadAsync<ProposalDeliveryDispatchDto>()).AsList();
         return proposal;
     }
 
-    public async Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 SELECT p.ProposalId,
@@ -4364,6 +4400,8 @@ SELECT p.ProposalId,
        p.Status,
        p.DeliveryMethod,
        p.Recipient,
+       p.DeliveryStatus,
+       p.LastDeliveryDispatchId,
        p.SentDateUtc,
        p.ClientDecision,
        p.DecisionNotes,
@@ -4372,20 +4410,80 @@ SELECT p.ProposalId,
        d.FileName AS DocumentFileName
 FROM Submissions.Proposal p
 LEFT JOIN DMS.Document d ON d.DocumentId = p.DocumentId AND d.IsDeleted = 0
-WHERE p.SubmissionId = @SubmissionId AND p.IsDeleted = 0
+WHERE p.SubmissionId = @SubmissionId AND p.TenantId = @TenantId AND p.IsDeleted = 0
 ORDER BY p.CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
-        return (await cn.QueryAsync<ProposalWorkflowDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        return (await cn.QueryAsync<ProposalWorkflowDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<ProposalWorkflowLaunchDto> GetProposalWorkflowLaunchAsync(Guid opportunityId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52041, 'Opportunity was not found for proposal workflow.', 1;
+
+;WITH SubmissionReadiness AS
+(
+    SELECT s.SubmissionId,
+           s.ModifiedDateUtc,
+           s.CreatedDateUtc,
+           COUNT(CASE WHEN q.Status = N'Approved for Presentation'
+                            AND q.ExpiresDateUtc > SYSUTCDATETIME()
+                            AND q.AnnualPremium > 0
+                            AND q.CarrierId IS NOT NULL
+                            AND q.Deductible IS NOT NULL
+                            AND q.[Limit] IS NOT NULL
+                            AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
+                            AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
+                            AND q.QuoteDocumentId IS NOT NULL
+                      THEN 1 END) AS ProposalReadyQuoteCount
+    FROM Submissions.Submission s
+    LEFT JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0
+    WHERE s.OpportunityId = @OpportunityId AND s.TenantId = @TenantId AND s.IsDeleted = 0
+    GROUP BY s.SubmissionId, s.ModifiedDateUtc, s.CreatedDateUtc
+), SelectedSubmission AS
+(
+    SELECT TOP 1 SubmissionId, ProposalReadyQuoteCount
+    FROM SubmissionReadiness
+    ORDER BY CASE WHEN ProposalReadyQuoteCount > 0 THEN 0 ELSE 1 END,
+             COALESCE(ModifiedDateUtc, CreatedDateUtc) DESC,
+             CreatedDateUtc DESC
+)
+SELECT @OpportunityId AS OpportunityId,
+       @TenantId AS TenantId,
+       selected.SubmissionId,
+       CAST(CASE WHEN selected.SubmissionId IS NULL THEN 0 ELSE 1 END AS bit) AS HasSubmission,
+       CAST(CASE WHEN COALESCE(selected.ProposalReadyQuoteCount, 0) > 0 THEN 1 ELSE 0 END AS bit) AS HasProposalReadyQuotes,
+       COALESCE(selected.ProposalReadyQuoteCount, 0) AS ProposalReadyQuoteCount,
+       CASE WHEN selected.SubmissionId IS NULL THEN N'CreateSubmission'
+            WHEN selected.ProposalReadyQuoteCount > 0 THEN N'OpenProposalWorkflow'
+            ELSE N'OpenSubmission' END AS NextActionCode,
+       CASE WHEN selected.SubmissionId IS NULL THEN N'Create a submission before preparing a proposal.'
+            WHEN selected.ProposalReadyQuoteCount > 0 THEN N'Proposal-ready quotes are available.'
+            ELSE N'Complete quote review and approval before preparing a proposal.' END AS Message
+FROM (VALUES (1)) seed(Value)
+LEFT JOIN SelectedSubmission selected ON 1 = 1;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleAsync<ProposalWorkflowLaunchDto>(new CommandDefinition(sql, new { OpportunityId = opportunityId, TenantId = tenantId }, cancellationToken: cancellationToken));
     }
 
     public async Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT ProposalWorkflowOptionId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, SortOrder
-FROM Submissions.ProposalWorkflowOption
-WHERE TenantId = @TenantId AND IsActive = 1 AND IsDeleted = 0
-ORDER BY OptionGroupCode, SortOrder, DisplayName;";
+SELECT optionRow.ProposalWorkflowOptionId, optionRow.OptionGroupCode, optionRow.OptionCode, optionRow.DisplayName,
+       optionRow.Description, optionRow.IsDefault, optionRow.SortOrder,
+       CAST(COALESCE(provider.IsConfigured, 1) AS bit) AS IsProviderConfigured,
+       provider.DisplayName AS ProviderName
+FROM Submissions.ProposalWorkflowOption optionRow
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON optionRow.OptionGroupCode = N'DeliveryMethod'
+ AND provider.TenantId = optionRow.TenantId
+ AND provider.DeliveryMethodCode = optionRow.OptionCode
+ AND provider.IsActive = 1
+ AND provider.IsDeleted = 0
+WHERE optionRow.TenantId = @TenantId AND optionRow.IsActive = 1 AND optionRow.IsDeleted = 0
+ORDER BY optionRow.OptionGroupCode, optionRow.SortOrder, optionRow.DisplayName;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return (await cn.QueryAsync<ProposalWorkflowOptionDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
@@ -4494,37 +4592,222 @@ VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalGenerated', CONCAT(@Title, 
         return id;
     }
 
-    public async Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    public async Task<ProposalDeliveryDispatchDto> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
     {
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
         const string sql = @"
 DECLARE @SubmissionId UNIQUEIDENTIFIER;
-UPDATE Submissions.Proposal
-SET Status = N'Delivered',
-    DeliveryMethod = @DeliveryMethod,
-    Recipient = @Recipient,
-    SentDateUtc = SYSUTCDATETIME(),
-    SentByUserId = @SentByUserId,
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @SentByUserId,
-    @SubmissionId = SubmissionId
+DECLARE @DispatchId UNIQUEIDENTIFIER = NEWID();
+DECLARE @ProviderId UNIQUEIDENTIFIER;
+DECLARE @ProviderName NVARCHAR(150);
+DECLARE @IsConfigured BIT = 0;
+DECLARE @MaxAttempts INT = 5;
+DECLARE @DispatchStatus NVARCHAR(50);
+
+SELECT @SubmissionId = SubmissionId
+FROM Submissions.Proposal
 WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0 AND Status IN (N'Generated', N'Delivered');
 
 IF @SubmissionId IS NULL THROW 52016, 'Proposal was not found for delivery.', 1;
 
+SELECT @ProviderId = ProposalDeliveryProviderId,
+       @ProviderName = DisplayName,
+       @IsConfigured = IsConfigured,
+       @MaxAttempts = MaxAttempts
+FROM Submissions.ProposalDeliveryProvider
+WHERE TenantId = @TenantId
+  AND DeliveryMethodCode = @DeliveryMethod
+  AND IsActive = 1
+  AND IsDeleted = 0;
+
+IF @ProviderId IS NULL THROW 52042, 'The selected proposal delivery method is not configured for this tenant.', 1;
+
+IF EXISTS
+(
+    SELECT 1 FROM Submissions.ProposalDeliveryDispatch
+    WHERE TenantId = @TenantId AND ProposalId = @ProposalId AND IsDeleted = 0
+      AND StatusCode IN (N'Queued', N'Processing', N'Configuration Required')
+)
+    THROW 52043, 'An active proposal delivery already exists.', 1;
+
+SET @DispatchStatus = CASE WHEN @IsConfigured = 1 THEN N'Queued' ELSE N'Configuration Required' END;
+
+INSERT INTO Submissions.ProposalDeliveryDispatch
+    (ProposalDeliveryDispatchId, TenantId, SubmissionId, ProposalId, ProposalDeliveryProviderId,
+     DeliveryMethodCode, Recipient, StatusCode, AttemptCount, MaxAttempts, NextAttemptDateUtc,
+     ErrorCode, ErrorMessage, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (@DispatchId, @TenantId, @SubmissionId, @ProposalId, @ProviderId,
+     @DeliveryMethod, @Recipient, @DispatchStatus, 0, @MaxAttempts,
+     CASE WHEN @DispatchStatus = N'Queued' THEN SYSUTCDATETIME() ELSE NULL END,
+     CASE WHEN @DispatchStatus = N'Configuration Required' THEN N'PROVIDER_NOT_CONFIGURED' ELSE NULL END,
+     CASE WHEN @DispatchStatus = N'Configuration Required' THEN CONCAT(@ProviderName, N' requires tenant configuration before delivery.') ELSE NULL END,
+     SYSUTCDATETIME(), @SentByUserId, 0);
+
+UPDATE Submissions.Proposal
+SET DeliveryMethod = @DeliveryMethod,
+    Recipient = @Recipient,
+    DeliveryStatus = @DispatchStatus,
+    LastDeliveryDispatchId = @DispatchId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @SentByUserId
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+
 INSERT INTO Submissions.ProposalLifecycleEvent
     (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
-    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Delivered', CONCAT(N'Proposal delivered by ', @DeliveryMethod, N' to ', @Recipient, N'.'), SYSUTCDATETIME(), SYSUTCDATETIME(), @SentByUserId, 0);
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId,
+     CASE WHEN @DispatchStatus = N'Queued' THEN N'DeliveryQueued' ELSE N'DeliveryConfigurationRequired' END,
+     CASE WHEN @DispatchStatus = N'Queued'
+          THEN CONCAT(N'Proposal delivery queued through ', @ProviderName, N' to ', @Recipient, N'.')
+          ELSE CONCAT(@ProviderName, N' requires tenant configuration before delivery to ', @Recipient, N'.') END,
+     SYSUTCDATETIME(), SYSUTCDATETIME(), @SentByUserId, 0);
 
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
-VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDelivered', CONCAT(N'Proposal sent by ', @DeliveryMethod, N' to ', @Recipient), SYSUTCDATETIME(), @SentByUserId, N'Proposal', @ProposalId, N'User', 0);
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDeliveryQueued', CONCAT(@DispatchStatus, N': ', @DeliveryMethod, N' to ', @Recipient), SYSUTCDATETIME(), @SentByUserId, N'ProposalDeliveryDispatch', @DispatchId, N'User', 0);
 
-SELECT @SubmissionId;";
-        var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.DeliveryMethod, request.Recipient, request.SentByUserId }, cancellationToken: cancellationToken));
-        await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = submissionId, request.TenantId }, cancellationToken: cancellationToken));
-        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Delivered", "Proposal Delivered", $"Proposal sent by {request.DeliveryMethod} to {request.Recipient}.", "Proposal", proposalId, request.SentByUserId, cancellationToken);
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       @ProviderName AS ProviderName, d.Recipient, d.StatusCode, d.AttemptCount, d.MaxAttempts,
+       d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId, d.ErrorCode, d.ErrorMessage,
+       d.CreatedDateUtc, CAST(CASE WHEN d.StatusCode = N'Configuration Required' THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+WHERE d.ProposalDeliveryDispatchId = @DispatchId;";
+        return await cn.QuerySingleAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.DeliveryMethod, request.Recipient, request.SentByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       COALESCE(provider.DisplayName, d.DeliveryMethodCode) AS ProviderName, d.Recipient, d.StatusCode,
+       d.AttemptCount, d.MaxAttempts, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.ErrorCode, d.ErrorMessage, d.CreatedDateUtc,
+       CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = d.ProposalDeliveryProviderId AND provider.IsDeleted = 0
+WHERE d.ProposalId = @ProposalId AND d.TenantId = @TenantId AND d.IsDeleted = 0
+ORDER BY d.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @ProviderName NVARCHAR(150);
+DECLARE @IsConfigured BIT;
+
+SELECT @ProviderName = provider.DisplayName, @IsConfigured = provider.IsConfigured
+FROM Submissions.ProposalDeliveryDispatch dispatch
+INNER JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
+ AND provider.TenantId = dispatch.TenantId
+ AND provider.IsActive = 1
+ AND provider.IsDeleted = 0
+WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId
+  AND dispatch.TenantId = @TenantId
+  AND dispatch.StatusCode IN (N'Configuration Required', N'Failed')
+  AND dispatch.IsDeleted = 0;
+
+IF @ProviderName IS NULL THROW 52044, 'Proposal delivery is not eligible for retry.', 1;
+
+UPDATE Submissions.ProposalDeliveryDispatch
+SET StatusCode = CASE WHEN @IsConfigured = 1 THEN N'Queued' ELSE N'Configuration Required' END,
+    NextAttemptDateUtc = CASE WHEN @IsConfigured = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+    ClaimedDateUtc = NULL,
+    ClaimedBy = NULL,
+    ErrorCode = CASE WHEN @IsConfigured = 1 THEN NULL ELSE N'PROVIDER_NOT_CONFIGURED' END,
+    ErrorMessage = CASE WHEN @IsConfigured = 1 THEN NULL ELSE CONCAT(@ProviderName, N' requires tenant configuration before delivery.') END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @RequestedByUserId
+WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND IsDeleted = 0;
+
+UPDATE proposal
+SET DeliveryStatus = dispatch.StatusCode,
+    LastDeliveryDispatchId = dispatch.ProposalDeliveryDispatchId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @RequestedByUserId
+FROM Submissions.Proposal proposal
+INNER JOIN Submissions.ProposalDeliveryDispatch dispatch ON dispatch.ProposalId = proposal.ProposalId
+WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId AND proposal.TenantId = @TenantId;
+
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), TenantId, ProposalId, SubmissionId, N'DeliveryRetryRequested',
+       CASE WHEN @IsConfigured = 1 THEN CONCAT(N'Delivery retry queued through ', @ProviderName, N'.') ELSE CONCAT(@ProviderName, N' remains unconfigured.') END,
+       SYSUTCDATETIME(), SYSUTCDATETIME(), @RequestedByUserId, 0
+FROM Submissions.ProposalDeliveryDispatch
+WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND IsDeleted = 0;
+
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       @ProviderName AS ProviderName, d.Recipient, d.StatusCode, d.AttemptCount, d.MaxAttempts,
+       d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId, d.ErrorCode, d.ErrorMessage,
+       d.CreatedDateUtc, CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+WHERE d.ProposalDeliveryDispatchId = @DispatchId AND d.TenantId = @TenantId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { DispatchId = dispatchId, request.TenantId, request.RequestedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<ProposalDeliveryProviderDto>> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT ProposalDeliveryProviderId, TenantId, DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName,
+       EndpointUri, SenderAddress, SecretReference, ConfigurationJson, IsConfigured, IsActive,
+       MaxAttempts, RetryDelaySeconds, ModifiedDateUtc
+FROM Submissions.ProposalDeliveryProvider
+WHERE TenantId = @TenantId AND IsDeleted = 0
+ORDER BY DeliveryMethodCode, DisplayName;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
+        return (await cn.QueryAsync<ProposalDeliveryProviderDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task UpdateProposalDeliveryProviderAsync(Guid providerId, UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @HandlerCode NVARCHAR(50);
+SELECT @HandlerCode = HandlerCode
+FROM Submissions.ProposalDeliveryProvider
+WHERE ProposalDeliveryProviderId = @ProviderId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @HandlerCode IS NULL THROW 52045, 'Proposal delivery provider was not found.', 1;
+IF @ConfigurationJson IS NOT NULL AND ISJSON(@ConfigurationJson) = 0 THROW 52046, 'Provider configuration must be valid JSON.', 1;
+IF @IsConfigured = 1 AND @HandlerCode = N'Smtp' AND (NULLIF(@EndpointUri, N'') IS NULL OR @EndpointUri NOT LIKE N'smtp://%' OR NULLIF(@SenderAddress, N'') IS NULL)
+    THROW 52047, 'Configured SMTP delivery requires an smtp:// endpoint and sender address.', 1;
+IF @IsConfigured = 1 AND @HandlerCode = N'ESignature' AND (NULLIF(@EndpointUri, N'') IS NULL OR @EndpointUri NOT LIKE N'https://%' OR NULLIF(@SecretReference, N'') IS NULL)
+    THROW 52048, 'Configured e-signature delivery requires an HTTPS endpoint and secret reference.', 1;
+
+UPDATE Submissions.ProposalDeliveryProvider
+SET EndpointUri = NULLIF(@EndpointUri, N''),
+    SenderAddress = NULLIF(@SenderAddress, N''),
+    SecretReference = NULLIF(@SecretReference, N''),
+    ConfigurationJson = NULLIF(@ConfigurationJson, N''),
+    IsConfigured = @IsConfigured,
+    IsActive = @IsActive,
+    MaxAttempts = @MaxAttempts,
+    RetryDelaySeconds = @RetryDelaySeconds,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ProposalDeliveryProviderId = @ProviderId AND TenantId = @TenantId AND IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsureEnterpriseWorkflowSchemaAsync(cn, request.TenantId, cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            ProviderId = providerId,
+            request.TenantId,
+            request.EndpointUri,
+            request.SenderAddress,
+            request.SecretReference,
+            request.ConfigurationJson,
+            request.IsConfigured,
+            request.IsActive,
+            request.MaxAttempts,
+            request.RetryDelaySeconds,
+            request.ModifiedByUserId
+        }, cancellationToken: cancellationToken));
     }
 
     public async Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
@@ -4573,7 +4856,7 @@ SELECT @SubmissionId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.PresentationNotes, request.PresentedByUserId }, cancellationToken: cancellationToken));
-        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Presented", "Proposal Presented", "Proposal Presented", request.PresentationNotes, "Proposal", proposalId, request.PresentedByUserId, cancellationToken);
+        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Presented", "Proposal Presented", request.PresentationNotes, "Proposal", proposalId, request.PresentedByUserId, cancellationToken);
     }
 
     public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
@@ -4636,8 +4919,44 @@ SELECT @SubmissionId;";
         {
             await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = submissionId, request.TenantId }, cancellationToken: cancellationToken));
         }
-        var stageName = string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) || string.Equals(request.Decision, "Declined", StringComparison.OrdinalIgnoreCase) ? "Lost" : "Customer Accepted";
+        var stageName = string.Equals(request.Decision, "Rejected", StringComparison.OrdinalIgnoreCase) || string.Equals(request.Decision, "Declined", StringComparison.OrdinalIgnoreCase) ? "Closed Lost" : "Negotiation";
         await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, stageName, "Proposal Decision", "Proposal Decision", $"{request.Decision}. {request.DecisionNotes}".Trim(), "Proposal", proposalId, request.DecidedByUserId, cancellationToken);
+    }
+
+    public async Task<ProposalBindContinuationDto> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT p.ProposalId,
+       p.SubmissionId,
+       p.TenantId,
+       CAST(CASE WHEN p.Status = N'Accepted' AND selectedQuote.QuoteId IS NOT NULL AND authorization.CustomerAuthorizationId IS NOT NULL THEN 1 ELSE 0 END AS bit) AS CanRequestBind,
+       selectedQuote.QuoteId AS SelectedQuoteId,
+       authorization.CustomerAuthorizationId,
+       CASE WHEN p.Status <> N'Accepted' THEN N'The customer must accept the presented proposal before requesting bind.'
+            WHEN selectedQuote.QuoteId IS NULL THEN N'Customer acceptance must identify a proposal quote.'
+            WHEN authorization.CustomerAuthorizationId IS NULL THEN N'Customer authorization must be recorded before requesting bind.'
+            ELSE NULL END AS BlockingReason
+FROM Submissions.Proposal p
+OUTER APPLY
+(
+    SELECT TOP 1 q.QuoteId
+    FROM Submissions.ProposalQuote pq
+    INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.SubmissionId = p.SubmissionId AND q.IsSelected = 1 AND q.IsDeleted = 0
+    WHERE pq.ProposalId = p.ProposalId AND pq.TenantId = p.TenantId AND pq.IsDeleted = 0
+    ORDER BY pq.SortOrder
+) selectedQuote
+OUTER APPLY
+(
+    SELECT TOP 1 ca.CustomerAuthorizationId
+    FROM Submissions.CustomerAuthorization ca
+    WHERE ca.TenantId = p.TenantId AND ca.SubmissionId = p.SubmissionId AND ca.ProposalId = p.ProposalId
+      AND ca.QuoteId = selectedQuote.QuoteId AND ca.IsDeleted = 0
+    ORDER BY ca.AuthorizedDateUtc DESC
+) authorization
+WHERE p.ProposalId = @ProposalId AND p.TenantId = @TenantId AND p.IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var result = await cn.QuerySingleOrDefaultAsync<ProposalBindContinuationDto>(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken));
+        return result ?? throw new InvalidOperationException("Proposal was not found for bind continuation.");
     }
 
     // ── Appetite ──────────────────────────────────────────────────────

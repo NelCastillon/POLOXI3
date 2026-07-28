@@ -133,7 +133,7 @@ else
         <section class="sdd-workflows" aria-label="Submission workflow shortcuts">
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i><span><strong>Submit to market</strong><small>Send package to a selected carrier</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i><span><strong>Request quote</strong><small>Generate a quote workflow request</small></span></button>
-            <button type="button" class="sdd-workflow" disabled="@(!CanGenerateProposal)" title="@GenerateProposalTitle" @onclick='() => OpenActionDialog("proposal")'><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal</strong><small>Create proposal from ready approved quotes</small></span></button>
+            <button type="button" class="sdd-workflow" disabled="@(!CanGenerateProposal)" title="@GenerateProposalTitle" @onclick="OpenProposalWorkflow"><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal Workflow</strong><small>Generate, deliver, and record the customer decision</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Request Bind</strong><small>Capture customer authorization and send bind request</small></span></button>
             <button type="button" class="sdd-workflow" @onclick='() => OpenActionDialog("copy")'><i class="bi bi-copy" aria-hidden="true"></i><span><strong>Copy / remarket</strong><small>Create renewal or remarketing copy</small></span></button>
         </section>
@@ -638,7 +638,7 @@ else
                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit Market</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i> Request Quote</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i> Request Bind</button>
-                             <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("proposal-delivery")'><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Delivery</button>
+                             <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="OpenProposalWorkflow"><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Workflow</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("task")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Task</button>
                         <button type="button" class="sdd-btn sdd-btn--danger" @onclick='() => OpenActionDialog("decline")'><i class="bi bi-x-circle" aria-hidden="true"></i> Decline</button>
                     </div>
@@ -1192,6 +1192,9 @@ else
     [SupplyParameterFromQuery(Name = "tab")]
     public string? RequestedTab { get; set; }
 
+    [SupplyParameterFromQuery(Name = "proposalId")]
+    public Guid? RequestedProposalId { get; set; }
+
     bool _loading = true;
     bool _actionBusy;
     bool _showActionDialog;
@@ -1340,8 +1343,14 @@ else
             {
                 if (string.Equals(RequestedAction, "document", StringComparison.OrdinalIgnoreCase))
                     OpenDocumentUpload();
+                else if (RequestedAction is "proposal" or "proposal-delivery")
+                    OpenProposalWorkflow();
                 else
+                {
                     OpenActionDialog(RequestedAction);
+                    if (string.Equals(RequestedAction, "policy", StringComparison.OrdinalIgnoreCase) && RequestedProposalId.HasValue)
+                        _actionForm.ProposalId = RequestedProposalId;
+                }
             }
         }
     }
@@ -1389,7 +1398,7 @@ else
             _taskTemplates.AddRange(await Api.GetSubmissionTaskTemplatesAsync(_submission.TenantId) ?? []);
 
             _proposals.Clear();
-            _proposals.AddRange(await Api.GetSubmissionProposalsAsync(SubmissionId) ?? []);
+            _proposals.AddRange(await Api.GetSubmissionProposalsAsync(SubmissionId, _currentUser!.TenantId) ?? []);
 
             _docs.Clear();
             _docs.AddRange(await Api.GetSubmissionDocumentsAsync(SubmissionId, _submission.TenantId) ?? []);
@@ -1625,6 +1634,7 @@ else
     void OpenDocumentUpload() => _showDocumentUpload = true;
 
     void OpenDocument(DocumentDto document) => Nav.NavigateTo($"/documents/{document.DocumentId}");
+    void OpenProposalWorkflow() => Nav.NavigateTo($"/quotes/proposal/{SubmissionId}");
 
     async Task PreviewDocumentAsync(DocumentDto document)
     {

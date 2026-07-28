@@ -1,0 +1,150 @@
+@page "/tenant/integrations/proposal-delivery"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Proposal Delivery Providers - AMS</PageTitle>
+<AppPageHeader Title="Proposal Delivery Providers" Subtitle="Configure tenant-specific email, portal, e-signature, and in-person proposal delivery." Icon="bi bi-send-check">
+    <Actions><button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions>
+</AppPageHeader>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
+
+@if (_loading)
+{
+    <div class="um-loading"><div class="um-spinner"></div><span>Loading proposal delivery providers...</span></div>
+}
+else if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var provider in _providers)
+        {
+            <div class="col-xl-6">
+                <div class="um-card h-100">
+                    <div class="um-card-header">
+                        <div><h2>@provider.DisplayName</h2><p>@provider.DeliveryMethodCode · @provider.HandlerCode · @provider.ProviderCode</p></div>
+                        <span class="um-status-pill">@(provider.IsConfigured ? "Configured" : "Configuration Required")</span>
+                    </div>
+                    <div class="um-card-body">
+                        <dl class="row mb-3">
+                            <dt class="col-sm-4">Endpoint</dt><dd class="col-sm-8">@(provider.EndpointUri ?? "Not configured")</dd>
+                            <dt class="col-sm-4">Sender</dt><dd class="col-sm-8">@(provider.SenderAddress ?? "Not configured")</dd>
+                            <dt class="col-sm-4">Secret reference</dt><dd class="col-sm-8">@(provider.SecretReference ?? "Not configured")</dd>
+                            <dt class="col-sm-4">Retry policy</dt><dd class="col-sm-8">@provider.MaxAttempts attempts · @provider.RetryDelaySeconds seconds</dd>
+                        </dl>
+                        <button class="um-btn um-btn-primary" @onclick="() => OpenEdit(provider)"><i class="bi bi-gear"></i> Configure</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@if (_editing is not null)
+{
+    <div class="um-modal-backdrop" @onclick="CloseEdit"></div>
+    <div class="um-modal" role="dialog" aria-modal="true">
+        <div class="um-modal-header"><i class="bi bi-send-check"></i><span>Configure @_editing.DisplayName</span><button class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="um-field um-field--full"><label>Endpoint URI</label><InputText class="um-input" @bind-Value="_form.EndpointUri" /><ValidationMessage For="() => _form.EndpointUri" /></div>
+                <div class="um-field"><label>Sender address</label><InputText class="um-input" @bind-Value="_form.SenderAddress" /><ValidationMessage For="() => _form.SenderAddress" /></div>
+                <div class="um-field"><label>Secret reference</label><InputText class="um-input" @bind-Value="_form.SecretReference" /><small>Name of the Worker environment variable containing the secret.</small></div>
+                <div class="um-field"><label>Maximum attempts</label><InputNumber class="um-input" @bind-Value="_form.MaxAttempts" /></div>
+                <div class="um-field"><label>Retry delay (seconds)</label><InputNumber class="um-input" @bind-Value="_form.RetryDelaySeconds" /></div>
+                <div class="um-field um-field--full"><label>Provider configuration JSON</label><InputTextArea class="um-input" rows="5" @bind-Value="_form.ConfigurationJson" /></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsConfigured" /> Configuration complete</label></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save Configuration</button></div>
+        </EditForm>
+    </div>
+}
+
+@code {
+    readonly List<ProposalDeliveryProviderDto> _providers = [];
+    CurrentUserContextModel? _currentUser;
+    ProposalDeliveryProviderDto? _editing;
+    ProviderForm _form = new();
+    EnterpriseToast? _toast;
+    bool _loading = true;
+    bool _saving;
+    string? _loadError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Integrations", "/tenant/integrations/health"), new("Proposal Delivery", "/tenant/integrations/proposal-delivery"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            _currentUser ??= await CurrentUser.RequireAsync();
+            _providers.Clear();
+            _providers.AddRange(await Api.GetProposalDeliveryProvidersAsync(_currentUser.TenantId) ?? []);
+        }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    void OpenEdit(ProposalDeliveryProviderDto provider)
+    {
+        _editing = provider;
+        _form = new ProviderForm
+        {
+            EndpointUri = provider.EndpointUri,
+            SenderAddress = provider.SenderAddress,
+            SecretReference = provider.SecretReference,
+            ConfigurationJson = provider.ConfigurationJson,
+            IsConfigured = provider.IsConfigured,
+            IsActive = provider.IsActive,
+            MaxAttempts = provider.MaxAttempts,
+            RetryDelaySeconds = provider.RetryDelaySeconds
+        };
+    }
+
+    void CloseEdit() => _editing = null;
+
+    async Task SaveAsync()
+    {
+        if (_editing is null || _currentUser is null) return;
+        try
+        {
+            _saving = true;
+            await Api.UpdateProposalDeliveryProviderAsync(_editing.ProposalDeliveryProviderId,
+                new(_currentUser.TenantId, _form.EndpointUri, _form.SenderAddress, _form.SecretReference,
+                    _form.ConfigurationJson, _form.IsConfigured, _form.IsActive, _form.MaxAttempts,
+                    _form.RetryDelaySeconds, _currentUser.UserId));
+            CloseEdit();
+            await LoadAsync();
+            await _toast!.ShowAsync(new() { Title = "Saved", Content = "Proposal delivery provider configuration updated.", CssClass = "enterprise-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast!.ShowAsync(new() { Title = "Configuration failed", Content = ex.Message, CssClass = "enterprise-toast-danger" });
+        }
+        finally { _saving = false; }
+    }
+
+    sealed class ProviderForm
+    {
+        [StringLength(1000)] public string? EndpointUri { get; set; }
+        [EmailAddress, StringLength(320)] public string? SenderAddress { get; set; }
+        [StringLength(500)] public string? SecretReference { get; set; }
+        public string? ConfigurationJson { get; set; }
+        public bool IsConfigured { get; set; }
+        public bool IsActive { get; set; } = true;
+        [Range(1, 25)] public int MaxAttempts { get; set; } = 5;
+        [Range(10, 86400)] public int RetryDelaySeconds { get; set; } = 300;
+    }
+}

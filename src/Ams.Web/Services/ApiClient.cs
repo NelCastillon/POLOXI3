@@ -3117,11 +3117,14 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
-    public Task<IReadOnlyList<ProposalWorkflowDto>?> GetSubmissionProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalWorkflowDto>>($"api/submissions/{submissionId}/proposals", cancellationToken);
+    public Task<IReadOnlyList<ProposalWorkflowDto>?> GetSubmissionProposalsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalWorkflowDto>>($"api/submissions/{submissionId}/proposals?tenantId={tenantId}", cancellationToken);
 
-    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<ProposalDto>($"api/submissions/proposals/{proposalId}", cancellationToken);
+    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ProposalDto>($"api/submissions/proposals/{proposalId}?tenantId={tenantId}", cancellationToken);
+
+    public Task<ProposalWorkflowLaunchDto?> GetProposalWorkflowLaunchAsync(Guid opportunityId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ProposalWorkflowLaunchDto>($"api/submissions/opportunities/{opportunityId}/proposal-launch?tenantId={tenantId}", cancellationToken);
 
     public async Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
     {
@@ -3131,11 +3134,34 @@ public sealed partial class ApiClient
         return result!.Id;
     }
 
-    public async Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    public async Task<ProposalDeliveryDispatchDto?> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/deliver", request, cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<ProposalDeliveryDispatchDto>(cancellationToken: cancellationToken);
     }
+
+    public Task<IReadOnlyList<ProposalDeliveryProviderDto>?> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalDeliveryProviderDto>>($"api/submissions/proposal-delivery-providers?tenantId={tenantId}", cancellationToken);
+
+    public async Task UpdateProposalDeliveryProviderAsync(Guid providerId, UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/submissions/proposal-delivery-providers/{providerId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<ProposalDeliveryDispatchDto>?> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalDeliveryDispatchDto>>($"api/submissions/proposals/{proposalId}/deliveries?tenantId={tenantId}", cancellationToken);
+
+    public async Task<ProposalDeliveryDispatchDto?> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposal-deliveries/{dispatchId}/retry", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<ProposalDeliveryDispatchDto>(cancellationToken: cancellationToken);
+    }
+
+    public Task<ProposalBindContinuationDto?> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ProposalBindContinuationDto>($"api/submissions/proposals/{proposalId}/bind-continuation?tenantId={tenantId}", cancellationToken);
 
     public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
     {

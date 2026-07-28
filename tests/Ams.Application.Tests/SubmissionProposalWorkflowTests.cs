@@ -16,6 +16,8 @@ public sealed class SubmissionProposalWorkflowTests
     private static readonly Guid QuoteId = Guid.Parse("44444444-4444-4444-4444-444444444444");
     private static readonly Guid UserId = Guid.Parse("55555555-5555-5555-5555-555555555555");
     private static readonly Guid AccountId = Guid.Parse("66666666-6666-6666-6666-666666666666");
+    private static readonly Guid OpportunityId = Guid.Parse("77777777-7777-7777-7777-777777777777");
+    private static readonly Guid DispatchId = Guid.Parse("88888888-8888-8888-8888-888888888888");
 
     [Fact]
     public async Task GenerateProposalAsync_Forwards_QuoteIds_And_CustomIntroduction()
@@ -39,13 +41,70 @@ public sealed class SubmissionProposalWorkflowTests
         var service = CreateService(repository);
         var request = new ProposalDeliveryRequest(TenantId, "Email", "client@example.com", UserId);
 
-        await service.DeliverProposalAsync(ProposalId, request);
+        var result = await service.DeliverProposalAsync(ProposalId, request);
 
+        Assert.Equal(DispatchId, result.ProposalDeliveryDispatchId);
+        Assert.Equal("Queued", result.StatusCode);
         Assert.Equal(ProposalId, repository.LastDeliveredProposalId);
         Assert.Same(request, repository.LastProposalDeliveryRequest);
         Assert.Equal("Email", repository.LastProposalDeliveryRequest!.DeliveryMethod);
         Assert.Equal("client@example.com", repository.LastProposalDeliveryRequest.Recipient);
         Assert.Equal(UserId, repository.LastProposalDeliveryRequest.SentByUserId);
+    }
+
+    [Fact]
+    public async Task ProposalReads_ForwardTenantScope()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+
+        await service.GetProposalByIdAsync(ProposalId, TenantId);
+        await service.GetProposalsAsync(SubmissionId, TenantId);
+
+        Assert.Equal(TenantId, repository.LastProposalReadTenantId);
+        Assert.Equal(TenantId, repository.LastProposalListTenantId);
+    }
+
+    [Fact]
+    public async Task GetProposalWorkflowLaunchAsync_ForwardsOpportunityAndTenant()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+
+        var result = await service.GetProposalWorkflowLaunchAsync(OpportunityId, TenantId);
+
+        Assert.Equal(OpportunityId, repository.LastLaunchOpportunityId);
+        Assert.Equal(TenantId, repository.LastLaunchTenantId);
+        Assert.Equal(SubmissionId, result.SubmissionId);
+        Assert.True(result.HasProposalReadyQuotes);
+        Assert.Equal("OpenProposalWorkflow", result.NextActionCode);
+    }
+
+    [Fact]
+    public async Task RetryProposalDeliveryAsync_ForwardsTenantAndReturnsQueueState()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new RetryProposalDeliveryRequest(TenantId, UserId);
+
+        var result = await service.RetryProposalDeliveryAsync(DispatchId, request);
+
+        Assert.Equal(DispatchId, repository.LastRetryDispatchId);
+        Assert.Same(request, repository.LastRetryRequest);
+        Assert.Equal("Queued", result.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetProposalBindContinuationAsync_ReturnsPersistedAuthorizationEligibility()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+
+        var result = await service.GetProposalBindContinuationAsync(ProposalId, TenantId);
+
+        Assert.True(result.CanRequestBind);
+        Assert.Equal(QuoteId, result.SelectedQuoteId);
+        Assert.Equal(TenantId, repository.LastBindContinuationTenantId);
     }
 
     [Fact]
@@ -107,6 +166,13 @@ public sealed class SubmissionProposalWorkflowTests
         public Guid? LastDecisionProposalId { get; private set; }
         public ProposalDecisionRequest? LastProposalDecisionRequest { get; private set; }
         public BindPolicyRequest? LastBindPolicyRequest { get; private set; }
+        public Guid? LastProposalReadTenantId { get; private set; }
+        public Guid? LastProposalListTenantId { get; private set; }
+        public Guid? LastLaunchOpportunityId { get; private set; }
+        public Guid? LastLaunchTenantId { get; private set; }
+        public Guid? LastRetryDispatchId { get; private set; }
+        public RetryProposalDeliveryRequest? LastRetryRequest { get; private set; }
+        public Guid? LastBindContinuationTenantId { get; private set; }
 
         public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         {
@@ -114,11 +180,11 @@ public sealed class SubmissionProposalWorkflowTests
             return Task.FromResult(GeneratedProposalId);
         }
 
-        public Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        public Task<ProposalDeliveryDispatchDto> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
         {
             LastDeliveredProposalId = proposalId;
             LastProposalDeliveryRequest = request;
-            return Task.CompletedTask;
+            return Task.FromResult(new ProposalDeliveryDispatchDto { ProposalDeliveryDispatchId = DispatchId, ProposalId = proposalId, TenantId = request.TenantId, StatusCode = "Queued" });
         }
 
         public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
@@ -174,8 +240,38 @@ public sealed class SubmissionProposalWorkflowTests
         public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default) => Task.FromResult<ProposalDto?>(null);
-        public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalWorkflowDto>>([]);
+        public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastProposalReadTenantId = tenantId;
+            return Task.FromResult<ProposalDto?>(new ProposalDto { ProposalId = proposalId, TenantId = tenantId, SubmissionId = SubmissionId });
+        }
+        public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastProposalListTenantId = tenantId;
+            return Task.FromResult<IReadOnlyList<ProposalWorkflowDto>>([]);
+        }
+        public Task<ProposalWorkflowLaunchDto> GetProposalWorkflowLaunchAsync(Guid opportunityId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastLaunchOpportunityId = opportunityId;
+            LastLaunchTenantId = tenantId;
+            return Task.FromResult(new ProposalWorkflowLaunchDto { OpportunityId = opportunityId, TenantId = tenantId, SubmissionId = SubmissionId, HasSubmission = true, HasProposalReadyQuotes = true, ProposalReadyQuoteCount = 1, NextActionCode = "OpenProposalWorkflow" });
+        }
+        public Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalWorkflowOptionDto>>([]);
+        public Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalDeliveryDispatchDto>>([]);
+        public Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        {
+            LastRetryDispatchId = dispatchId;
+            LastRetryRequest = request;
+            return Task.FromResult(new ProposalDeliveryDispatchDto { ProposalDeliveryDispatchId = dispatchId, TenantId = request.TenantId, ProposalId = ProposalId, StatusCode = "Queued" });
+        }
+        public Task<IReadOnlyList<ProposalDeliveryProviderDto>> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalDeliveryProviderDto>>([]);
+        public Task UpdateProposalDeliveryProviderAsync(Guid providerId, UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<ProposalBindContinuationDto> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastBindContinuationTenantId = tenantId;
+            return Task.FromResult(new ProposalBindContinuationDto { ProposalId = proposalId, SubmissionId = SubmissionId, TenantId = tenantId, CanRequestBind = true, SelectedQuoteId = QuoteId, CustomerAuthorizationId = Guid.NewGuid() });
+        }
         public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<AppetiteMatchDto>>([]);
         public Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<PolicyRegisterDto>());
         public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyRegisterDto?>(null);

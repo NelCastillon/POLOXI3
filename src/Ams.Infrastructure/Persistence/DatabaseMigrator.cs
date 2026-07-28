@@ -287,6 +287,7 @@ public sealed partial class DatabaseMigrator
         new("0249_CRM_Lead_PhoneCompliance_CanonicalLinks", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0058_LeadPhoneComplianceCanonicalLinks.sql")),
         new("0250_Client_AccountType_Constraint_Modernization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0059_AccountTypeConstraintModernization.sql")),
         new("0251_Proposal_Renewal_Lifecycle", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0060_ProposalRenewalLifecycle.sql")),
+        new("0252_Proposal_Workflow_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0061_ProposalWorkflowCompletion.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

@@ -441,6 +441,10 @@
 }
 
 @code {
+    [SupplyParameterFromQuery(Name = "submissionId")] public Guid? RequestedSubmissionId { get; set; }
+    [SupplyParameterFromQuery(Name = "proposalId")] public Guid? RequestedProposalId { get; set; }
+    [SupplyParameterFromQuery(Name = "quoteId")] public Guid? RequestedQuoteId { get; set; }
+    [SupplyParameterFromQuery(Name = "authorizationId")] public Guid? RequestedAuthorizationId { get; set; }
     EnterpriseToast? _toast;
     CurrentUserContextModel? _currentUser;
     bool _loading;
@@ -454,6 +458,8 @@
     string _view = "queue";
     BindQueueRow? _selected;
     BindQueueRow? _bindTarget;
+    Guid? _bindProposalId;
+    Guid? _bindCustomerAuthorizationId;
     readonly BindForm _bindForm = new();
     readonly List<BindQueueRow> _rows = [];
     readonly List<PolicyCreationSourceDto> _policySources = [];
@@ -500,6 +506,15 @@
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions & Quotes", "/submissions"), new("Bind Center", "/quotes/bind"));
         await LoadAsync();
+        if (RequestedSubmissionId.HasValue && RequestedQuoteId.HasValue)
+        {
+            var requestedRow = _rows.FirstOrDefault(row => row.SubmissionId == RequestedSubmissionId.Value && row.QuoteId == RequestedQuoteId.Value);
+            if (requestedRow is not null)
+            {
+                _selected = requestedRow;
+                OpenBindDialog(requestedRow, RequestedProposalId, RequestedAuthorizationId);
+            }
+        }
     }
 
     async Task LoadAsync()
@@ -604,7 +619,9 @@
         return groups.Select(g => new BreakdownItem(g.Name, g.Count, max == 0 ? 0 : (decimal)g.Count / max * 100));
     }
 
-    void OpenBindDialog(BindQueueRow row)
+    void OpenBindDialog(BindQueueRow row) => OpenBindDialog(row, null, null);
+
+    void OpenBindDialog(BindQueueRow row, Guid? proposalId, Guid? customerAuthorizationId)
     {
         var source = QuoteBoundSources.FirstOrDefault();
         var status = BindStatusOptions.FirstOrDefault(s => s.IsDefault) ?? BindStatusOptions.FirstOrDefault(s => s.StatusCode == "Pending") ?? BindStatusOptions.FirstOrDefault();
@@ -615,6 +632,8 @@
         }
 
         _bindTarget = row;
+        _bindProposalId = proposalId;
+        _bindCustomerAuthorizationId = customerAuthorizationId;
         var authorizationMethod = _customerAuthorizationMethods.FirstOrDefault(m => m.IsDefault) ?? _customerAuthorizationMethods.FirstOrDefault();
         _bindForm.Reset(row, source.SourceCode, status.StatusCode, authorizationMethod?.OptionCode, CreatesPolicyStatus);
         _showBindDialog = true;
@@ -625,6 +644,8 @@
         if (_actionBusy) return;
         _showBindDialog = false;
         _bindTarget = null;
+        _bindProposalId = null;
+        _bindCustomerAuthorizationId = null;
     }
 
     async Task SelectQuoteAsync(BindQueueRow row)
@@ -670,6 +691,8 @@
                 ApprovedByUserId: _currentUser.UserId,
                 BoundByUserId: CreatesPolicyStatus(_bindForm.BindStatusCode) ? _currentUser.UserId : null,
                 BindStatusCode: _bindForm.BindStatusCode,
+                ProposalId: _bindProposalId,
+                CustomerAuthorizationId: _bindCustomerAuthorizationId,
                 CustomerAuthorizationMethodCode: _bindForm.CustomerAuthorizationMethodCode,
                 CustomerAuthorizationReference: _bindForm.CustomerAuthorizationReference,
                 CustomerAuthorizationNotes: _bindForm.Notes,

@@ -222,6 +222,27 @@ public sealed record ProposalDeliveryRequest(
     string Recipient,
     Guid? SentByUserId);
 
+public sealed record RetryProposalDeliveryRequest(
+    Guid TenantId,
+    Guid? RequestedByUserId);
+
+public sealed record UpdateProposalDeliveryProviderRequest(
+    Guid TenantId,
+    [property: StringLength(1000)]
+    string? EndpointUri,
+    [property: EmailAddress, StringLength(320)]
+    string? SenderAddress,
+    [property: StringLength(500)]
+    string? SecretReference,
+    string? ConfigurationJson,
+    bool IsConfigured,
+    bool IsActive,
+    [property: Range(1, 25)]
+    int MaxAttempts,
+    [property: Range(10, 86400)]
+    int RetryDelaySeconds,
+    Guid? ModifiedByUserId);
+
 public sealed record ProposalPresentationRequest(
     Guid TenantId,
     [property: StringLength(1000)]

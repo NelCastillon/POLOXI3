@@ -194,11 +194,14 @@ public sealed class SubmissionService : ISubmissionService
     public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
         => _repository.SelectQuoteAsync(submissionId, request, cancellationToken);
 
-    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
-        => _repository.GetProposalByIdAsync(proposalId, cancellationToken);
+    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalByIdAsync(proposalId, tenantId, cancellationToken);
 
-    public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, CancellationToken cancellationToken = default)
-        => _repository.GetProposalsAsync(submissionId, cancellationToken);
+    public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalsAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<ProposalWorkflowLaunchDto> GetProposalWorkflowLaunchAsync(Guid opportunityId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalWorkflowLaunchAsync(opportunityId, tenantId, cancellationToken);
 
     public Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetProposalWorkflowOptionsAsync(tenantId, cancellationToken);
@@ -206,14 +209,29 @@ public sealed class SubmissionService : ISubmissionService
     public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         => _repository.GenerateProposalAsync(request, cancellationToken);
 
-    public Task DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    public Task<ProposalDeliveryDispatchDto> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
         => _repository.DeliverProposalAsync(proposalId, request, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveriesAsync(proposalId, tenantId, cancellationToken);
+
+    public Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.RetryProposalDeliveryAsync(dispatchId, request, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalDeliveryProviderDto>> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveryProvidersAsync(tenantId, cancellationToken);
+
+    public Task UpdateProposalDeliveryProviderAsync(Guid providerId, UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateProposalDeliveryProviderAsync(providerId, request, cancellationToken);
 
     public Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
         => _repository.PresentProposalAsync(proposalId, request, cancellationToken);
 
     public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
         => _repository.RecordProposalDecisionAsync(proposalId, request, cancellationToken);
+
+    public Task<ProposalBindContinuationDto> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalBindContinuationAsync(proposalId, tenantId, cancellationToken);
 
     public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default)
         => _repository.SearchAppetiteAsync(request, cancellationToken);

@@ -33,7 +33,7 @@ else
     <div class="um-card mb-3">
         <div class="um-card-header"><div><h2>Submission</h2><p>@_submission?.SubmissionNumber · @_submission?.AccountName · @_submission?.LineOfBusiness</p></div></div>
         <div class="um-card-body d-flex gap-2 flex-wrap">
-            <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any())"><i class="bi bi-plus-lg"></i> Generate Proposal</button>
+            <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any(x => x.IsProposalReady))"><i class="bi bi-plus-lg"></i> Generate Proposal</button>
             <button class="um-btn um-btn-ghost" @onclick="OpenQuoteComparison"><i class="bi bi-columns-gap"></i> Compare Quotes</button>
             <button class="um-btn um-btn-ghost" @onclick="GoBack"><i class="bi bi-journal-text"></i> Submission</button>
         </div>
@@ -57,13 +57,18 @@ else
                             <tr @ondblclick="() => ViewAsync(item.ProposalId)">
                                 <td><strong>@item.Title</strong><div class="text-muted small">@item.DocumentFileName</div></td>
                                 <td><span class="um-status-pill">@item.Status</span></td>
-                                <td>@(item.SentDateUtc?.ToLocalTime().ToString("g") ?? "Not delivered")<div class="text-muted small">@item.DeliveryMethod @item.Recipient</div></td>
+                                <td><span class="um-status-pill">@(item.DeliveryStatus ?? "Not queued")</span><div class="text-muted small">@item.DeliveryMethod @item.Recipient</div></td>
                                 <td>@(item.ClientDecision ?? "Pending")</td>
                                 <td class="text-end">
                                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewAsync(item.ProposalId)"><i class="bi bi-eye"></i> View</button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Generated"))" @onclick="() => OpenDeliver(item)"><i class="bi bi-send"></i> Deliver</button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!CanQueueDelivery(item))" @onclick="() => OpenDeliver(item)"><i class="bi bi-send"></i> Deliver</button>
+                                    @if (item.LastDeliveryDispatchId.HasValue && item.DeliveryStatus is "Configuration Required" or "Failed")
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryAsync(item.LastDeliveryDispatchId.Value)"><i class="bi bi-arrow-repeat"></i> Retry</button>
+                                    }
                                     <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Delivered"))" @onclick="() => PresentAsync(item)"><i class="bi bi-person-video3"></i> Present</button>
                                     <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Presented"))" @onclick="() => OpenDecision(item)"><i class="bi bi-check2-circle"></i> Decision</button>
+                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Accepted"))" @onclick="() => RequestBindAsync(item)"><i class="bi bi-shield-check"></i> Request Bind</button>
                                 </td>
                             </tr>
                         }
@@ -92,6 +97,20 @@ else
                         {
                             <div class="border-start ps-2 mb-2"><strong>@evt.EventCode</strong><div class="small">@evt.EventDateUtc.ToLocalTime().ToString("g")</div><div class="small text-muted">@evt.EventDetail</div></div>
                         }
+                        <h3 class="h6 mt-3">Delivery Dispatches</h3>
+                        @if (_selected.Deliveries.Count == 0)
+                        {
+                            <div class="small text-muted">No delivery has been queued.</div>
+                        }
+                        @foreach (var delivery in _selected.Deliveries)
+                        {
+                            <div class="border rounded p-2 mb-2">
+                                <strong>@delivery.ProviderName</strong><span class="um-status-pill ms-2">@delivery.StatusCode</span>
+                                <div class="small">@delivery.Recipient · Attempt @delivery.AttemptCount of @delivery.MaxAttempts</div>
+                                @if (!string.IsNullOrWhiteSpace(delivery.ErrorMessage)) { <div class="small text-danger">@delivery.ErrorMessage</div> }
+                                @if (delivery.CanRetry) { <button class="um-btn um-btn-ghost um-btn-sm mt-1" @onclick="() => RetryAsync(delivery.ProposalDeliveryDispatchId)"><i class="bi bi-arrow-repeat"></i> Retry</button> }
+                            </div>
+                        }
                     </div>
                 </div>
             </div>
@@ -110,11 +129,11 @@ else
                 {
                     <div class="um-form-field"><label>Title</label><InputText class="form-control" @bind-Value="_form.Title" /></div>
                     <div class="um-form-field um-form-field--full"><label>Introduction</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Notes" /></div>
-                    <div class="um-form-field um-form-field--full"><label>Quotes</label>@foreach (var quote in _quotes){<label class="d-block"><input type="checkbox" checked="@_form.QuoteIds.Contains(quote.QuoteId)" @onchange="e => ToggleQuote(quote.QuoteId, (bool)e.Value!)" /> @quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</label>}</div>
+                    <div class="um-form-field um-form-field--full"><label>Quotes</label>@foreach (var quote in _quotes.Where(x => x.IsProposalReady)){<label class="d-block"><input type="checkbox" checked="@_form.QuoteIds.Contains(quote.QuoteId)" @onchange="e => ToggleQuote(quote.QuoteId, (bool)e.Value!)" /> @quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</label>}</div>
                 }
                 else if (_dialog == "Deliver Proposal")
                 {
-                    <div class="um-form-field"><label>Delivery Method</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("DeliveryMethod")){<option value="@option.OptionCode">@option.DisplayName</option>}</InputSelect></div>
+                    <div class="um-form-field"><label>Delivery Method</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("DeliveryMethod")){<option value="@option.OptionCode">@option.DisplayName@(option.IsProviderConfigured ? "" : " — configuration required")</option>}</InputSelect></div>
                     <div class="um-form-field"><label>Recipient</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
                 }
                 else
@@ -141,15 +160,18 @@ else
     ProposalDto? _selected; ProposalWorkflowDto? _target; Ams.Web.Services.CurrentUserContextModel? _currentUser; EnterpriseToast? _toast; bool _loading=true,_saving; string? _loadError,_dialog; FormModel _form=new();
 
     protected override async Task OnInitializedAsync(){ Breadcrumbs.SetCrumbs(new("Home","/"),new("Submissions","/submissions"),new("Submission",$"/submissions/{SubmissionId}"),new("Proposal Workflow",$"/quotes/proposal/{SubmissionId}")); await LoadAsync(); }
-    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList(); if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
+    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_currentUser.TenantId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList(); if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId,_currentUser.TenantId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
     RenderFragment Kpi(string label,string value,string icon)=>b=>{b.OpenElement(0,"div");b.AddAttribute(1,"class","pc-kpi-card");b.AddMarkupContent(2,$"<i class='bi {icon}'></i><strong>{value}</strong><span>{label}</span>");b.CloseElement();};
     IEnumerable<ProposalWorkflowOptionDto> Options(string group)=>_options.Where(x=>x.OptionGroupCode==group).OrderBy(x=>x.SortOrder);
     static bool HasStatus(ProposalWorkflowDto item, string status) => string.Equals(item.Status, status, StringComparison.OrdinalIgnoreCase);
+    static bool CanQueueDelivery(ProposalWorkflowDto item) => HasStatus(item,"Generated") && string.IsNullOrWhiteSpace(item.DeliveryStatus);
     void OpenGenerate(){_target=null;_form=new(){Title=$"{_submission?.AccountName} Insurance Proposal",QuoteIds=_quotes.Where(x=>x.IsProposalReady).Select(x=>x.QuoteId).ToHashSet()};_dialog="Generate Proposal";}
     void OpenDeliver(ProposalWorkflowDto item){_target=item;_form=new(){OptionCode=Options("DeliveryMethod").FirstOrDefault(x=>x.IsDefault)?.OptionCode??Options("DeliveryMethod").FirstOrDefault()?.OptionCode??"",Recipient=item.Recipient??""};_dialog="Deliver Proposal";}
     async Task OpenDecision(ProposalWorkflowDto item){await ViewAsync(item.ProposalId);_target=item;_form=new(){OptionCode=Options("Decision").FirstOrDefault()?.OptionCode??"Accepted",SelectedQuoteId=_selected?.Quotes.FirstOrDefault(x=>x.IsSelected)?.QuoteId??_selected?.Quotes.FirstOrDefault()?.QuoteId,AuthorizationMethodCode=_authorizationMethods.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorizationMethods.FirstOrDefault()?.OptionCode??""};_dialog="Customer Decision";}
-    async Task ViewAsync(Guid id)=>_selected=await Api.GetProposalByIdAsync(id);
+    async Task ViewAsync(Guid id){var user=_currentUser??=await CurrentUser.RequireAsync();_selected=await Api.GetProposalByIdAsync(id,user.TenantId);}
     async Task PresentAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.PresentProposalAsync(item.ProposalId,new(user.TenantId,"Proposal presented to customer.",user.UserId));await LoadAsync();await Success("Proposal presented.");}catch(Exception ex){await Error(ex.Message);}}
+    async Task RetryAsync(Guid dispatchId){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.RetryProposalDeliveryAsync(dispatchId,new(user.TenantId,user.UserId));await LoadAsync();await Success("Proposal delivery retry requested.");}catch(Exception ex){await Error(ex.Message);}}
+    async Task RequestBindAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();var continuation=await Api.GetProposalBindContinuationAsync(item.ProposalId,user.TenantId);if(continuation?.CanRequestBind!=true||!continuation.SelectedQuoteId.HasValue||!continuation.CustomerAuthorizationId.HasValue){await Error(continuation?.BlockingReason??"Proposal is not ready for binding.");return;}Nav.NavigateTo($"/quotes/bind?submissionId={continuation.SubmissionId}&proposalId={continuation.ProposalId}&quoteId={continuation.SelectedQuoteId.Value}&authorizationId={continuation.CustomerAuthorizationId.Value}");}catch(Exception ex){await Error(ex.Message);}}
     async Task SaveDialogAsync(){try{_saving=true;var user=_currentUser??=await CurrentUser.RequireAsync();if(_dialog=="Generate Proposal")await Api.GenerateProposalAsync(new(SubmissionId,user.TenantId,_form.Title,_form.QuoteIds.ToArray(),_form.Notes,user.UserId));else if(_dialog=="Deliver Proposal"&&_target is not null)await Api.DeliverProposalAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Recipient,user.UserId));else if(_target is not null)await Api.RecordProposalDecisionAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Notes,user.UserId,_form.SelectedQuoteId,_form.AuthorizationMethodCode,_form.Recipient,_form.AuthorizedByName,DateTime.UtcNow));CloseDialog();await LoadAsync();await Success("Proposal workflow updated.");}catch(Exception ex){await Error(ex.Message);}finally{_saving=false;}}
     void ToggleQuote(Guid id,bool selected){if(selected)_form.QuoteIds.Add(id);else _form.QuoteIds.Remove(id);} void CloseDialog(){_dialog=null;_target=null;} void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}"); void OpenQuoteComparison()=>Nav.NavigateTo($"/quotes/compare/{SubmissionId}");
     Task Success(string text)=>_toast!.ShowAsync(new(){Title="Success",Content=text,CssClass="enterprise-toast-success"}); Task Error(string text)=>_toast!.ShowAsync(new(){Title="Error",Content=text,CssClass="enterprise-toast-danger"});

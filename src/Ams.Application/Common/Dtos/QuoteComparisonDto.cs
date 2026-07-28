@@ -60,6 +60,8 @@ public sealed class ProposalWorkflowDto
     public string Status { get; set; } = string.Empty;
     public string? DeliveryMethod { get; set; }
     public string? Recipient { get; set; }
+    public string? DeliveryStatus { get; set; }
+    public Guid? LastDeliveryDispatchId { get; set; }
     public DateTime? SentDateUtc { get; set; }
     public string? ClientDecision { get; set; }
     public string? DecisionNotes { get; set; }
