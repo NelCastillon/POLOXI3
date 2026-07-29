@@ -234,6 +234,7 @@ OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting 
     {
         using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(responseText) ? "{}" : responseText);
         var root = document.RootElement;
+        var lines = ReadRatingLines(root);
 
         return new ApiRatingResponse(
             Status: ReadString(root, "status") ?? ReadString(root, "quoteStatus") ?? "Received",
@@ -255,14 +256,59 @@ OUTER APPLY (SELECT TOP 1 SettingValue, DefaultValue FROM Agency.CarrierSetting 
             EffectiveDate: ReadDateTime(root, "effectiveDate"),
             CoverageForms: ReadString(root, "coverageForms"),
             IsBindable: ReadBool(root, "isBindable") ?? false,
+            Lines: lines,
             RawPayloadJson: responseText,
             CarrierReferenceNumber: ReadString(root, "carrierReferenceNumber") ?? ReadString(root, "referenceNumber") ?? $"API-{transmission.CarrierTransmissionId:N}"[..20]);
+    }
+
+    private static IReadOnlyList<ApiRatingLineResponse> ReadRatingLines(JsonElement root)
+    {
+        if (!root.TryGetProperty("lines", out var linesElement) || linesElement.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var lines = new List<ApiRatingLineResponse>();
+        var sortOrder = 0;
+        foreach (var item in linesElement.EnumerateArray())
+        {
+            var submissionLineIdText = ReadString(item, "submissionLineId");
+            if (!Guid.TryParse(submissionLineIdText, out var submissionLineId))
+                throw new InvalidOperationException("Every API rating line must include a valid submissionLineId.");
+
+            if (lines.Any(line => line.SubmissionLineId == submissionLineId))
+                throw new InvalidOperationException($"API rating response contains duplicate submission line '{submissionLineId}'.");
+
+            lines.Add(new ApiRatingLineResponse(
+                submissionLineId,
+                ReadString(item, "lineOfBusiness"),
+                ReadString(item, "status"),
+                ReadDecimal(item, "quotedPremium") ?? ReadDecimal(item, "premium") ?? 0m,
+                ReadDecimal(item, "deductible"),
+                ReadDecimal(item, "limit"),
+                ReadDecimal(item, "commissionPercent"),
+                ReadString(item, "coverageForms"),
+                ReadString(item, "subjectivities"),
+                ReadString(item, "exclusions"),
+                ReadString(item, "paymentTerms"),
+                ReadDecimal(item, "minimumEarnedPremium"),
+                ReadDecimal(item, "taxesAndFees"),
+                ReadDecimal(item, "brokerFee"),
+                ReadBool(item, "triaIncluded"),
+                ReadBool(item, "isBindable") ?? false,
+                ReadString(item, "coverageNotes") ?? ReadString(item, "notes"),
+                sortOrder++));
+        }
+
+        return lines;
     }
 
     private static async Task PersistSuccessfulRatingAsync(ISqlConnectionFactory connectionFactory, ApiRatingTransmission transmission, ApiRatingResponse rating, CancellationToken cancellationToken)
     {
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         const string sql = @"
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRANSACTION;
+
 DECLARE @QuoteId UNIQUEIDENTIFIER = NEWID();
 DECLARE @QuoteRequestId UNIQUEIDENTIFIER = (
     SELECT TOP 1 QuoteRequestId
@@ -282,6 +328,21 @@ BEGIN
         (@QuoteRequestId, @TenantId, @SubmissionId, @SubmissionMarketId, @CarrierId, N'InitialRequest', N'ApiRating', N'API', N'Package', 1, N'Submitted', SYSUTCDATETIME(), DATEADD(day, 1, SYSUTCDATETIME()), CONCAT(N'QR-', CONVERT(NVARCHAR(36), @QuoteRequestId)), SYSUTCDATETIME(), 0);
 END;
 
+DECLARE @SuppliedLineCount INT = (SELECT COUNT(1) FROM OPENJSON(COALESCE(NULLIF(@LineTermsJson, N''), N'[]')));
+DECLARE @EligibleLineCount INT =
+(
+    SELECT COUNT(1)
+    FROM Submissions.SubmissionLine sl
+    WHERE sl.SubmissionId = @SubmissionId
+      AND sl.TenantId = @TenantId
+      AND sl.IsDeleted = 0
+      AND (NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarketLine sml WHERE sml.SubmissionMarketId = @SubmissionMarketId AND sml.IsDeleted = 0)
+           OR EXISTS (SELECT 1 FROM Submissions.SubmissionMarketLine sml WHERE sml.SubmissionMarketId = @SubmissionMarketId AND sml.SubmissionLineId = sl.SubmissionLineId AND sml.IsDeleted = 0))
+);
+
+IF @SuppliedLineCount > 0 AND @SuppliedLineCount <> @EligibleLineCount
+    THROW 52120, 'API rating response must include every eligible submission line exactly once.', 1;
+
 INSERT INTO Submissions.Quote
     (QuoteId, SubmissionId, SubmissionMarketId, QuoteRequestId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CommissionPercent,
      Subjectivities, Exclusions, CarrierRating, PaymentTerms, MinimumEarnedPremium, TaxesAndFees, BrokerFee, TriaIncluded,
@@ -294,6 +355,96 @@ VALUES
      @MinimumEarnedPremium, @TaxesAndFees, @BrokerFee, @TriaIncluded, @EffectiveDate, @CoverageForms, @IsBindable, @CoverageNotes,
      SYSUTCDATETIME(), @ExpiresDateUtc, (SELECT RequestedDateUtc FROM Submissions.QuoteRequest WHERE QuoteRequestId = @QuoteRequestId), SYSUTCDATETIME(), 1,
      N'Api', @CarrierReferenceNumber, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+
+INSERT INTO Submissions.QuoteLine
+    (QuoteLineId, TenantId, QuoteId, SubmissionId, SubmissionLineId, OpportunityLineId, LineOfBusiness, QuotedPremium,
+     Deductible, [Limit], CommissionPercent, CoverageForms, Subjectivities, Exclusions, PaymentTerms, MinimumEarnedPremium,
+     TaxesAndFees, BrokerFee, TriaIncluded, IsBindable, CoverageNotes, Status, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), @TenantId, @QuoteId, @SubmissionId, sl.SubmissionLineId, sl.OpportunityLineId,
+       COALESCE(NULLIF(source.LineOfBusiness, N''), sl.LineOfBusiness), source.QuotedPremium,
+       source.Deductible, source.[Limit], source.CommissionPercent, source.CoverageForms, source.Subjectivities, source.Exclusions,
+       source.PaymentTerms, source.MinimumEarnedPremium, source.TaxesAndFees, source.BrokerFee, source.TriaIncluded,
+       source.IsBindable, source.CoverageNotes, COALESCE(NULLIF(source.Status, N''), @Status), source.SortOrder, SYSUTCDATETIME(), 0
+FROM OPENJSON(COALESCE(NULLIF(@LineTermsJson, N''), N'[]'))
+WITH
+(
+    SubmissionLineId UNIQUEIDENTIFIER N'$.SubmissionLineId',
+    LineOfBusiness NVARCHAR(100) N'$.LineOfBusiness',
+    Status NVARCHAR(50) N'$.Status',
+    QuotedPremium DECIMAL(18,2) N'$.QuotedPremium',
+    Deductible DECIMAL(18,2) N'$.Deductible',
+    [Limit] DECIMAL(18,2) N'$.Limit',
+    CommissionPercent DECIMAL(9,4) N'$.CommissionPercent',
+    CoverageForms NVARCHAR(2000) N'$.CoverageForms',
+    Subjectivities NVARCHAR(2000) N'$.Subjectivities',
+    Exclusions NVARCHAR(2000) N'$.Exclusions',
+    PaymentTerms NVARCHAR(200) N'$.PaymentTerms',
+    MinimumEarnedPremium DECIMAL(18,2) N'$.MinimumEarnedPremium',
+    TaxesAndFees DECIMAL(18,2) N'$.TaxesAndFees',
+    BrokerFee DECIMAL(18,2) N'$.BrokerFee',
+    TriaIncluded BIT N'$.TriaIncluded',
+    IsBindable BIT N'$.IsBindable',
+    CoverageNotes NVARCHAR(1000) N'$.CoverageNotes',
+    SortOrder INT N'$.SortOrder'
+) source
+JOIN Submissions.SubmissionLine sl ON sl.SubmissionLineId = source.SubmissionLineId AND sl.SubmissionId = @SubmissionId AND sl.TenantId = @TenantId AND sl.IsDeleted = 0;
+
+IF @SuppliedLineCount > 0 AND (SELECT COUNT(1) FROM Submissions.QuoteLine WHERE QuoteId = @QuoteId AND IsDeleted = 0) <> @SuppliedLineCount
+    THROW 52121, 'API rating response contains a line that is not eligible for this submission market.', 1;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine WHERE QuoteId = @QuoteId AND IsDeleted = 0)
+BEGIN
+    ;WITH CandidateLines AS
+    (
+        SELECT sl.SubmissionLineId, sl.OpportunityLineId, sl.LineOfBusiness, sl.TargetPremium,
+               ROW_NUMBER() OVER (ORDER BY sl.LineOfBusiness, sl.SubmissionLineId) AS SortOrder,
+               SUM(CASE WHEN sl.TargetPremium > 0 THEN sl.TargetPremium ELSE 0 END) OVER () AS TotalTargetPremium,
+               COUNT(1) OVER () AS LineCount
+        FROM Submissions.SubmissionLine sl
+        WHERE sl.SubmissionId = @SubmissionId
+          AND sl.TenantId = @TenantId
+          AND sl.IsDeleted = 0
+          AND (NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarketLine sml WHERE sml.SubmissionMarketId = @SubmissionMarketId AND sml.IsDeleted = 0)
+               OR EXISTS (SELECT 1 FROM Submissions.SubmissionMarketLine sml WHERE sml.SubmissionMarketId = @SubmissionMarketId AND sml.SubmissionLineId = sl.SubmissionLineId AND sml.IsDeleted = 0))
+    )
+    INSERT INTO Submissions.QuoteLine
+        (QuoteLineId, TenantId, QuoteId, SubmissionId, SubmissionLineId, OpportunityLineId, LineOfBusiness, QuotedPremium,
+         Deductible, [Limit], CommissionPercent, CoverageForms, Subjectivities, Exclusions, PaymentTerms, MinimumEarnedPremium,
+         TaxesAndFees, BrokerFee, TriaIncluded, IsBindable, CoverageNotes, Status, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), @TenantId, @QuoteId, @SubmissionId, line.SubmissionLineId, line.OpportunityLineId, line.LineOfBusiness,
+           ROUND(CASE WHEN line.TotalTargetPremium > 0 THEN @AnnualPremium * line.TargetPremium / line.TotalTargetPremium
+                      ELSE @AnnualPremium / NULLIF(line.LineCount, 0) END, 2),
+           @Deductible, @Limit, @CommissionPercent, @CoverageForms, @Subjectivities, @Exclusions, @PaymentTerms,
+           @MinimumEarnedPremium, @TaxesAndFees, @BrokerFee, @TriaIncluded, @IsBindable, @CoverageNotes, @Status,
+           line.SortOrder, SYSUTCDATETIME(), 0
+    FROM CandidateLines line;
+END;
+
+IF EXISTS (SELECT 1 FROM Submissions.QuoteLine WHERE QuoteId = @QuoteId AND IsDeleted = 0)
+BEGIN
+    UPDATE q
+    SET AnnualPremium = totals.AnnualPremium,
+        Deductible = totals.Deductible,
+        [Limit] = totals.[Limit],
+        CommissionPercent = totals.CommissionPercent,
+        TaxesAndFees = totals.TaxesAndFees,
+        BrokerFee = totals.BrokerFee,
+        MinimumEarnedPremium = totals.MinimumEarnedPremium,
+        TriaIncluded = totals.TriaIncluded,
+        IsBindable = totals.IsBindable,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.Quote q
+    CROSS APPLY
+    (
+        SELECT SUM(QuotedPremium) AnnualPremium, SUM(Deductible) Deductible, SUM([Limit]) [Limit],
+               CASE WHEN SUM(QuotedPremium) > 0 THEN SUM(COALESCE(CommissionPercent, 0) * QuotedPremium) / SUM(QuotedPremium) ELSE AVG(CommissionPercent) END CommissionPercent,
+               SUM(TaxesAndFees) TaxesAndFees, SUM(BrokerFee) BrokerFee, SUM(MinimumEarnedPremium) MinimumEarnedPremium,
+               CAST(CASE WHEN COUNT(TriaIncluded) = COUNT(1) AND MIN(CONVERT(int, TriaIncluded)) = 1 THEN 1 WHEN COUNT(TriaIncluded) = 0 THEN NULL ELSE 0 END AS bit) TriaIncluded,
+               CAST(CASE WHEN MIN(CONVERT(int, IsBindable)) = 1 THEN 1 ELSE 0 END AS bit) IsBindable
+        FROM Submissions.QuoteLine WHERE QuoteId = @QuoteId AND IsDeleted = 0
+    ) totals
+    WHERE q.QuoteId = @QuoteId;
+END;
 
 INSERT INTO Submissions.CarrierInboundResponse
     (CarrierInboundResponseId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, CarrierTransmissionId, SourceChannelCode, ResponseTypeCode, StatusCode,
@@ -357,7 +508,14 @@ VALUES
 INSERT INTO Submissions.SubmissionActionLog
     (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES
-    (NEWID(), @SubmissionId, @TenantId, N'ApiRatingQuoteReceived', N'API rating connector returned and persisted quote terms.', SYSUTCDATETIME(), N'Quote', @QuoteId, N'ApiRatingConnectorWorker', 0);";
+    (NEWID(), @SubmissionId, @TenantId, N'ApiRatingQuoteReceived', N'API rating connector returned and persisted quote terms.', SYSUTCDATETIME(), N'Quote', @QuoteId, N'ApiRatingConnectorWorker', 0);
+
+COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    THROW;
+END CATCH;";
 
         await cn.ExecuteAsync(new CommandDefinition(sql, new
         {
@@ -386,7 +544,8 @@ VALUES
             rating.CoverageNotes,
             rating.ExpiresDateUtc,
             rating.CarrierReferenceNumber,
-            rating.RawPayloadJson
+            rating.RawPayloadJson,
+            LineTermsJson = JsonSerializer.Serialize(rating.Lines, JsonOptions)
         }, cancellationToken: cancellationToken));
     }
 
@@ -764,6 +923,27 @@ WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;";
         DateTime? EffectiveDate,
         string? CoverageForms,
         bool IsBindable,
+        IReadOnlyList<ApiRatingLineResponse> Lines,
         string RawPayloadJson,
         string CarrierReferenceNumber);
+
+    private sealed record ApiRatingLineResponse(
+        Guid SubmissionLineId,
+        string? LineOfBusiness,
+        string? Status,
+        decimal QuotedPremium,
+        decimal? Deductible,
+        decimal? Limit,
+        decimal? CommissionPercent,
+        string? CoverageForms,
+        string? Subjectivities,
+        string? Exclusions,
+        string? PaymentTerms,
+        decimal? MinimumEarnedPremium,
+        decimal? TaxesAndFees,
+        decimal? BrokerFee,
+        bool? TriaIncluded,
+        bool IsBindable,
+        string? CoverageNotes,
+        int SortOrder);
 }

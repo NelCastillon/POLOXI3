@@ -7,6 +7,7 @@ public sealed class ProposalDto
     public Guid TenantId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string GovernanceStatusCode { get; set; } = string.Empty;
     public int VersionNumber { get; set; }
     public string? PdfUrl { get; set; }
     public string? HtmlContent { get; set; }
@@ -22,6 +23,15 @@ public sealed class ProposalDto
     public DateTime? DecisionDateUtc { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? GeneratedDateUtc { get; set; }
+    public DateTime? ApprovedDateUtc { get; set; }
+    public Guid? ApprovedByUserId { get; set; }
+    public int? ApprovalVersionNumber { get; set; }
+    public string? ApprovedSnapshotHash { get; set; }
+    public DateTime? ReadyToDeliverDateUtc { get; set; }
+    public DateTime? DeliveryConfirmedDateUtc { get; set; }
+    public ProposalReviewDto? CurrentReview { get; set; }
+    public IReadOnlyList<ProposalRecipientDto> Recipients { get; set; } = [];
+    public IReadOnlyList<ProposalESignEnvelopeDto> ESignEnvelopes { get; set; } = [];
     public IReadOnlyList<ProposalQuoteDto> Quotes { get; set; } = [];
     public IReadOnlyList<ProposalLifecycleEventDto> Events { get; set; } = [];
     public IReadOnlyList<ProposalDeliveryDispatchDto> Deliveries { get; set; } = [];
@@ -56,15 +66,82 @@ public sealed class ProposalDeliveryDispatchDto
     public string ProviderName { get; set; } = string.Empty;
     public string Recipient { get; set; } = string.Empty;
     public string StatusCode { get; set; } = string.Empty;
+    public int ProposalVersionNumber { get; set; }
     public int AttemptCount { get; set; }
     public int MaxAttempts { get; set; }
     public DateTime? NextAttemptDateUtc { get; set; }
     public DateTime? CompletedDateUtc { get; set; }
+    public DateTime? FirstViewedDateUtc { get; set; }
+    public DateTime? LastViewedDateUtc { get; set; }
+    public DateTime? DownloadedDateUtc { get; set; }
+    public DateTime? SignedDateUtc { get; set; }
+    public DateTime? DeclinedDateUtc { get; set; }
+    public DateTime? ExpiredDateUtc { get; set; }
+    public DateTime? BouncedDateUtc { get; set; }
+    public DateTime? CancelledDateUtc { get; set; }
     public string? ExternalDeliveryId { get; set; }
     public string? ErrorCode { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public bool CanRetry { get; set; }
+}
+
+public sealed class ProposalReviewDto
+{
+    public Guid ProposalReviewId { get; set; }
+    public Guid ProposalId { get; set; }
+    public int ProposalVersionNumber { get; set; }
+    public int ReviewRound { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public Guid AssignedReviewerUserId { get; set; }
+    public string AssignedReviewerName { get; set; } = string.Empty;
+    public DateTime RequestedDateUtc { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public DateTime? CompletedDateUtc { get; set; }
+    public string? DecisionNotes { get; set; }
+}
+
+public sealed class ProposalRecipientDto
+{
+    public Guid ProposalRecipientId { get; set; }
+    public Guid ProposalId { get; set; }
+    public Guid? ContactId { get; set; }
+    public string RecipientTypeCode { get; set; } = string.Empty;
+    public string RecipientName { get; set; } = string.Empty;
+    public string RecipientEmail { get; set; } = string.Empty;
+    public int SigningOrder { get; set; }
+    public bool IsPrimary { get; set; }
+    public bool IsSigner { get; set; }
+}
+
+public sealed class ProposalESignEnvelopeDto
+{
+    public Guid ProposalESignEnvelopeId { get; set; }
+    public Guid ProposalId { get; set; }
+    public int ProposalVersionNumber { get; set; }
+    public Guid ProposalDeliveryDispatchId { get; set; }
+    public Guid? ESignRequestId { get; set; }
+    public string ProviderCode { get; set; } = string.Empty;
+    public string ExternalEnvelopeId { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public DateTime? SentDateUtc { get; set; }
+    public DateTime? DeliveredDateUtc { get; set; }
+    public DateTime? FirstViewedDateUtc { get; set; }
+    public DateTime? CompletedDateUtc { get; set; }
+    public Guid? SignedDocumentId { get; set; }
+    public Guid? CertificateDocumentId { get; set; }
+}
+
+public sealed class ProposalSlaPolicyDto
+{
+    public Guid ProposalSlaPolicyId { get; set; }
+    public Guid TenantId { get; set; }
+    public string EventCode { get; set; } = string.Empty;
+    public int DueAfterMinutes { get; set; }
+    public int? EscalateAfterMinutes { get; set; }
+    public string PriorityCode { get; set; } = string.Empty;
+    public string? AssignedRoleCode { get; set; }
+    public bool IsActive { get; set; }
 }
 
 public sealed class ProposalWorkflowLaunchDto

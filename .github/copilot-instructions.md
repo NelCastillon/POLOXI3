@@ -32,6 +32,8 @@
 - **When fixing UI/CSS issues, prefer removing the source CSS/markup that causes the problem instead of adding compensating overrides; if a style is not working because of overlap, remove the conflicting old CSS first.** User strongly prefers removal-based fixes over adding overrides; avoid using stronger CSS overrides like !important to compensate for conflicts, and remove/narrow conflicting CSS at the source instead.
 - Implement enterprise features using database-backed data only: no mock or hardcoded operational data; add or update tables and configuration/reference seeds as needed; synchronize all existing data into the authoritative model.
 - When adding platform pages or related workflows, also add discoverable navigation entries in NavSidebar under the correct functional section, including relevant portal and hub-center links.
+- **Enterprise-facing pages should be polished and support both light and dark application themes.** Keep headers compact and ensure all text has strong contrast in the light theme.
+- In light theme, secondary buttons placed on pale or gradient headers must use dark text and a visibly contrasting border/background rather than white text.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.

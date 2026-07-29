@@ -66,6 +66,18 @@ public sealed class SubmissionProposalWorkflowTests
     }
 
     [Fact]
+    public async Task GetQuoteByIdAsync_ForwardsTenantScope()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+
+        await service.GetQuoteByIdAsync(QuoteId, TenantId);
+
+        Assert.Equal(QuoteId, repository.LastQuoteReadId);
+        Assert.Equal(TenantId, repository.LastQuoteReadTenantId);
+    }
+
+    [Fact]
     public async Task GetProposalWorkflowLaunchAsync_ForwardsOpportunityAndTenant()
     {
         var repository = new FakeSubmissionRepository();
@@ -108,19 +120,36 @@ public sealed class SubmissionProposalWorkflowTests
     }
 
     [Fact]
-    public async Task RecordProposalDecisionAsync_Forwards_Decision_Metadata()
+    public async Task SubmitAndDecideProposalReviewAsync_Forwards_Governance_Metadata()
     {
         var repository = new FakeSubmissionRepository();
         var service = CreateService(repository);
-        var request = new ProposalDecisionRequest(TenantId, "Accepted", "Client approved selected option.", UserId);
+        var reviewerId = Guid.NewGuid();
+        var submitRequest = new SubmitProposalReviewRequest(TenantId, reviewerId, "Review requested.", DateTime.UtcNow.AddDays(1), UserId);
+        var decisionRequest = new DecideProposalReviewRequest(TenantId, "Approved", "Approved for delivery.", UserId);
 
-        await service.RecordProposalDecisionAsync(ProposalId, request);
+        await service.SubmitProposalReviewAsync(ProposalId, submitRequest);
+        await service.DecideProposalReviewAsync(ProposalId, decisionRequest);
 
-        Assert.Equal(ProposalId, repository.LastDecisionProposalId);
-        Assert.Same(request, repository.LastProposalDecisionRequest);
-        Assert.Equal("Accepted", repository.LastProposalDecisionRequest!.Decision);
-        Assert.Equal("Client approved selected option.", repository.LastProposalDecisionRequest.DecisionNotes);
-        Assert.Equal(UserId, repository.LastProposalDecisionRequest.DecidedByUserId);
+        Assert.Equal(ProposalId, repository.LastReviewProposalId);
+        Assert.Same(submitRequest, repository.LastSubmitReviewRequest);
+        Assert.Same(decisionRequest, repository.LastReviewDecisionRequest);
+        Assert.Equal("Approved", repository.LastReviewDecisionRequest!.DecisionCode);
+    }
+
+    [Fact]
+    public async Task ProcessProposalProviderCallbackAsync_Forwards_IdempotencyCorrelationMetadata()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new ProposalProviderCallbackRequest(TenantId, "DocuSign", "event-123", "envelope-456", "recipient-delivered", "Delivered", "{}", "sha256=signature");
+
+        var result = await service.ProcessProposalProviderCallbackAsync(request);
+
+        Assert.Equal(repository.CallbackId, result);
+        Assert.Same(request, repository.LastCallbackRequest);
+        Assert.Equal("event-123", repository.LastCallbackRequest!.ProviderEventId);
+        Assert.Equal("envelope-456", repository.LastCallbackRequest.ExternalEnvelopeId);
     }
 
     [Fact]
@@ -154,6 +183,100 @@ public sealed class SubmissionProposalWorkflowTests
         Assert.Equal("client approval email", repository.LastBindPolicyRequest.CustomerAuthorizationReference);
     }
 
+    [Fact]
+    public async Task RecordQuoteResponseAsync_Forwards_Persisted_Line_Terms()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var submissionLineId = Guid.NewGuid();
+        var marketId = Guid.NewGuid();
+        var line = new SubmissionQuoteLineTermRequest(
+            submissionLineId,
+            "General Liability",
+            "Quoted",
+            12500m,
+            2500m,
+            1000000m,
+            12.5m,
+            "Occurrence form",
+            "Signed application",
+            "Known losses",
+            "Annual",
+            3125m,
+            450m,
+            250m,
+            true,
+            true,
+            "Primary coverage",
+            1);
+        var request = new RecordSubmissionQuoteResponseRequest(
+            TenantId,
+            marketId,
+            QuoteId,
+            "Quoted",
+            12500m,
+            2500m,
+            1000000m,
+            12.5m,
+            "Signed application",
+            "Known losses",
+            "A",
+            "Annual",
+            3125m,
+            450m,
+            250m,
+            true,
+            null,
+            "Package response",
+            DateTime.UtcNow.AddDays(30),
+            "Manual",
+            "CAR-1001",
+            UserId,
+            DateTime.UtcNow.Date,
+            "Occurrence form",
+            true,
+            [line]);
+
+        await service.RecordQuoteResponseAsync(SubmissionId, request);
+
+        Assert.Equal(SubmissionId, repository.LastQuoteResponseSubmissionId);
+        Assert.Same(request, repository.LastQuoteResponseRequest);
+        var persistedLine = Assert.Single(repository.LastQuoteResponseRequest!.Lines!);
+        Assert.Equal(submissionLineId, persistedLine.SubmissionLineId);
+        Assert.Equal(12500m, persistedLine.QuotedPremium);
+        Assert.Equal(12.5m, persistedLine.CommissionPercent);
+        Assert.True(persistedLine.IsBindable);
+    }
+
+    [Fact]
+    public async Task UpdateQuoteAsync_Forwards_Multiple_Line_Terms()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var lines = new[]
+        {
+            CreateQuoteLine("Property", 18000m, 0),
+            CreateQuoteLine("General Liability", 7000m, 1)
+        };
+        var request = new UpdateSubmissionQuoteRequest(
+            TenantId, "Quoted", 25000m, 5000m, 2000000m, 15m,
+            null, null, "A", "Annual", null, 900m, 300m, true,
+            null, "Two-line package", DateTime.UtcNow.AddDays(45), UserId,
+            "Manual", "CAR-2002", UserId, Guid.NewGuid(), DateTime.UtcNow.Date,
+            "Package coverage", true, lines);
+
+        await service.UpdateQuoteAsync(QuoteId, request);
+
+        Assert.Equal(QuoteId, repository.LastUpdatedQuoteId);
+        Assert.Same(request, repository.LastUpdateQuoteRequest);
+        Assert.Equal(2, repository.LastUpdateQuoteRequest!.Lines!.Count);
+        Assert.Equal(25000m, repository.LastUpdateQuoteRequest.Lines.Sum(line => line.QuotedPremium));
+    }
+
+    private static SubmissionQuoteLineTermRequest CreateQuoteLine(string lineOfBusiness, decimal premium, int sortOrder)
+        => new(Guid.NewGuid(), lineOfBusiness, "Quoted", premium, 2500m, 1000000m, 15m,
+            null, null, null, "Annual", null, null, null, true, true, null, sortOrder);
+
     private static SubmissionService CreateService(FakeSubmissionRepository repository)
         => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository(), new FakePolicyCreationService());
 
@@ -163,8 +286,11 @@ public sealed class SubmissionProposalWorkflowTests
         public GenerateProposalRequest? LastGenerateProposalRequest { get; private set; }
         public Guid? LastDeliveredProposalId { get; private set; }
         public ProposalDeliveryRequest? LastProposalDeliveryRequest { get; private set; }
-        public Guid? LastDecisionProposalId { get; private set; }
-        public ProposalDecisionRequest? LastProposalDecisionRequest { get; private set; }
+        public Guid CallbackId { get; } = Guid.NewGuid();
+        public Guid? LastReviewProposalId { get; private set; }
+        public SubmitProposalReviewRequest? LastSubmitReviewRequest { get; private set; }
+        public DecideProposalReviewRequest? LastReviewDecisionRequest { get; private set; }
+        public ProposalProviderCallbackRequest? LastCallbackRequest { get; private set; }
         public BindPolicyRequest? LastBindPolicyRequest { get; private set; }
         public Guid? LastProposalReadTenantId { get; private set; }
         public Guid? LastProposalListTenantId { get; private set; }
@@ -173,6 +299,12 @@ public sealed class SubmissionProposalWorkflowTests
         public Guid? LastRetryDispatchId { get; private set; }
         public RetryProposalDeliveryRequest? LastRetryRequest { get; private set; }
         public Guid? LastBindContinuationTenantId { get; private set; }
+        public Guid? LastQuoteResponseSubmissionId { get; private set; }
+        public RecordSubmissionQuoteResponseRequest? LastQuoteResponseRequest { get; private set; }
+        public Guid? LastUpdatedQuoteId { get; private set; }
+        public UpdateSubmissionQuoteRequest? LastUpdateQuoteRequest { get; private set; }
+        public Guid? LastQuoteReadId { get; private set; }
+        public Guid? LastQuoteReadTenantId { get; private set; }
 
         public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         {
@@ -187,11 +319,28 @@ public sealed class SubmissionProposalWorkflowTests
             return Task.FromResult(new ProposalDeliveryDispatchDto { ProposalDeliveryDispatchId = DispatchId, ProposalId = proposalId, TenantId = request.TenantId, StatusCode = "Queued" });
         }
 
-        public Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+        public Task SubmitProposalReviewAsync(Guid proposalId, SubmitProposalReviewRequest request, CancellationToken cancellationToken = default)
         {
-            LastDecisionProposalId = proposalId;
-            LastProposalDecisionRequest = request;
+            LastReviewProposalId = proposalId;
+            LastSubmitReviewRequest = request;
             return Task.CompletedTask;
+        }
+
+        public Task DecideProposalReviewAsync(Guid proposalId, DecideProposalReviewRequest request, CancellationToken cancellationToken = default)
+        {
+            LastReviewProposalId = proposalId;
+            LastReviewDecisionRequest = request;
+            return Task.CompletedTask;
+        }
+
+        public Task<Guid> UpsertProposalRecipientAsync(Guid proposalId, UpsertProposalRecipientRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task DeleteProposalRecipientAsync(Guid proposalId, Guid recipientId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<ProposalSlaPolicyDto>> GetProposalSlaPoliciesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalSlaPolicyDto>>([]);
+        public Task<Guid> UpsertProposalSlaPolicyAsync(UpsertProposalSlaPolicyRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> ProcessProposalProviderCallbackAsync(ProposalProviderCallbackRequest request, CancellationToken cancellationToken = default)
+        {
+            LastCallbackRequest = request;
+            return Task.FromResult(CallbackId);
         }
 
         public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<SubmissionDto>());
@@ -235,10 +384,25 @@ public sealed class SubmissionProposalWorkflowTests
         public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<QuoteComparisonDto>>([]);
-        public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default) => Task.FromResult<QuoteComparisonDto?>(null);
-        public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastQuoteReadId = quoteId;
+            LastQuoteReadTenantId = tenantId;
+            return Task.FromResult<QuoteComparisonDto?>(null);
+        }
+        public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
+        {
+            LastQuoteResponseSubmissionId = submissionId;
+            LastQuoteResponseRequest = request;
+            return Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
+        }
         public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
-        public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+        {
+            LastUpdatedQuoteId = quoteId;
+            LastUpdateQuoteRequest = request;
+            return Task.CompletedTask;
+        }
         public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         {
@@ -272,6 +436,16 @@ public sealed class SubmissionProposalWorkflowTests
             LastBindContinuationTenantId = tenantId;
             return Task.FromResult(new ProposalBindContinuationDto { ProposalId = proposalId, SubmissionId = SubmissionId, TenantId = tenantId, CanRequestBind = true, SelectedQuoteId = QuoteId, CustomerAuthorizationId = Guid.NewGuid() });
         }
+        public Task<ClientAcceptanceReadinessDto> GetClientAcceptanceReadinessAsync(Guid proposalId, Guid? quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ClientAcceptanceReadinessDto { ProposalId = proposalId, TenantId = tenantId, SelectedQuoteId = quoteId });
+        public Task<IReadOnlyList<ClientAcceptanceDto>> GetClientAcceptancesAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ClientAcceptanceDto>>([]);
+        public Task<ClientAcceptanceDto?> GetClientAcceptanceByIdAsync(Guid clientAcceptanceId, Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult<ClientAcceptanceDto?>(null);
+        public Task<Guid> RecordClientAcceptanceAsync(RecordClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(Guid.NewGuid());
+        public Task WithdrawClientAcceptanceAsync(Guid clientAcceptanceId, WithdrawClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
         public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<AppetiteMatchDto>>([]);
         public Task<PagedResult<PolicyRegisterDto>> SearchPoliciesAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<PolicyRegisterDto>());
         public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyRegisterDto?>(null);

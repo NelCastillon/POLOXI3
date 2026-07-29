@@ -34,7 +34,8 @@ public sealed class CurrentUserContext
                 userId.Value,
                 user.FindFirst("tenant_name")?.Value,
                 user.FindFirst("tenant_code")?.Value,
-                [.. user.FindAll(ClaimTypes.Role).Select(c => c.Value)])
+                [.. user.FindAll(ClaimTypes.Role).Select(c => c.Value)],
+                [.. user.FindAll("permission").Select(c => c.Value)])
             : null;
     }
 
@@ -51,7 +52,7 @@ public sealed class CurrentUserContext
         var loginUrl = $"/login?error={Uri.EscapeDataString("Your session is missing tenant context. Please sign in again.")}&returnUrl={Uri.EscapeDataString(returnUrl)}";
         _navigationManager.NavigateTo(loginUrl, forceLoad: true);
 
-        return new CurrentUserContextModel(Guid.Empty, Guid.Empty, null, null, []);
+        return new CurrentUserContextModel(Guid.Empty, Guid.Empty, null, null, [], []);
     }
 
     private static Guid? GetClaimGuid(ClaimsPrincipal user, params string[] claimTypes)
@@ -69,11 +70,14 @@ public sealed class CurrentUserContext
     }
 }
 
-public sealed record CurrentUserContextModel(Guid TenantId, Guid UserId, string? TenantName, string? TenantCode, IReadOnlyList<string> RoleCodes)
+public sealed record CurrentUserContextModel(Guid TenantId, Guid UserId, string? TenantName, string? TenantCode, IReadOnlyList<string> RoleCodes, IReadOnlyList<string> PermissionCodes)
 {
     public bool IsTenantAdministrator => RoleCodes.Any(role =>
         string.Equals(role, "TENANT_ADMIN", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(role, "SYSTEM_ADMIN", StringComparison.OrdinalIgnoreCase));
 
     public Guid? UserScopeId => IsTenantAdministrator ? null : UserId;
+
+    public bool HasPermission(string permission) => IsTenantAdministrator
+        || PermissionCodes.Any(code => string.Equals(code, permission, StringComparison.OrdinalIgnoreCase) || string.Equals(code, "NAV_ALL", StringComparison.OrdinalIgnoreCase));
 }

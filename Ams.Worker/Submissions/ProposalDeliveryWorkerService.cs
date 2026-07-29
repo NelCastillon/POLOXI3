@@ -46,7 +46,7 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
 
                 while (processed < Math.Clamp(_options.MaxProposalDeliveriesPerPoll, 1, 100))
                 {
-                    var dispatch = await ClaimNextAsync(connectionFactory, stoppingToken);
+                    var dispatch = await ClaimNextAsync(connectionFactory, _options.ProposalDeliveryClaimLeaseMinutes, stoppingToken);
                     if (dispatch is null) break;
 
                     await ProcessAsync(connectionFactory, dispatch, stoppingToken);
@@ -71,13 +71,25 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
         }
     }
 
-    private static async Task<ProposalDeliveryWorkItem?> ClaimNextAsync(ISqlConnectionFactory connectionFactory, CancellationToken cancellationToken)
+    private static async Task<ProposalDeliveryWorkItem?> ClaimNextAsync(ISqlConnectionFactory connectionFactory, int claimLeaseMinutes, CancellationToken cancellationToken)
     {
         const string sql = """
 DECLARE @DispatchId UNIQUEIDENTIFIER;
 DECLARE @WorkerId NVARCHAR(200) = CONCAT(HOST_NAME(), N':', APP_NAME(), N':ProposalDelivery');
 
 BEGIN TRANSACTION;
+UPDATE Submissions.ProposalDeliveryDispatch WITH (ROWLOCK)
+SET StatusCode = CASE WHEN AttemptCount < MaxAttempts THEN N'Queued' ELSE N'Failed' END,
+    NextAttemptDateUtc = CASE WHEN AttemptCount < MaxAttempts THEN SYSUTCDATETIME() ELSE NULL END,
+    ErrorCode = N'WORKER_CLAIM_EXPIRED',
+    ErrorMessage = N'The prior worker claim expired before completion. Delivery was recovered; external delivery may require duplicate-send review.',
+    ClaimedDateUtc = NULL,
+    ClaimedBy = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE StatusCode = N'Processing'
+  AND IsDeleted = 0
+  AND ClaimedDateUtc < DATEADD(minute, -@ClaimLeaseMinutes, SYSUTCDATETIME());
+
 SELECT TOP 1 @DispatchId = dispatch.ProposalDeliveryDispatchId
 FROM Submissions.ProposalDeliveryDispatch dispatch WITH (UPDLOCK, READPAST, ROWLOCK)
 INNER JOIN Submissions.ProposalDeliveryProvider provider
@@ -104,7 +116,7 @@ END;
 COMMIT TRANSACTION;
 
 SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.SubmissionId, dispatch.ProposalId,
-       dispatch.DeliveryMethodCode, dispatch.Recipient, dispatch.AttemptCount, dispatch.MaxAttempts,
+       dispatch.ProposalVersionNumber, dispatch.DeliveryMethodCode, dispatch.Recipient, dispatch.AttemptCount, dispatch.MaxAttempts,
        provider.ProposalDeliveryProviderId, provider.ProviderCode, provider.HandlerCode, provider.DisplayName AS ProviderName,
        provider.EndpointUri, provider.SenderAddress, provider.SecretReference, provider.ConfigurationJson,
        provider.IsConfigured, provider.RetryDelaySeconds,
@@ -120,7 +132,7 @@ INNER JOIN Submissions.Submission submission
 WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
 """;
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.QuerySingleOrDefaultAsync<ProposalDeliveryWorkItem>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        return await cn.QuerySingleOrDefaultAsync<ProposalDeliveryWorkItem>(new CommandDefinition(sql, new { ClaimLeaseMinutes = Math.Clamp(claimLeaseMinutes, 5, 1440) }, cancellationToken: cancellationToken));
     }
 
     private async Task ProcessAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
@@ -138,7 +150,7 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
                 "Smtp" => await SendSmtpAsync(dispatch, cancellationToken),
                 "Portal" => await PublishPortalAsync(connectionFactory, dispatch, cancellationToken),
                 "ESignature" => await SendESignatureAsync(dispatch, cancellationToken),
-                "Manual" => DeliveryResult.Delivered($"manual:{dispatch.ProposalDeliveryDispatchId}"),
+                "Manual" => DeliveryResult.Sent($"manual:{dispatch.ProposalDeliveryDispatchId}"),
                 _ => DeliveryResult.ConfigurationRequired("HANDLER_NOT_SUPPORTED", $"Delivery handler '{dispatch.HandlerCode}' is not supported.")
             };
 
@@ -148,7 +160,7 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
             }
             else
             {
-                await MarkDeliveredAsync(connectionFactory, dispatch, result.ExternalDeliveryId!, result.ResponseJson, cancellationToken);
+                await MarkSentAsync(connectionFactory, dispatch, result.ExternalDeliveryId!, result.ResponseJson, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -192,7 +204,7 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         if (!string.IsNullOrWhiteSpace(username)) client.Credentials = new NetworkCredential(username, password);
 
         await client.SendMailAsync(message, cancellationToken);
-        return DeliveryResult.Delivered($"smtp:{dispatch.ProposalDeliveryDispatchId}");
+        return DeliveryResult.Sent($"smtp:{dispatch.ProposalDeliveryDispatchId}");
     }
 
     private static async Task<DeliveryResult> PublishPortalAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
@@ -238,7 +250,7 @@ SELECT @PortalProposalDeliveryId;
         }, cancellationToken: cancellationToken));
 
         return notificationId.HasValue
-            ? DeliveryResult.Delivered($"portal:{notificationId.Value}")
+            ? DeliveryResult.Sent($"portal:{notificationId.Value}")
             : DeliveryResult.ConfigurationRequired("PORTAL_RECIPIENT_REQUIRED", "The recipient must be an active portal contact on the submission account.");
     }
 
@@ -274,15 +286,15 @@ SELECT @PortalProposalDeliveryId;
         var externalId = response.Headers.Location?.ToString();
         if (string.IsNullOrWhiteSpace(externalId) && response.Headers.TryGetValues("X-Envelope-Id", out var envelopeIds)) externalId = envelopeIds.FirstOrDefault();
         externalId ??= $"esign:{dispatch.ProposalDeliveryDispatchId}";
-        return DeliveryResult.Delivered(externalId, JsonSerializer.Serialize(new { statusCode = (int)response.StatusCode, body = responseBody }));
+        return DeliveryResult.Sent(externalId, JsonSerializer.Serialize(new { statusCode = (int)response.StatusCode, body = responseBody }));
     }
 
-    private static async Task MarkDeliveredAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, string externalDeliveryId, string? responseJson, CancellationToken cancellationToken)
+    private static async Task MarkSentAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, string externalDeliveryId, string? responseJson, CancellationToken cancellationToken)
     {
         const string sql = """
 BEGIN TRANSACTION;
 UPDATE Submissions.ProposalDeliveryDispatch
-SET StatusCode = N'Delivered', CompletedDateUtc = SYSUTCDATETIME(), ExternalDeliveryId = @ExternalDeliveryId,
+SET StatusCode = N'Sent', ExternalDeliveryId = @ExternalDeliveryId,
     ResponseJson = @ResponseJson, ErrorCode = NULL, ErrorMessage = NULL, NextAttemptDateUtc = NULL,
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND StatusCode = N'Processing' AND IsDeleted = 0;
@@ -294,36 +306,30 @@ BEGIN
 END;
 
 UPDATE Submissions.Proposal
-SET Status = N'Delivered', DeliveryStatus = N'Delivered', DeliveryMethod = @DeliveryMethodCode, Recipient = @Recipient,
+SET DeliveryStatus = N'Sent', DeliveryMethod = @DeliveryMethodCode, Recipient = @Recipient,
     SentDateUtc = SYSUTCDATETIME(), LastDeliveryDispatchId = @DispatchId, ModifiedDateUtc = SYSUTCDATETIME()
 WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
-
-UPDATE Submissions.Submission
-SET Status = N'Proposal Delivered', ModifiedDateUtc = SYSUTCDATETIME()
-WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0
-  AND Status NOT IN (N'Presented', N'Customer Accepted', N'Binding', N'Bound', N'Lost', N'Cancelled', N'Closed');
 
 INSERT INTO Submissions.ProposalLifecycleEvent
     (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, IsDeleted)
 VALUES
-    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Delivered', CONCAT(N'Proposal delivered through ', @ProviderName, N' to ', @Recipient, N'.'), SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Sent', CONCAT(N'Proposal submitted through ', @ProviderName, N' to ', @Recipient, N'. Awaiting delivery confirmation.'), SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
 
 INSERT INTO Submissions.SubmissionActionLog
     (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES
-    (NEWID(), @SubmissionId, @TenantId, N'ProposalDelivered', CONCAT(@ProviderName, N' delivery confirmed for ', @Recipient, N'.'), SYSUTCDATETIME(), N'ProposalDeliveryDispatch', @DispatchId, N'Worker', 0);
+    (NEWID(), @SubmissionId, @TenantId, N'ProposalSent', CONCAT(@ProviderName, N' accepted delivery for ', @Recipient, N'.'), SYSUTCDATETIME(), N'ProposalDeliveryDispatch', @DispatchId, N'Worker', 0);
 
-DECLARE @OpportunityId UNIQUEIDENTIFIER = (SELECT OpportunityId FROM Submissions.Submission WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId);
-DECLARE @StageId UNIQUEIDENTIFIER = (SELECT TOP 1 OpportunityStageId FROM CRM.OpportunityStage WHERE TenantId = @TenantId AND StageName = N'Proposal' AND IsActive = 1 ORDER BY SortOrder);
-IF @OpportunityId IS NOT NULL AND @StageId IS NOT NULL
+IF @DeliveryMethodCode IN (N'ESignature', N'ESign')
 BEGIN
-    UPDATE CRM.Opportunity
-    SET StageName = N'Proposal', OpportunityStageId = @StageId, ModifiedDateUtc = SYSUTCDATETIME()
-    WHERE OpportunityId = @OpportunityId AND TenantId = @TenantId AND IsDeleted = 0 AND StageName NOT IN (N'Closed Won', N'Closed Lost');
-    INSERT INTO CRM.OpportunityWorkflowEvent
-        (WorkflowEventId, TenantId, OpportunityId, EventType, EventTitle, EventDetail, RelatedEntityName, RelatedEntityId, EventDateUtc, CreatedDateUtc, IsDeleted)
-    VALUES
-        (NEWID(), @TenantId, @OpportunityId, N'Proposal Delivered', N'Proposal Delivered', CONCAT(@ProviderName, N' delivery confirmed.'), N'ProposalDeliveryDispatch', @DispatchId, SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+    DECLARE @EnvelopeId UNIQUEIDENTIFIER = NEWID(), @ESignRequestId UNIQUEIDENTIFIER = NEWID();
+    INSERT INTO Submissions.ProposalESignEnvelope (ProposalESignEnvelopeId,TenantId,SubmissionId,ProposalId,ProposalVersionNumber,ProposalDeliveryDispatchId,ESignRequestId,ProposalDeliveryProviderId,ProviderCode,ExternalEnvelopeId,StatusCode,SentDateUtc,CreatedDateUtc,IsDeleted)
+    VALUES (@EnvelopeId,@TenantId,@SubmissionId,@ProposalId,@ProposalVersionNumber,@DispatchId,@ESignRequestId,@ProviderId,@ProviderCode,@ExternalDeliveryId,N'Sent',SYSUTCDATETIME(),SYSUTCDATETIME(),0);
+    INSERT INTO DMS.ESignRequest (ESignRequestId,TenantId,DocumentId,SignerName,SignerEmail,Priority,Status,SentDate,DueDate,Message,ProposalId,ProposalVersionNumber,ProposalDeliveryDispatchId,ProposalESignEnvelopeId,ProviderCode,ExternalEnvelopeId,CreatedDateUtc,IsDeleted)
+    SELECT @ESignRequestId,@TenantId,proposal.DocumentId,recipient.RecipientName,recipient.RecipientEmail,N'High',N'Sent',SYSUTCDATETIME(),DATEADD(day,7,SYSUTCDATETIME()),N'Please review and sign the approved proposal.',@ProposalId,@ProposalVersionNumber,@DispatchId,@EnvelopeId,@ProviderCode,@ExternalDeliveryId,SYSUTCDATETIME(),0
+    FROM Submissions.Proposal proposal
+    OUTER APPLY (SELECT TOP 1 RecipientName,RecipientEmail FROM Submissions.ProposalRecipient WHERE ProposalId=@ProposalId AND TenantId=@TenantId AND IsSigner=1 AND IsDeleted=0 ORDER BY SigningOrder) recipient
+    WHERE proposal.ProposalId=@ProposalId AND proposal.DocumentId IS NOT NULL AND recipient.RecipientEmail IS NOT NULL;
 END;
 COMMIT TRANSACTION;
 """;
@@ -337,6 +343,9 @@ COMMIT TRANSACTION;
             dispatch.DeliveryMethodCode,
             dispatch.Recipient,
             dispatch.ProviderName,
+            dispatch.ProposalVersionNumber,
+            ProviderId = dispatch.ProposalDeliveryProviderId,
+            dispatch.ProviderCode,
             ExternalDeliveryId = externalDeliveryId,
             ResponseJson = responseJson
         }, cancellationToken: cancellationToken));
@@ -405,6 +414,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         public Guid ProposalId { get; set; }
         public Guid AccountId { get; set; }
         public Guid ProposalDeliveryProviderId { get; set; }
+        public int ProposalVersionNumber { get; set; }
         public string DeliveryMethodCode { get; set; } = string.Empty;
         public string Recipient { get; set; } = string.Empty;
         public int AttemptCount { get; set; }
@@ -426,7 +436,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
     private sealed record DeliveryResult(bool IsConfigurationRequired, string? ExternalDeliveryId, string? ResponseJson, string? ErrorCode, string? ErrorMessage)
     {
-        public static DeliveryResult Delivered(string externalDeliveryId, string? responseJson = null) => new(false, externalDeliveryId, responseJson, null, null);
+        public static DeliveryResult Sent(string externalDeliveryId, string? responseJson = null) => new(false, externalDeliveryId, responseJson, null, null);
         public static DeliveryResult ConfigurationRequired(string errorCode, string errorMessage) => new(true, null, null, errorCode, errorMessage);
     }
 }

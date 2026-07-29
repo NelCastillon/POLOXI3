@@ -19,17 +19,18 @@
                           CreatedByUserId="_currentUser?.UserId"
                           EntityName="Submission"
                           EntityId="SubmissionId"
-                          Title="Upload Submission Document"
-                          IntroText="Upload and classify applications, loss runs, schedules, and other supporting submission documents."
-                          DefaultDocumentTypeCode="SUBMISSION"
-                          DefaultCategoryCode="SUBMISSION"
-                          DefaultTags="Submission"
+                          Title="@(_uploadingCarrierQuote ? "Upload Carrier Quote" : "Upload Submission Document")"
+                          IntroText="@(_uploadingCarrierQuote ? "Upload the carrier-issued quote or disclosure and link it to this submission." : "Upload and classify applications, loss runs, schedules, and other supporting submission documents.")"
+                          DefaultDocumentTypeCode="@(_uploadingCarrierQuote ? "QUOTE" : "SUBMISSION")"
+                          DefaultCategoryCode="@(_uploadingCarrierQuote ? "QUOTE" : "SUBMISSION")"
+                          DefaultDescription="@(_uploadingCarrierQuote ? "Carrier-issued quote document received for review and proposal presentation." : null)"
+                          DefaultTags="@(_uploadingCarrierQuote ? "Carrier Quote" : "Submission")"
                           OnUploaded="HandleSubmissionDocumentUploadedAsync"
                           OnUploadFailed="HandleSubmissionDocumentUploadFailed" />
 
 @if (_showDocumentMetadata && _selectedDocument is not null)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseDocumentMetadata">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-modal sdd-document-modal" role="dialog" aria-modal="true" aria-labelledby="sdd-document-metadata-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-pencil-square" aria-hidden="true"></i>
@@ -415,13 +416,35 @@ else
                                      {
                                          <p><strong>Exclusions:</strong> @quote.Exclusions</p>
                                      }
+                                     @if (quote.Lines.Count > 0)
+                                     {
+                                         <details class="sdd-quote-lines" open="@(quote.Lines.Count <= 2)">
+                                             <summary><span><i class="bi bi-layers" aria-hidden="true"></i> @quote.Lines.Count coverage line@(quote.Lines.Count == 1 ? string.Empty : "s")</span><strong>@quote.Lines.Sum(line => line.QuotedPremium).ToString("C0")</strong></summary>
+                                             <div class="sdd-quote-lines__list">
+                                                 @foreach (var line in quote.Lines.OrderBy(line => line.SortOrder))
+                                                 {
+                                                     <article>
+                                                         <div><strong>@line.LineOfBusiness</strong><small>@line.Status</small></div>
+                                                         <div><small>Premium</small><strong>@line.QuotedPremium.ToString("C0")</strong></div>
+                                                         <div><small>Deductible</small><strong>@MoneyOrDash(line.Deductible)</strong></div>
+                                                         <div><small>Limit</small><strong>@MoneyOrDash(line.Limit)</strong></div>
+                                                         <div><small>Commission</small><strong>@PercentOrDash(line.CommissionPercent)</strong></div>
+                                                     </article>
+                                                 }
+                                             </div>
+                                         </details>
+                                     }
                                     @if (!string.IsNullOrWhiteSpace(quote.CoverageNotes))
                                     {
                                         <p>@quote.CoverageNotes</p>
                                     }
                                     @if (!quote.IsProposalReady && !string.IsNullOrWhiteSpace(quote.ProposalReadinessReason))
                                     {
-                                        <p><strong>Proposal readiness:</strong> @quote.ProposalReadinessReason</p>
+                                        <button type="button" class="sdd-proposal-readiness-warning" @onclick="() => OpenQuoteReviewDialog(quote)" title="Open the required quote review">
+                                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                                            <span><strong>Proposal readiness:</strong> @quote.ProposalReadinessReason</span>
+                                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                                        </button>
                                     }
                                     <div class="sdd-quote-actions">
                                          <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="() => OpenQuoteReviewDialog(quote)"><i class="bi bi-pencil-square" aria-hidden="true"></i> Review</button>
@@ -440,6 +463,39 @@ else
                     {
                         <section class="sdd-question-list">
                             <div class="sdd-progress-card"><span>Underwriting readiness</span><strong>@ReadinessPercent%</strong><div class="sdd-progress"><span style="width:@ReadinessPercent%"></span></div></div>
+                            <section class="sdd-central-readiness" aria-labelledby="proposal-readiness-heading">
+                                <div class="sdd-central-readiness__header">
+                                    <div><span>Proposal workflow</span><h3 id="proposal-readiness-heading">Proposal readiness</h3><p>Review every quote requirement and resolve blocked items from this work queue.</p></div>
+                                    <strong>@_quotes.Count(quote => quote.IsProposalReady)/@_quotes.Count ready</strong>
+                                </div>
+                                <div class="sdd-central-readiness__quotes">
+                                    @foreach (var quote in _quotes.OrderByDescending(quote => quote.IsProposalReady).ThenBy(quote => quote.CarrierName))
+                                    {
+                                        var checks = quote.ProposalReadinessFactors;
+                                        <article class="@(quote.IsProposalReady ? "is-ready" : "is-blocked")">
+                                            <div class="sdd-central-readiness__quote-head">
+                                                <div><strong>@quote.CarrierName</strong><small>@quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</small></div>
+                                                <span><i class="bi @(quote.IsProposalReady ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")" aria-hidden="true"></i> @(quote.IsProposalReady ? "Proposal ready" : $"{checks.Count(check => check.IsRequired && !check.IsSatisfied)} action(s) required")</span>
+                                            </div>
+                                            <div class="sdd-central-readiness__factors">
+                                                @foreach (var check in checks)
+                                                {
+                                                    <div class="@(check.IsSatisfied ? "is-ready" : "is-blocked")" title="@check.Instructions"><i class="bi @(check.IsSatisfied ? "bi-check-circle-fill" : "bi-x-circle-fill")" aria-hidden="true"></i><span><strong>@check.DisplayName</strong><small>@check.Instructions</small></span></div>
+                                                }
+                                            </div>
+                                            @if (!quote.IsProposalReady)
+                                            {
+                                                var nextAction = checks.FirstOrDefault(check => check.IsRequired && !check.IsSatisfied);
+                                                <button type="button" class="sdd-btn sdd-btn--primary" @onclick="() => ExecuteProposalReadinessAction(quote, nextAction)"><i class="bi bi-pencil-square" aria-hidden="true"></i> @(nextAction?.ActionLabel ?? "Resolve readiness")</button>
+                                            }
+                                        </article>
+                                    }
+                                    @if (!_quotes.Any())
+                                    {
+                                        <div class="sdd-empty"><i class="bi bi-journal-x" aria-hidden="true"></i><strong>No quotes available</strong><span>Request and record a carrier quote before completing proposal readiness.</span></div>
+                                    }
+                                </div>
+                            </section>
                              @if (_readiness is not null && _readiness.IsReadyForMarketing)
                              {
                                  <div class="sdd-ready-next"><i class="bi bi-check2-circle" aria-hidden="true"></i><div><strong>Ready to submit to market</strong><span>Select a target carrier, preview the package, and submit through the configured channel.</span></div><button type="button" class="sdd-btn sdd-btn--primary" @onclick="GoToMarketsForSubmit"><i class="bi bi-bank" aria-hidden="true"></i> Choose Market</button></div>
@@ -638,7 +694,7 @@ else
                         <button type="button" class="sdd-btn sdd-btn--primary" @onclick='() => OpenActionDialog("submit")'><i class="bi bi-send" aria-hidden="true"></i> Submit Market</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("quote")'><i class="bi bi-journal-plus" aria-hidden="true"></i> Request Quote</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("policy")'><i class="bi bi-shield-check" aria-hidden="true"></i> Request Bind</button>
-                             <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="OpenProposalWorkflow"><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Workflow</button>
+                        <button type="button" class="sdd-btn sdd-btn--ghost" disabled="@(!CanGenerateProposal)" title="@GenerateProposalTitle" @onclick="OpenProposalWorkflow"><i class="bi bi-envelope-check" aria-hidden="true"></i> Proposal Workflow</button>
                         <button type="button" class="sdd-btn sdd-btn--ghost" @onclick='() => OpenActionDialog("task")'><i class="bi bi-list-check" aria-hidden="true"></i> Follow-Up Task</button>
                         <button type="button" class="sdd-btn sdd-btn--danger" @onclick='() => OpenActionDialog("decline")'><i class="bi bi-x-circle" aria-hidden="true"></i> Decline</button>
                     </div>
@@ -650,7 +706,7 @@ else
 
 @if (_selectedCoverageLine is not null && _submission is not null)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseCoverageLineDetail">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-modal sdd-coverage-modal" role="dialog" aria-modal="true" aria-labelledby="sdd-coverage-title" @onclick:stopPropagation="true">
             <div class="sdd-modal__header">
                 <i class="bi bi-shield-check" aria-hidden="true"></i>
@@ -694,8 +750,8 @@ else
 
 @if (_showActionDialog && _submission is not null)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseActionDialog">
-        <div class="sdd-modal" role="dialog" aria-modal="true" aria-labelledby="sdd-action-title" @onclick:stopPropagation="true">
+    <div class="sdd-modal-backdrop" role="presentation">
+        <div class="sdd-modal @(_actionMode == "quote-review" ? "sdd-modal--quote-review" : null)" role="dialog" aria-modal="true" aria-labelledby="sdd-action-title" @onclick:stopPropagation="true">
             <div class="sdd-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
                 <span id="sdd-action-title">@_actionTitle</span>
@@ -705,6 +761,21 @@ else
                 <DataAnnotationsValidator />
                 <div class="sdd-modal__body">
                     <div class="sdd-modal-intro"><strong>@ActionHelpText</strong><span>@_submission.SubmissionNumber - @_submission.AccountName</span></div>
+                    @if (_actionMode == "quote-review" && _quoteValidationErrors.Count > 0)
+                    {
+                        <div class="sdd-validation-summary" role="alert" aria-live="assertive">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <div>
+                                <strong>Review the following before continuing</strong>
+                                <ul>
+                                    @foreach (var error in _quoteValidationErrors)
+                                    {
+                                        <li>@error</li>
+                                    }
+                                </ul>
+                            </div>
+                        </div>
+                    }
                     <div class="sdd-form-grid">
                         @if (_actionMode is "submit" or "quote" or "policy")
                         {
@@ -949,29 +1020,102 @@ else
                          @if (_actionMode == "quote-review")
                          {
                              <label class="sdd-field">
-                                 <span>Quote Status</span>
-                                 <InputSelect class="form-select" @bind-Value="_actionForm.QuoteStatus">
+                                 <span>Quote Status <em>*</em></span>
+                                  <InputSelect class="@ProposalFieldClass("form-select", "ApprovedStatus")" @bind-Value="_actionForm.QuoteStatus">
                                      @foreach (var status in _quoteStatuses)
                                      {
                                           <option value="@status.OptionCode">@status.OptionName</option>
                                      }
                                  </InputSelect>
                              </label>
-                             <label class="sdd-field"><span>Deductible</span><InputNumber class="form-control" @bind-Value="_actionForm.Deductible" /></label>
-                             <label class="sdd-field"><span>Limit</span><InputNumber class="form-control" @bind-Value="_actionForm.Limit" /></label>
-                             <label class="sdd-field"><span>Commission %</span><InputNumber class="form-control" @bind-Value="_actionForm.CommissionPercent" /></label>
-                              <label class="sdd-field"><span>Effective Date</span><InputDate class="form-control" @bind-Value="_actionForm.QuoteEffectiveDate" /></label>
-                             <label class="sdd-field"><span>Carrier Rating</span><InputText class="form-control" @bind-Value="_actionForm.CarrierRating" /></label>
-                             <label class="sdd-field"><span>Payment Terms</span><InputText class="form-control" @bind-Value="_actionForm.PaymentTerms" /></label>
-                             <label class="sdd-field"><span>Taxes & Fees</span><InputNumber class="form-control" @bind-Value="_actionForm.TaxesAndFees" /></label>
-                             <label class="sdd-field"><span>Broker Fee</span><InputNumber class="form-control" @bind-Value="_actionForm.BrokerFee" /></label>
-                             <label class="sdd-field"><span>Minimum Earned Premium</span><InputNumber class="form-control" @bind-Value="_actionForm.MinimumEarnedPremium" /></label>
-                             <label class="sdd-field"><span>Expires</span><InputDate class="form-control" @bind-Value="_actionForm.ExpiresDateUtc" /></label>
-                             <label class="sdd-field"><span>TRIA Included</span><InputCheckbox class="form-check-input" @bind-Value="_actionForm.TriaIncluded" /></label>
+                              <label class="sdd-field">
+                                  <span>Carrier Market</span>
+                                   <input class="form-control @(IsProposalFieldInvalid("CarrierMarket") ? "invalid" : string.Empty)" value="@Safe(_selectedQuote?.CarrierName ?? _selectedMarket?.CarrierName, "Carrier market not linked")" readonly />
+                                  <small class="sdd-field-help">The carrier is governed by the selected submission market.</small>
+                              </label>
+                              <label class="sdd-field">
+                                  <span>Annual Premium <em>*</em></span>
+                                   <InputNumber class="@ProposalFieldClass("form-control", "PositivePremium")" @bind-Value="_actionForm.AnnualPremium" min="0.01" max="999999999999" step="0.01" required />
+                              </label>
+                              <section class="sdd-field sdd-field--full sdd-proposal-readiness-checklist" aria-label="Proposal readiness checklist">
+                                  <div class="sdd-proposal-readiness-checklist__head">
+                                      <div><strong>Proposal readiness checklist</strong><small>Resolve every item here, then save this review.</small></div>
+                                      <span>@LiveProposalReadinessCount/@(_selectedQuote?.ProposalReadinessFactors.Count ?? 0) complete</span>
+                                  </div>
+                                  <div class="sdd-proposal-readiness-checklist__items">
+                                      @foreach (var item in _selectedQuote?.ProposalReadinessFactors ?? [])
+                                      {
+                                           var isSatisfied = IsProposalFactorSatisfied(item);
+                                           <div class="@(isSatisfied ? "is-ready" : "is-blocked")">
+                                               <i class="bi @(isSatisfied ? "bi-check-circle-fill" : "bi-exclamation-circle-fill")" aria-hidden="true"></i>
+                                              <span><strong>@item.DisplayName</strong><small>@item.Instructions</small></span>
+                                          </div>
+                                      }
+                                  </div>
+                              </section>
+                              @if (_quoteLineForms.Count > 0)
+                              {
+                                  <section class="sdd-field sdd-field--full sdd-quote-term-workbench" aria-label="Quote line terms">
+                                      <div class="sdd-quote-term-workbench__head">
+                                          <div><strong>Coverage line terms</strong><small>Package totals are recalculated from these persisted line values.</small></div>
+                                          <span>@_quoteLineForms.Sum(line => line.QuotedPremium).ToString("C0") total</span>
+                                      </div>
+                                      <div class="sdd-quote-term-workbench__lines">
+                                          @foreach (var line in _quoteLineForms.OrderBy(line => line.SortOrder))
+                                          {
+                                              <details class="sdd-quote-term-line" open="@(_quoteLineForms.Count <= 2)">
+                                                  <summary><span><i class="bi bi-layers" aria-hidden="true"></i><strong>@line.LineOfBusiness</strong></span><span>@line.QuotedPremium.ToString("C0")</span></summary>
+                                                  <div class="sdd-quote-term-line__grid">
+                                                      <label class="sdd-field"><span>Status <em>*</em></span><InputSelect class="form-select" @bind-Value="line.Status" @bind-Value:after="SynchronizeQuoteStatusFromLines" required>@foreach (var status in _quoteStatuses) { <option value="@status.OptionCode">@status.OptionName</option> }</InputSelect></label>
+                                                      <label class="sdd-field"><span>Premium <em>*</em></span><InputNumber class="form-control" @bind-Value="line.QuotedPremium" min="0.01" max="999999999999" step="0.01" required /></label>
+                                                      <label class="sdd-field"><span>Deductible</span><InputNumber class="form-control" @bind-Value="line.Deductible" min="0" max="999999999999" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>Limit</span><InputNumber class="form-control" @bind-Value="line.Limit" min="0" max="999999999999" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>Commission %</span><InputNumber class="form-control" @bind-Value="line.CommissionPercent" min="0" max="100" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>Payment Terms</span><InputText class="form-control" @bind-Value="line.PaymentTerms" maxlength="200" /></label>
+                                                      <label class="sdd-field"><span>Taxes & Fees</span><InputNumber class="form-control" @bind-Value="line.TaxesAndFees" min="0" max="999999999999" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>Broker Fee</span><InputNumber class="form-control" @bind-Value="line.BrokerFee" min="0" max="999999999999" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>Minimum Earned Premium</span><InputNumber class="form-control" @bind-Value="line.MinimumEarnedPremium" min="0" max="999999999999" step="0.01" /></label>
+                                                      <label class="sdd-field"><span>TRIA Included</span><InputSelect TValue="bool?" class="form-select" @bind-Value="line.TriaIncluded"><option value="">Not specified</option><option value="true">Yes</option><option value="false">No</option></InputSelect></label>
+                                                      <label class="sdd-field sdd-check-field"><span>Bindable</span><InputCheckbox class="form-check-input" @bind-Value="line.IsBindable" /></label>
+                                                      <label class="sdd-field sdd-field--full"><span>Coverage Forms</span><InputTextArea class="form-control" rows="2" @bind-Value="line.CoverageForms" maxlength="2000" /></label>
+                                                      <label class="sdd-field sdd-field--full"><span>Subjectivities</span><InputTextArea class="form-control" rows="2" @bind-Value="line.Subjectivities" maxlength="2000" /></label>
+                                                      <label class="sdd-field sdd-field--full"><span>Exclusions</span><InputTextArea class="form-control" rows="2" @bind-Value="line.Exclusions" maxlength="2000" /></label>
+                                                      <label class="sdd-field sdd-field--full"><span>Line Notes</span><InputTextArea class="form-control" rows="2" @bind-Value="line.CoverageNotes" maxlength="1000" /></label>
+                                                  </div>
+                                              </details>
+                                          }
+                                      </div>
+                                  </section>
+                              }
+                             <label class="sdd-field"><span>Package Deductible @if (IsProposalFactorRequired("Deductible")) { <em>*</em> }</span><InputNumber class="@ProposalFieldClass("form-control", "Deductible")" @bind-Value="_actionForm.Deductible" min="0" max="999999999999" step="0.01" /></label>
+                             <label class="sdd-field"><span>Package Limit @if (IsProposalFactorRequired("CoverageLimit")) { <em>*</em> }</span><InputNumber class="@ProposalFieldClass("form-control", "CoverageLimit")" @bind-Value="_actionForm.Limit" min="0" max="999999999999" step="0.01" /></label>
+                             <label class="sdd-field"><span>Commission %</span><InputNumber class="form-control" @bind-Value="_actionForm.CommissionPercent" min="0" max="100" step="0.01" /></label>
+                              <label class="sdd-field"><span>Effective Date <em>*</em></span><InputDate class="@RequiredFieldClass("form-control", _actionForm.QuoteEffectiveDate.HasValue)" @bind-Value="_actionForm.QuoteEffectiveDate" required /></label>
+                             <label class="sdd-field"><span>Carrier Rating</span><InputText class="form-control" @bind-Value="_actionForm.CarrierRating" maxlength="80" /></label>
+                             <label class="sdd-field"><span>Payment Terms</span><InputText class="form-control" @bind-Value="_actionForm.PaymentTerms" maxlength="200" /></label>
+                             <label class="sdd-field"><span>Taxes & Fees</span><InputNumber class="form-control" @bind-Value="_actionForm.TaxesAndFees" min="0" max="999999999999" step="0.01" /></label>
+                             <label class="sdd-field"><span>Broker Fee</span><InputNumber class="form-control" @bind-Value="_actionForm.BrokerFee" min="0" max="999999999999" step="0.01" /></label>
+                             <label class="sdd-field"><span>Minimum Earned Premium</span><InputNumber class="form-control" @bind-Value="_actionForm.MinimumEarnedPremium" min="0" max="999999999999" step="0.01" /></label>
+                             <label class="sdd-field"><span>Expires <em>*</em></span><InputDate class="@ProposalFieldClass("form-control", "CurrentExpiration")" @bind-Value="_actionForm.ExpiresDateUtc" required /></label>
+                              <label class="sdd-field sdd-field--full">
+                                  <span>Carrier Quote Document @if (IsProposalFactorRequired("CarrierQuoteDocument")) { <em>*</em> }</span>
+                                  <div class="input-group">
+                                      <InputSelect class="@ProposalFieldClass("form-select", "CarrierQuoteDocument")" @bind-Value="_actionForm.QuoteDocumentId">
+                                          <option value="">Select the carrier quote document</option>
+                                          @foreach (var document in CarrierQuoteDocuments)
+                                          {
+                                              <option value="@document.DocumentId">@document.FileName (@document.CategoryCode)</option>
+                                          }
+                                      </InputSelect>
+                                      <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="OpenCarrierQuoteUpload"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Upload Carrier Quote</button>
+                                  </div>
+                                  <small class="sdd-field-help">Link the carrier-issued quote or disclosure used for proposal presentation.</small>
+                              </label>
+                             <label class="sdd-field"><span>TRIA Included</span><InputSelect TValue="bool?" class="form-select" @bind-Value="_actionForm.TriaIncluded"><option value="">Not specified</option><option value="true">Yes</option><option value="false">No</option></InputSelect></label>
                               <label class="sdd-field"><span>Bindable</span><InputCheckbox class="form-check-input" @bind-Value="_actionForm.IsBindable" /></label>
-                              <label class="sdd-field sdd-field--full"><span>Coverage Forms</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.CoverageForms" /></label>
-                             <label class="sdd-field sdd-field--full"><span>Subjectivities</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Subjectivities" /></label>
-                             <label class="sdd-field sdd-field--full"><span>Exclusions</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Exclusions" /></label>
+                              <label class="sdd-field sdd-field--full"><span>Coverage Forms / Details @if (IsProposalFactorRequired("CoverageDetails")) { <em>*</em> }</span><InputTextArea class="@ProposalFieldClass("form-control", "CoverageDetails")" rows="3" @bind-Value="_actionForm.CoverageForms" @bind-Value:event="oninput" maxlength="2000" /></label>
+                             <label class="sdd-field sdd-field--full"><span>Subjectivities</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Subjectivities" maxlength="2000" /></label>
+                             <label class="sdd-field sdd-field--full"><span>Exclusions</span><InputTextArea class="form-control" rows="3" @bind-Value="_actionForm.Exclusions" maxlength="2000" /></label>
                          }
                          @if (_actionMode == "proposal-delivery")
                          {
@@ -987,7 +1131,6 @@ else
                              </label>
                              <label class="sdd-field"><span>Delivery Method</span><InputSelect class="form-select" @bind-Value="_actionForm.DeliveryMethod">@foreach (var option in _proposalDeliveryMethodOptions) { <option value="@option.OptionCode">@option.OptionName</option> }</InputSelect></label>
                              <label class="sdd-field"><span>Recipient</span><InputText class="form-control" @bind-Value="_actionForm.Recipient" /></label>
-                             <label class="sdd-field"><span>Client Decision</span><InputSelect class="form-select" @bind-Value="_actionForm.ClientDecision">@foreach (var option in _proposalClientDecisionOptions) { <option value="@option.OptionCode">@option.OptionName</option> }</InputSelect></label>
                          }
                         <label class="sdd-field sdd-field--full">
                             <span>@ActionNotesLabel <em>*</em></span>
@@ -1006,7 +1149,7 @@ else
 
 @if (_showConfirmDialog)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseConfirmDialog">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-confirm" role="dialog" aria-modal="true" aria-labelledby="sdd-confirm-title" @onclick:stopPropagation="true">
             <div class="sdd-modal__header">
                 <i class="bi @_actionIcon" aria-hidden="true"></i>
@@ -1033,7 +1176,7 @@ else
 
 @if (_showQuoteRequestPopup && _quoteRequestInstruction is not null)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseQuoteRequestPopup">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-quote-success @(_quoteRequestPopupIsError ? "sdd-quote-success--error" : string.Empty)" role="dialog" aria-modal="true" aria-labelledby="sdd-quote-success-title" @onclick:stopPropagation="true">
             <div class="sdd-quote-success__hero">
                 <div class="sdd-quote-success__icon"><i class="bi @(_quoteRequestPopupIsError ? "bi-exclamation-triangle" : "bi-send-check")" aria-hidden="true"></i></div>
@@ -1070,7 +1213,7 @@ else
 
 @if (_showReadinessGatePopup)
 {
-    <div class="sdd-modal-backdrop" role="presentation" @onclick="CloseReadinessGatePopup">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-readiness-gate" role="dialog" aria-modal="true" aria-labelledby="sdd-readiness-gate-title" @onclick:stopPropagation="true">
             <div class="sdd-readiness-gate__hero">
                 <div class="sdd-readiness-gate__icon"><i class="bi bi-shield-exclamation" aria-hidden="true"></i></div>
@@ -1132,7 +1275,7 @@ else
 
 @if (_packagePreview is not null)
 {
-    <div class="sdd-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="sdd-package-preview-title" @onclick="ClosePackagePreview">
+    <div class="sdd-modal-backdrop" role="presentation">
         <div class="sdd-package-preview" @onclick:stopPropagation="true">
             <div class="sdd-modal__header"><i class="bi bi-box-seam" aria-hidden="true"></i><span id="sdd-package-preview-title">Market Package Preview</span><button type="button" class="sdd-icon-btn sdd-icon-btn--light ms-auto" @onclick="ClosePackagePreview"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
             <div class="sdd-modal__body">
@@ -1195,10 +1338,14 @@ else
     [SupplyParameterFromQuery(Name = "proposalId")]
     public Guid? RequestedProposalId { get; set; }
 
+    [SupplyParameterFromQuery(Name = "quoteId")]
+    public Guid? RequestedQuoteId { get; set; }
+
     bool _loading = true;
     bool _actionBusy;
     bool _showActionDialog;
     bool _showDocumentUpload;
+    bool _uploadingCarrierQuote;
     bool _showDocumentMetadata;
     bool _documentBusy;
     bool _showConfirmDialog;
@@ -1251,7 +1398,6 @@ else
     readonly List<SubmissionReferenceOptionDto> _quoteStatuses = [];
     readonly List<SubmissionReferenceOptionDto> _submissionMethodOptions = [];
     readonly List<SubmissionReferenceOptionDto> _proposalDeliveryMethodOptions = [];
-    readonly List<SubmissionReferenceOptionDto> _proposalClientDecisionOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestScopeOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestActionOptions = [];
     readonly List<SubmissionReferenceOptionDto> _quoteRequestReasonOptions = [];
@@ -1259,6 +1405,8 @@ else
     readonly List<SubmissionReferenceOptionDto> _quoteRequestBlockedStatusOptions = [];
     readonly List<SubmissionReferenceOptionDto> _customerAuthorizationMethodOptions = [];
     readonly HashSet<Guid> _selectedQuoteRequestLineIds = [];
+    readonly List<QuoteLineForm> _quoteLineForms = [];
+    readonly List<string> _quoteValidationErrors = [];
     readonly List<CommItem> _communications = [];
     readonly List<ToastMessage> _toasts = [];
     readonly ActionForm _actionForm = new();
@@ -1345,6 +1493,15 @@ else
                     OpenDocumentUpload();
                 else if (RequestedAction is "proposal" or "proposal-delivery")
                     OpenProposalWorkflow();
+                else if (string.Equals(RequestedAction, "quote-review", StringComparison.OrdinalIgnoreCase) && RequestedQuoteId.HasValue)
+                {
+                    var requestedQuote = _quotes.FirstOrDefault(quote => quote.QuoteId == RequestedQuoteId.Value);
+                    if (requestedQuote is not null)
+                    {
+                        SetTab(2);
+                        OpenQuoteReviewDialog(requestedQuote);
+                    }
+                }
                 else
                 {
                     OpenActionDialog(RequestedAction);
@@ -1450,14 +1607,13 @@ else
 
     async Task LoadReferenceOptionsAsync(Guid tenantId)
     {
-        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _proposalClientDecisionOptions.Count > 0 && _quoteRequestScopeOptions.Count > 0 && _quoteRequestActionOptions.Count > 0 && _quoteRequestReasonOptions.Count > 0 && _quoteRequestMethodOptions.Count > 0 && _quoteRequestBlockedStatusOptions.Count > 0 && _customerAuthorizationMethodOptions.Count > 0) return;
+        if (_marketStatuses.Count > 0 && _quoteStatuses.Count > 0 && _submissionMethodOptions.Count > 0 && _proposalDeliveryMethodOptions.Count > 0 && _quoteRequestScopeOptions.Count > 0 && _quoteRequestActionOptions.Count > 0 && _quoteRequestReasonOptions.Count > 0 && _quoteRequestMethodOptions.Count > 0 && _quoteRequestBlockedStatusOptions.Count > 0 && _customerAuthorizationMethodOptions.Count > 0) return;
 
         var options = await Api.GetSubmissionReferenceOptionsAsync(tenantId) ?? [];
         LoadOptionGroup(_marketStatuses, options, "MarketStatus");
         LoadOptionGroup(_quoteStatuses, options, "QuoteStatus");
         LoadOptionGroup(_submissionMethodOptions, options, "SubmissionMethod");
         LoadOptionGroup(_proposalDeliveryMethodOptions, options, "ProposalDeliveryMethod");
-        LoadOptionGroup(_proposalClientDecisionOptions, options, "ProposalClientDecision");
         LoadOptionGroup(_quoteRequestScopeOptions, options, "QuoteRequestScope");
         LoadOptionGroup(_quoteRequestActionOptions, options, "QuoteRequestAction");
         LoadOptionGroup(_quoteRequestReasonOptions, options, "QuoteRequestReason");
@@ -1560,6 +1716,7 @@ else
     void OpenActionDialog(string mode)
     {
         _actionMode = mode;
+        _quoteValidationErrors.Clear();
         _actionTitle = mode switch
         {
             "submit" => "Submit to Market",
@@ -1574,7 +1731,7 @@ else
             "document" => "Upload Document",
             "market-package" => "Update Market Package",
             "quote-review" => "Review Quote Terms",
-            "proposal-delivery" => "Proposal Delivery / Decision",
+            "proposal-delivery" => "Proposal Delivery",
             _ => "Submission Action"
         };
         _actionIcon = mode switch
@@ -1600,7 +1757,6 @@ else
         _actionForm.QuoteStatus = DefaultOptionCode(_quoteStatuses, _actionForm.QuoteStatus);
         _actionForm.SubmissionMethodCode = DefaultOptionCode(_submissionMethodOptions, _actionForm.SubmissionMethodCode);
         _actionForm.DeliveryMethod = DefaultOptionCode(_proposalDeliveryMethodOptions, _actionForm.DeliveryMethod);
-        _actionForm.ClientDecision = DefaultOptionCode(_proposalClientDecisionOptions, _actionForm.ClientDecision);
         _actionForm.QuoteRequestScopeCode = DefaultOptionCode(_quoteRequestScopeOptions, _actionForm.QuoteRequestScopeCode);
         if (mode == "quote")
         {
@@ -1631,10 +1787,20 @@ else
         _showActionDialog = true;
     }
 
-    void OpenDocumentUpload() => _showDocumentUpload = true;
+    void OpenDocumentUpload()
+    {
+        _uploadingCarrierQuote = false;
+        _showDocumentUpload = true;
+    }
+
+    void OpenCarrierQuoteUpload()
+    {
+        _uploadingCarrierQuote = true;
+        _showDocumentUpload = true;
+    }
 
     void OpenDocument(DocumentDto document) => Nav.NavigateTo($"/documents/{document.DocumentId}");
-    void OpenProposalWorkflow() => Nav.NavigateTo($"/quotes/proposal/{SubmissionId}");
+    void OpenProposalWorkflow() => Nav.NavigateTo($"/submissions/{SubmissionId}/proposals");
 
     async Task PreviewDocumentAsync(DocumentDto document)
     {
@@ -1706,6 +1872,7 @@ else
     {
         if (_submission is null) return;
 
+        var uploadedCarrierQuote = _uploadingCarrierQuote;
         var document = await Api.GetDocumentByIdAsync(documentId);
         await Api.AddSubmissionNoteAsync(
             SubmissionId,
@@ -1715,7 +1882,16 @@ else
                 _currentUser?.UserId));
 
         await LoadAsync();
-        ShowToast("Submission document uploaded successfully.");
+        if (uploadedCarrierQuote)
+        {
+            _actionForm.QuoteDocumentId = documentId;
+            _uploadingCarrierQuote = false;
+            ShowToast("Carrier quote uploaded and selected successfully.");
+        }
+        else
+        {
+            ShowToast("Submission document uploaded successfully.");
+        }
     }
 
     void HandleSubmissionDocumentUploadFailed(string message) => ShowToast(message, true);
@@ -1756,9 +1932,22 @@ else
         _actionForm.BrokerFee = quote.BrokerFee;
         _actionForm.TriaIncluded = quote.TriaIncluded ?? false;
         _actionForm.IsBindable = quote.IsBindable;
+        _actionForm.QuoteDocumentId = quote.QuoteDocumentId;
         _actionForm.ExpiresDateUtc = quote.ExpiresDateUtc;
         _actionForm.QuoteStatus = quote.Status;
         _actionForm.Notes = quote.CoverageNotes ?? string.Empty;
+        InitializeQuoteLineForms(quote, _selectedMarket);
+    }
+
+    void ExecuteProposalReadinessAction(QuoteComparisonDto quote, ProposalReadinessFactorDto? factor)
+    {
+        if (factor is null || string.Equals(factor.ActionCode, "QuoteReview", StringComparison.OrdinalIgnoreCase))
+        {
+            OpenQuoteReviewDialog(quote);
+            return;
+        }
+
+        ShowToast($"Unsupported proposal-readiness action: {factor.ActionCode}.", true);
     }
 
     void OpenQuoteResponseDialog(SubmissionMarketDto market)
@@ -1775,6 +1964,32 @@ else
         _actionForm.ExpiresDateUtc = DateTime.UtcNow.AddDays(30);
         _actionForm.IsBindable = false;
         _actionForm.Notes = string.Empty;
+        InitializeQuoteLineForms(null, market);
+    }
+
+    void InitializeQuoteLineForms(QuoteComparisonDto? quote, SubmissionMarketDto? market)
+    {
+        _quoteLineForms.Clear();
+        if (quote?.Lines.Any(line => line.SubmissionLineId.HasValue) == true)
+        {
+            _quoteLineForms.AddRange(quote.Lines.Where(line => line.SubmissionLineId.HasValue).Select(line => QuoteLineForm.FromDto(line)));
+            return;
+        }
+
+        var requestedLineIds = market?.RequestedLines.Select(line => line.SubmissionLineId).ToHashSet() ?? [];
+        var sourceLines = requestedLineIds.Count > 0 ? _lines.Where(line => requestedLineIds.Contains(line.SubmissionLineId)) : _lines;
+        var sortOrder = 0;
+        foreach (var line in sourceLines)
+        {
+            _quoteLineForms.Add(new QuoteLineForm
+            {
+                SubmissionLineId = line.SubmissionLineId,
+                LineOfBusiness = line.LineOfBusiness,
+                Status = PreferredOptionCode(_quoteStatuses, "Received", _actionForm.QuoteStatus),
+                QuotedPremium = market?.RequestedLines.FirstOrDefault(requested => requested.SubmissionLineId == line.SubmissionLineId)?.TargetPremium ?? line.TargetPremium,
+                SortOrder = sortOrder++
+            });
+        }
     }
 
     void RequestQuoteForMarket(SubmissionMarketDto market)
@@ -1792,6 +2007,12 @@ else
 
     void OpenConfirmDialog()
     {
+        if (_actionMode == "quote-review" && !ValidateQuoteReview())
+        {
+            ShowToast("Review the highlighted quote-term validation issues.", true);
+            return;
+        }
+
         if (_actionMode == "submit" && !IsReadyForSubmitToMarket())
         {
             ShowReadinessGate("This carrier package cannot be submitted yet because underwriting readiness has open DB-backed blockers.");
@@ -1883,11 +2104,122 @@ else
             "note" => "Persist this note to the submission activity timeline?",
             "market-package" => "Persist market package status, reason, next action date, and sent document set?",
             "quote-review" => "Persist quote terms, subjectivities, exclusions, commission, rating, and recommendation score?",
-            "proposal-delivery" => "Persist proposal delivery and client decision tracking?",
+            "proposal-delivery" => "Queue this approved proposal for delivery?",
             _ => "Record this submission action?"
         };
         _showActionDialog = false;
         _showConfirmDialog = true;
+    }
+
+    bool ValidateQuoteReview()
+    {
+        _quoteValidationErrors.Clear();
+        SynchronizeQuoteStatusFromLines();
+
+        if (string.IsNullOrWhiteSpace(_actionForm.QuoteStatus))
+            _quoteValidationErrors.Add("Quote status is required.");
+        if (!_actionForm.QuoteEffectiveDate.HasValue)
+            _quoteValidationErrors.Add("Effective date is required.");
+        if (!_actionForm.ExpiresDateUtc.HasValue)
+            _quoteValidationErrors.Add("Expiration date is required.");
+        if (_actionForm.QuoteEffectiveDate.HasValue && _actionForm.ExpiresDateUtc.HasValue && _actionForm.ExpiresDateUtc.Value.Date <= _actionForm.QuoteEffectiveDate.Value.Date)
+            _quoteValidationErrors.Add("Expiration date must be after the effective date.");
+        if (_actionForm.AnnualPremium is < 0)
+            _quoteValidationErrors.Add("Annual premium cannot be negative.");
+
+        if (string.Equals(_actionForm.QuoteStatus, "Approved for Presentation", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_actionForm.CarrierId.HasValue || _actionForm.CarrierId == Guid.Empty)
+                _quoteValidationErrors.Add("A carrier market must be linked before approval for presentation.");
+            if (_actionForm.AnnualPremium is null or <= 0)
+                _quoteValidationErrors.Add("Annual premium must be greater than zero before approval for presentation.");
+            if (!_actionForm.ExpiresDateUtc.HasValue || _actionForm.ExpiresDateUtc.Value <= DateTime.UtcNow)
+                _quoteValidationErrors.Add("A future quote expiration date is required before approval for presentation.");
+            if (!_actionForm.Deductible.HasValue)
+                _quoteValidationErrors.Add("Deductible is required before approval for presentation.");
+            if (!_actionForm.Limit.HasValue)
+                _quoteValidationErrors.Add("Coverage limit is required before approval for presentation.");
+            if (string.IsNullOrWhiteSpace(_actionForm.CoverageForms) && string.IsNullOrWhiteSpace(_actionForm.Notes))
+                _quoteValidationErrors.Add("Coverage forms or coverage notes are required before approval for presentation.");
+            if (!_actionForm.QuoteDocumentId.HasValue)
+                _quoteValidationErrors.Add("A carrier quote document must be linked before approval for presentation.");
+        }
+
+        ValidateOptionalMoney(_actionForm.Deductible, "Package deductible");
+        ValidateOptionalMoney(_actionForm.Limit, "Package limit");
+        ValidateOptionalMoney(_actionForm.MinimumEarnedPremium, "Package minimum earned premium");
+        ValidateOptionalMoney(_actionForm.TaxesAndFees, "Package taxes and fees");
+        ValidateOptionalMoney(_actionForm.BrokerFee, "Package broker fee");
+        ValidateCommission(_actionForm.CommissionPercent, "Package commission");
+        ValidateLength(_actionForm.CarrierRating, 80, "Carrier rating");
+        ValidateLength(_actionForm.PaymentTerms, 200, "Package payment terms");
+        ValidateLength(_actionForm.CoverageForms, 2000, "Package coverage forms");
+        ValidateLength(_actionForm.Subjectivities, 2000, "Package subjectivities");
+        ValidateLength(_actionForm.Exclusions, 2000, "Package exclusions");
+        ValidateLength(_actionForm.Notes, 1000, "Package notes");
+
+        if (_quoteLineForms.Count == 0)
+            _quoteValidationErrors.Add("At least one persisted submission coverage line is required.");
+        if (_quoteLineForms.Any(line => line.SubmissionLineId == Guid.Empty))
+            _quoteValidationErrors.Add("Every quote line must reference a valid submission line.");
+        if (_quoteLineForms.GroupBy(line => line.SubmissionLineId).Any(group => group.Count() > 1))
+            _quoteValidationErrors.Add("A submission coverage line can appear only once in the quote.");
+
+        foreach (var line in _quoteLineForms.OrderBy(line => line.SortOrder))
+        {
+            var label = string.IsNullOrWhiteSpace(line.LineOfBusiness) ? "Coverage line" : line.LineOfBusiness.Trim();
+            if (string.IsNullOrWhiteSpace(line.LineOfBusiness)) _quoteValidationErrors.Add("Every quote line requires a line of business.");
+            if (line.LineOfBusiness?.Length > 100) _quoteValidationErrors.Add($"{label}: line of business cannot exceed 100 characters.");
+            if (string.IsNullOrWhiteSpace(line.Status)) _quoteValidationErrors.Add($"{label}: status is required.");
+            if (line.Status?.Length > 50) _quoteValidationErrors.Add($"{label}: status cannot exceed 50 characters.");
+            if (line.QuotedPremium <= 0) _quoteValidationErrors.Add($"{label}: quoted premium must be greater than zero.");
+            ValidateOptionalMoney(line.Deductible, $"{label} deductible");
+            ValidateOptionalMoney(line.Limit, $"{label} limit");
+            ValidateOptionalMoney(line.MinimumEarnedPremium, $"{label} minimum earned premium");
+            ValidateOptionalMoney(line.TaxesAndFees, $"{label} taxes and fees");
+            ValidateOptionalMoney(line.BrokerFee, $"{label} broker fee");
+            ValidateCommission(line.CommissionPercent, $"{label} commission");
+            ValidateLength(line.PaymentTerms, 200, $"{label} payment terms");
+            ValidateLength(line.CoverageForms, 2000, $"{label} coverage forms");
+            ValidateLength(line.Subjectivities, 2000, $"{label} subjectivities");
+            ValidateLength(line.Exclusions, 2000, $"{label} exclusions");
+            ValidateLength(line.CoverageNotes, 1000, $"{label} notes");
+        }
+
+        if (_quoteLineForms.Count > 0)
+            _actionForm.AnnualPremium = _quoteLineForms.Sum(line => line.QuotedPremium);
+
+        return _quoteValidationErrors.Count == 0;
+    }
+
+    void SynchronizeQuoteStatusFromLines()
+    {
+        var statuses = _quoteLineForms
+            .Select(line => line.Status?.Trim())
+            .Where(status => !string.IsNullOrWhiteSpace(status))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (_quoteLineForms.Count > 0 && statuses.Length == 1)
+            _actionForm.QuoteStatus = statuses[0]!;
+    }
+
+    void ValidateOptionalMoney(decimal? value, string label)
+    {
+        if (value is < 0 or > 999999999999m)
+            _quoteValidationErrors.Add($"{label} must be between 0 and 999,999,999,999.");
+    }
+
+    void ValidateCommission(decimal? value, string label)
+    {
+        if (value is < 0 or > 100)
+            _quoteValidationErrors.Add($"{label} must be between 0% and 100%.");
+    }
+
+    void ValidateLength(string? value, int maximumLength, string label)
+    {
+        if (value?.Length > maximumLength)
+            _quoteValidationErrors.Add($"{label} cannot exceed {maximumLength:N0} characters.");
     }
 
     void CloseConfirmDialog()
@@ -1976,16 +2308,13 @@ else
                     throw new InvalidOperationException("Select a market before recording a carrier quote response.");
                 }
 
-                await Api.RecordSubmissionQuoteResponseAsync(SubmissionId, new RecordSubmissionQuoteResponseRequest(_submission.TenantId, marketId.Value, _selectedQuote?.QuoteId, _actionForm.QuoteStatus, _actionForm.AnnualPremium ?? _selectedQuote?.AnnualPremium ?? 0, _actionForm.Deductible, _actionForm.Limit, _actionForm.CommissionPercent, _actionForm.Subjectivities, _actionForm.Exclusions, _actionForm.CarrierRating, _actionForm.PaymentTerms, _actionForm.MinimumEarnedPremium, _actionForm.TaxesAndFees, _actionForm.BrokerFee, _actionForm.TriaIncluded, null, _actionForm.Notes, _actionForm.ExpiresDateUtc ?? DateTime.UtcNow.AddDays(30), "ManualEntry", null, _currentUser?.UserId, _actionForm.QuoteEffectiveDate, _actionForm.CoverageForms, _actionForm.IsBindable));
+                var lineTerms = _quoteLineForms.Select(line => line.ToRequest()).ToArray();
+                await Api.RecordSubmissionQuoteResponseAsync(SubmissionId, new RecordSubmissionQuoteResponseRequest(_submission.TenantId, marketId.Value, _selectedQuote?.QuoteId, _actionForm.QuoteStatus, _actionForm.AnnualPremium ?? _selectedQuote?.AnnualPremium ?? 0, _actionForm.Deductible, _actionForm.Limit, _actionForm.CommissionPercent, _actionForm.Subjectivities, _actionForm.Exclusions, _actionForm.CarrierRating, _actionForm.PaymentTerms, _actionForm.MinimumEarnedPremium, _actionForm.TaxesAndFees, _actionForm.BrokerFee, _actionForm.TriaIncluded, _actionForm.QuoteDocumentId, _actionForm.Notes, _actionForm.ExpiresDateUtc ?? DateTime.UtcNow.AddDays(30), "ManualEntry", null, _currentUser?.UserId, _actionForm.QuoteEffectiveDate, _actionForm.CoverageForms, _actionForm.IsBindable, lineTerms));
                 ShowToast("Quote terms updated.");
             }
             else if (_actionMode == "proposal-delivery" && _actionForm.ProposalId.HasValue)
             {
                 await Api.DeliverProposalAsync(_actionForm.ProposalId.Value, new ProposalDeliveryRequest(_submission.TenantId, _actionForm.DeliveryMethod, _actionForm.Recipient, _currentUser?.UserId));
-                if (!string.Equals(_actionForm.ClientDecision, "Pending", StringComparison.OrdinalIgnoreCase))
-                {
-                    await Api.RecordProposalDecisionAsync(_actionForm.ProposalId.Value, new ProposalDecisionRequest(_submission.TenantId, _actionForm.ClientDecision, _actionForm.Notes, _currentUser?.UserId));
-                }
                 ShowToast("Proposal workflow updated.");
             }
             else if (_actionMode == "remove-market" && _pendingRemoveMarket is not null)
@@ -2205,6 +2534,41 @@ else
         var linkedIds = question.EvidenceDocuments.Select(e => e.DocumentId).ToHashSet();
         return _docs.Where(doc => !linkedIds.Contains(doc.DocumentId)).OrderByDescending(d => d.CreatedDateUtc);
     }
+
+    IEnumerable<DocumentDto> CarrierQuoteDocuments => _docs
+        .Where(document => document.DocumentId == _actionForm.QuoteDocumentId
+            || string.Equals(document.CategoryCode, "QUOTE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(document.DocumentTypeCode, "QUOTE", StringComparison.OrdinalIgnoreCase)
+            || document.Tags?.Contains("Carrier Quote", StringComparison.OrdinalIgnoreCase) == true)
+        .OrderByDescending(document => document.CreatedDateUtc);
+
+    int LiveProposalReadinessCount => _selectedQuote?.ProposalReadinessFactors.Count(IsProposalFactorSatisfied) ?? 0;
+
+    bool IsProposalFactorRequired(string factorCode) => _selectedQuote?.ProposalReadinessFactors.Any(item =>
+        item.IsRequired && string.Equals(item.FactorCode, factorCode, StringComparison.OrdinalIgnoreCase)) == true;
+
+    bool IsProposalFieldInvalid(string factorCode)
+    {
+        var factor = _selectedQuote?.ProposalReadinessFactors.FirstOrDefault(item =>
+            item.IsRequired && string.Equals(item.FactorCode, factorCode, StringComparison.OrdinalIgnoreCase));
+        return factor is not null && !IsProposalFactorSatisfied(factor);
+    }
+
+    string ProposalFieldClass(string baseClass, string factorCode) => RequiredFieldClass(baseClass, !IsProposalFieldInvalid(factorCode));
+    static string RequiredFieldClass(string baseClass, bool isValid) => isValid ? baseClass : $"{baseClass} invalid";
+
+    bool IsProposalFactorSatisfied(ProposalReadinessFactorDto factor) => factor.FactorCode switch
+    {
+        "ApprovedStatus" => string.Equals(_actionForm.QuoteStatus, "Approved for Presentation", StringComparison.OrdinalIgnoreCase),
+        "CurrentExpiration" => _actionForm.ExpiresDateUtc.HasValue && _actionForm.ExpiresDateUtc.Value > DateTime.UtcNow,
+        "PositivePremium" => _actionForm.AnnualPremium is > 0,
+        "CarrierMarket" => _actionForm.CarrierId.HasValue && _actionForm.CarrierId != Guid.Empty,
+        "Deductible" => _actionForm.Deductible.HasValue,
+        "CoverageLimit" => _actionForm.Limit.HasValue,
+        "CoverageDetails" => !string.IsNullOrWhiteSpace(_actionForm.CoverageForms) || !string.IsNullOrWhiteSpace(_actionForm.Notes),
+        "CarrierQuoteDocument" => _actionForm.QuoteDocumentId.HasValue,
+        _ => factor.IsSatisfied
+    };
 
     static string EvidenceHeaderText(SubmissionIntakeQuestionDto question) => question.EvidenceDocuments.Count switch
     {
@@ -2616,6 +2980,7 @@ else
 
     void SyncQuoteRequestPremium() => _actionForm.AnnualPremium = QuoteRequestPackagePremium;
 
+
     static string StatusClass(string status) => $"sdd-status--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string MarketStatusClass(string status) => $"sdd-market-status--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string ActivityIcon(string type) => type switch { "SubmitToMarket" => "bi-send", "RequestQuote" => "bi-journal-text", "Decline" => "bi-x-circle", "Note" => "bi-sticky", "FollowUpTask" => "bi-list-check", "DocumentAttached" => "bi-file-earmark", "Assign" => "bi-person-check", _ => "bi-dot" };
@@ -2718,9 +3083,11 @@ else
 
         public decimal? BrokerFee { get; set; }
 
-        public bool TriaIncluded { get; set; }
+        public bool? TriaIncluded { get; set; }
 
         public bool IsBindable { get; set; }
+
+        public Guid? QuoteDocumentId { get; set; }
 
         public DateTime? ExpiresDateUtc { get; set; }
 
@@ -2728,7 +3095,6 @@ else
 
         public string Recipient { get; set; } = string.Empty;
 
-        public string ClientDecision { get; set; } = string.Empty;
 
         public string QuoteRequestScopeCode { get; set; } = string.Empty;
 
@@ -2788,10 +3154,10 @@ else
             BrokerFee = null;
             TriaIncluded = false;
             IsBindable = false;
+            QuoteDocumentId = null;
             ExpiresDateUtc = DateTime.Today.AddDays(30);
             DeliveryMethod = string.Empty;
             Recipient = string.Empty;
-            ClientDecision = string.Empty;
             QuoteRequestScopeCode = string.Empty;
             QuoteRequestActionCode = string.Empty;
             QuoteRequestReasonCode = null;
@@ -2803,6 +3169,40 @@ else
     }
 
     sealed record MarketStatusGroup(string Status, IReadOnlyList<SubmissionMarketDto> Markets);
+    sealed class QuoteLineForm
+    {
+        public Guid SubmissionLineId { get; set; }
+        public string LineOfBusiness { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal QuotedPremium { get; set; }
+        public decimal? Deductible { get; set; }
+        public decimal? Limit { get; set; }
+        public decimal? CommissionPercent { get; set; }
+        public string? CoverageForms { get; set; }
+        public string? Subjectivities { get; set; }
+        public string? Exclusions { get; set; }
+        public string? PaymentTerms { get; set; }
+        public decimal? MinimumEarnedPremium { get; set; }
+        public decimal? TaxesAndFees { get; set; }
+        public decimal? BrokerFee { get; set; }
+        public bool? TriaIncluded { get; set; }
+        public bool IsBindable { get; set; }
+        public string? CoverageNotes { get; set; }
+        public int SortOrder { get; set; }
+
+        public static QuoteLineForm FromDto(SubmissionQuoteLineDto line) => new()
+        {
+            SubmissionLineId = line.SubmissionLineId.GetValueOrDefault(), LineOfBusiness = line.LineOfBusiness, Status = line.Status,
+            QuotedPremium = line.QuotedPremium, Deductible = line.Deductible, Limit = line.Limit, CommissionPercent = line.CommissionPercent,
+            CoverageForms = line.CoverageForms, Subjectivities = line.Subjectivities, Exclusions = line.Exclusions, PaymentTerms = line.PaymentTerms,
+            MinimumEarnedPremium = line.MinimumEarnedPremium, TaxesAndFees = line.TaxesAndFees, BrokerFee = line.BrokerFee,
+            TriaIncluded = line.TriaIncluded, IsBindable = line.IsBindable, CoverageNotes = line.CoverageNotes, SortOrder = line.SortOrder
+        };
+
+        public SubmissionQuoteLineTermRequest ToRequest() => new(SubmissionLineId, LineOfBusiness, Status, QuotedPremium, Deductible, Limit,
+            CommissionPercent, CoverageForms, Subjectivities, Exclusions, PaymentTerms, MinimumEarnedPremium, TaxesAndFees, BrokerFee,
+            TriaIncluded, IsBindable, CoverageNotes, SortOrder);
+    }
     sealed record TabDef(int Index, string Key, string Label, string Kicker, string Title, string Description, string Icon);
     sealed record UwQuestion(int Number, string Text, bool Required, bool Answered, string HelpText)
     {

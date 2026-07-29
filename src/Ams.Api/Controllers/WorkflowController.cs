@@ -1,5 +1,6 @@
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Models;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -33,8 +34,18 @@ public sealed class WorkflowController : ControllerBase
     [HttpPost("initiate")]
     public async Task<IActionResult> Initiate([FromBody] InitiateWorkflowRequest request, CancellationToken cancellationToken)
     {
-        var id = await _service.InitiateAsync(request.TenantId, request.TargetEntityName, request.TargetEntityId, request.WorkflowDefinitionId, request.UserId, request.Notes, cancellationToken);
-        return Ok(new IdResult { Id = id });
+        if (request.TenantId == Guid.Empty || request.TargetEntityId == Guid.Empty)
+            return BadRequest(new ProblemDetails { Status = StatusCodes.Status400BadRequest, Title = "Workflow request is invalid", Detail = "Tenant and target entity identifiers are required." });
+
+        try
+        {
+            var id = await _service.InitiateAsync(request.TenantId, request.TargetEntityName, request.TargetEntityId, request.WorkflowDefinitionId, request.UserId, request.Notes, cancellationToken);
+            return Ok(new IdResult { Id = id });
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Conflict(new ProblemDetails { Status = StatusCodes.Status409Conflict, Title = "Workflow could not be initiated", Detail = exception.Message });
+        }
     }
 
     [HttpPost("{id:guid}/approve")]
@@ -61,6 +72,7 @@ public sealed class WorkflowController : ControllerBase
     public sealed class InitiateWorkflowRequest
     {
         public Guid TenantId { get; set; }
+        [Required, StringLength(100)]
         public string TargetEntityName { get; set; } = string.Empty;
         public Guid TargetEntityId { get; set; }
         public Guid? WorkflowDefinitionId { get; set; }

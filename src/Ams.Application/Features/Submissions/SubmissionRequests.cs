@@ -143,50 +143,114 @@ public sealed record UpdateSubmissionQuoteRequest(
     DateTime? EffectiveDate = null,
     [property: StringLength(2000)]
     string? CoverageForms = null,
-    bool IsBindable = false);
+    bool IsBindable = false,
+    IReadOnlyList<SubmissionQuoteLineTermRequest>? Lines = null);
 
 public sealed record RecordSubmissionQuoteResponseRequest(
     Guid TenantId,
     Guid SubmissionMarketId,
     Guid? QuoteId,
-    [property: Required, StringLength(50)]
+    [param: Required, StringLength(50)]
     string Status,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal AnnualPremium,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal? Deductible,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal? Limit,
-    [property: Range(0, 100)]
+    [param: Range(0, 100)]
     decimal? CommissionPercent,
-    [property: StringLength(2000)]
+    [param: StringLength(2000)]
     string? Subjectivities,
-    [property: StringLength(2000)]
+    [param: StringLength(2000)]
     string? Exclusions,
-    [property: StringLength(80)]
+    [param: StringLength(80)]
     string? CarrierRating,
-    [property: StringLength(200)]
+    [param: StringLength(200)]
     string? PaymentTerms,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal? MinimumEarnedPremium,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal? TaxesAndFees,
-    [property: Range(0, 999999999999)]
+    [param: Range(0, 999999999999)]
     decimal? BrokerFee,
     bool? TriaIncluded,
     Guid? QuoteDocumentId,
-    [property: StringLength(1000)]
+    [param: StringLength(1000)]
     string? CoverageNotes,
     DateTime ExpiresDateUtc,
-    [property: StringLength(50)]
+    [param: StringLength(50)]
     string? ResponseSourceCode,
-    [property: StringLength(100)]
+    [param: StringLength(100)]
     string? CarrierReferenceNumber,
     Guid? ReceivedByUserId,
     DateTime? EffectiveDate = null,
-    [property: StringLength(2000)]
+    [param: StringLength(2000)]
     string? CoverageForms = null,
-    bool IsBindable = false);
+    bool IsBindable = false,
+    IReadOnlyList<SubmissionQuoteLineTermRequest>? Lines = null);
+
+public sealed class SubmissionQuoteLineTermRequest
+{
+    public SubmissionQuoteLineTermRequest(
+        Guid submissionLineId,
+        string lineOfBusiness,
+        string status,
+        decimal quotedPremium,
+        decimal? deductible,
+        decimal? limit,
+        decimal? commissionPercent,
+        string? coverageForms,
+        string? subjectivities,
+        string? exclusions,
+        string? paymentTerms,
+        decimal? minimumEarnedPremium,
+        decimal? taxesAndFees,
+        decimal? brokerFee,
+        bool? triaIncluded,
+        bool isBindable,
+        string? coverageNotes,
+        int sortOrder = 0)
+    {
+        SubmissionLineId = submissionLineId;
+        LineOfBusiness = lineOfBusiness;
+        Status = status;
+        QuotedPremium = quotedPremium;
+        Deductible = deductible;
+        Limit = limit;
+        CommissionPercent = commissionPercent;
+        CoverageForms = coverageForms;
+        Subjectivities = subjectivities;
+        Exclusions = exclusions;
+        PaymentTerms = paymentTerms;
+        MinimumEarnedPremium = minimumEarnedPremium;
+        TaxesAndFees = taxesAndFees;
+        BrokerFee = brokerFee;
+        TriaIncluded = triaIncluded;
+        IsBindable = isBindable;
+        CoverageNotes = coverageNotes;
+        SortOrder = sortOrder;
+    }
+
+    public Guid SubmissionLineId { get; init; }
+    [Required, StringLength(100)] public string LineOfBusiness { get; init; }
+    [Required, StringLength(50)] public string Status { get; init; }
+    [Range(0, 999999999999)] public decimal QuotedPremium { get; init; }
+    [Range(0, 999999999999)] public decimal? Deductible { get; init; }
+    [Range(0, 999999999999)] public decimal? Limit { get; init; }
+    [Range(0, 100)] public decimal? CommissionPercent { get; init; }
+    [StringLength(2000)] public string? CoverageForms { get; init; }
+    [StringLength(2000)] public string? Subjectivities { get; init; }
+    [StringLength(2000)] public string? Exclusions { get; init; }
+    [StringLength(200)] public string? PaymentTerms { get; init; }
+    [Range(0, 999999999999)] public decimal? MinimumEarnedPremium { get; init; }
+    [Range(0, 999999999999)] public decimal? TaxesAndFees { get; init; }
+    [Range(0, 999999999999)] public decimal? BrokerFee { get; init; }
+    public bool? TriaIncluded { get; init; }
+    public bool IsBindable { get; init; }
+    [StringLength(1000)] public string? CoverageNotes { get; init; }
+    public int SortOrder { get; init; }
+}
 
 public sealed record RecordCarrierInboundResponseRequest(
     Guid TenantId,
@@ -210,7 +274,7 @@ public sealed record SelectSubmissionQuoteRequest(
     Guid TenantId,
     Guid QuoteId,
     bool IsRecommended,
-    [property: Required, StringLength(1000)]
+    [param: Required, StringLength(1000)]
     string Reason,
     Guid? SelectedByUserId);
 
@@ -249,23 +313,6 @@ public sealed record ProposalPresentationRequest(
     string? PresentationNotes,
     Guid? PresentedByUserId);
 
-public sealed record ProposalDecisionRequest(
-    Guid TenantId,
-    [property: Required, StringLength(50)]
-    string Decision,
-    [property: StringLength(1000)]
-    string? DecisionNotes,
-    Guid? DecidedByUserId,
-    Guid? SelectedQuoteId = null,
-    [property: StringLength(50)]
-    string? AuthorizationMethodCode = null,
-    [property: StringLength(200)]
-    string? AuthorizationReference = null,
-    [property: StringLength(200)]
-    string? AuthorizedByName = null,
-    DateTime? AuthorizedDateUtc = null,
-    Guid? AuthorizationDocumentId = null);
-
 public sealed record SubmitSubmissionToMarketRequest(
     Guid TenantId,
     Guid? CarrierId,
@@ -299,6 +346,10 @@ public sealed record UpsertSubmissionReadinessRequirementRequest(
     string? EvidencePrompt,
     [property: StringLength(100)]
     string? ApprovalRoleCode,
+    [property: StringLength(50)]
+    string? ActionCode,
+    [property: StringLength(150)]
+    string? ActionLabel,
     [property: Range(0, 100)]
     int ScoreWeight,
     [property: Range(0, 10000)]
@@ -386,6 +437,76 @@ public sealed record GenerateProposalRequest(
     Guid[] QuoteIds,
     string? CustomIntroduction,
     Guid? GeneratedByUserId = null);
+
+public sealed record SubmitProposalReviewRequest(
+    Guid TenantId,
+    Guid AssignedReviewerUserId,
+    [property: StringLength(2000)] string? ReviewNotes,
+    DateTime? DueDateUtc,
+    Guid? RequestedByUserId = null);
+
+public sealed record DecideProposalReviewRequest(
+    Guid TenantId,
+    [property: Required] string DecisionCode,
+    [property: Required, StringLength(2000)] string DecisionNotes,
+    Guid? DecidedByUserId = null) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (DecisionCode is not ("Approved" or "ChangesRequired" or "Rejected"))
+            yield return new ValidationResult("Decision must be Approved, ChangesRequired, or Rejected.", [nameof(DecisionCode)]);
+    }
+}
+
+public sealed record UpsertProposalRecipientRequest(
+    Guid TenantId,
+    Guid? ProposalRecipientId,
+    Guid? ContactId,
+    [property: Required, StringLength(50)] string RecipientTypeCode,
+    [property: Required, StringLength(200)] string RecipientName,
+    [property: Required, EmailAddress, StringLength(320)] string RecipientEmail,
+    [property: Range(1, 100)] int SigningOrder,
+    bool IsPrimary,
+    bool IsSigner,
+    Guid? ModifiedByUserId = null) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (RecipientTypeCode is not ("Client" or "Cc" or "Signer" or "Agency"))
+            yield return new ValidationResult("Recipient type is invalid.", [nameof(RecipientTypeCode)]);
+        if (RecipientTypeCode == "Signer" && !IsSigner)
+            yield return new ValidationResult("Signer recipients must be marked as signers.", [nameof(IsSigner)]);
+    }
+}
+
+public sealed record ProposalProviderCallbackRequest(
+    Guid TenantId,
+    [property: Required, StringLength(100)] string ProviderCode,
+    [property: Required, StringLength(500)] string ProviderEventId,
+    [property: StringLength(500)] string? ExternalEnvelopeId,
+    [property: Required, StringLength(100)] string EventTypeCode,
+    [property: Required, StringLength(50)] string StatusCode,
+    [property: Required] string PayloadJson,
+    [property: Required, StringLength(2000)] string SignatureHeader,
+    Guid? SignedDocumentId = null,
+    Guid? CertificateDocumentId = null);
+
+public sealed record UpsertProposalSlaPolicyRequest(
+    Guid TenantId,
+    [property: Required, StringLength(100)] string EventCode,
+    [property: Range(1, 525600)] int DueAfterMinutes,
+    [property: Range(1, 525600)] int? EscalateAfterMinutes,
+    [property: Required, StringLength(50)] string PriorityCode,
+    [property: StringLength(100)] string? AssignedRoleCode,
+    bool IsActive,
+    Guid? ModifiedByUserId = null) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (EscalateAfterMinutes.HasValue && EscalateAfterMinutes < DueAfterMinutes)
+            yield return new ValidationResult("Escalation cannot occur before the SLA due time.", [nameof(EscalateAfterMinutes)]);
+    }
+}
 
 public sealed record UpsertSubmissionIntakeTemplateRequest(
     Guid TenantId,

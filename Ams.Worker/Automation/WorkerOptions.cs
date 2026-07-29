@@ -13,6 +13,7 @@ public sealed class WorkerOptions
     public int MaxSubmitToMarketDispatchesPerPoll { get; set; } = 25;
     public int ProposalDeliveryPollIntervalSeconds { get; set; } = 30;
     public int MaxProposalDeliveriesPerPoll { get; set; } = 25;
+    public int ProposalDeliveryClaimLeaseMinutes { get; set; } = 15;
     public int QuoteRequestFollowUpPollIntervalSeconds { get; set; } = 300;
     public int ApiRatingPollIntervalSeconds { get; set; } = 30;
     public int MaxApiRatingTransmissionsPerPoll { get; set; } = 10;

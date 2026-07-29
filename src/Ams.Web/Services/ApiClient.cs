@@ -969,6 +969,29 @@ public sealed partial class ApiClient
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
     }
 
+    public Task<ClientAcceptanceReadinessDto?> GetClientAcceptanceReadinessAsync(Guid proposalId, Guid? quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ClientAcceptanceReadinessDto>($"api/client-acceptances/readiness?proposalId={proposalId}&quoteId={quoteId}&tenantId={tenantId}", cancellationToken);
+
+    public Task<IReadOnlyList<ClientAcceptanceDto>?> GetClientAcceptancesAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ClientAcceptanceDto>>($"api/client-acceptances/submission/{submissionId}?tenantId={tenantId}", cancellationToken);
+
+    public Task<ClientAcceptanceDto?> GetClientAcceptanceByIdAsync(Guid clientAcceptanceId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ClientAcceptanceDto>($"api/client-acceptances/{clientAcceptanceId}?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> RecordClientAcceptanceAsync(RecordClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/client-acceptances", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task WithdrawClientAcceptanceAsync(Guid clientAcceptanceId, WithdrawClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/client-acceptances/{clientAcceptanceId}/withdraw", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public async Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/present", request, cancellationToken);
@@ -3058,6 +3081,9 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes", cancellationToken);
 
+    public Task<QuoteComparisonDto?> GetSubmissionQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<QuoteComparisonDto>($"api/quotes/{quoteId}?tenantId={tenantId}", cancellationToken);
+
     public async Task<SubmissionActionResult> RecordSubmissionQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/{submissionId}/quotes/response", request, cancellationToken);
@@ -3163,10 +3189,39 @@ public sealed partial class ApiClient
     public Task<ProposalBindContinuationDto?> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<ProposalBindContinuationDto>($"api/submissions/proposals/{proposalId}/bind-continuation?tenantId={tenantId}", cancellationToken);
 
-    public async Task RecordProposalDecisionAsync(Guid proposalId, ProposalDecisionRequest request, CancellationToken cancellationToken = default)
+    public async Task SubmitProposalReviewAsync(Guid proposalId, SubmitProposalReviewRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/decision", request, cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/review", request, cancellationToken);
         await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task DecideProposalReviewAsync(Guid proposalId, DecideProposalReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/review-decision", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<Guid> UpsertProposalRecipientAsync(Guid proposalId, UpsertProposalRecipientRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposals/{proposalId}/recipients", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task DeleteProposalRecipientAsync(Guid proposalId, Guid recipientId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/submissions/proposals/{proposalId}/recipients/{recipientId}?tenantId={tenantId}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<ProposalSlaPolicyDto>?> GetProposalSlaPoliciesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalSlaPolicyDto>>($"api/submissions/proposal-sla-policies?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> UpsertProposalSlaPolicyAsync(UpsertProposalSlaPolicyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync("api/submissions/proposal-sla-policies", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
     public async Task<Guid> InitiateWorkflowForSubmissionAsync(Guid submissionId, Guid tenantId, Guid? workflowDefinitionId = null, CancellationToken cancellationToken = default)

@@ -810,14 +810,25 @@ BEGIN TRY
               );
 
             INSERT INTO Submissions.QuoteLine
-                (QuoteLineId, TenantId, QuoteId, SubmissionId, OpportunityLineId, LineOfBusiness, QuotedPremium, Status, CreatedDateUtc, IsDeleted)
-            SELECT NEWID(), line.TenantId, @QuoteId, @SubmissionId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(sl.TargetPremium, 0), line.EstPremium, 0), N'Bound', SYSUTCDATETIME(), 0
-            FROM CRM.OpportunityLine line
-            LEFT JOIN CRM.OpportunitySubmissionLine sl ON sl.SubmissionId = @SourceOpportunitySubmissionId AND sl.OpportunityLineId = line.OpportunityLineId AND sl.IsDeleted = 0
-            WHERE line.TenantId = @TenantId
-              AND line.OpportunityId = @OpportunityId
-              AND line.IsDeleted = 0
-              AND (@SourceOpportunitySubmissionId IS NULL OR sl.OpportunitySubmissionLineId IS NOT NULL OR NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine sourceLine WHERE sourceLine.SubmissionId = @SourceOpportunitySubmissionId AND sourceLine.IsDeleted = 0));
+                (QuoteLineId, TenantId, QuoteId, SubmissionId, SubmissionLineId, OpportunityLineId, LineOfBusiness, QuotedPremium,
+                 IsBindable, CoverageNotes, Status, SortOrder, CreatedDateUtc, CreatedByUserId, IsDeleted)
+            SELECT NEWID(), submissionLine.TenantId, @QuoteId, @SubmissionId, submissionLine.SubmissionLineId, submissionLine.OpportunityLineId,
+                   submissionLine.LineOfBusiness,
+                   ROUND(CASE WHEN totals.TotalTargetPremium > 0 THEN @AnnualPremium * submissionLine.TargetPremium / totals.TotalTargetPremium
+                              ELSE @AnnualPremium / NULLIF(totals.LineCount, 0) END, 2),
+                   1, CONCAT(N'Bound line synchronized from opportunity ', @OpportunityNumber, N'.'), N'Bound',
+                   ROW_NUMBER() OVER (ORDER BY submissionLine.LineOfBusiness, submissionLine.SubmissionLineId), SYSUTCDATETIME(), @ModifiedByUserId, 0
+            FROM Submissions.SubmissionLine submissionLine
+            CROSS APPLY
+            (
+                SELECT SUM(CASE WHEN candidate.TargetPremium > 0 THEN candidate.TargetPremium ELSE 0 END) AS TotalTargetPremium,
+                       COUNT(1) AS LineCount
+                FROM Submissions.SubmissionLine candidate
+                WHERE candidate.SubmissionId = @SubmissionId AND candidate.TenantId = @TenantId AND candidate.IsDeleted = 0
+            ) totals
+            WHERE submissionLine.SubmissionId = @SubmissionId
+              AND submissionLine.TenantId = @TenantId
+              AND submissionLine.IsDeleted = 0;
 
             SET @PolicyId = NEWID();
             SET @PolicyNumber = CONCAT(N'POL-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(N'00000' + CAST(NEXT VALUE FOR Submissions.PolicySeq AS NVARCHAR(10)), 5));

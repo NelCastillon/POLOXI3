@@ -5,19 +5,24 @@
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
 
-<PageTitle>Carrier Readiness Requirements - Carrier Configuration</PageTitle>
+<PageTitle>Workflow Readiness Requirements - Tenant Configuration</PageTitle>
 
 <div class="crr-page">
     <section class="crr-hero">
         <div>
-            <span class="crr-kicker">Enterprise market readiness</span>
-            <h1>Carrier Readiness Requirements</h1>
-            <p>Configure DB-backed submission readiness gates by line of business, carrier, state, and channel before market submission.</p>
+            <span class="crr-kicker">Enterprise workflow readiness</span>
+            <h1>Workflow Readiness Requirements</h1>
+            <p>Configure the shared DB-backed requirements for carrier submission and proposal presentation workflows.</p>
         </div>
         <div class="crr-actions">
             <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
             <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Requirement</button>
         </div>
+    </section>
+
+    <section class="crr-filter" aria-label="Workflow readiness view">
+        <button type="button" class="um-btn @(_workflowView == "Carrier" ? "um-btn-primary" : "um-btn-ghost")" @onclick='() => SetWorkflowView("Carrier")'><i class="bi bi-building" aria-hidden="true"></i> Carrier Readiness</button>
+        <button type="button" class="um-btn @(_workflowView == "Proposal" ? "um-btn-primary" : "um-btn-ghost")" @onclick='() => SetWorkflowView("Proposal")'><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i> Proposal Readiness</button>
     </section>
 
     @if (_loadError is not null)
@@ -83,6 +88,8 @@
                     <label><span>Sort order</span><InputNumber class="form-control" @bind-Value="_form.SortOrder" /><ValidationMessage For="() => _form.SortOrder" class="text-danger" /></label>
                     <label class="crr-wide"><span>Description</span><InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" /></label>
                     <label class="crr-wide"><span>Evidence prompt</span><InputTextArea class="form-control" rows="2" @bind-Value="_form.EvidencePrompt" /></label>
+                    <label><span>Corrective action</span><InputSelect class="form-select" @bind-Value="_form.ActionCode"><option value="">No direct action</option><option value="QuoteReview">Review Quote Terms</option><option value="Documents">Manage Documents</option><option value="Readiness">Review Submission Readiness</option></InputSelect></label>
+                    <label><span>Action label</span><InputText class="form-control" @bind-Value="_form.ActionLabel" maxlength="150" /></label>
                     <label class="crr-check"><InputCheckbox @bind-Value="_form.IsRequired" /><span>Required</span></label>
                     <label class="crr-check"><InputCheckbox @bind-Value="_form.BlocksSubmit" /><span>Blocks submit</span></label>
                     <label class="crr-check"><InputCheckbox @bind-Value="_form.AllowsWaiver" /><span>Allows waiver</span></label>
@@ -107,8 +114,8 @@
     readonly List<SubmissionReadinessRequirementDto> _filtered = [];
     readonly List<CarrierDto> _carriers = [];
     readonly List<string> _lobOptions = [];
-    static readonly string[] ScopeOptions = ["Submission", "Market", "Carrier"];
-    static readonly string[] TypeOptions = ["IntakeConfirmation", "CarrierConfirmation", "DocumentEvidence", "Approval"];
+    static readonly string[] ScopeOptions = ["Submission", "Market", "Carrier", "Proposal"];
+    static readonly string[] TypeOptions = ["IntakeConfirmation", "CarrierConfirmation", "DocumentEvidence", "Approval", "QuoteData"];
     static readonly string[] ChannelOptions = ["API", "Email", "Portal", "Manual"];
     RequirementForm _form = new();
     SubmissionReadinessRequirementDto? _deleteTarget;
@@ -117,6 +124,7 @@
     string _searchTerm = string.Empty;
     string _lobFilter = string.Empty;
     string _carrierFilter = string.Empty;
+    string _workflowView = "Carrier";
     bool _loading;
     bool _saving;
     bool _showForm;
@@ -153,7 +161,7 @@
 
     void ApplyFilters()
     {
-        IEnumerable<SubmissionReadinessRequirementDto> query = _items;
+        IEnumerable<SubmissionReadinessRequirementDto> query = _items.Where(item => _workflowView == "Proposal" ? string.Equals(item.ScopeCode, "Proposal", StringComparison.OrdinalIgnoreCase) : !string.Equals(item.ScopeCode, "Proposal", StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(_lobFilter)) query = query.Where(x => string.Equals(x.LineOfBusiness, _lobFilter, StringComparison.OrdinalIgnoreCase));
         if (Guid.TryParse(_carrierFilter, out var carrierId)) query = query.Where(x => x.CarrierId == carrierId);
         _filtered.Clear();
@@ -162,7 +170,8 @@
 
     void OnSearch(string? value) { _searchTerm = value ?? string.Empty; _ = LoadAsync(); }
     void ClearFilters() { _searchTerm = string.Empty; _lobFilter = string.Empty; _carrierFilter = string.Empty; ApplyFilters(); }
-    void OpenCreate() { _editId = null; _form = new RequirementForm { LineOfBusiness = _lobOptions.FirstOrDefault() ?? string.Empty }; _showForm = true; }
+    void SetWorkflowView(string view) { _workflowView = view; ApplyFilters(); }
+    void OpenCreate() { _editId = null; _form = new RequirementForm { LineOfBusiness = _workflowView == "Proposal" ? "All" : _lobOptions.FirstOrDefault() ?? string.Empty, ScopeCode = _workflowView == "Proposal" ? "Proposal" : "Submission", RequirementTypeCode = _workflowView == "Proposal" ? "QuoteData" : "IntakeConfirmation", ActionCode = _workflowView == "Proposal" ? "QuoteReview" : null, ActionLabel = _workflowView == "Proposal" ? "Review Quote Terms" : null }; _showForm = true; }
     void OpenEdit(SubmissionReadinessRequirementDto item) { _editId = item.ReadinessRequirementId; _form = RequirementForm.From(item); _showForm = true; }
     void CloseForm() => _showForm = false;
     void ConfirmDelete(SubmissionReadinessRequirementDto item) => _deleteTarget = item;
@@ -210,10 +219,34 @@
         public bool AllowsWaiver { get; set; } = true;
         public bool RequiresEvidence { get; set; }
         [StringLength(500)] public string? EvidencePrompt { get; set; }
+        [StringLength(50)] public string? ActionCode { get; set; }
+        [StringLength(150)] public string? ActionLabel { get; set; }
         [Range(0, 100)] public int ScoreWeight { get; set; } = 10;
         [Range(0, 10000)] public int SortOrder { get; set; } = 100;
         public bool IsActive { get; set; } = true;
-        public static RequirementForm From(SubmissionReadinessRequirementDto item) => new() { LineOfBusiness = item.LineOfBusiness, CarrierIdText = item.CarrierId?.ToString() ?? string.Empty, StateCode = item.StateCode, ChannelCode = item.ChannelCode, ScopeCode = item.ScopeCode, RequirementCode = item.RequirementCode, RequirementTypeCode = item.RequirementTypeCode, DisplayName = item.DisplayName, Description = item.Description, IsRequired = item.IsRequired, BlocksSubmit = item.BlocksSubmit, AllowsWaiver = item.AllowsWaiver, RequiresEvidence = item.RequiresEvidence, EvidencePrompt = item.EvidencePrompt, ScoreWeight = item.ScoreWeight, SortOrder = item.SortOrder, IsActive = item.IsActive };
-        public UpsertSubmissionReadinessRequirementRequest ToRequest(Guid tenantId, Guid? userId) => new(tenantId, LineOfBusiness, Guid.TryParse(CarrierIdText, out var carrierId) ? carrierId : null, StateCode, ChannelCode, ScopeCode, RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, BlocksSubmit, AllowsWaiver, RequiresEvidence, EvidencePrompt, null, ScoreWeight, SortOrder, IsActive, userId);
+        public static RequirementForm From(SubmissionReadinessRequirementDto item) => new() { LineOfBusiness = item.LineOfBusiness, CarrierIdText = item.CarrierId?.ToString() ?? string.Empty, StateCode = item.StateCode, ChannelCode = item.ChannelCode, ScopeCode = item.ScopeCode, RequirementCode = item.RequirementCode, RequirementTypeCode = item.RequirementTypeCode, DisplayName = item.DisplayName, Description = item.Description, IsRequired = item.IsRequired, BlocksSubmit = item.BlocksSubmit, AllowsWaiver = item.AllowsWaiver, RequiresEvidence = item.RequiresEvidence, EvidencePrompt = item.EvidencePrompt, ActionCode = item.ActionCode, ActionLabel = item.ActionLabel, ScoreWeight = item.ScoreWeight, SortOrder = item.SortOrder, IsActive = item.IsActive };
+        public UpsertSubmissionReadinessRequirementRequest ToRequest(Guid tenantId, Guid? userId) => new(
+            TenantId: tenantId,
+            LineOfBusiness: LineOfBusiness,
+            CarrierId: Guid.TryParse(CarrierIdText, out var carrierId) ? carrierId : null,
+            StateCode: StateCode,
+            ChannelCode: ChannelCode,
+            ScopeCode: ScopeCode,
+            RequirementCode: RequirementCode,
+            RequirementTypeCode: RequirementTypeCode,
+            DisplayName: DisplayName,
+            Description: Description,
+            IsRequired: IsRequired,
+            BlocksSubmit: BlocksSubmit,
+            AllowsWaiver: AllowsWaiver,
+            RequiresEvidence: RequiresEvidence,
+            EvidencePrompt: EvidencePrompt,
+            ApprovalRoleCode: null,
+            ActionCode: ActionCode,
+            ActionLabel: ActionLabel,
+            ScoreWeight: ScoreWeight,
+            SortOrder: SortOrder,
+            IsActive: IsActive,
+            ModifiedByUserId: userId);
     }
 }

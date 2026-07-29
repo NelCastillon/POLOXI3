@@ -17,7 +17,7 @@ public sealed class ProposalsController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        if (!TryTenant(tenantId, out var denied)) return denied;
+        if (!CanAccess(tenantId, "PROPOSAL_VIEW", out var denied)) return denied;
         var item = await _service.GetProposalByIdAsync(id, tenantId, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
@@ -25,7 +25,7 @@ public sealed class ProposalsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Generate([FromBody] GenerateProposalRequest request, CancellationToken cancellationToken)
     {
-        if (!TryTenant(request.TenantId, out var denied)) return denied;
+        if (!CanAccess(request.TenantId, "PROPOSAL_CREATE", out var denied)) return denied;
         var userId = GetUserId();
         var id = await _service.GenerateProposalAsync(request with { GeneratedByUserId = userId }, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id, tenantId = request.TenantId }, new { id });
@@ -36,6 +36,16 @@ public sealed class ProposalsController : ControllerBase
         denied = Forbid();
         var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
         return requestedTenantId != Guid.Empty && Guid.TryParse(claim, out var authenticatedTenantId) && authenticatedTenantId == requestedTenantId;
+    }
+
+    private bool CanAccess(Guid tenantId, string permission, out IActionResult denied)
+    {
+        if (!TryTenant(tenantId, out denied)) return false;
+        return User.HasClaim("permission", permission)
+            || User.HasClaim("permission", "NAV_ALL")
+            || User.IsInRole("SYSTEM_ADMIN")
+            || User.IsInRole("TENANT_ADMIN")
+            || User.Identity?.AuthenticationType == "Development";
     }
 
     private Guid? GetUserId()

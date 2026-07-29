@@ -1,4 +1,4 @@
-@page "/quotes/proposal/{SubmissionId:guid}"
+@page "/submissions/{SubmissionId:guid}/proposals"
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
@@ -11,7 +11,11 @@
 <PageTitle>Proposal Workflow - AMS</PageTitle>
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
 
-<AppPageHeader Icon="bi-file-earmark-richtext" Title="Proposal Workflow" Subtitle="Generate, deliver, present, and record customer acceptance using submission and quote data." OnBack="GoBack" OnRefresh="LoadAsync" />
+<AppPageHeader Icon="bi-file-earmark-richtext" Title="Proposal Workflow" Subtitle="Generate, deliver, present, and record customer acceptance using submission and quote data." ReturnUrl="@($"/submissions/{SubmissionId}")" ReturnLabel="Back to Submission">
+    <Actions>
+        <button type="button" class="um-btn um-btn-ghost" disabled="@_loading" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
 
 @if (!string.IsNullOrWhiteSpace(_loadError))
 {
@@ -33,7 +37,7 @@ else
     <div class="um-card mb-3">
         <div class="um-card-header"><div><h2>Submission</h2><p>@_submission?.SubmissionNumber · @_submission?.AccountName · @_submission?.LineOfBusiness</p></div></div>
         <div class="um-card-body d-flex gap-2 flex-wrap">
-            <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any(x => x.IsProposalReady))"><i class="bi bi-plus-lg"></i> Generate Proposal</button>
+            @if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true) { <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any(x => x.IsProposalReady))"><i class="bi bi-plus-lg"></i> Generate Proposal</button> }
             <button class="um-btn um-btn-ghost" @onclick="OpenQuoteComparison"><i class="bi bi-columns-gap"></i> Compare Quotes</button>
             <button class="um-btn um-btn-ghost" @onclick="GoBack"><i class="bi bi-journal-text"></i> Submission</button>
         </div>
@@ -61,13 +65,28 @@ else
                                 <td>@(item.ClientDecision ?? "Pending")</td>
                                 <td class="text-end">
                                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewAsync(item.ProposalId)"><i class="bi bi-eye"></i> View</button>
-                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!CanQueueDelivery(item))" @onclick="() => OpenDeliver(item)"><i class="bi bi-send"></i> Deliver</button>
+                                    @if(_currentUser?.HasPermission("PROPOSAL_CREATE") == true && item.GovernanceStatusCode is "Draft" or "ChangesRequired")
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenReview(item)"><i class="bi bi-person-check"></i> Submit Review</button>
+                                    }
+                                    @if(item.GovernanceStatusCode=="InternalReview" && (_currentUser?.HasPermission("PROPOSAL_REVIEW") == true || _currentUser?.HasPermission("PROPOSAL_APPROVE") == true))
+                                    {
+                                        <button class="um-btn um-btn-success um-btn-sm" @onclick='() => DecideReviewAsync(item, "Approved")'><i class="bi bi-check2-square"></i> Approve</button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => DecideReviewAsync(item, "ChangesRequired")'><i class="bi bi-arrow-counterclockwise"></i> Changes</button>
+                                    }
+                                    @if (_currentUser?.HasPermission("PROPOSAL_DELIVER") == true) { <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(item.GovernanceStatusCode!="ReadyToDeliver")" @onclick="() => OpenDeliverAsync(item)"><i class="bi bi-send"></i> Deliver</button> }
                                     @if (item.LastDeliveryDispatchId.HasValue && item.DeliveryStatus is "Configuration Required" or "Failed")
                                     {
                                         <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryAsync(item.LastDeliveryDispatchId.Value)"><i class="bi bi-arrow-repeat"></i> Retry</button>
                                     }
+                        <div class="d-flex align-items-center justify-content-between mt-3"><h3 class="h6 mb-0">Recipients</h3>@if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true && _selected.GovernanceStatusCode is "Draft" or "ChangesRequired" or "ReadyToDeliver") { <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenRecipient"><i class="bi bi-person-plus"></i> Add</button> }</div>
+                        @if (_selected.Recipients.Count == 0) { <div class="small text-muted mt-2">No persisted recipients.</div> }
+                        @foreach (var recipient in _selected.Recipients)
+                        {
+                            <div class="border rounded p-2 mt-2"><strong>@recipient.RecipientName</strong>@if(recipient.IsPrimary){<span class="um-status-pill ms-2">Primary</span>}<div class="small">@recipient.RecipientEmail · @recipient.RecipientTypeCode</div>@if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true && _selected.GovernanceStatusCode is "Draft" or "ChangesRequired" or "ReadyToDeliver") { <button class="um-btn um-btn-ghost um-btn-sm mt-1" @onclick="() => DeleteRecipientAsync(recipient.ProposalRecipientId)"><i class="bi bi-trash"></i> Remove</button> }</div>
+                        }
                                     <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Delivered"))" @onclick="() => PresentAsync(item)"><i class="bi bi-person-video3"></i> Present</button>
-                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Presented"))" @onclick="() => OpenDecision(item)"><i class="bi bi-check2-circle"></i> Decision</button>
+                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item,"Presented"))" @onclick="() => OpenClientAcceptance(item)"><i class="bi bi-person-check"></i> Client Acceptance</button>
                                     <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Accepted"))" @onclick="() => RequestBindAsync(item)"><i class="bi bi-shield-check"></i> Request Bind</button>
                                 </td>
                             </tr>
@@ -134,19 +153,20 @@ else
                 else if (_dialog == "Deliver Proposal")
                 {
                     <div class="um-form-field"><label>Delivery Method</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("DeliveryMethod")){<option value="@option.OptionCode">@option.DisplayName@(option.IsProviderConfigured ? "" : " — configuration required")</option>}</InputSelect></div>
-                    <div class="um-form-field"><label>Recipient</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
+                    <div class="um-form-field"><label>Primary Recipient</label><InputText class="form-control" @bind-Value="_form.Recipient" readonly /></div>
                 }
-                else
+                else if (_dialog == "Submit Review")
                 {
-                    <div class="um-form-field"><label>Decision</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("Decision")){<option value="@option.OptionCode">@option.DisplayName</option>}</InputSelect></div>
-                    @if (_form.OptionCode == "Accepted")
-                    {
-                        <div class="um-form-field"><label>Selected Quote</label><InputSelect class="form-select" @bind-Value="_form.SelectedQuoteId">@foreach(var quote in _selected?.Quotes ?? []){<option value="@quote.QuoteId">@quote.CarrierName · @quote.QuoteNumber</option>}</InputSelect></div>
-                        <div class="um-form-field"><label>Authorization Method</label><InputSelect class="form-select" @bind-Value="_form.AuthorizationMethodCode">@foreach(var option in _authorizationMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></div>
-                        <div class="um-form-field"><label>Authorized By</label><InputText class="form-control" @bind-Value="_form.AuthorizedByName" /></div>
-                        <div class="um-form-field"><label>Reference</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
-                    }
+                    <div class="um-form-field"><label>Assigned Reviewer</label><InputSelect class="form-select" @bind-Value="_form.ReviewerUserId">@foreach(var user in _users){<option value="@user.UserId">@user.FullName (@user.Email)</option>}</InputSelect></div>
                     <div class="um-form-field um-form-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" /></div>
+                }
+                else if (_dialog == "Add Recipient")
+                {
+                    <div class="um-form-field"><label>Name</label><InputText class="form-control" @bind-Value="_form.RecipientName" /></div>
+                    <div class="um-form-field"><label>Email</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
+                    <div class="um-form-field"><label>Type</label><InputSelect class="form-select" @bind-Value="_form.RecipientTypeCode"><option value="Client">Client</option><option value="Signer">Signer</option><option value="Cc">Cc</option><option value="Agency">Agency</option></InputSelect></div>
+                    <label class="um-form-field"><span>Primary recipient</span><InputCheckbox class="form-check-input" @bind-Value="_form.IsPrimary" /></label>
+                    <label class="um-form-field"><span>Signer</span><InputCheckbox class="form-check-input" @bind-Value="_form.IsSigner" /></label>
                 }
             </div></div>
             <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
@@ -156,24 +176,28 @@ else
 
 @code {
     [Parameter] public Guid SubmissionId { get; set; }
-    SubmissionDto? _submission; List<QuoteComparisonDto> _quotes=[]; List<ProposalWorkflowDto> _proposals=[]; List<ProposalWorkflowOptionDto> _options=[]; List<SubmissionReferenceOptionDto> _authorizationMethods=[];
+    SubmissionDto? _submission; List<QuoteComparisonDto> _quotes=[]; List<ProposalWorkflowDto> _proposals=[]; List<ProposalWorkflowOptionDto> _options=[]; List<SubmissionReferenceOptionDto> _authorizationMethods=[]; List<UserDto> _users=[];
     ProposalDto? _selected; ProposalWorkflowDto? _target; Ams.Web.Services.CurrentUserContextModel? _currentUser; EnterpriseToast? _toast; bool _loading=true,_saving; string? _loadError,_dialog; FormModel _form=new();
 
-    protected override async Task OnInitializedAsync(){ Breadcrumbs.SetCrumbs(new("Home","/"),new("Submissions","/submissions"),new("Submission",$"/submissions/{SubmissionId}"),new("Proposal Workflow",$"/quotes/proposal/{SubmissionId}")); await LoadAsync(); }
-    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_currentUser.TenantId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList(); if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId,_currentUser.TenantId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
+    protected override async Task OnInitializedAsync(){ Breadcrumbs.SetCrumbs(new("Home","/"),new("Submissions","/submissions"),new("Submission",$"/submissions/{SubmissionId}"),new("Proposal Workflow",$"/submissions/{SubmissionId}/proposals")); await LoadAsync(); }
+    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_currentUser.TenantId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList();_users=(await Api.SearchUsersAsync(_currentUser.TenantId,pageSize:100))?.Items.Where(x=>x.StatusCode=="Active").ToList()??[]; if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId,_currentUser.TenantId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
     RenderFragment Kpi(string label,string value,string icon)=>b=>{b.OpenElement(0,"div");b.AddAttribute(1,"class","pc-kpi-card");b.AddMarkupContent(2,$"<i class='bi {icon}'></i><strong>{value}</strong><span>{label}</span>");b.CloseElement();};
     IEnumerable<ProposalWorkflowOptionDto> Options(string group)=>_options.Where(x=>x.OptionGroupCode==group).OrderBy(x=>x.SortOrder);
     static bool HasStatus(ProposalWorkflowDto item, string status) => string.Equals(item.Status, status, StringComparison.OrdinalIgnoreCase);
     static bool CanQueueDelivery(ProposalWorkflowDto item) => HasStatus(item,"Generated") && string.IsNullOrWhiteSpace(item.DeliveryStatus);
     void OpenGenerate(){_target=null;_form=new(){Title=$"{_submission?.AccountName} Insurance Proposal",QuoteIds=_quotes.Where(x=>x.IsProposalReady).Select(x=>x.QuoteId).ToHashSet()};_dialog="Generate Proposal";}
-    void OpenDeliver(ProposalWorkflowDto item){_target=item;_form=new(){OptionCode=Options("DeliveryMethod").FirstOrDefault(x=>x.IsDefault)?.OptionCode??Options("DeliveryMethod").FirstOrDefault()?.OptionCode??"",Recipient=item.Recipient??""};_dialog="Deliver Proposal";}
-    async Task OpenDecision(ProposalWorkflowDto item){await ViewAsync(item.ProposalId);_target=item;_form=new(){OptionCode=Options("Decision").FirstOrDefault()?.OptionCode??"Accepted",SelectedQuoteId=_selected?.Quotes.FirstOrDefault(x=>x.IsSelected)?.QuoteId??_selected?.Quotes.FirstOrDefault()?.QuoteId,AuthorizationMethodCode=_authorizationMethods.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorizationMethods.FirstOrDefault()?.OptionCode??""};_dialog="Customer Decision";}
+    async Task OpenDeliverAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();_selected=await Api.GetProposalByIdAsync(item.ProposalId,user.TenantId);var primary=_selected?.Recipients.FirstOrDefault(x=>x.IsPrimary);if(primary is null){await Error("Add a primary proposal recipient before delivery.");return;}_target=item;_form=new(){OptionCode=Options("DeliveryMethod").FirstOrDefault(x=>x.IsDefault)?.OptionCode??Options("DeliveryMethod").FirstOrDefault()?.OptionCode??"",Recipient=primary.RecipientEmail};_dialog="Deliver Proposal";}catch(Exception ex){await Error(ex.Message);}}
+    void OpenReview(ProposalWorkflowDto item){_target=item;_form=new(){ReviewerUserId=_currentUser?.UserId,Notes="Internal proposal review requested."};_dialog="Submit Review";}
+    void OpenRecipient(){_target=_proposals.FirstOrDefault(x=>x.ProposalId==_selected?.ProposalId);_form=new(){RecipientTypeCode="Client",IsPrimary=_selected?.Recipients.Any(x=>x.IsPrimary)!=true};_dialog="Add Recipient";}
     async Task ViewAsync(Guid id){var user=_currentUser??=await CurrentUser.RequireAsync();_selected=await Api.GetProposalByIdAsync(id,user.TenantId);}
     async Task PresentAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.PresentProposalAsync(item.ProposalId,new(user.TenantId,"Proposal presented to customer.",user.UserId));await LoadAsync();await Success("Proposal presented.");}catch(Exception ex){await Error(ex.Message);}}
     async Task RetryAsync(Guid dispatchId){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.RetryProposalDeliveryAsync(dispatchId,new(user.TenantId,user.UserId));await LoadAsync();await Success("Proposal delivery retry requested.");}catch(Exception ex){await Error(ex.Message);}}
     async Task RequestBindAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();var continuation=await Api.GetProposalBindContinuationAsync(item.ProposalId,user.TenantId);if(continuation?.CanRequestBind!=true||!continuation.SelectedQuoteId.HasValue||!continuation.CustomerAuthorizationId.HasValue){await Error(continuation?.BlockingReason??"Proposal is not ready for binding.");return;}Nav.NavigateTo($"/quotes/bind?submissionId={continuation.SubmissionId}&proposalId={continuation.ProposalId}&quoteId={continuation.SelectedQuoteId.Value}&authorizationId={continuation.CustomerAuthorizationId.Value}");}catch(Exception ex){await Error(ex.Message);}}
-    async Task SaveDialogAsync(){try{_saving=true;var user=_currentUser??=await CurrentUser.RequireAsync();if(_dialog=="Generate Proposal")await Api.GenerateProposalAsync(new(SubmissionId,user.TenantId,_form.Title,_form.QuoteIds.ToArray(),_form.Notes,user.UserId));else if(_dialog=="Deliver Proposal"&&_target is not null)await Api.DeliverProposalAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Recipient,user.UserId));else if(_target is not null)await Api.RecordProposalDecisionAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Notes,user.UserId,_form.SelectedQuoteId,_form.AuthorizationMethodCode,_form.Recipient,_form.AuthorizedByName,DateTime.UtcNow));CloseDialog();await LoadAsync();await Success("Proposal workflow updated.");}catch(Exception ex){await Error(ex.Message);}finally{_saving=false;}}
+    void OpenClientAcceptance(ProposalWorkflowDto item)=>Nav.NavigateTo($"/submissions/{SubmissionId}/client-acceptance?proposalId={item.ProposalId}");
+    async Task DecideReviewAsync(ProposalWorkflowDto item,string decision){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.DecideProposalReviewAsync(item.ProposalId,new(user.TenantId,decision,decision=="Approved"?"Proposal approved for delivery.":"Proposal returned for required changes.",user.UserId));await LoadAsync();await Success($"Review decision recorded: {decision}.");}catch(Exception ex){await Error(ex.Message);}}
+    async Task SaveDialogAsync(){try{_saving=true;var user=_currentUser??=await CurrentUser.RequireAsync();if(_dialog=="Generate Proposal")await Api.GenerateProposalAsync(new(SubmissionId,user.TenantId,_form.Title,_form.QuoteIds.ToArray(),_form.Notes,user.UserId));else if(_dialog=="Deliver Proposal"&&_target is not null)await Api.DeliverProposalAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Recipient,user.UserId));else if(_dialog=="Submit Review"&&_target is not null&&_form.ReviewerUserId.HasValue)await Api.SubmitProposalReviewAsync(_target.ProposalId,new(user.TenantId,_form.ReviewerUserId.Value,_form.Notes,DateTime.UtcNow.AddDays(1),user.UserId));else if(_dialog=="Add Recipient"&&_target is not null)await Api.UpsertProposalRecipientAsync(_target.ProposalId,new(user.TenantId,null,null,_form.RecipientTypeCode,_form.RecipientName,_form.Recipient,1,_form.IsPrimary,_form.IsSigner,user.UserId));CloseDialog();await LoadAsync();await Success("Proposal workflow updated.");}catch(Exception ex){await Error(ex.Message);}finally{_saving=false;}}
+    async Task DeleteRecipientAsync(Guid recipientId){if(_selected is null||_currentUser is null)return;try{await Api.DeleteProposalRecipientAsync(_selected.ProposalId,recipientId,_currentUser.TenantId);await LoadAsync();await Success("Recipient removed.");}catch(Exception ex){await Error(ex.Message);}}
     void ToggleQuote(Guid id,bool selected){if(selected)_form.QuoteIds.Add(id);else _form.QuoteIds.Remove(id);} void CloseDialog(){_dialog=null;_target=null;} void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}"); void OpenQuoteComparison()=>Nav.NavigateTo($"/quotes/compare/{SubmissionId}");
     Task Success(string text)=>_toast!.ShowAsync(new(){Title="Success",Content=text,CssClass="enterprise-toast-success"}); Task Error(string text)=>_toast!.ShowAsync(new(){Title="Error",Content=text,CssClass="enterprise-toast-danger"});
-    sealed class FormModel{[Required,StringLength(200)]public string Title{get;set;}="";public HashSet<Guid> QuoteIds{get;set;}=[];[Required]public string OptionCode{get;set;}="";[Required,StringLength(320)]public string Recipient{get;set;}="";public string? Notes{get;set;}public Guid? SelectedQuoteId{get;set;}public string? AuthorizationMethodCode{get;set;}public string? AuthorizedByName{get;set;}}
+    sealed class FormModel{[Required,StringLength(200)]public string Title{get;set;}="";public HashSet<Guid> QuoteIds{get;set;}=[];[Required]public string OptionCode{get;set;}="";[Required,StringLength(320)]public string Recipient{get;set;}="";public string RecipientName{get;set;}="";public string RecipientTypeCode{get;set;}="Client";public bool IsPrimary{get;set;}public bool IsSigner{get;set;}public string? Notes{get;set;}public Guid? ReviewerUserId{get;set;}}
 }

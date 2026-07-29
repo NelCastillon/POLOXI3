@@ -9,6 +9,7 @@ public sealed class QuoteComparisonDto
     public string CarrierName { get; set; } = string.Empty;
     public string QuoteNumber { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string GovernanceStatusCode { get; set; } = string.Empty;
     public decimal AnnualPremium { get; set; }
     public DateTime? EffectiveDate { get; set; }
     public decimal? Deductible { get; set; }
@@ -49,6 +50,53 @@ public sealed class QuoteComparisonDto
     public Guid? ReceivedByUserId { get; set; }
     public DateTime QuotedDateUtc { get; set; }
     public DateTime ExpiresDateUtc { get; set; }
+    public IReadOnlyList<SubmissionQuoteLineDto> Lines { get; set; } = [];
+    public IReadOnlyList<ProposalReadinessFactorDto> ProposalReadinessFactors { get; set; } = [];
+    public int LineCount => Lines.Count;
+}
+
+public sealed class ProposalReadinessFactorDto
+{
+    public Guid ProposalReadinessFactorId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid QuoteId { get; set; }
+    public string FactorCode { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Instructions { get; set; } = string.Empty;
+    public string ActionCode { get; set; } = string.Empty;
+    public string ActionLabel { get; set; } = string.Empty;
+    public bool IsRequired { get; set; }
+    public bool IsSatisfied { get; set; }
+    public int SortOrder { get; set; }
+}
+
+public sealed class SubmissionQuoteLineDto
+{
+    public Guid QuoteLineId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid QuoteId { get; set; }
+    public Guid SubmissionId { get; set; }
+    public Guid? SubmissionLineId { get; set; }
+    public Guid? OpportunityLineId { get; set; }
+    public string LineOfBusiness { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal QuotedPremium { get; set; }
+    public decimal? Deductible { get; set; }
+    public decimal? Limit { get; set; }
+    public decimal? CommissionPercent { get; set; }
+    public string? CoverageForms { get; set; }
+    public string? Subjectivities { get; set; }
+    public string? Exclusions { get; set; }
+    public string? PaymentTerms { get; set; }
+    public decimal? MinimumEarnedPremium { get; set; }
+    public decimal? TaxesAndFees { get; set; }
+    public decimal? BrokerFee { get; set; }
+    public bool? TriaIncluded { get; set; }
+    public bool IsBindable { get; set; }
+    public string? CoverageNotes { get; set; }
+    public int SortOrder { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+    public DateTime? ModifiedDateUtc { get; set; }
 }
 
 public sealed class ProposalWorkflowDto
@@ -58,11 +106,16 @@ public sealed class ProposalWorkflowDto
     public Guid TenantId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string GovernanceStatusCode { get; set; } = string.Empty;
     public string? DeliveryMethod { get; set; }
     public string? Recipient { get; set; }
     public string? DeliveryStatus { get; set; }
     public Guid? LastDeliveryDispatchId { get; set; }
     public DateTime? SentDateUtc { get; set; }
+    public DateTime? PresentedDateUtc { get; set; }
+    public DateTime? ApprovedDateUtc { get; set; }
+    public DateTime? DeliveryConfirmedDateUtc { get; set; }
+    public Guid? CurrentReviewId { get; set; }
     public string? ClientDecision { get; set; }
     public string? DecisionNotes { get; set; }
     public DateTime? DecisionDateUtc { get; set; }

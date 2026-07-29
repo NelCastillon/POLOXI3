@@ -1,0 +1,111 @@
+@page "/submissions/{SubmissionId:guid}/client-acceptance"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject Ams.Web.Services.CurrentUserContext CurrentUser
+
+<PageTitle>Client Acceptance - AMS</PageTitle>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true" />
+<AppPageHeader Icon="bi-person-check-fill" Title="Client Acceptance" Subtitle="Controlled proposal acceptance, coverage election, consent, and authorization to bind." ReturnUrl="@($"/submissions/{SubmissionId}/proposals")" ReturnLabel="Back to Proposal Workflow">
+    <Actions>
+        <button type="button" class="um-btn um-btn-ghost" disabled="@_loading" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ca-state"><div class="spinner-border text-primary"></div><strong>Loading acceptance controls...</strong></div>
+}
+else if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+else
+{
+    <div class="ca-kpis">
+        @Kpi("Proposal versions", _proposals.Count.ToString(), "bi-layers")
+        @Kpi("Recorded decisions", _history.Count.ToString(), "bi-journal-check")
+        @Kpi("Active acceptance", _history.Count(x => x.StatusCode is "Accepted" or "BindRequested" or "CarrierBound").ToString(), "bi-shield-check")
+        @Kpi("Bind readiness", _readiness?.CanAccept == true ? "Ready" : "Review", "bi-clipboard2-check")
+    </div>
+
+    <div class="ca-layout">
+        <section class="ca-card ca-workbench">
+            <header><div><span class="ca-eyebrow">Decision workbench</span><h2>Capture client decision</h2><p>Acceptance is tied to the exact proposal version, quote fingerprint, coverage lines, signer, and evidence.</p></div></header>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <ValidationSummary class="ca-validation" />
+                <div class="ca-grid">
+                    <label><span>Proposal version <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.ProposalId" @bind-Value:after="ProposalChangedAsync"><option value="">Select delivered proposal</option>@foreach (var item in _proposals.OrderByDescending(x => x.ProposalId)){<option value="@item.ProposalId">@item.Title · @item.Status</option>}</InputSelect></label>
+                    <label><span>Quote option <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.QuoteId" @bind-Value:after="QuoteChangedAsync" disabled="@(!_quotes.Any())"><option value="">Select proposal quote</option>@foreach (var quote in _quotes){<option value="@quote.QuoteId">@quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</option>}</InputSelect></label>
+                    <label><span>Decision <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.DecisionCode" @bind-Value:after="DecisionChanged">@foreach (var option in _decisionOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                    <label><span>Authorization method <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.AuthorizationMethodCode">@foreach (var option in _authorizationMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                    <label><span>Authorized person <em>*</em></span><InputText class="form-control" @bind-Value="_form.AuthorizedByName" maxlength="200" /></label>
+                    <label><span>Title / capacity <em>*</em></span><InputText class="form-control" @bind-Value="_form.AuthorizedByTitle" maxlength="150" /></label>
+                    <label><span>Authority basis <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.AuthorityBasisCode">@foreach (var option in _authorityOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                    <label><span>Authorization date <em>*</em></span><InputDate class="form-control" @bind-Value="_form.AuthorizedDateUtc" /></label>
+                    <label><span>Signer email</span><InputText class="form-control" @bind-Value="_form.SignerEmail" maxlength="320" /></label>
+                    <label><span>Evidence reference</span><InputText class="form-control" @bind-Value="_form.AuthorizationReference" maxlength="500" placeholder="Email, portal, call, or signature reference" /></label>
+                    <label><span>Evidence document</span><InputSelect class="form-select" @bind-Value="_form.AuthorizationDocumentId"><option value="">No linked document</option>@foreach (var document in _documents){<option value="@document.DocumentId">@document.FileName</option>}</InputSelect></label>
+                    <label class="ca-full"><span>Decision notes</span><InputTextArea class="form-control" @bind-Value="_form.DecisionNotes" rows="3" maxlength="2000" /></label>
+                </div>
+
+                @if (_readiness is not null)
+                {
+                    <div class="ca-readiness @(_readiness.CanAccept ? "ca-readiness--ready" : "ca-readiness--blocked")">
+                        <strong><i class="bi @(_readiness.CanAccept ? "bi-shield-check" : "bi-exclamation-triangle")"></i> @(_readiness.CanAccept ? "Quote is eligible for acceptance" : "Acceptance controls require attention")</strong>
+                        @foreach (var blocker in _readiness.BlockingReasons){<span>@blocker</span>}
+                    </div>
+                }
+
+                @if (IsAcceptedDecision && _lineForms.Count > 0)
+                {
+                    <section class="ca-section"><header><div><h3>Coverage elections</h3><p>Confirm every persisted quote line, including rejected optional coverage.</p></div><strong>@_lineForms.Sum(x => x.Line.QuotedPremium).ToString("C0")</strong></header>
+                        <div class="ca-lines">@foreach (var item in _lineForms.OrderBy(x => x.Line.SortOrder)){<article><div><strong>@item.Line.LineOfBusiness</strong><span>@item.Line.QuotedPremium.ToString("C0") · Limit @item.Line.Limit?.ToString("C0") · Deductible @item.Line.Deductible?.ToString("C0")</span><small>@item.Line.PaymentTerms · TRIA @(item.Line.TriaIncluded == true ? "Included" : item.Line.TriaIncluded == false ? "Excluded" : "Not specified")</small></div><InputSelect class="form-select" @bind-Value="item.ElectionCode">@foreach (var option in _electionOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><InputText class="form-control" @bind-Value="item.Notes" maxlength="1000" placeholder="Election notes" /></article>}</div>
+                    </section>
+                }
+
+                @if (IsAcceptedDecision)
+                {
+                    <section class="ca-section"><header><div><h3>Consent and disclosures</h3><p>All configured attestations must be explicitly confirmed for acceptance.</p></div></header><div class="ca-consents">@foreach (var consent in _consentForms){<label><InputCheckbox class="form-check-input" @bind-Value="consent.IsAccepted" /><span><strong>@consent.Name</strong><small>@consent.Description</small></span></label>}</div></section>
+                }
+                <footer><button type="button" class="btn btn-outline-secondary" @onclick="GoBack">Cancel</button><button type="submit" class="btn btn-primary" disabled="@(!CanSubmit)"><i class="bi bi-check2-circle"></i> @(_saving ? "Recording..." : "Record Client Decision")</button></footer>
+            </EditForm>
+        </section>
+
+        <aside class="ca-card ca-history"><header><div><span class="ca-eyebrow">Immutable history</span><h2>Acceptance timeline</h2></div></header>@if (_history.Count == 0){<div class="ca-empty"><i class="bi bi-clock-history"></i><strong>No decisions recorded</strong><span>Completed decisions and bind transitions appear here.</span></div>}else{@foreach (var item in _history){<button type="button" @onclick="() => OpenHistoryAsync(item)"><span class="ca-status ca-status--@item.StatusCode.ToLowerInvariant()">@item.StatusCode</span><strong>@item.AuthorizedByName</strong><small>Proposal v@item.ProposalVersionNumber · @item.QuoteNumber</small><time>@item.CreatedDateUtc.ToLocalTime().ToString("g")</time></button>@if(item.StatusCode=="Accepted"&&!item.PolicyBindTransactionId.HasValue){<button type="button" class="btn btn-sm btn-outline-danger" disabled="@_saving" @onclick="() => WithdrawAsync(item)">Withdraw acceptance</button>}}}</aside>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid SubmissionId { get; set; }
+    [SupplyParameterFromQuery(Name="proposalId")] public Guid? ProposalId { get; set; }
+    EnterpriseToast? _toast; bool _loading = true; bool _saving; string? _error;
+    CurrentUserContextModel? _user; SubmissionDto? _submission; ClientAcceptanceReadinessDto? _readiness;
+    List<ProposalWorkflowDto> _proposals = []; List<ProposalQuoteDto> _quotes = []; List<DocumentDto> _documents = []; List<ClientAcceptanceDto> _history = [];
+    List<SubmissionReferenceOptionDto> _decisionOptions = []; List<SubmissionReferenceOptionDto> _authorizationMethods = []; List<SubmissionReferenceOptionDto> _authorityOptions = []; List<SubmissionReferenceOptionDto> _electionOptions = []; List<LineElectionForm> _lineForms = []; List<ConsentForm> _consentForms = [];
+    AcceptanceForm _form = new();
+    bool IsAcceptedDecision=>string.Equals(_form.DecisionCode,"Accepted",StringComparison.OrdinalIgnoreCase);
+    bool CanSubmit=>!_saving&&_form.ProposalId.HasValue&&_form.QuoteId.HasValue&&(!IsAcceptedDecision||(_readiness?.CanAccept==true&&_lineForms.Count>0&&_consentForms.Count>0&&_consentForms.All(x=>x.IsAccepted)));
+
+    protected override async Task OnParametersSetAsync(){Breadcrumbs.SetCrumbs(new("Submissions", "/submissions"),new("Client Acceptance"));await LoadAsync();}
+    async Task LoadAsync(){try{_loading=true;_error=null;_user??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId);_proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_user.TenantId)??[]).ToList();_documents=(await Api.GetSubmissionDocumentsAsync(SubmissionId,_user.TenantId)??[]).ToList();_history=(await Api.GetClientAcceptancesAsync(SubmissionId,_user.TenantId)??[]).ToList();var options=await Api.GetSubmissionReferenceOptionsAsync(_user.TenantId);SetOptions(_decisionOptions,options,"ClientAcceptanceDecision");SetOptions(_authorizationMethods,options,"CustomerAuthorizationMethod");SetOptions(_authorityOptions,options,"AuthorityBasis");SetOptions(_electionOptions,options,"CoverageElection");_consentForms=options.Where(x=>x.OptionGroup=="ClientAcceptanceConsent"&&x.IsActive).OrderBy(x=>x.SortOrder).Select(x=>new ConsentForm(x.OptionCode,x.OptionName,x.Description??string.Empty)).ToList();_form.DecisionCode=_decisionOptions.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_decisionOptions.FirstOrDefault()?.OptionCode??"Accepted";_form.AuthorizationMethodCode=_authorizationMethods.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorizationMethods.FirstOrDefault()?.OptionCode??string.Empty;_form.AuthorityBasisCode=_authorityOptions.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorityOptions.FirstOrDefault()?.OptionCode??string.Empty;if(ProposalId.HasValue&&_proposals.Any(x=>x.ProposalId==ProposalId.Value)){_form.ProposalId=ProposalId;await LoadReadinessAsync(null);}}catch(Exception ex){_error=ex.Message;}finally{_loading=false;}}
+    async Task ProposalChangedAsync(){_readiness=null;_quotes.Clear();_lineForms.Clear();if(!_form.ProposalId.HasValue)return;await LoadReadinessAsync(null);}
+    async Task QuoteChangedAsync(){if(_form.ProposalId.HasValue&&_form.QuoteId.HasValue)await LoadReadinessAsync(_form.QuoteId);}
+    void DecisionChanged(){if(!IsAcceptedDecision){foreach(var consent in _consentForms)consent.IsAccepted=false;}}
+    async Task LoadReadinessAsync(Guid? quoteId){if(_user is null||!_form.ProposalId.HasValue)return;_readiness=await Api.GetClientAcceptanceReadinessAsync(_form.ProposalId.Value,quoteId,_user.TenantId);_quotes=_readiness?.Quotes.ToList()??[];_form.ProposalVersionNumber=_readiness?.ProposalVersionNumber??0;_form.QuoteId=_readiness?.SelectedQuoteId;_form.QuoteFingerprint=_readiness?.QuoteFingerprint??string.Empty;_lineForms=(_readiness?.QuoteLines??[]).Select(x=>new LineElectionForm(x,_electionOptions.FirstOrDefault(o=>o.IsDefault)?.OptionCode??_electionOptions.FirstOrDefault()?.OptionCode??"Accepted")).ToList();}
+    async Task SaveAsync(){if(_user is null||!_form.ProposalId.HasValue||!_form.QuoteId.HasValue||!CanSubmit)return;try{_saving=true;var request=new RecordClientAcceptanceRequest{TenantId=_user.TenantId,ProposalId=_form.ProposalId.Value,ProposalVersionNumber=_form.ProposalVersionNumber,QuoteId=_form.QuoteId.Value,QuoteFingerprint=_form.QuoteFingerprint,DecisionCode=_form.DecisionCode,DecisionNotes=_form.DecisionNotes,AuthorizationMethodCode=_form.AuthorizationMethodCode,AuthorizationReference=_form.AuthorizationReference,AuthorizationDocumentId=_form.AuthorizationDocumentId,AuthorizedByName=_form.AuthorizedByName,AuthorizedByTitle=_form.AuthorizedByTitle,AuthorityBasisCode=_form.AuthorityBasisCode,AuthorizedDateUtc=_form.AuthorizedDateUtc,SignerEmail=_form.SignerEmail,IdempotencyKey=Guid.NewGuid().ToString("N"),CoverageElections=IsAcceptedDecision?_lineForms.Select(x=>new ClientAcceptanceCoverageElectionRequest{QuoteLineId=x.Line.QuoteLineId,ElectionCode=x.ElectionCode,ElectionNotes=x.Notes}).ToList():[],Consents=IsAcceptedDecision?_consentForms.Select(x=>new ClientAcceptanceConsentRequest{ConsentCode=x.Code,ConsentVersion="1.0",IsAccepted=x.IsAccepted}).ToList():[]};await Api.RecordClientAcceptanceAsync(request);await ToastAsync("Client decision recorded with immutable acceptance evidence.","success");await LoadAsync();}catch(Exception ex){await ToastAsync(ex.Message,"danger");}finally{_saving=false;}}
+    async Task WithdrawAsync(ClientAcceptanceDto item){if(_user is null)return;var reason=$"Acceptance withdrawn from the client acceptance workbench on {DateTime.Now:g}.";try{_saving=true;await Api.WithdrawClientAcceptanceAsync(item.ClientAcceptanceId,new(_user.TenantId,item.VersionNumber,reason,_user.UserId));await ToastAsync("Client acceptance withdrawn and authorization revoked.","success");await LoadAsync();}catch(Exception ex){await ToastAsync(ex.Message,"danger");}finally{_saving=false;}}
+    async Task OpenHistoryAsync(ClientAcceptanceDto item){var detail=await Api.GetClientAcceptanceByIdAsync(item.ClientAcceptanceId,item.TenantId);await ToastAsync(detail is null?"Acceptance record was not found.":$"{detail.StatusCode}: {detail.CoverageElections.Count} elections, {detail.Consents.Count} consents, {detail.AuditEvents.Count} audit events.",detail is null?"danger":"info");}
+    Task ToastAsync(string message,string kind)=>_toast?.ShowAsync(new ToastModel{Content=message,CssClass=$"um-toast-{kind}",Timeout=5000})??Task.CompletedTask;
+    static void SetOptions(List<SubmissionReferenceOptionDto> target,IReadOnlyList<SubmissionReferenceOptionDto> source,string group){target.Clear();target.AddRange(source.Where(x=>x.OptionGroup==group&&x.IsActive).OrderBy(x=>x.SortOrder));}
+    void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}");
+    RenderFragment Kpi(string label,string value,string icon)=>@<div class="ca-kpi"><i class="bi @icon"></i><div><strong>@value</strong><span>@label</span></div></div>;
+    sealed class AcceptanceForm{[Required]public Guid? ProposalId{get;set;}[Required]public Guid? QuoteId{get;set;}public int ProposalVersionNumber{get;set;}public string QuoteFingerprint{get;set;}=string.Empty;[Required]public string DecisionCode{get;set;}=string.Empty;public string? DecisionNotes{get;set;}[Required]public string AuthorizationMethodCode{get;set;}=string.Empty;public string? AuthorizationReference{get;set;}public Guid? AuthorizationDocumentId{get;set;}[Required]public string AuthorizedByName{get;set;}=string.Empty;[Required]public string AuthorizedByTitle{get;set;}=string.Empty;[Required]public string AuthorityBasisCode{get;set;}=string.Empty;public DateTime AuthorizedDateUtc{get;set;}=DateTime.Today;[EmailAddress]public string? SignerEmail{get;set;}}
+    sealed class LineElectionForm(SubmissionQuoteLineDto line,string code){public SubmissionQuoteLineDto Line{get;}=line;public string ElectionCode{get;set;}=code;public string? Notes{get;set;}}
+    sealed class ConsentForm(string code,string name,string description){public string Code{get;}=code;public string Name{get;}=name;public string Description{get;}=description;public bool IsAccepted{get;set;}}
+}

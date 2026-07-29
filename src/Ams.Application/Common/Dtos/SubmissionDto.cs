@@ -160,6 +160,8 @@ public sealed class SubmissionReadinessRequirementDto
     public bool RequiresEvidence { get; set; }
     public string? EvidencePrompt { get; set; }
     public string? ApprovalRoleCode { get; set; }
+    public string? ActionCode { get; set; }
+    public string? ActionLabel { get; set; }
     public int ScoreWeight { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; }

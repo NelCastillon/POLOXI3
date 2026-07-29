@@ -239,14 +239,14 @@
                         <tbody>
                             @foreach (var row in PagedRows)
                             {
-                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)">
+                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)" @ondblclick="() => OpenQuote(row)" title="Double-click to open quote">
                                     <td>@ImportanceBadge(row)</td>
                                     <td>
                                         <button type="button" class="qde-link-button" @onclick:stopPropagation="true" @onclick="() => OpenQuote(row)">@row.QuoteNo</button>
                                         <small>Quoted @row.QuotedDateUtc.ToString("MMM d, yyyy")</small>
                                     </td>
                                     <td>
-                                        <button type="button" class="qde-sub-link" @onclick:stopPropagation="true" @onclick="() => OpenQuote(row)">@row.SubmissionNo</button>
+                                        <button type="button" class="qde-sub-link" @onclick:stopPropagation="true" @onclick="() => OpenSubmission(row)">@row.SubmissionNo</button>
                                     </td>
                                     <td><strong>@row.Account</strong></td>
                                     <td><span class="qde-lob-pill">@Safe(row.Lob, "Unknown")</span></td>
@@ -321,8 +321,29 @@
                             <div><dt>Expires</dt><dd>@_selected.ExpiryDate.ToString("MMM d, yyyy")</dd></div>
                             <div><dt>Producer</dt><dd>@Safe(_selected.Producer, "Unassigned")</dd></div>
                         </dl>
+                        @if (_selected.Lines.Count > 0)
+                        {
+                            <details class="qde-line-package">
+                                <summary><span><i class="bi bi-layers" aria-hidden="true"></i> Coverage lines</span><strong>@_selected.Lines.Count</strong></summary>
+                                <div class="qde-line-package__list">
+                                    @foreach (var line in _selected.Lines.OrderBy(line => line.SortOrder).ThenBy(line => line.LineOfBusiness))
+                                    {
+                                        <article>
+                                            <header><strong>@Safe(line.LineOfBusiness, "Coverage line")</strong><span>@Safe(line.Status, "Quoted")</span></header>
+                                            <dl>
+                                                <div><dt>Premium</dt><dd>@line.QuotedPremium.ToString("C0")</dd></div>
+                                                <div><dt>Deductible</dt><dd>@MoneyOrDash(line.Deductible)</dd></div>
+                                                <div><dt>Limit</dt><dd>@MoneyOrDash(line.Limit)</dd></div>
+                                                <div><dt>Commission</dt><dd>@FormatPercent(line.CommissionPercent)</dd></div>
+                                            </dl>
+                                        </article>
+                                    }
+                                </div>
+                            </details>
+                        }
                         <div class="qde-selected-actions">
-                            <button type="button" class="qde-btn qde-btn--primary" @onclick="() => OpenQuote(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Submission</button>
+                            <button type="button" class="qde-btn qde-btn--primary" @onclick="() => OpenQuote(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Quote</button>
+                            <button type="button" class="qde-btn qde-btn--ghost" @onclick="() => OpenSubmission(_selected)"><i class="bi bi-send" aria-hidden="true"></i> Open Submission</button>
                             <button type="button" class="qde-btn qde-btn--ghost" @onclick="OpenCompareDialogAsync"><i class="bi bi-columns-gap" aria-hidden="true"></i> Compare</button>
                             <button type="button" class="qde-btn qde-btn--ghost" @onclick='() => OpenActionDialog("Bind")'><i class="bi bi-shield-check" aria-hidden="true"></i> Bind</button>
                         </div>
@@ -492,6 +513,9 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "readiness")]
+    public string? RequestedReadiness { get; set; }
+
     bool _loading;
     bool _showActionDialog;
     bool _showConfirmDialog;
@@ -597,6 +621,8 @@
         "declined" => _rows.Where(r => r.Status == "Declined"),
         _ => _rows
     };
+
+    bool ShowBlockedReadinessOnly => string.Equals(RequestedReadiness, "blocked", StringComparison.OrdinalIgnoreCase);
 
     IEnumerable<QuoteRow> FilteredRows => SortRows(ApplyFilters(TabRows));
     IEnumerable<QuoteRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
@@ -709,7 +735,8 @@
                     QuotedDateUtc = q.QuoteReceivedDateUtc ?? q.QuotedDateUtc,
                     EffDate = submission.EffectiveDate,
                     ExpiryDate = q.ExpiresDateUtc,
-                    Producer = submission.AssignedToUserName ?? "Unassigned"
+                    Producer = submission.AssignedToUserName ?? "Unassigned",
+                    Lines = q.Lines
                 }).ToList();
             }
         }
@@ -723,6 +750,8 @@
 
     IEnumerable<QuoteRow> ApplyFilters(IEnumerable<QuoteRow> rows)
     {
+        if (ShowBlockedReadinessOnly)
+            rows = rows.Where(row => !row.IsProposalReady);
         rows = _activeKpi switch
         {
             "priority" => rows.Where(r => ImportanceLevel(r) is "Critical" or "High"),
@@ -877,7 +906,8 @@
         _openActionMenuFor = null;
     }
 
-    void OpenQuote(QuoteRow row) => Nav.NavigateTo($"/submissions/{row.SubId}");
+    void OpenQuote(QuoteRow row) => Nav.NavigateTo($"/submissions/quotes/{row.QuoteId}");
+    void OpenSubmission(QuoteRow row) => Nav.NavigateTo($"/submissions/{row.SubId}?tab=quotes");
     void OpenSelectedSubmission()
     {
         if (_selected is not null)
@@ -1133,6 +1163,8 @@
 
     string FormatMoney(decimal? value) => value is > 0 ? value.Value.ToString("C0") : "-";
 
+    string FormatPercent(decimal? value) => value.HasValue ? $"{value.Value:0.##}%" : "-";
+
     string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
     string CompareCardClass(QuoteRow row) => _selected?.QuoteId == row.QuoteId ? "qde-compare-card qde-compare-card--active" : "qde-compare-card";
@@ -1177,6 +1209,9 @@
         public decimal? Limit { get; set; }
         public string? CoverageNotes { get; set; }
         public DateTime QuotedDateUtc { get; set; }
+        public IReadOnlyList<SubmissionQuoteLineDto> Lines { get; set; } = [];
+        public bool IsProposalReady { get; set; }
+        public IReadOnlyList<ProposalReadinessFactorDto> ProposalReadinessFactors { get; set; } = [];
     }
 
     sealed record QuoteMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);

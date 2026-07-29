@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using Ams.Application.Abstractions.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -15,9 +17,14 @@ public sealed class QuoteComparisonController : ControllerBase
         => Ok(await _service.GetQuoteComparisonAsync(submissionId, cancellationToken));
 
     [HttpGet("{quoteId:guid}")]
-    public async Task<IActionResult> GetById(Guid quoteId, CancellationToken cancellationToken)
+    [Authorize]
+    public async Task<IActionResult> GetById(Guid quoteId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        var item = await _service.GetQuoteByIdAsync(quoteId, cancellationToken);
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        if (tenantId == Guid.Empty || !Guid.TryParse(claim, out var authenticatedTenantId) || authenticatedTenantId != tenantId)
+            return Forbid();
+
+        var item = await _service.GetQuoteByIdAsync(quoteId, tenantId, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
 }
