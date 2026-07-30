@@ -336,6 +336,11 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> GetProposalDeliveries(Guid proposalId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => CanAccess(tenantId, "PROPOSAL_VIEW", out var denied) ? Ok(await _service.GetProposalDeliveriesAsync(proposalId, tenantId, cancellationToken)) : denied;
 
+    [HttpGet("proposal-deliveries/monitor")]
+    [Authorize]
+    public async Task<IActionResult> GetProposalDeliveryMonitor([FromQuery] Guid tenantId, [FromQuery] string? status, [FromQuery] string? searchTerm, CancellationToken cancellationToken)
+        => CanAccess(tenantId, "PROPOSAL_VIEW", out var denied) ? Ok(await _service.GetProposalDeliveryMonitorAsync(tenantId, status, searchTerm, cancellationToken)) : denied;
+
     [HttpPost("proposal-deliveries/{dispatchId:guid}/retry")]
     [Authorize]
     public async Task<IActionResult> RetryProposalDelivery(Guid dispatchId, [FromBody] RetryProposalDeliveryRequest request, CancellationToken cancellationToken)

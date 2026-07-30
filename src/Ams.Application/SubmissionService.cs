@@ -233,6 +233,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task<ProposalDeliveryDispatchDto> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
         => _repository.DeliverProposalAsync(proposalId, request, cancellationToken);
 
+    public Task<IReadOnlyList<ProposalDeliveryMonitorDto>> GetProposalDeliveryMonitorAsync(Guid tenantId, string? status, string? searchTerm, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveryMonitorAsync(tenantId, status, searchTerm, cancellationToken);
+
     public Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetProposalDeliveriesAsync(proposalId, tenantId, cancellationToken);
 

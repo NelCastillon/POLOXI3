@@ -160,7 +160,7 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
             }
             else
             {
-                await MarkSentAsync(connectionFactory, dispatch, result.ExternalDeliveryId!, result.ResponseJson, cancellationToken);
+                await MarkDeliveredAsync(connectionFactory, dispatch, result.ExternalDeliveryId!, result.ResponseJson, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -289,12 +289,13 @@ SELECT @PortalProposalDeliveryId;
         return DeliveryResult.Sent(externalId, JsonSerializer.Serialize(new { statusCode = (int)response.StatusCode, body = responseBody }));
     }
 
-    private static async Task MarkSentAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, string externalDeliveryId, string? responseJson, CancellationToken cancellationToken)
+    private static async Task MarkDeliveredAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, string externalDeliveryId, string? responseJson, CancellationToken cancellationToken)
     {
         const string sql = """
 BEGIN TRANSACTION;
 UPDATE Submissions.ProposalDeliveryDispatch
-SET StatusCode = N'Sent', ExternalDeliveryId = @ExternalDeliveryId,
+SET StatusCode = N'Delivered', ExternalDeliveryId = @ExternalDeliveryId,
+    CompletedDateUtc = COALESCE(CompletedDateUtc, SYSUTCDATETIME()),
     ResponseJson = @ResponseJson, ErrorCode = NULL, ErrorMessage = NULL, NextAttemptDateUtc = NULL,
     ModifiedDateUtc = SYSUTCDATETIME()
 WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND StatusCode = N'Processing' AND IsDeleted = 0;
@@ -306,19 +307,23 @@ BEGIN
 END;
 
 UPDATE Submissions.Proposal
-SET DeliveryStatus = N'Sent', DeliveryMethod = @DeliveryMethodCode, Recipient = @Recipient,
-    SentDateUtc = SYSUTCDATETIME(), LastDeliveryDispatchId = @DispatchId, ModifiedDateUtc = SYSUTCDATETIME()
+SET Status = CASE WHEN PresentedDateUtc IS NULL THEN N'Delivered' ELSE Status END,
+    GovernanceStatusCode = CASE WHEN PresentedDateUtc IS NULL THEN N'Delivered' ELSE GovernanceStatusCode END,
+    DeliveryStatus = N'Delivered', DeliveryMethod = @DeliveryMethodCode, Recipient = @Recipient,
+    SentDateUtc = COALESCE(SentDateUtc, SYSUTCDATETIME()),
+    DeliveryConfirmedDateUtc = COALESCE(DeliveryConfirmedDateUtc, SYSUTCDATETIME()),
+    LastDeliveryDispatchId = @DispatchId, ModifiedDateUtc = SYSUTCDATETIME()
 WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
 INSERT INTO Submissions.ProposalLifecycleEvent
     (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, IsDeleted)
 VALUES
-    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Sent', CONCAT(N'Proposal submitted through ', @ProviderName, N' to ', @Recipient, N'. Awaiting delivery confirmation.'), SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'Delivered', CONCAT(N'Proposal delivery completed through ', @ProviderName, N' to ', @Recipient, N'.'), SYSUTCDATETIME(), SYSUTCDATETIME(), 0);
 
 INSERT INTO Submissions.SubmissionActionLog
     (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 VALUES
-    (NEWID(), @SubmissionId, @TenantId, N'ProposalSent', CONCAT(@ProviderName, N' accepted delivery for ', @Recipient, N'.'), SYSUTCDATETIME(), N'ProposalDeliveryDispatch', @DispatchId, N'Worker', 0);
+    (NEWID(), @SubmissionId, @TenantId, N'ProposalDelivered', CONCAT(@ProviderName, N' completed delivery for ', @Recipient, N'.'), SYSUTCDATETIME(), N'ProposalDeliveryDispatch', @DispatchId, N'Worker', 0);
 
 IF @DeliveryMethodCode IN (N'ESignature', N'ESign')
 BEGIN

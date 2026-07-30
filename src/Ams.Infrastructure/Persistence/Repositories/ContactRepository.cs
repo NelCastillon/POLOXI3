@@ -247,6 +247,9 @@ IF OBJECT_ID(N'Client.ContactWorkflowEvent', N'U') IS NOT NULL
     public async Task UpdateAsync(Guid id, UpdateContactRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+SET XACT_ABORT ON;
+BEGIN TRAN;
+
 UPDATE Client.Contact
 SET FirstName = @FirstName,
     LastName = @LastName,
@@ -263,7 +266,27 @@ SET FirstName = @FirstName,
     StatusCodeId = @StatusCodeId,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
-WHERE ContactId = @Id AND IsDeleted = 0;";
+WHERE ContactId = @Id AND IsDeleted = 0;
+
+UPDATE recipient
+SET RecipientName = NULLIF(LTRIM(RTRIM(CONCAT(contact.FirstName, N' ', contact.LastName))), N''),
+    RecipientEmail = contact.Email,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+FROM Submissions.ProposalRecipient recipient
+INNER JOIN Client.Contact contact
+  ON contact.ContactId = recipient.ContactId
+ AND contact.TenantId = recipient.TenantId
+ AND contact.IsDeleted = 0
+INNER JOIN Submissions.Proposal proposal
+  ON proposal.ProposalId = recipient.ProposalId
+ AND proposal.TenantId = recipient.TenantId
+ AND proposal.IsDeleted = 0
+WHERE recipient.ContactId = @Id
+  AND recipient.IsDeleted = 0
+  AND proposal.GovernanceStatusCode IN (N'Draft', N'ChangesRequired', N'ReadyToDeliver', N'Approved', N'Delivered');
+
+COMMIT;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new
@@ -289,13 +312,31 @@ WHERE ContactId = @Id AND IsDeleted = 0;";
     public async Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+SET XACT_ABORT ON;
+BEGIN TRAN;
+
 UPDATE Client.Contact
 SET IsDeleted = 1,
     StatusCode = 'Inactive',
     StatusCodeId = 2,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @UserId
-WHERE ContactId = @Id AND IsDeleted = 0;";
+WHERE ContactId = @Id AND IsDeleted = 0;
+
+UPDATE recipient
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @UserId
+FROM Submissions.ProposalRecipient recipient
+INNER JOIN Submissions.Proposal proposal
+  ON proposal.ProposalId = recipient.ProposalId
+ AND proposal.TenantId = recipient.TenantId
+ AND proposal.IsDeleted = 0
+WHERE recipient.ContactId = @Id
+  AND recipient.IsDeleted = 0
+  AND proposal.GovernanceStatusCode IN (N'Draft', N'ChangesRequired', N'ReadyToDeliver', N'Approved');
+
+COMMIT;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, UserId = userId }, cancellationToken: cancellationToken));

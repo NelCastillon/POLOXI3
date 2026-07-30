@@ -6,6 +6,9 @@ public sealed class SubmissionDto
     public Guid TenantId { get; set; }
     public Guid AccountId { get; set; }
     public string AccountName { get; set; } = string.Empty;
+    public Guid? PrimaryContactId { get; set; }
+    public string? PrimaryContactName { get; set; }
+    public string? PrimaryContactEmail { get; set; }
     public Guid OpportunityId { get; set; }
     public string OpportunityName { get; set; } = string.Empty;
     public string SubmissionNumber { get; set; } = string.Empty;

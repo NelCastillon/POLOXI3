@@ -198,15 +198,16 @@ END;
 IF @TenantId IS NOT NULL AND OBJECT_ID(N'Submissions.ProposalDeliveryProvider', N'U') IS NOT NULL
 BEGIN
     INSERT INTO Submissions.ProposalDeliveryProvider
-        (ProposalDeliveryProviderId, TenantId, DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, IsConfigured, IsActive, MaxAttempts, RetryDelaySeconds, CreatedDateUtc, IsDeleted)
+        (ProposalDeliveryProviderId, TenantId, DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, EndpointUri, SenderAddress, SecretReference, ConfigurationJson, IsConfigured, IsActive, MaxAttempts, RetryDelaySeconds, CreatedDateUtc, IsDeleted)
     SELECT NEWID(), @TenantId, seed.DeliveryMethodCode, seed.ProviderCode, seed.HandlerCode, seed.DisplayName,
+           seed.EndpointUri, seed.SenderAddress, seed.SecretReference, seed.ConfigurationJson,
            seed.IsConfigured, 1, seed.MaxAttempts, seed.RetryDelaySeconds, SYSUTCDATETIME(), 0
     FROM (VALUES
-        (N'Email', N'TenantSmtp', N'Smtp', N'Tenant SMTP', CAST(0 AS bit), 5, 300),
-        (N'Portal', N'AmsPortal', N'Portal', N'AMS Customer Portal', CAST(1 AS bit), 3, 60),
-        (N'ESignature', N'TenantESignature', N'ESignature', N'Tenant E-Signature', CAST(0 AS bit), 5, 300),
-        (N'InPerson', N'ManualDelivery', N'Manual', N'In-Person / Manual Delivery', CAST(1 AS bit), 1, 10)
-    ) seed(DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, IsConfigured, MaxAttempts, RetryDelaySeconds)
+        (N'Email', N'TenantSmtp', N'Smtp', N'NetworkSolutions SMTP', N'smtp://mail.agencybinder.com:587', N'ams_admin@agencybinder.com', N'AMS_PROPOSAL_SMTP_PASSWORD', N'{' + NCHAR(34) + N'username' + NCHAR(34) + N':' + NCHAR(34) + N'ams_admin@agencybinder.com' + NCHAR(34) + N',' + NCHAR(34) + N'enableSsl' + NCHAR(34) + N':' + NCHAR(34) + N'true' + NCHAR(34) + N'}', CAST(1 AS bit), 5, 300),
+        (N'Portal', N'AmsPortal', N'Portal', N'AMS Customer Portal', NULL, NULL, NULL, NULL, CAST(1 AS bit), 3, 60),
+        (N'ESignature', N'TenantESignature', N'ESignature', N'Tenant E-Signature', NULL, NULL, NULL, NULL, CAST(0 AS bit), 5, 300),
+        (N'InPerson', N'ManualDelivery', N'Manual', N'In-Person / Manual Delivery', NULL, NULL, NULL, NULL, CAST(1 AS bit), 1, 10)
+    ) seed(DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, EndpointUri, SenderAddress, SecretReference, ConfigurationJson, IsConfigured, MaxAttempts, RetryDelaySeconds)
     WHERE NOT EXISTS
     (
         SELECT 1
@@ -215,6 +216,25 @@ BEGIN
           AND existing.DeliveryMethodCode = seed.DeliveryMethodCode
           AND existing.IsDeleted = 0
     );
+END;
+
+IF @TenantId IS NOT NULL AND OBJECT_ID(N'Submissions.ProposalDeliveryProvider', N'U') IS NOT NULL
+BEGIN
+    UPDATE Submissions.ProposalDeliveryProvider
+    SET ProviderCode = CASE WHEN ProviderCode IN (N'SMTP', N'TenantSmtp') THEN N'TenantSmtp' ELSE ProviderCode END,
+        DisplayName = CASE WHEN DisplayName IN (N'Email (SMTP)', N'Tenant SMTP') THEN N'NetworkSolutions SMTP' ELSE DisplayName END,
+        EndpointUri = COALESCE(NULLIF(EndpointUri, N''), N'smtp://mail.agencybinder.com:587'),
+        SenderAddress = COALESCE(NULLIF(SenderAddress, N''), N'ams_admin@agencybinder.com'),
+        SecretReference = COALESCE(NULLIF(SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD'),
+        ConfigurationJson = COALESCE(NULLIF(ConfigurationJson, N''), N'{' + NCHAR(34) + N'username' + NCHAR(34) + N':' + NCHAR(34) + N'ams_admin@agencybinder.com' + NCHAR(34) + N',' + NCHAR(34) + N'enableSsl' + NCHAR(34) + N':' + NCHAR(34) + N'true' + NCHAR(34) + N'}'),
+        IsConfigured = CASE WHEN COALESCE(NULLIF(EndpointUri, N''), N'smtp://mail.agencybinder.com:587') IS NOT NULL
+                            AND COALESCE(NULLIF(SenderAddress, N''), N'ams_admin@agencybinder.com') IS NOT NULL
+                            AND COALESCE(NULLIF(SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD') IS NOT NULL THEN 1 ELSE IsConfigured END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE TenantId = @TenantId
+      AND DeliveryMethodCode = N'Email'
+      AND HandlerCode = N'Smtp'
+      AND IsDeleted = 0;
 END;
 
 IF @TenantId IS NOT NULL AND OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL
@@ -1313,6 +1333,9 @@ END;";
            s.TenantId,
            s.AccountId,
            a.AccountName,
+       primaryContact.ContactId AS PrimaryContactId,
+       primaryContact.ContactName AS PrimaryContactName,
+       primaryContact.Email AS PrimaryContactEmail,
            s.OpportunityId,
            COALESCE(o.OpportunityName, s.SubmissionNumber) AS OpportunityName,
            s.SubmissionNumber,
@@ -1330,6 +1353,22 @@ END;";
            s.ModifiedDateUtc
     FROM   Submissions.Submission s
     JOIN   Client.Account a ON a.AccountId = s.AccountId
+OUTER APPLY
+(
+    SELECT TOP 1 contact.ContactId,
+           LTRIM(RTRIM(CONCAT(contact.FirstName, N' ', contact.LastName))) AS ContactName,
+           contact.Email
+    FROM Client.Contact contact
+    WHERE contact.TenantId = s.TenantId
+      AND contact.AccountId = s.AccountId
+      AND (contact.ContactTypeCode = N'Primary' OR contact.IsKeyContact = 1 OR contact.IsServiceContact = 1 OR contact.IsBillingContact = 1)
+      AND contact.IsDeleted = 0
+    ORDER BY CASE WHEN contact.ContactTypeCode = N'Primary' THEN 0 ELSE 1 END,
+             CASE WHEN contact.IsKeyContact = 1 THEN 0 ELSE 1 END,
+             CASE WHEN contact.StatusCode = N'Active' THEN 0 ELSE 1 END,
+             COALESCE(contact.ModifiedDateUtc, contact.CreatedDateUtc) DESC,
+             contact.ContactId
+) primaryContact
     LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
     LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
     WHERE  s.TenantId = @TenantId
@@ -1388,6 +1427,9 @@ SELECT s.SubmissionId,
        s.TenantId,
        s.AccountId,
        a.AccountName,
+       primaryContact.ContactId AS PrimaryContactId,
+       primaryContact.ContactName AS PrimaryContactName,
+       primaryContact.Email AS PrimaryContactEmail,
        s.OpportunityId,
        COALESCE(o.OpportunityName, s.SubmissionNumber) AS OpportunityName,
        s.SubmissionNumber,
@@ -1405,6 +1447,22 @@ SELECT s.SubmissionId,
        s.ModifiedDateUtc
 FROM   Submissions.Submission s
 JOIN   Client.Account a ON a.AccountId = s.AccountId
+OUTER APPLY
+(
+    SELECT TOP 1 contact.ContactId,
+           LTRIM(RTRIM(CONCAT(contact.FirstName, N' ', contact.LastName))) AS ContactName,
+           contact.Email
+    FROM Client.Contact contact
+    WHERE contact.TenantId = s.TenantId
+      AND contact.AccountId = s.AccountId
+      AND (contact.ContactTypeCode = N'Primary' OR contact.IsKeyContact = 1 OR contact.IsServiceContact = 1 OR contact.IsBillingContact = 1)
+      AND contact.IsDeleted = 0
+    ORDER BY CASE WHEN contact.ContactTypeCode = N'Primary' THEN 0 ELSE 1 END,
+             CASE WHEN contact.IsKeyContact = 1 THEN 0 ELSE 1 END,
+             CASE WHEN contact.StatusCode = N'Active' THEN 0 ELSE 1 END,
+             COALESCE(contact.ModifiedDateUtc, contact.CreatedDateUtc) DESC,
+             contact.ContactId
+) primaryContact
 LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
 LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
 WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
@@ -1491,6 +1549,13 @@ INSERT INTO Submissions.ProposalLifecycleEvent (ProposalLifecycleEventId, Tenant
 IF NOT EXISTS (SELECT 1 FROM Submissions.Proposal WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND GovernanceStatusCode IN (N'Draft', N'ChangesRequired', N'ReadyToDeliver') AND IsDeleted = 0) THROW 52204, 'Recipients cannot be changed after delivery begins.', 1;
 IF @ContactId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM Client.Contact contact INNER JOIN Submissions.Submission submission ON submission.AccountId = contact.AccountId AND submission.SubmissionId = (SELECT SubmissionId FROM Submissions.Proposal WHERE ProposalId = @ProposalId) WHERE contact.ContactId = @ContactId AND contact.TenantId = @TenantId AND contact.IsDeleted = 0) THROW 52205, 'Recipient contact does not belong to the submission account.', 1;
 IF @IsPrimary = 1 UPDATE Submissions.ProposalRecipient SET IsPrimary = 0, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ModifiedByUserId WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+IF @ContactId IS NOT NULL
+BEGIN
+    SELECT @RecipientName = COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(contact.FirstName, N' ', contact.LastName))), N''), @RecipientName),
+           @RecipientEmail = COALESCE(NULLIF(contact.Email, N''), @RecipientEmail)
+    FROM Client.Contact contact
+    WHERE contact.ContactId = @ContactId AND contact.TenantId = @TenantId AND contact.IsDeleted = 0;
+END;
 MERGE Submissions.ProposalRecipient AS target USING (SELECT @ProposalRecipientId AS ProposalRecipientId) AS source ON target.ProposalRecipientId = source.ProposalRecipientId AND target.TenantId = @TenantId
 WHEN MATCHED THEN UPDATE SET ContactId=@ContactId, RecipientTypeCode=@RecipientTypeCode, RecipientName=@RecipientName, RecipientEmail=@RecipientEmail, SigningOrder=@SigningOrder, IsPrimary=@IsPrimary, IsSigner=@IsSigner, ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@ModifiedByUserId, IsDeleted=0
 WHEN NOT MATCHED THEN INSERT (ProposalRecipientId,TenantId,SubmissionId,ProposalId,ContactId,RecipientTypeCode,RecipientName,RecipientEmail,SigningOrder,IsPrimary,IsSigner,CreatedByUserId,IsDeleted) VALUES (@ProposalRecipientId,@TenantId,(SELECT SubmissionId FROM Submissions.Proposal WHERE ProposalId=@ProposalId),@ProposalId,@ContactId,@RecipientTypeCode,@RecipientName,@RecipientEmail,@SigningOrder,@IsPrimary,@IsSigner,@ModifiedByUserId,0);";
@@ -4862,8 +4927,22 @@ LEFT JOIN IAM.[User] reviewer ON reviewer.UserId = review.AssignedReviewerUserId
 WHERE review.ProposalId = @ProposalId AND review.TenantId = @TenantId AND review.IsDeleted = 0
 ORDER BY review.ReviewRound DESC;
 
-SELECT ProposalRecipientId, ProposalId, ContactId, RecipientTypeCode, RecipientName, RecipientEmail, SigningOrder, IsPrimary, IsSigner
-FROM Submissions.ProposalRecipient WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY SigningOrder, RecipientName;
+SELECT recipient.ProposalRecipientId,
+       recipient.ProposalId,
+       recipient.ContactId,
+       recipient.RecipientTypeCode,
+       COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(contact.FirstName, N' ', contact.LastName))), N''), recipient.RecipientName) AS RecipientName,
+       COALESCE(NULLIF(contact.Email, N''), recipient.RecipientEmail) AS RecipientEmail,
+       recipient.SigningOrder,
+       recipient.IsPrimary,
+       recipient.IsSigner
+FROM Submissions.ProposalRecipient recipient
+LEFT JOIN Client.Contact contact
+  ON contact.ContactId = recipient.ContactId
+ AND contact.TenantId = recipient.TenantId
+ AND contact.IsDeleted = 0
+WHERE recipient.ProposalId = @ProposalId AND recipient.TenantId = @TenantId AND recipient.IsDeleted = 0
+ORDER BY recipient.SigningOrder, RecipientName;
 
 SELECT ProposalESignEnvelopeId, ProposalId, ProposalVersionNumber, ProposalDeliveryDispatchId, ESignRequestId, ProviderCode,
        ExternalEnvelopeId, StatusCode, SentDateUtc, DeliveredDateUtc, FirstViewedDateUtc, CompletedDateUtc, SignedDocumentId, CertificateDocumentId
@@ -5191,7 +5270,8 @@ WHERE d.ProposalDeliveryDispatchId = @DispatchId;";
         const string sql = @"
 SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
        COALESCE(provider.DisplayName, d.DeliveryMethodCode) AS ProviderName, d.Recipient, d.StatusCode,
-       d.AttemptCount, d.MaxAttempts, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.ProposalVersionNumber, d.AttemptCount, d.MaxAttempts, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.FirstViewedDateUtc, d.LastViewedDateUtc, d.DownloadedDateUtc, d.SignedDateUtc, d.DeclinedDateUtc, d.ExpiredDateUtc, d.BouncedDateUtc, d.CancelledDateUtc,
        d.ErrorCode, d.ErrorMessage, d.CreatedDateUtc,
        CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
 FROM Submissions.ProposalDeliveryDispatch d
@@ -5201,6 +5281,83 @@ WHERE d.ProposalId = @ProposalId AND d.TenantId = @TenantId AND d.IsDeleted = 0
 ORDER BY d.CreatedDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return (await cn.QueryAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyList<ProposalDeliveryMonitorDto>> GetProposalDeliveryMonitorAsync(Guid tenantId, string? status, string? searchTerm, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT TOP (250)
+       d.ProposalDeliveryDispatchId,
+       d.TenantId,
+       d.SubmissionId,
+       d.ProposalId,
+       d.DeliveryMethodCode,
+       COALESCE(provider.DisplayName, d.DeliveryMethodCode) AS ProviderName,
+       d.Recipient,
+       d.StatusCode,
+       d.ProposalVersionNumber,
+       d.AttemptCount,
+       d.MaxAttempts,
+       d.NextAttemptDateUtc,
+       d.CompletedDateUtc,
+       d.ExternalDeliveryId,
+       d.FirstViewedDateUtc,
+       d.LastViewedDateUtc,
+       d.DownloadedDateUtc,
+       d.SignedDateUtc,
+       d.DeclinedDateUtc,
+       d.ExpiredDateUtc,
+       d.BouncedDateUtc,
+       d.CancelledDateUtc,
+       d.ErrorCode,
+       d.ErrorMessage,
+       d.CreatedDateUtc,
+       CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry,
+       p.Title AS ProposalTitle,
+       s.SubmissionNumber,
+       s.Status AS SubmissionStatus,
+       account.AccountName,
+       opportunity.OpportunityName,
+       COALESCE(producer.FullName, producer.DisplayName, producer.UserName) AS AssignedProducerName,
+       provider.HandlerCode AS DeliveryHandlerCode,
+       provider.SenderAddress,
+       CAST(COALESCE(provider.IsConfigured, 0) AS bit) AS ProviderIsConfigured,
+       CAST(COALESCE(provider.IsActive, 0) AS bit) AS ProviderIsActive
+FROM Submissions.ProposalDeliveryDispatch d
+INNER JOIN Submissions.Proposal p
+  ON p.ProposalId = d.ProposalId
+ AND p.TenantId = d.TenantId
+ AND p.IsDeleted = 0
+INNER JOIN Submissions.Submission s
+  ON s.SubmissionId = d.SubmissionId
+ AND s.TenantId = d.TenantId
+ AND s.IsDeleted = 0
+LEFT JOIN Client.Account account
+  ON account.AccountId = s.AccountId
+ AND account.IsDeleted = 0
+LEFT JOIN CRM.Opportunity opportunity
+  ON opportunity.OpportunityId = s.OpportunityId
+ AND opportunity.IsDeleted = 0
+LEFT JOIN IAM.[User] producer
+  ON producer.UserId = s.AssignedToUserId
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = d.ProposalDeliveryProviderId
+ AND provider.IsDeleted = 0
+WHERE d.TenantId = @TenantId
+  AND d.IsDeleted = 0
+  AND (@Status IS NULL OR @Status = N'' OR d.StatusCode = @Status)
+  AND (@SearchTerm IS NULL OR @SearchTerm = N''
+       OR d.Recipient LIKE N'%' + @SearchTerm + N'%'
+       OR d.StatusCode LIKE N'%' + @SearchTerm + N'%'
+       OR d.DeliveryMethodCode LIKE N'%' + @SearchTerm + N'%'
+       OR COALESCE(provider.DisplayName, d.DeliveryMethodCode) LIKE N'%' + @SearchTerm + N'%'
+       OR p.Title LIKE N'%' + @SearchTerm + N'%'
+       OR s.SubmissionNumber LIKE N'%' + @SearchTerm + N'%'
+       OR account.AccountName LIKE N'%' + @SearchTerm + N'%'
+       OR opportunity.OpportunityName LIKE N'%' + @SearchTerm + N'%')
+ORDER BY d.CreatedDateUtc DESC;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<ProposalDeliveryMonitorDto>(new CommandDefinition(sql, new { TenantId = tenantId, Status = status, SearchTerm = searchTerm }, cancellationToken: cancellationToken))).AsList();
     }
 
     public async Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
@@ -5253,7 +5410,9 @@ WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND IsDe
 
 SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
        @ProviderName AS ProviderName, d.Recipient, d.StatusCode, d.AttemptCount, d.MaxAttempts,
-       d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId, d.ErrorCode, d.ErrorMessage,
+       d.ProposalVersionNumber, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.FirstViewedDateUtc, d.LastViewedDateUtc, d.DownloadedDateUtc, d.SignedDateUtc, d.DeclinedDateUtc, d.ExpiredDateUtc, d.BouncedDateUtc, d.CancelledDateUtc,
+       d.ErrorCode, d.ErrorMessage,
        d.CreatedDateUtc, CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
 FROM Submissions.ProposalDeliveryDispatch d
 WHERE d.ProposalDeliveryDispatchId = @DispatchId AND d.TenantId = @TenantId;";

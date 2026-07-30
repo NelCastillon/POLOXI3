@@ -280,9 +280,9 @@ public sealed record SelectSubmissionQuoteRequest(
 
 public sealed record ProposalDeliveryRequest(
     Guid TenantId,
-    [property: Required, StringLength(50)]
+    [Required, StringLength(50)]
     string DeliveryMethod,
-    [property: Required, StringLength(320)]
+    [Required, StringLength(320)]
     string Recipient,
     Guid? SentByUserId);
 
@@ -292,24 +292,24 @@ public sealed record RetryProposalDeliveryRequest(
 
 public sealed record UpdateProposalDeliveryProviderRequest(
     Guid TenantId,
-    [property: StringLength(1000)]
+    [StringLength(1000)]
     string? EndpointUri,
-    [property: EmailAddress, StringLength(320)]
+    [EmailAddress, StringLength(320)]
     string? SenderAddress,
-    [property: StringLength(500)]
+    [StringLength(500)]
     string? SecretReference,
     string? ConfigurationJson,
     bool IsConfigured,
     bool IsActive,
-    [property: Range(1, 25)]
+    [Range(1, 25)]
     int MaxAttempts,
-    [property: Range(10, 86400)]
+    [Range(10, 86400)]
     int RetryDelaySeconds,
     Guid? ModifiedByUserId);
 
 public sealed record ProposalPresentationRequest(
     Guid TenantId,
-    [property: StringLength(1000)]
+    [StringLength(1000)]
     string? PresentationNotes,
     Guid? PresentedByUserId);
 
@@ -441,14 +441,14 @@ public sealed record GenerateProposalRequest(
 public sealed record SubmitProposalReviewRequest(
     Guid TenantId,
     Guid AssignedReviewerUserId,
-    [property: StringLength(2000)] string? ReviewNotes,
+    [StringLength(2000)] string? ReviewNotes,
     DateTime? DueDateUtc,
     Guid? RequestedByUserId = null);
 
 public sealed record DecideProposalReviewRequest(
     Guid TenantId,
-    [property: Required] string DecisionCode,
-    [property: Required, StringLength(2000)] string DecisionNotes,
+    [Required] string DecisionCode,
+    [Required, StringLength(2000)] string DecisionNotes,
     Guid? DecidedByUserId = null) : IValidatableObject
 {
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
@@ -462,10 +462,10 @@ public sealed record UpsertProposalRecipientRequest(
     Guid TenantId,
     Guid? ProposalRecipientId,
     Guid? ContactId,
-    [property: Required, StringLength(50)] string RecipientTypeCode,
-    [property: Required, StringLength(200)] string RecipientName,
-    [property: Required, EmailAddress, StringLength(320)] string RecipientEmail,
-    [property: Range(1, 100)] int SigningOrder,
+    [Required, StringLength(50)] string RecipientTypeCode,
+    [Required, StringLength(200)] string RecipientName,
+    [Required, EmailAddress, StringLength(320)] string RecipientEmail,
+    [Range(1, 100)] int SigningOrder,
     bool IsPrimary,
     bool IsSigner,
     Guid? ModifiedByUserId = null) : IValidatableObject
@@ -481,23 +481,40 @@ public sealed record UpsertProposalRecipientRequest(
 
 public sealed record ProposalProviderCallbackRequest(
     Guid TenantId,
-    [property: Required, StringLength(100)] string ProviderCode,
-    [property: Required, StringLength(500)] string ProviderEventId,
-    [property: StringLength(500)] string? ExternalEnvelopeId,
-    [property: Required, StringLength(100)] string EventTypeCode,
-    [property: Required, StringLength(50)] string StatusCode,
-    [property: Required] string PayloadJson,
-    [property: Required, StringLength(2000)] string SignatureHeader,
+    [Required, StringLength(100)] string ProviderCode,
+    [Required, StringLength(500)] string ProviderEventId,
+    [StringLength(500)] string? ExternalEnvelopeId,
+    [Required, StringLength(100)] string EventTypeCode,
+    [Required, StringLength(50)] string StatusCode,
+    [Required] string PayloadJson,
+    [Required, StringLength(2000)] string SignatureHeader,
     Guid? SignedDocumentId = null,
-    Guid? CertificateDocumentId = null);
+    Guid? CertificateDocumentId = null) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (string.IsNullOrWhiteSpace(ProviderCode))
+            yield return new ValidationResult("Provider code is required.", [nameof(ProviderCode)]);
+        if (string.IsNullOrWhiteSpace(ProviderEventId))
+            yield return new ValidationResult("Provider event ID is required.", [nameof(ProviderEventId)]);
+        if (string.IsNullOrWhiteSpace(EventTypeCode))
+            yield return new ValidationResult("Event type is required.", [nameof(EventTypeCode)]);
+        if (string.IsNullOrWhiteSpace(StatusCode))
+            yield return new ValidationResult("Status is required.", [nameof(StatusCode)]);
+        if (string.IsNullOrWhiteSpace(PayloadJson))
+            yield return new ValidationResult("Payload is required.", [nameof(PayloadJson)]);
+        if (string.IsNullOrWhiteSpace(SignatureHeader))
+            yield return new ValidationResult("Signature header is required.", [nameof(SignatureHeader)]);
+    }
+}
 
 public sealed record UpsertProposalSlaPolicyRequest(
     Guid TenantId,
-    [property: Required, StringLength(100)] string EventCode,
-    [property: Range(1, 525600)] int DueAfterMinutes,
-    [property: Range(1, 525600)] int? EscalateAfterMinutes,
-    [property: Required, StringLength(50)] string PriorityCode,
-    [property: StringLength(100)] string? AssignedRoleCode,
+    [Required, StringLength(100)] string EventCode,
+    [Range(1, 525600)] int DueAfterMinutes,
+    [Range(1, 525600)] int? EscalateAfterMinutes,
+    [Required, StringLength(50)] string PriorityCode,
+    [StringLength(100)] string? AssignedRoleCode,
     bool IsActive,
     Guid? ModifiedByUserId = null) : IValidatableObject
 {

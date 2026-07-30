@@ -7,197 +7,380 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject Ams.Web.Services.CurrentUserContext CurrentUser
+@inject ConfirmationDialogService Confirmations
 
-<PageTitle>Proposal Workflow - AMS</PageTitle>
-<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
+<PageTitle>@(_submission is null ? "Proposal Workflow" : $"{_submission.SubmissionNumber} - Proposal Workflow")</PageTitle>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true" />
+<AppConfirmDialog />
 
-<AppPageHeader Icon="bi-file-earmark-richtext" Title="Proposal Workflow" Subtitle="Generate, deliver, present, and record customer acceptance using submission and quote data." ReturnUrl="@($"/submissions/{SubmissionId}")" ReturnLabel="Back to Submission">
-    <Actions>
-        <button type="button" class="um-btn um-btn-ghost" disabled="@_loading" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-    </Actions>
-</AppPageHeader>
-
-@if (!string.IsNullOrWhiteSpace(_loadError))
+@if (_loading && _submission is null)
 {
-    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+    <div class="pb-loading"><div class="um-spinner" aria-hidden="true"></div><span>Loading proposal workflow...</span></div>
 }
-else if (_loading)
+else if (_submission is null)
 {
-    <div class="um-loading"><div class="um-spinner"></div><span>Loading proposal workflow...</span></div>
+    <div class="pb-not-found">
+        <i class="bi bi-file-earmark-x" aria-hidden="true"></i>
+        <h1>Proposal workflow unavailable</h1>
+        <p>@(_loadError ?? "The submission could not be loaded.")</p>
+        <button type="button" class="pb-btn pb-btn--primary" @onclick='() => Nav.NavigateTo("/submissions")'><i class="bi bi-arrow-left"></i> Back to Submissions</button>
+    </div>
 }
 else
 {
-    <div class="pc-kpi-strip">
-        @Kpi("Versions", _proposals.Count.ToString(), "bi-layers")
-        @Kpi("Generated", _proposals.Count(x => x.Status == "Generated").ToString(), "bi-file-earmark-check")
-        @Kpi("Delivered", _proposals.Count(x => x.Status == "Delivered").ToString(), "bi-send-check")
-        @Kpi("Accepted", _proposals.Count(x => x.Status == "Accepted").ToString(), "bi-check-circle")
-    </div>
-
-    <div class="um-card mb-3">
-        <div class="um-card-header"><div><h2>Submission</h2><p>@_submission?.SubmissionNumber · @_submission?.AccountName · @_submission?.LineOfBusiness</p></div></div>
-        <div class="um-card-body d-flex gap-2 flex-wrap">
-            @if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true) { <button class="um-btn um-btn-primary" @onclick="OpenGenerate" disabled="@(!_quotes.Any(x => x.IsProposalReady))"><i class="bi bi-plus-lg"></i> Generate Proposal</button> }
-            <button class="um-btn um-btn-ghost" @onclick="OpenQuoteComparison"><i class="bi bi-columns-gap"></i> Compare Quotes</button>
-            <button class="um-btn um-btn-ghost" @onclick="GoBack"><i class="bi bi-journal-text"></i> Submission</button>
-        </div>
-    </div>
-
-    <div class="um-card">
-        <div class="um-card-header"><div><h2>Proposal Versions</h2><p>Each version preserves its quote selection and lifecycle history.</p></div></div>
-        <div class="um-card-body">
-            @if (_proposals.Count == 0)
-            {
-                <div class="um-empty-state"><i class="bi bi-file-earmark-richtext"></i><strong>No proposals generated</strong><span>Generate a proposal from approved presentation-ready quotes.</span></div>
-            }
-            else
-            {
-                <div class="table-responsive">
-                    <table class="table enterprise-table align-middle">
-                        <thead><tr><th>Proposal</th><th>Status</th><th>Delivery</th><th>Decision</th><th class="text-end">Actions</th></tr></thead>
-                        <tbody>
-                        @foreach (var item in _proposals)
-                        {
-                            <tr @ondblclick="() => ViewAsync(item.ProposalId)">
-                                <td><strong>@item.Title</strong><div class="text-muted small">@item.DocumentFileName</div></td>
-                                <td><span class="um-status-pill">@item.Status</span></td>
-                                <td><span class="um-status-pill">@(item.DeliveryStatus ?? "Not queued")</span><div class="text-muted small">@item.DeliveryMethod @item.Recipient</div></td>
-                                <td>@(item.ClientDecision ?? "Pending")</td>
-                                <td class="text-end">
-                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ViewAsync(item.ProposalId)"><i class="bi bi-eye"></i> View</button>
-                                    @if(_currentUser?.HasPermission("PROPOSAL_CREATE") == true && item.GovernanceStatusCode is "Draft" or "ChangesRequired")
-                                    {
-                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenReview(item)"><i class="bi bi-person-check"></i> Submit Review</button>
-                                    }
-                                    @if(item.GovernanceStatusCode=="InternalReview" && (_currentUser?.HasPermission("PROPOSAL_REVIEW") == true || _currentUser?.HasPermission("PROPOSAL_APPROVE") == true))
-                                    {
-                                        <button class="um-btn um-btn-success um-btn-sm" @onclick='() => DecideReviewAsync(item, "Approved")'><i class="bi bi-check2-square"></i> Approve</button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => DecideReviewAsync(item, "ChangesRequired")'><i class="bi bi-arrow-counterclockwise"></i> Changes</button>
-                                    }
-                                    @if (_currentUser?.HasPermission("PROPOSAL_DELIVER") == true) { <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(item.GovernanceStatusCode!="ReadyToDeliver")" @onclick="() => OpenDeliverAsync(item)"><i class="bi bi-send"></i> Deliver</button> }
-                                    @if (item.LastDeliveryDispatchId.HasValue && item.DeliveryStatus is "Configuration Required" or "Failed")
-                                    {
-                                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryAsync(item.LastDeliveryDispatchId.Value)"><i class="bi bi-arrow-repeat"></i> Retry</button>
-                                    }
-                        <div class="d-flex align-items-center justify-content-between mt-3"><h3 class="h6 mb-0">Recipients</h3>@if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true && _selected.GovernanceStatusCode is "Draft" or "ChangesRequired" or "ReadyToDeliver") { <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenRecipient"><i class="bi bi-person-plus"></i> Add</button> }</div>
-                        @if (_selected.Recipients.Count == 0) { <div class="small text-muted mt-2">No persisted recipients.</div> }
-                        @foreach (var recipient in _selected.Recipients)
-                        {
-                            <div class="border rounded p-2 mt-2"><strong>@recipient.RecipientName</strong>@if(recipient.IsPrimary){<span class="um-status-pill ms-2">Primary</span>}<div class="small">@recipient.RecipientEmail · @recipient.RecipientTypeCode</div>@if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true && _selected.GovernanceStatusCode is "Draft" or "ChangesRequired" or "ReadyToDeliver") { <button class="um-btn um-btn-ghost um-btn-sm mt-1" @onclick="() => DeleteRecipientAsync(recipient.ProposalRecipientId)"><i class="bi bi-trash"></i> Remove</button> }</div>
-                        }
-                                    <button class="um-btn um-btn-ghost um-btn-sm" disabled="@(!HasStatus(item, "Delivered"))" @onclick="() => PresentAsync(item)"><i class="bi bi-person-video3"></i> Present</button>
-                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item,"Presented"))" @onclick="() => OpenClientAcceptance(item)"><i class="bi bi-person-check"></i> Client Acceptance</button>
-                                    <button class="um-btn um-btn-success um-btn-sm" disabled="@(!HasStatus(item, "Accepted"))" @onclick="() => RequestBindAsync(item)"><i class="bi bi-shield-check"></i> Request Bind</button>
-                                </td>
-                            </tr>
-                        }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        </div>
-    </div>
-
-    @if (_selected is not null)
-    {
-        <div class="um-card mt-3">
-            <div class="um-card-header"><div><h2>@_selected.Title · Version @_selected.VersionNumber</h2><p>@_selected.Status · Generated @_selected.GeneratedDateUtc?.ToLocalTime().ToString("g")</p></div></div>
-            <div class="um-card-body">
-                <div class="row g-3">
-                    <div class="col-lg-8"><div class="border rounded p-3">@((MarkupString)(_selected.HtmlContent ?? ""))</div></div>
-                    <div class="col-lg-4">
-                        <h3 class="h6">Included Quotes</h3>
-                        @foreach (var quote in _selected.Quotes)
-                        {
-                            <div class="border rounded p-2 mb-2"><strong>@quote.CarrierName</strong><div>@quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</div><small>Limit @quote.Limit?.ToString("C0") · Deductible @quote.Deductible?.ToString("C0")</small></div>
-                        }
-                        <h3 class="h6 mt-3">Lifecycle</h3>
-                        @foreach (var evt in _selected.Events)
-                        {
-                            <div class="border-start ps-2 mb-2"><strong>@evt.EventCode</strong><div class="small">@evt.EventDateUtc.ToLocalTime().ToString("g")</div><div class="small text-muted">@evt.EventDetail</div></div>
-                        }
-                        <h3 class="h6 mt-3">Delivery Dispatches</h3>
-                        @if (_selected.Deliveries.Count == 0)
-                        {
-                            <div class="small text-muted">No delivery has been queued.</div>
-                        }
-                        @foreach (var delivery in _selected.Deliveries)
-                        {
-                            <div class="border rounded p-2 mb-2">
-                                <strong>@delivery.ProviderName</strong><span class="um-status-pill ms-2">@delivery.StatusCode</span>
-                                <div class="small">@delivery.Recipient · Attempt @delivery.AttemptCount of @delivery.MaxAttempts</div>
-                                @if (!string.IsNullOrWhiteSpace(delivery.ErrorMessage)) { <div class="small text-danger">@delivery.ErrorMessage</div> }
-                                @if (delivery.CanRetry) { <button class="um-btn um-btn-ghost um-btn-sm mt-1" @onclick="() => RetryAsync(delivery.ProposalDeliveryDispatchId)"><i class="bi bi-arrow-repeat"></i> Retry</button> }
-                            </div>
-                        }
-                    </div>
+    <div class="pb-page">
+        <section class="pb-hero">
+            <div class="pb-hero__content">
+                <div class="pb-eyebrow"><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i> Enterprise proposal command center</div>
+                <h1>Proposal Workflow</h1>
+                <p>Build governed proposal versions for <strong>@_submission.AccountName</strong>, coordinate approval and delivery, and continue from customer acceptance to bind.</p>
+                <div class="pb-hero__meta">
+                    <span class="pb-account-pill"><i class="bi bi-building"></i>@_submission.AccountName</span>
+                    <span><i class="bi bi-hash"></i>@_submission.SubmissionNumber</span>
+                    <span><i class="bi bi-layers"></i>@_submission.LineOfBusiness</span>
+                    <span><i class="bi bi-calendar-event"></i>@_submission.EffectiveDate.ToString("MMM d, yyyy")</span>
                 </div>
             </div>
+            <div class="pb-hero__actions">
+                <button type="button" class="pb-btn pb-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pb-spin" : null)"></i> Refresh</button>
+                <button type="button" class="pb-btn pb-btn--light" @onclick="OpenQuoteComparison"><i class="bi bi-columns-gap"></i> Compare Quotes</button>
+                <button type="button" class="pb-btn pb-btn--light" @onclick="GoBack"><i class="bi bi-arrow-left"></i> Submission</button>
+                @if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true)
+                {
+                    <button type="button" class="pb-btn pb-btn--primary" @onclick="OpenGenerate" disabled="@(!ProposalReadyQuotes.Any())" title="@GenerateTitle"><i class="bi bi-plus-lg"></i> Generate Proposal</button>
+                }
+            </div>
+        </section>
+
+        @if (!string.IsNullOrWhiteSpace(_loadError))
+        {
+            <div class="alert alert-danger pb-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_loadError</span></div>
+        }
+
+        <section class="pb-kpi-strip" aria-label="Proposal workflow filters">
+            <button type="button" class="@KpiClass("all", "blue")" title="Show every proposal version" @onclick='() => SetFilter("all")'><span><i class="bi bi-layers"></i> Versions</span><strong>@_proposals.Count</strong><small>All preserved proposal versions</small></button>
+            <button type="button" class="@KpiClass("review", "amber")" title="Show proposals awaiting internal review" @onclick='() => SetFilter("review")'><span><i class="bi bi-person-check"></i> In Review</span><strong>@ReviewCount</strong><small>Awaiting reviewer decision</small></button>
+            <button type="button" class="@KpiClass("delivered", "cyan")" title="Show delivered proposal versions" @onclick='() => SetFilter("delivered")'><span><i class="bi bi-send-check"></i> Delivered</span><strong>@DeliveredCount</strong><small>Sent through configured channels</small></button>
+            <button type="button" class="@KpiClass("accepted", "emerald")" title="Show customer-accepted proposals" @onclick='() => SetFilter("accepted")'><span><i class="bi bi-shield-check"></i> Accepted</span><strong>@AcceptedCount</strong><small>Eligible to continue toward bind</small></button>
+        </section>
+
+        <section class="pb-workflow-strip" aria-label="Proposal lifecycle">
+            <header class="pb-workflow-heading"><div><span class="pb-section-kicker">Governed lifecycle</span><h2>Proposal Flow</h2><p>Follow each controlled stage from quote selection through binding.</p></div><span class="pb-workflow-summary"><i class="bi bi-signpost-split"></i>@WorkflowSummary</span></header>
+            <div class="pb-workflow-track">
+                @foreach (var step in WorkflowSteps)
+                {
+                    var state = WorkflowState(step.Number);
+                    <article class="pb-workflow-step pb-workflow-step--@state" aria-current="@(state == "current" ? "step" : null)">
+                        <span class="pb-workflow-icon"><i class="bi @(state == "completed" ? "bi-check-lg" : step.Icon)"></i></span>
+                        <span class="pb-workflow-number">@step.Number.ToString("00")</span>
+                        <div>
+                            <strong>@step.Title</strong>
+                            <small>@step.Description</small>
+                            <span class="pb-workflow-state">@(state == "completed" ? "Complete" : state == "current" ? "Current stage" : "Upcoming")</span>
+                        </div>
+                    </article>
+                }
+            </div>
+            <div class="pb-flow-intel" aria-label="Current workflow intelligence">
+                <article class="pb-flow-intel__primary"><span class="pb-flow-intel__icon"><i class="bi @CurrentStageIcon"></i></span><div><span class="pb-section-kicker">Current user focus</span><strong>@CurrentStageTitle</strong><p>@CurrentStageDescription</p></div></article>
+                <div class="pb-flow-facts">
+                    @foreach (var fact in FlowFacts)
+                    {
+                        <span><i class="bi @fact.Icon"></i><strong>@fact.Value</strong><small>@fact.Label</small></span>
+                    }
+                </div>
+            </div>
+        </section>
+
+        <div class="pb-layout">
+            <section class="pb-card pb-list-card">
+                <header class="pb-card-header"><div><span class="pb-section-kicker">Version control</span><h2>Proposal Versions</h2><p>@FilterDescription</p></div><span class="pb-count">@FilteredProposals.Count version@(FilteredProposals.Count == 1 ? "" : "s")</span></header>
+                @if (_proposals.Count == 0)
+                {
+                    <div class="pb-empty"><i class="bi bi-file-earmark-richtext"></i><strong>No proposals generated</strong><span>Generate a proposal from approved presentation-ready quotes to begin the governed workflow.</span></div>
+                }
+                else if (FilteredProposals.Count == 0)
+                {
+                    <div class="pb-empty"><i class="bi bi-funnel"></i><strong>No matching proposals</strong><span>Select another KPI filter to view proposal versions.</span><button type="button" class="pb-btn pb-btn--ghost" @onclick='() => SetFilter("all")'>Clear filter</button></div>
+                }
+                else
+                {
+                    <div class="pb-table-wrap"><table class="pb-table">
+                        <thead><tr><th>Proposal</th><th>Governance</th><th>Delivery</th><th>Customer</th><th class="text-end">Actions</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in FilteredProposals)
+                            {
+                                <tr class="@RowClass(item)" @onclick="() => ViewAsync(item.ProposalId)" tabindex="0" @onkeydown="e => HandleRowKeyAsync(e, item.ProposalId)">
+                                    <td><div class="pb-proposal-title"><span class="pb-version-icon"><i class="bi bi-file-earmark-text"></i></span><span><strong>@item.Title</strong><small>@(item.DocumentFileName ?? "Proposal document")</small></span></div></td>
+                                    <td><span class="@StatusClass(item.GovernanceStatusCode)">@DisplayStatus(item.GovernanceStatusCode)</span></td>
+                                    <td><span class="@StatusClass(item.DeliveryStatus ?? "NotQueued")">@(item.DeliveryStatus ?? "Not queued")</span><small class="pb-cell-meta">@DeliverySummary(item)</small></td>
+                                    <td><span class="@StatusClass(item.ClientDecision ?? "Pending")">@(item.ClientDecision ?? "Pending")</span><small class="pb-cell-meta">@DecisionSummary(item)</small></td>
+                                    <td class="pb-actions" @onclick:stopPropagation="true">
+                                        <button type="button" class="pb-icon-btn" title="View proposal" aria-label="View proposal" @onclick="() => ViewAsync(item.ProposalId)"><i class="bi bi-eye"></i></button>
+                                        @if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true && item.GovernanceStatusCode is "Draft" or "ChangesRequired") { <button type="button" class="pb-review-cta" title="Submit this proposal for internal review" aria-label="Submit this proposal for internal review" @onclick="() => OpenReview(item)"><i class="bi bi-send-check"></i><span>Submit Review</span></button> }
+                                        @if (item.GovernanceStatusCode == "InternalReview" && (_currentUser?.HasPermission("PROPOSAL_REVIEW") == true || _currentUser?.HasPermission("PROPOSAL_APPROVE") == true)) { <button type="button" class="pb-icon-btn pb-icon-btn--success" title="Approve proposal" aria-label="Approve proposal" @onclick='() => DecideReviewAsync(item, "Approved")'><i class="bi bi-check2-square"></i></button><button type="button" class="pb-icon-btn" title="Request changes" aria-label="Request changes" @onclick='() => DecideReviewAsync(item, "ChangesRequired")'><i class="bi bi-arrow-counterclockwise"></i></button> }
+                                        @if (_currentUser?.HasPermission("PROPOSAL_DELIVER") == true && CanQueueDelivery(item)) { <button type="button" class="pb-deliver-cta" title="Deliver this approved proposal to the customer" aria-label="Deliver this approved proposal to the customer" disabled="@IsDeliveryBusy(item.ProposalId)" @onclick="() => OpenDeliverAsync(item)">@if (IsDeliveryBusy(item.ProposalId)) { <span class="spinner-border spinner-border-sm"></span> } else { <i class="bi bi-send-fill"></i> }<span>Deliver Proposal</span></button> }
+                                        else if (HasActiveDelivery(item)) { <span class="pb-action-note"><i class="bi bi-hourglass-split"></i> Delivery queued</span> }
+                                        @if (item.LastDeliveryDispatchId.HasValue && item.DeliveryStatus is "Configuration Required" or "Failed") { <button type="button" class="pb-icon-btn" title="Retry delivery" aria-label="Retry delivery" @onclick="() => RetryAsync(item.LastDeliveryDispatchId.Value)"><i class="bi bi-arrow-repeat"></i></button> }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table></div>
+                }
+            </section>
+
+            <aside class="pb-card pb-guidance-card">
+                <header class="pb-card-header"><div><span class="pb-section-kicker">Readiness</span><h2>Next Best Action</h2></div></header>
+                <div class="pb-guidance"><span class="pb-guidance-icon"><i class="bi @NextActionIcon"></i></span><div><strong>@NextActionTitle</strong><p>@NextActionDescription</p></div>
+                    @if (NextActionCode == "generate" && _currentUser?.HasPermission("PROPOSAL_CREATE") == true) { <button type="button" class="pb-btn pb-btn--primary" @onclick="OpenGenerate" disabled="@(!ProposalReadyQuotes.Any())">Generate Proposal</button> }
+                    else if (NextActionCode == "compare") { <button type="button" class="pb-btn pb-btn--ghost" @onclick="OpenQuoteComparison">Review Quotes</button> }
+                    else if (NextActionCode == "review" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Confirm the generated proposal content and included quotes.</span><span><i class="bi bi-2-circle"></i> Submit the version for internal review.</span><span><i class="bi bi-3-circle"></i> Wait for approval or requested changes before delivery.</span></div>
+                        @if (_currentUser?.HasPermission("PROPOSAL_CREATE") == true) { <button type="button" class="pb-btn pb-btn--review" @onclick="() => OpenReview(SelectedWorkflow)"><i class="bi bi-send-check"></i> Submit Review</button> }
+                    }
+                    else if (NextActionCode == "reviewDecision" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps pb-next-steps--review"><span><i class="bi bi-1-circle"></i> Reviewer validates coverage, pricing, and presentation language.</span><span><i class="bi bi-2-circle"></i> Approve if ready for customer delivery.</span><span><i class="bi bi-3-circle"></i> Request changes if the proposal needs correction.</span></div>
+                        @if (_currentUser?.HasPermission("PROPOSAL_REVIEW") == true || _currentUser?.HasPermission("PROPOSAL_APPROVE") == true) { <div class="pb-guidance-actions"><button type="button" class="pb-btn pb-btn--primary" @onclick='() => DecideReviewAsync(SelectedWorkflow, "Approved")'><i class="bi bi-check2-square"></i> Approve</button><button type="button" class="pb-btn pb-btn--ghost" @onclick='() => DecideReviewAsync(SelectedWorkflow, "ChangesRequired")'><i class="bi bi-arrow-counterclockwise"></i> Request Changes</button></div> }
+                    }
+                    else if (NextActionCode == "deliver" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Confirm the primary recipient is correct.</span><span><i class="bi bi-2-circle"></i> Click Deliver Proposal and choose the delivery method.</span><span><i class="bi bi-3-circle"></i> After delivery, mark the proposal presented when the customer meeting occurs.</span></div>
+                        @if (_currentUser?.HasPermission("PROPOSAL_DELIVER") == true && CanQueueDelivery(SelectedWorkflow)) { <button type="button" class="pb-btn pb-btn--deliver" disabled="@IsDeliveryBusy(SelectedWorkflow.ProposalId)" @onclick="() => OpenDeliverAsync(SelectedWorkflow)">@if (IsDeliveryBusy(SelectedWorkflow.ProposalId)) { <span class="spinner-border spinner-border-sm"></span> } else { <i class="bi bi-send-fill"></i> } Deliver Proposal</button> }
+                        else if (HasActiveDelivery(SelectedWorkflow)) { <span class="pb-guidance-note"><i class="bi bi-hourglass-split"></i> Delivery is already queued. Watch the Delivery panel for status updates.</span> }
+                    }
+                    else if (NextActionCode == "deliveryQueued")
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Delivery dispatch is persisted in the database.</span><span><i class="bi bi-2-circle"></i> Worker/provider processing updates the Delivery panel status.</span><span><i class="bi bi-3-circle"></i> Retry only appears if the persisted dispatch fails or needs configuration.</span></div>
+                        <span class="pb-guidance-note"><i class="bi bi-hourglass-split"></i> Delivery is already in progress; another delivery cannot be queued.</span>
+                    }
+                    else if (NextActionCode == "present" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Confirm the proposal was presented to the customer.</span><span><i class="bi bi-2-circle"></i> Mark presented to unlock customer decision tracking.</span><span><i class="bi bi-3-circle"></i> Capture acceptance when the customer approves the proposal.</span></div>
+                        <button type="button" class="pb-btn pb-btn--primary" @onclick="() => PresentAsync(SelectedWorkflow)"><i class="bi bi-person-video3"></i> Mark Presented</button>
+                    }
+                    else if (NextActionCode == "accept" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Confirm the customer accepted the presented proposal.</span><span><i class="bi bi-2-circle"></i> Capture the decision and authorization.</span><span><i class="bi bi-3-circle"></i> Continue toward bind after acceptance is recorded.</span></div>
+                        <button type="button" class="pb-btn pb-btn--primary" @onclick="() => OpenClientAcceptance(SelectedWorkflow)"><i class="bi bi-person-check"></i> Client Acceptance</button>
+                    }
+                    else if (NextActionCode == "bind" && SelectedWorkflow is not null)
+                    {
+                        <div class="pb-next-steps"><span><i class="bi bi-1-circle"></i> Confirm acceptance and quote selection are final.</span><span><i class="bi bi-2-circle"></i> Request bind to start carrier confirmation.</span><span><i class="bi bi-3-circle"></i> Policy creation happens after reliable bind confirmation.</span></div>
+                        <button type="button" class="pb-btn pb-btn--primary" @onclick="() => RequestBindAsync(SelectedWorkflow)"><i class="bi bi-shield-check"></i> Request Bind</button>
+                    }
+                    else if (NextActionCode == "select") { <span class="pb-guidance-note"><i class="bi bi-cursor"></i> Select a proposal version to continue.</span> }
+                </div>
+            </aside>
         </div>
-    }
+
+        @if (_selected is not null)
+        {
+            <section class="pb-card pb-detail-card">
+                <header class="pb-card-header pb-detail-header"><div><span class="pb-section-kicker">Selected proposal · Version @_selected.VersionNumber</span><h2>@_selected.Title</h2><p>@DisplayStatus(_selected.GovernanceStatusCode) · Generated @FormatDate(_selected.GeneratedDateUtc ?? _selected.CreatedDateUtc)</p></div><div class="pb-detail-actions">
+                    @if (SelectedWorkflow is not null && _currentUser?.HasPermission("PROPOSAL_DELIVER") == true && CanQueueDelivery(SelectedWorkflow)) { <button type="button" class="pb-btn pb-btn--deliver" disabled="@IsDeliveryBusy(SelectedWorkflow.ProposalId)" @onclick="() => OpenDeliverAsync(SelectedWorkflow)">@if (IsDeliveryBusy(SelectedWorkflow.ProposalId)) { <span class="spinner-border spinner-border-sm"></span> } else { <i class="bi bi-send-fill"></i> } Deliver Proposal</button> }
+                    @if (_selected.Status.Equals("Delivered", StringComparison.OrdinalIgnoreCase) && SelectedWorkflow is not null) { <button type="button" class="pb-btn pb-btn--ghost" @onclick="() => PresentAsync(SelectedWorkflow)"><i class="bi bi-person-video3"></i> Mark Presented</button> }
+                    @if (_selected.Status.Equals("Presented", StringComparison.OrdinalIgnoreCase) && SelectedWorkflow is not null) { <button type="button" class="pb-btn pb-btn--primary" @onclick="() => OpenClientAcceptance(SelectedWorkflow)"><i class="bi bi-person-check"></i> Client Acceptance</button> }
+                    @if (_selected.Status.Equals("Accepted", StringComparison.OrdinalIgnoreCase) && SelectedWorkflow is not null) { <button type="button" class="pb-btn pb-btn--primary" @onclick="() => RequestBindAsync(SelectedWorkflow)"><i class="bi bi-shield-check"></i> Request Bind</button> }
+                    <button type="button" class="pb-icon-btn" title="Close proposal detail" aria-label="Close proposal detail" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button>
+                </div></header>
+                <div class="pb-detail-layout">
+                    <div class="pb-document-shell"><div class="pb-document-toolbar"><span><i class="bi bi-file-earmark-check"></i> Approved proposal content</span><span>Version @_selected.VersionNumber</span></div><div class="pb-document">@((MarkupString)(_selected.HtmlContent ?? "<p>Proposal content is not available.</p>"))</div></div>
+                    <div class="pb-detail-rail">
+                        <section class="pb-rail-section pb-stage-panel"><div class="pb-rail-heading"><div><i class="bi @NextActionIcon"></i><span><strong>Flow Guidance</strong><small>@NextActionTitle</small></span></div></div><p>@NextActionDescription</p><div class="pb-stage-checks"><span class="@(BuildComplete ? "is-done" : null)"><i class="bi bi-file-earmark-richtext"></i> Built</span><span class="@(ReviewComplete ? "is-done" : null)"><i class="bi bi-person-check"></i> Reviewed</span><span class="@(DeliveryComplete ? "is-done" : null)"><i class="bi bi-send-check"></i> Delivered</span><span class="@(AcceptanceComplete ? "is-done" : null)"><i class="bi bi-check2-circle"></i> Accepted</span></div></section>
+                        <section class="pb-rail-section"><div class="pb-rail-heading"><div><i class="bi bi-people"></i><span><strong>Recipients</strong><small>@_selected.Recipients.Count persisted</small></span></div>@if (CanManageSelected) { <button type="button" class="pb-icon-btn" title="Add recipient" aria-label="Add recipient" @onclick="OpenRecipient"><i class="bi bi-person-plus"></i></button> }</div>
+                            @if (_selected.Recipients.Count == 0) { <div class="pb-rail-empty">Add a primary recipient before delivery.</div> }
+                            @foreach (var recipient in _selected.Recipients) { <article class="pb-recipient"><span class="pb-avatar">@Initials(recipient.RecipientName)</span><div><strong>@recipient.RecipientName</strong><span>@recipient.RecipientEmail</span><small>@DisplayRecipientType(recipient.RecipientTypeCode) @if (recipient.IsPrimary) { <em>Primary</em> } @if (recipient.IsSigner) { <em>Signer</em> }</small></div>@if (CanManageSelected) { <button type="button" class="pb-icon-btn pb-icon-btn--danger" title="Remove recipient" aria-label="Remove recipient" @onclick="() => ConfirmDeleteRecipientAsync(recipient)"><i class="bi bi-trash"></i></button> }</article> }
+                        </section>
+                        <section class="pb-rail-section"><div class="pb-rail-heading"><div><i class="bi bi-journal-check"></i><span><strong>Included Quotes</strong><small>@_selected.Quotes.Count selected</small></span></div></div>
+                            @foreach (var quote in _selected.Quotes.OrderBy(x => x.SortOrder)) { <article class="pb-quote"><div><strong>@quote.CarrierName</strong><span>@quote.QuoteNumber</span></div><strong>@quote.AnnualPremium.ToString("C0")</strong><small>Limit @MoneyOrDash(quote.Limit) · Deductible @MoneyOrDash(quote.Deductible)</small></article> }
+                        </section>
+                        <section class="pb-rail-section"><div class="pb-rail-heading"><div><i class="bi bi-truck"></i><span><strong>Delivery</strong><small>@_selected.Deliveries.Count dispatches</small></span></div></div>
+                            @if (_selected.Deliveries.Count == 0) { <div class="pb-rail-empty">No delivery has been queued. Use Deliver Proposal after confirming the primary recipient.<div class="pb-dispatch-actions">@if (CanManageSelected && !SelectedHasPrimaryRecipient) { <button type="button" class="pb-btn pb-btn--ghost pb-btn--sm" @onclick="OpenRecipient"><i class="bi bi-person-plus"></i> Add Primary Recipient</button> }@if (SelectedWorkflow is not null && CanQueueDelivery(SelectedWorkflow)) { <button type="button" class="pb-btn pb-btn--deliver pb-btn--sm" disabled="@IsDeliveryBusy(SelectedWorkflow.ProposalId)" @onclick="() => OpenDeliverAsync(SelectedWorkflow)"><i class="bi bi-send-fill"></i> Run Deliver Proposal</button> }</div></div> }
+                            @foreach (var delivery in _selected.Deliveries.OrderByDescending(x => x.CreatedDateUtc)) { <article class="pb-dispatch"><div><strong>@delivery.ProviderName</strong><span class="@StatusClass(delivery.StatusCode)">@delivery.StatusCode</span></div><small>@delivery.Recipient · Attempt @delivery.AttemptCount of @delivery.MaxAttempts</small>@if (!string.IsNullOrWhiteSpace(delivery.ErrorMessage)) { <p>@delivery.ErrorMessage</p> } @if (RequiresDeliveryConfiguration(delivery)) { <div class="pb-config-callout"><i class="bi bi-sliders"></i><span>Complete the @delivery.ProviderName configuration, then run Deliver Proposal again.</span></div> } @if (RequiresDeliveryConfiguration(delivery) || delivery.CanRetry) { <div class="pb-dispatch-actions">@if (RequiresDeliveryConfiguration(delivery)) { <button type="button" class="pb-btn pb-btn--ghost pb-btn--sm" @onclick="() => OpenDeliveryConfiguration(delivery.DeliveryMethodCode)"><i class="bi bi-gear"></i> Configure @DisplayStatus(delivery.DeliveryMethodCode)</button> }@if (delivery.CanRetry) { <button type="button" class="pb-btn pb-btn--deliver pb-btn--sm" @onclick="() => RetryAsync(delivery.ProposalDeliveryDispatchId)"><i class="bi bi-arrow-repeat"></i> Run Deliver Proposal Again</button> }</div> }</article> }
+                        </section>
+                        <section class="pb-rail-section"><div class="pb-rail-heading"><div><i class="bi bi-clock-history"></i><span><strong>Lifecycle</strong><small>@_selected.Events.Count events</small></span></div></div><div class="pb-timeline">
+                            @foreach (var evt in _selected.Events.OrderByDescending(x => x.EventDateUtc)) { <article><span></span><div><strong>@DisplayStatus(evt.EventCode)</strong><small>@FormatDate(evt.EventDateUtc)</small>@if (!string.IsNullOrWhiteSpace(evt.EventDetail)) { <p>@evt.EventDetail</p> }</div></article> }
+                        </div></section>
+                    </div>
+                </div>
+            </section>
+        }
+    </div>
 }
 
-@if (_dialog is not null)
+@if (_dialog == "Generate Proposal")
 {
-    <div class="um-modal-backdrop" @onclick="CloseDialog"></div>
-    <div class="um-modal" role="dialog" aria-modal="true">
-        <div class="um-modal-header"><i class="bi bi-file-earmark-richtext"></i><span>@_dialog</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog"><i class="bi bi-x-lg"></i></button></div>
-        <EditForm Model="_form" OnValidSubmit="SaveDialogAsync"><DataAnnotationsValidator />
-            <div class="um-modal-body"><div class="um-form-grid">
-                @if (_dialog == "Generate Proposal")
-                {
-                    <div class="um-form-field"><label>Title</label><InputText class="form-control" @bind-Value="_form.Title" /></div>
-                    <div class="um-form-field um-form-field--full"><label>Introduction</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Notes" /></div>
-                    <div class="um-form-field um-form-field--full"><label>Quotes</label>@foreach (var quote in _quotes.Where(x => x.IsProposalReady)){<label class="d-block"><input type="checkbox" checked="@_form.QuoteIds.Contains(quote.QuoteId)" @onchange="e => ToggleQuote(quote.QuoteId, (bool)e.Value!)" /> @quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</label>}</div>
-                }
-                else if (_dialog == "Deliver Proposal")
-                {
-                    <div class="um-form-field"><label>Delivery Method</label><InputSelect class="form-select" @bind-Value="_form.OptionCode">@foreach(var option in Options("DeliveryMethod")){<option value="@option.OptionCode">@option.DisplayName@(option.IsProviderConfigured ? "" : " — configuration required")</option>}</InputSelect></div>
-                    <div class="um-form-field"><label>Primary Recipient</label><InputText class="form-control" @bind-Value="_form.Recipient" readonly /></div>
-                }
-                else if (_dialog == "Submit Review")
-                {
-                    <div class="um-form-field"><label>Assigned Reviewer</label><InputSelect class="form-select" @bind-Value="_form.ReviewerUserId">@foreach(var user in _users){<option value="@user.UserId">@user.FullName (@user.Email)</option>}</InputSelect></div>
-                    <div class="um-form-field um-form-field--full"><label>Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" /></div>
-                }
-                else if (_dialog == "Add Recipient")
-                {
-                    <div class="um-form-field"><label>Name</label><InputText class="form-control" @bind-Value="_form.RecipientName" /></div>
-                    <div class="um-form-field"><label>Email</label><InputText class="form-control" @bind-Value="_form.Recipient" /></div>
-                    <div class="um-form-field"><label>Type</label><InputSelect class="form-select" @bind-Value="_form.RecipientTypeCode"><option value="Client">Client</option><option value="Signer">Signer</option><option value="Cc">Cc</option><option value="Agency">Agency</option></InputSelect></div>
-                    <label class="um-form-field"><span>Primary recipient</span><InputCheckbox class="form-check-input" @bind-Value="_form.IsPrimary" /></label>
-                    <label class="um-form-field"><span>Signer</span><InputCheckbox class="form-check-input" @bind-Value="_form.IsSigner" /></label>
-                }
-            </div></div>
-            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save</button></div>
-        </EditForm>
-    </div>
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal" role="dialog" aria-modal="true" aria-labelledby="pb-generate-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-file-earmark-plus"></i><span id="pb-generate-title">Generate Proposal</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" disabled="@_saving"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_generateForm" OnValidSubmit="GenerateAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-form-field um-form-field--full"><label>Proposal title</label><InputText class="form-control" @bind-Value="_generateForm.Title" /><ValidationMessage For="() => _generateForm.Title" class="text-danger" /></div><div class="um-form-field um-form-field--full"><label>Introduction</label><InputTextArea class="form-control" rows="4" @bind-Value="_generateForm.Notes" /><ValidationMessage For="() => _generateForm.Notes" class="text-danger" /></div><div class="um-form-field um-form-field--full"><label>Presentation-ready quotes</label><div class="pb-quote-options">@foreach (var quote in ProposalReadyQuotes) { <label class="pb-quote-option"><input type="checkbox" checked="@_generateForm.QuoteIds.Contains(quote.QuoteId)" @onchange="e => ToggleQuote(quote.QuoteId, (bool)e.Value!)" /><span><strong>@quote.CarrierName</strong><small>@quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</small></span></label> }</div>@if (_generateForm.QuoteIds.Count == 0) { <span class="text-danger">Select at least one quote.</span> }</div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@(_saving || _generateForm.QuoteIds.Count == 0)">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> } Generate Proposal</button></div></EditForm>
+    </div></div>
+}
+else if (_dialog == "Deliver Proposal")
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal" role="dialog" aria-modal="true" aria-labelledby="pb-deliver-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-send"></i><span id="pb-deliver-title">Deliver Proposal</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" disabled="@_saving"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_deliverForm" OnValidSubmit="DeliverAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-form-field"><label>Delivery method</label><InputSelect class="form-select" @bind-Value="_deliverForm.OptionCode" disabled="@_saving">@foreach (var option in Options("DeliveryMethod")) { <option value="@option.OptionCode">@option.DisplayName@(option.IsProviderConfigured ? "" : " — configuration required")</option> }</InputSelect><ValidationMessage For="() => _deliverForm.OptionCode" class="text-danger" /></div><div class="um-form-field"><label>Primary recipient</label><InputText class="form-control" @bind-Value="_deliverForm.Recipient" readonly /><ValidationMessage For="() => _deliverForm.Recipient" class="text-danger" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> } <i class="bi bi-send-check"></i> Queue Delivery</button></div></EditForm>
+    </div></div>
+}
+else if (_dialog == "Delivery Queued" && _deliveryInfo is not null)
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal pb-modal--workflow pb-info-modal" role="dialog" aria-modal="true" aria-labelledby="pb-delivery-queued-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-send-check"></i><span id="pb-delivery-queued-title">Proposal Delivery Queued</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" aria-label="Close delivery queued dialog"><i class="bi bi-x-lg"></i></button></div>
+        <div class="um-modal-body"><section class="pb-dialog-hero pb-dialog-hero--success"><span class="pb-dialog-hero__icon pb-dialog-hero__icon--success"><i class="bi bi-check2-circle"></i></span><div><span class="pb-dialog-kicker">Delivery dispatch created</span><h3>@_deliveryInfo.ProposalTitle is now queued for delivery</h3><p>The proposal was queued through @_deliveryInfo.ProviderName to @_deliveryInfo.Recipient. Current status: @DisplayStatus(_deliveryInfo.StatusCode).</p></div></section><div class="pb-info-steps"><article><i class="bi bi-database-check"></i><div><strong>What happened</strong><span>A database-backed delivery dispatch was created and is now visible in the Delivery panel.</span></div></article><article><i class="bi bi-gear-wide-connected"></i><div><strong>What to expect next</strong><span>The delivery worker/provider will process the dispatch. The status will move from queued or configuration required to sent, delivered, failed, or another provider result.</span></div></article><article><i class="bi bi-person-video3"></i><div><strong>Next user action</strong><span>Once the customer receives or reviews the proposal, use Mark Presented, then capture Client Acceptance if they approve it.</span></div></article></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Close</button><button type="button" class="um-btn um-btn-primary" @onclick='() => SetFilterAndClose("delivered")'><i class="bi bi-send-check"></i> View Delivery Status</button></div>
+    </div></div>
+}
+else if (_dialog == "Submit Review")
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal pb-modal--workflow" role="dialog" aria-modal="true" aria-labelledby="pb-review-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-person-check"></i><span id="pb-review-title">Submit for Review</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" disabled="@_saving" aria-label="Close review dialog"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_reviewForm" OnValidSubmit="SubmitReviewAsync"><DataAnnotationsValidator /><div class="um-modal-body"><section class="pb-dialog-hero"><span class="pb-dialog-hero__icon pb-dialog-hero__icon--review"><i class="bi bi-shield-check"></i></span><div><span class="pb-dialog-kicker">Internal governance</span><h3>Route this proposal for approval</h3><p>The reviewer will validate proposal content and quote presentation before customer delivery.</p></div></section><div class="pb-dialog-context"><div><span>Proposal</span><strong>@(_target?.Title ?? "Selected proposal")</strong></div><div><span>Current stage</span><strong>@DisplayStatus(_target?.GovernanceStatusCode)</strong></div><div><span>Review due</span><strong>@DateTime.Today.AddDays(1).ToString("MMM d, yyyy")</strong></div></div><div class="um-form-grid pb-dialog-form"><div class="um-form-field um-form-field--full"><label>Assigned reviewer</label><InputSelect class="form-select" @bind-Value="_reviewForm.ReviewerUserId"><option value="">Select reviewer</option>@foreach (var user in _users) { <option value="@user.UserId">@user.FullName (@user.Email)</option> }</InputSelect><small class="pb-field-hint">Choose an active tenant user accountable for the decision.</small><ValidationMessage For="() => _reviewForm.ReviewerUserId" class="text-danger" /></div><div class="um-form-field um-form-field--full"><label>Review notes</label><InputTextArea class="form-control" rows="4" @bind-Value="_reviewForm.Notes" /><small class="pb-field-hint">Summarize any pricing, coverage, or presentation items that need attention.</small><ValidationMessage For="() => _reviewForm.Notes" class="text-danger" /></div></div></div><div class="um-modal-footer"><span class="pb-footer-note"><i class="bi bi-clock-history"></i> Review history is preserved.</span><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> } <i class="bi bi-send-check"></i> Submit for Review</button></div></EditForm>
+    </div></div>
+}
+else if (_dialog == "Review Submitted" && _reviewInfo is not null)
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal pb-modal--workflow pb-info-modal" role="dialog" aria-modal="true" aria-labelledby="pb-review-submitted-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-info-circle"></i><span id="pb-review-submitted-title">Proposal Sent for Review</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" aria-label="Close review submitted dialog"><i class="bi bi-x-lg"></i></button></div>
+        <div class="um-modal-body"><section class="pb-dialog-hero pb-dialog-hero--success"><span class="pb-dialog-hero__icon pb-dialog-hero__icon--success"><i class="bi bi-check2-circle"></i></span><div><span class="pb-dialog-kicker">Review request created</span><h3>@_reviewInfo.ProposalTitle is now in internal review</h3><p>The proposal was routed to @_reviewInfo.ReviewerName with a due date of @(_reviewInfo.DueDate.ToString("MMM d, yyyy")).</p></div></section><div class="pb-info-steps"><article><i class="bi bi-person-check"></i><div><strong>What happened</strong><span>A pending review record was created and the proposal status moved to Internal Review.</span></div></article><article><i class="bi bi-bell"></i><div><strong>What to do next</strong><span>The assigned reviewer should open the proposal, approve it for delivery, or request changes.</span></div></article><article><i class="bi bi-send"></i><div><strong>After approval</strong><span>Return here to add a primary recipient if needed, then deliver the approved proposal.</span></div></article></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog">Close</button><button type="button" class="um-btn um-btn-primary" @onclick='() => SetFilterAndClose("review")'><i class="bi bi-funnel"></i> View In Review</button></div>
+    </div></div>
+}
+else if (_dialog == "Add Recipient")
+{
+    <div class="pb-modal-backdrop" role="presentation" @onclick="CloseDialog"><div class="um-modal pb-modal pb-modal--workflow" role="dialog" aria-modal="true" aria-labelledby="pb-recipient-title" @onclick:stopPropagation="true"><div class="um-modal-header"><i class="bi bi-person-plus"></i><span id="pb-recipient-title">Add Proposal Recipient</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialog" disabled="@_saving" aria-label="Close recipient dialog"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_recipientForm" OnValidSubmit="SaveRecipientAsync"><DataAnnotationsValidator /><div class="um-modal-body"><section class="pb-dialog-hero"><span class="pb-dialog-hero__icon pb-dialog-hero__icon--recipient"><i class="bi bi-envelope-paper"></i></span><div><span class="pb-dialog-kicker">Proposal delivery</span><h3>Add a customer recipient</h3><p>Recipient details remain linked to this proposal version and its delivery history.</p></div></section>@if (_recipientForm.ContactId.HasValue) { <div class="pb-source-banner pb-source-banner--success"><i class="bi bi-database-check"></i><div><strong>Account primary contact applied</strong><span>@_recipientForm.Name was loaded from @_submission?.AccountName.</span></div><span class="pb-source-badge">Primary contact</span></div> } else if (!_selected!.Recipients.Any(x => x.IsPrimary)) { <div class="pb-source-banner pb-source-banner--warning"><i class="bi bi-person-exclamation"></i><div><strong>No usable primary contact found</strong><span>Enter the recipient details below. The account may not have a primary contact or email configured.</span></div></div> }<div class="um-form-grid pb-dialog-form"><div class="um-form-field"><label>Name</label><InputText class="form-control" @bind-Value="_recipientForm.Name" /><ValidationMessage For="() => _recipientForm.Name" class="text-danger" /></div><div class="um-form-field"><label>Email</label><InputText class="form-control" type="email" @bind-Value="_recipientForm.Email" /><ValidationMessage For="() => _recipientForm.Email" class="text-danger" /></div><div class="um-form-field um-form-field--full"><label>Recipient type</label><InputSelect class="form-select" @bind-Value="_recipientForm.TypeCode" @bind-Value:after="RecipientTypeChanged">@foreach (var option in _recipientTypes) { <option value="@option.OptionCode">@option.OptionName</option> }</InputSelect><ValidationMessage For="() => _recipientForm.TypeCode" class="text-danger" /></div><label class="pb-check-field"><InputCheckbox class="form-check-input" @bind-Value="_recipientForm.IsPrimary" /><span><strong>Primary recipient</strong><small>Use this address for proposal delivery.</small></span></label><label class="pb-check-field"><InputCheckbox class="form-check-input" @bind-Value="_recipientForm.IsSigner" /><span><strong>Signer</strong><small>Include in signature workflows.</small></span></label></div></div><div class="um-modal-footer"><span class="pb-footer-note"><i class="bi bi-lock"></i> Tenant-scoped recipient</span><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialog" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> } <i class="bi bi-person-check"></i> Add Recipient</button></div></EditForm>
+    </div></div>
 }
 
 @code {
     [Parameter] public Guid SubmissionId { get; set; }
-    SubmissionDto? _submission; List<QuoteComparisonDto> _quotes=[]; List<ProposalWorkflowDto> _proposals=[]; List<ProposalWorkflowOptionDto> _options=[]; List<SubmissionReferenceOptionDto> _authorizationMethods=[]; List<UserDto> _users=[];
-    ProposalDto? _selected; ProposalWorkflowDto? _target; Ams.Web.Services.CurrentUserContextModel? _currentUser; EnterpriseToast? _toast; bool _loading=true,_saving; string? _loadError,_dialog; FormModel _form=new();
 
-    protected override async Task OnInitializedAsync(){ Breadcrumbs.SetCrumbs(new("Home","/"),new("Submissions","/submissions"),new("Submission",$"/submissions/{SubmissionId}"),new("Proposal Workflow",$"/submissions/{SubmissionId}/proposals")); await LoadAsync(); }
-    async Task LoadAsync(){ try{_loading=true;_loadError=null;_currentUser??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId); _quotes=(await Api.GetSubmissionQuoteComparisonAsync(SubmissionId)??[]).ToList(); _proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_currentUser.TenantId)??[]).ToList(); _options=(await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId)??[]).ToList(); _authorizationMethods=(await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId,"CustomerAuthorizationMethod")??[]).ToList();_users=(await Api.SearchUsersAsync(_currentUser.TenantId,pageSize:100))?.Items.Where(x=>x.StatusCode=="Active").ToList()??[]; if(_selected is not null) _selected=await Api.GetProposalByIdAsync(_selected.ProposalId,_currentUser.TenantId); }catch(Exception ex){_loadError=ex.Message;}finally{_loading=false;} }
-    RenderFragment Kpi(string label,string value,string icon)=>b=>{b.OpenElement(0,"div");b.AddAttribute(1,"class","pc-kpi-card");b.AddMarkupContent(2,$"<i class='bi {icon}'></i><strong>{value}</strong><span>{label}</span>");b.CloseElement();};
-    IEnumerable<ProposalWorkflowOptionDto> Options(string group)=>_options.Where(x=>x.OptionGroupCode==group).OrderBy(x=>x.SortOrder);
+    SubmissionDto? _submission;
+    List<QuoteComparisonDto> _quotes = [];
+    List<ProposalWorkflowDto> _proposals = [];
+    List<ProposalWorkflowOptionDto> _options = [];
+    List<SubmissionReferenceOptionDto> _recipientTypes = [];
+    List<UserDto> _users = [];
+    ProposalDto? _selected;
+    ProposalWorkflowDto? _target;
+    Ams.Web.Services.CurrentUserContextModel? _currentUser;
+    EnterpriseToast? _toast;
+    ReviewSubmittedInfo? _reviewInfo;
+    DeliveryQueuedInfo? _deliveryInfo;
+    readonly HashSet<Guid> _deliveryBusy = [];
+    bool _loading = true, _saving;
+    string? _loadError, _dialog;
+    string _activeFilter = "all";
+    GenerateForm _generateForm = new();
+    DeliverForm _deliverForm = new();
+    ReviewForm _reviewForm = new();
+    RecipientForm _recipientForm = new();
+
+    IReadOnlyList<QuoteComparisonDto> ProposalReadyQuotes => _quotes.Where(x => x.IsProposalReady).ToList();
+    IReadOnlyList<ProposalWorkflowDto> FilteredProposals => _proposals.Where(MatchesFilter).ToList();
+    ProposalWorkflowDto? SelectedWorkflow => _selected is null ? null : _proposals.FirstOrDefault(x => x.ProposalId == _selected.ProposalId);
+    int ReviewCount => _proposals.Count(x => x.GovernanceStatusCode == "InternalReview");
+    int DeliveredCount => _proposals.Count(x => HasStatus(x, "Delivered") || !string.IsNullOrWhiteSpace(x.DeliveryStatus));
+    int AcceptedCount => _proposals.Count(x => HasStatus(x, "Accepted"));
+    bool BuildComplete => _proposals.Any();
+    bool ReviewComplete => _proposals.Any(x => x.GovernanceStatusCode == "ReadyToDeliver" || HasStatus(x, "Delivered") || HasStatus(x, "Presented") || HasStatus(x, "Accepted") || HasStatus(x, "Bound"));
+    bool DeliveryComplete => _proposals.Any(x => string.Equals(x.DeliveryStatus, "Delivered", StringComparison.OrdinalIgnoreCase) || HasStatus(x, "Delivered") || HasStatus(x, "Presented") || HasStatus(x, "Accepted") || HasStatus(x, "Bound"));
+    bool AcceptanceComplete => _proposals.Any(x => HasStatus(x, "Accepted") || HasStatus(x, "Bound"));
+    bool BindComplete => _proposals.Any(x => HasStatus(x, "Bound"));
+    string WorkflowSummary => BindComplete ? "Lifecycle completed" : $"Current stage: {WorkflowTitle(CurrentWorkflowStep)}";
+    bool CanManageSelected => _selected is not null && _currentUser?.HasPermission("PROPOSAL_CREATE") == true && _selected.GovernanceStatusCode is "Draft" or "ChangesRequired" or "ReadyToDeliver";
+    bool SelectedHasPrimaryRecipient => _selected?.Recipients.Any(x => x.IsPrimary) == true;
+    string GenerateTitle => ProposalReadyQuotes.Any() ? "Generate a proposal from presentation-ready quotes" : "No presentation-ready quotes are available";
+    string FilterDescription => _activeFilter switch { "review" => "Proposal versions awaiting an internal reviewer decision.", "delivered" => "Proposal versions sent through a configured delivery channel.", "accepted" => "Customer-accepted proposal versions ready for bind continuation.", _ => "Each version preserves its quote selection, governance, delivery, and decision history." };
+    string NextActionCode => !_quotes.Any() ? "compare" : !_proposals.Any() ? (ProposalReadyQuotes.Any() ? "generate" : "compare") : _selected is null ? "select" : SelectedNextActionCode;
+    string SelectedNextActionCode => _selected is null ? "select" : HasActiveSelectedDelivery ? "deliveryQueued" : _selected.GovernanceStatusCode switch { "Draft" or "ChangesRequired" => "review", "InternalReview" => "reviewDecision", "ReadyToDeliver" => "deliver", _ => _selected.Status.Equals("Delivered", StringComparison.OrdinalIgnoreCase) ? "present" : _selected.Status.Equals("Presented", StringComparison.OrdinalIgnoreCase) ? "accept" : _selected.Status.Equals("Accepted", StringComparison.OrdinalIgnoreCase) ? "bind" : "selected" };
+    string NextActionIcon => NextActionCode switch { "generate" => "bi-file-earmark-plus", "compare" => "bi-columns-gap", "select" => "bi-cursor", "review" => "bi-person-check", "reviewDecision" => "bi-shield-check", "deliver" => "bi-send-fill", "deliveryQueued" => "bi-hourglass-split", "present" => "bi-person-video3", "accept" => "bi-person-check-fill", "bind" => "bi-shield-fill-check", _ => "bi-check2-circle" };
+    string NextActionTitle => NextActionCode switch { "generate" => "Build the first proposal", "compare" => "Review quote readiness", "select" => "Open a proposal version", "review" => "Submit this version for review", "reviewDecision" => "Reviewer decision required", "deliver" => "Deliver the approved proposal", "deliveryQueued" => "Delivery is queued", "present" => "Mark customer presentation", "accept" => "Capture customer acceptance", "bind" => "Request bind from acceptance", _ => "Continue the selected lifecycle" };
+    string NextActionDescription => NextActionCode switch { "generate" => $"{ProposalReadyQuotes.Count} presentation-ready quote option(s) can be included.", "compare" => "Review persisted quote options and approve at least one for presentation.", "select" => "Select a row to inspect recipients, quote content, delivery attempts, and lifecycle history.", "review" => "This proposal version is still editable. Submit it for internal governance review before customer delivery.", "reviewDecision" => "A reviewer must approve this proposal or request changes before it can be delivered.", "deliver" => "This proposal passed review and is ready to send to the customer. Verify the recipient, then queue delivery through the configured provider.", "deliveryQueued" => "A database-backed delivery dispatch already exists for this proposal. Monitor the Delivery panel and retry only if the persisted dispatch becomes eligible.", "present" => "Delivery has been recorded. Mark the proposal presented after the customer presentation or meeting occurs.", "accept" => "The customer has seen the proposal. Capture formal acceptance before requesting bind.", "bind" => "Customer acceptance is recorded. Continue to bind using the selected quote and authorization.", _ => "Use the actions on the selected proposal to advance its governed workflow." };
+    string CurrentStageIcon => CurrentWorkflowStep switch { 1 => "bi-file-earmark-plus", 2 => "bi-person-check", 3 => "bi-send-fill", 4 => "bi-check2-circle", 5 => "bi-shield-check", _ => "bi-signpost-split" };
+    string CurrentStageTitle => CurrentWorkflowStep switch { 1 => "Build proposal content", 2 => "Complete internal review", 3 => "Deliver to the customer", 4 => "Capture customer decision", 5 => BindComplete ? "Bind complete" : "Continue to bind", _ => "Proposal workflow" };
+    string CurrentStageDescription => CurrentWorkflowStep switch { 1 => ProposalReadyQuotes.Any() ? "Presentation-ready quotes are available. Generate a proposal version to start the governed flow." : "No proposal version exists yet. Review quotes and make at least one quote presentation-ready before generating.", 2 => ReviewCount > 0 ? "A proposal is in internal review. The reviewer should approve it or request changes." : "Submit a draft proposal for review so customer delivery is controlled and auditable.", 3 => "At least one proposal has cleared review. Confirm recipients, choose the delivery channel, and queue delivery.", 4 => "A proposal has been delivered. Record presentation and customer acceptance when received.", 5 => BindComplete ? "The proposal flow has reached bind completion." : "Customer acceptance exists. Request bind and continue the downstream policy workflow.", _ => "Review the selected proposal for the next available action." };
+    IReadOnlyList<FlowFactModel> FlowFacts =>
+    [
+        new("bi-file-earmark-richtext", _proposals.Count.ToString(), "Versions built"),
+        new("bi-person-check", ReviewCount.ToString(), "In review"),
+        new("bi-send-check", DeliveredCount.ToString(), "Delivered"),
+        new("bi-shield-check", AcceptedCount.ToString(), "Accepted")
+    ];
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Submission", $"/submissions/{SubmissionId}"), new("Proposal Workflow", $"/submissions/{SubmissionId}/proposals")); await LoadAsync(); }
+    async Task LoadAsync()
+    {
+        try { _loading = true; _loadError = null; _currentUser ??= await CurrentUser.RequireAsync(); _submission = await Api.GetSubmissionByIdAsync(SubmissionId); _quotes = (await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? []).ToList(); _proposals = (await Api.GetSubmissionProposalsAsync(SubmissionId, _currentUser.TenantId) ?? []).ToList(); _options = (await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId) ?? []).ToList(); _recipientTypes = (await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId, "ProposalRecipientType") ?? []).ToList(); _users = (await Api.SearchUsersAsync(_currentUser.TenantId, pageSize: 100))?.Items.Where(x => x.StatusCode == "Active").ToList() ?? []; if (_selected is not null) _selected = await Api.GetProposalByIdAsync(_selected.ProposalId, _currentUser.TenantId); }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    int CurrentWorkflowStep => !BuildComplete ? 1 : !ReviewComplete ? 2 : !DeliveryComplete ? 3 : !AcceptanceComplete ? 4 : !BindComplete ? 5 : 5;
+    bool IsWorkflowStepComplete(int step) => step switch { 1 => BuildComplete, 2 => ReviewComplete, 3 => DeliveryComplete, 4 => AcceptanceComplete, 5 => BindComplete, _ => false };
+    string WorkflowState(int step) => IsWorkflowStepComplete(step) ? "completed" : step == CurrentWorkflowStep ? "current" : "upcoming";
+    static string WorkflowTitle(int step) => step switch { 1 => "Build", 2 => "Review", 3 => "Deliver", 4 => "Accept", 5 => "Bind", _ => "Workflow" };
+    IReadOnlyList<WorkflowStepModel> WorkflowSteps { get; } =
+    [
+        new(1, "Build", "Select presentation-ready quotes", "bi-file-earmark-plus"),
+        new(2, "Review", "Apply internal governance", "bi-person-check"),
+        new(3, "Deliver", "Use a configured provider", "bi-send"),
+        new(4, "Accept", "Capture customer authorization", "bi-check2-circle"),
+        new(5, "Bind", "Continue with selected quote", "bi-shield-check")
+    ];
+    IEnumerable<ProposalWorkflowOptionDto> Options(string group) => _options.Where(x => x.OptionGroupCode == group).OrderBy(x => x.SortOrder);
+    bool MatchesFilter(ProposalWorkflowDto item) => _activeFilter switch { "review" => item.GovernanceStatusCode == "InternalReview", "delivered" => HasStatus(item, "Delivered") || !string.IsNullOrWhiteSpace(item.DeliveryStatus), "accepted" => HasStatus(item, "Accepted"), _ => true };
     static bool HasStatus(ProposalWorkflowDto item, string status) => string.Equals(item.Status, status, StringComparison.OrdinalIgnoreCase);
-    static bool CanQueueDelivery(ProposalWorkflowDto item) => HasStatus(item,"Generated") && string.IsNullOrWhiteSpace(item.DeliveryStatus);
-    void OpenGenerate(){_target=null;_form=new(){Title=$"{_submission?.AccountName} Insurance Proposal",QuoteIds=_quotes.Where(x=>x.IsProposalReady).Select(x=>x.QuoteId).ToHashSet()};_dialog="Generate Proposal";}
-    async Task OpenDeliverAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();_selected=await Api.GetProposalByIdAsync(item.ProposalId,user.TenantId);var primary=_selected?.Recipients.FirstOrDefault(x=>x.IsPrimary);if(primary is null){await Error("Add a primary proposal recipient before delivery.");return;}_target=item;_form=new(){OptionCode=Options("DeliveryMethod").FirstOrDefault(x=>x.IsDefault)?.OptionCode??Options("DeliveryMethod").FirstOrDefault()?.OptionCode??"",Recipient=primary.RecipientEmail};_dialog="Deliver Proposal";}catch(Exception ex){await Error(ex.Message);}}
-    void OpenReview(ProposalWorkflowDto item){_target=item;_form=new(){ReviewerUserId=_currentUser?.UserId,Notes="Internal proposal review requested."};_dialog="Submit Review";}
-    void OpenRecipient(){_target=_proposals.FirstOrDefault(x=>x.ProposalId==_selected?.ProposalId);_form=new(){RecipientTypeCode="Client",IsPrimary=_selected?.Recipients.Any(x=>x.IsPrimary)!=true};_dialog="Add Recipient";}
-    async Task ViewAsync(Guid id){var user=_currentUser??=await CurrentUser.RequireAsync();_selected=await Api.GetProposalByIdAsync(id,user.TenantId);}
-    async Task PresentAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.PresentProposalAsync(item.ProposalId,new(user.TenantId,"Proposal presented to customer.",user.UserId));await LoadAsync();await Success("Proposal presented.");}catch(Exception ex){await Error(ex.Message);}}
-    async Task RetryAsync(Guid dispatchId){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.RetryProposalDeliveryAsync(dispatchId,new(user.TenantId,user.UserId));await LoadAsync();await Success("Proposal delivery retry requested.");}catch(Exception ex){await Error(ex.Message);}}
-    async Task RequestBindAsync(ProposalWorkflowDto item){try{var user=_currentUser??=await CurrentUser.RequireAsync();var continuation=await Api.GetProposalBindContinuationAsync(item.ProposalId,user.TenantId);if(continuation?.CanRequestBind!=true||!continuation.SelectedQuoteId.HasValue||!continuation.CustomerAuthorizationId.HasValue){await Error(continuation?.BlockingReason??"Proposal is not ready for binding.");return;}Nav.NavigateTo($"/quotes/bind?submissionId={continuation.SubmissionId}&proposalId={continuation.ProposalId}&quoteId={continuation.SelectedQuoteId.Value}&authorizationId={continuation.CustomerAuthorizationId.Value}");}catch(Exception ex){await Error(ex.Message);}}
-    void OpenClientAcceptance(ProposalWorkflowDto item)=>Nav.NavigateTo($"/submissions/{SubmissionId}/client-acceptance?proposalId={item.ProposalId}");
-    async Task DecideReviewAsync(ProposalWorkflowDto item,string decision){try{var user=_currentUser??=await CurrentUser.RequireAsync();await Api.DecideProposalReviewAsync(item.ProposalId,new(user.TenantId,decision,decision=="Approved"?"Proposal approved for delivery.":"Proposal returned for required changes.",user.UserId));await LoadAsync();await Success($"Review decision recorded: {decision}.");}catch(Exception ex){await Error(ex.Message);}}
-    async Task SaveDialogAsync(){try{_saving=true;var user=_currentUser??=await CurrentUser.RequireAsync();if(_dialog=="Generate Proposal")await Api.GenerateProposalAsync(new(SubmissionId,user.TenantId,_form.Title,_form.QuoteIds.ToArray(),_form.Notes,user.UserId));else if(_dialog=="Deliver Proposal"&&_target is not null)await Api.DeliverProposalAsync(_target.ProposalId,new(user.TenantId,_form.OptionCode,_form.Recipient,user.UserId));else if(_dialog=="Submit Review"&&_target is not null&&_form.ReviewerUserId.HasValue)await Api.SubmitProposalReviewAsync(_target.ProposalId,new(user.TenantId,_form.ReviewerUserId.Value,_form.Notes,DateTime.UtcNow.AddDays(1),user.UserId));else if(_dialog=="Add Recipient"&&_target is not null)await Api.UpsertProposalRecipientAsync(_target.ProposalId,new(user.TenantId,null,null,_form.RecipientTypeCode,_form.RecipientName,_form.Recipient,1,_form.IsPrimary,_form.IsSigner,user.UserId));CloseDialog();await LoadAsync();await Success("Proposal workflow updated.");}catch(Exception ex){await Error(ex.Message);}finally{_saving=false;}}
-    async Task DeleteRecipientAsync(Guid recipientId){if(_selected is null||_currentUser is null)return;try{await Api.DeleteProposalRecipientAsync(_selected.ProposalId,recipientId,_currentUser.TenantId);await LoadAsync();await Success("Recipient removed.");}catch(Exception ex){await Error(ex.Message);}}
-    void ToggleQuote(Guid id,bool selected){if(selected)_form.QuoteIds.Add(id);else _form.QuoteIds.Remove(id);} void CloseDialog(){_dialog=null;_target=null;} void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}"); void OpenQuoteComparison()=>Nav.NavigateTo($"/quotes/compare/{SubmissionId}");
-    Task Success(string text)=>_toast!.ShowAsync(new(){Title="Success",Content=text,CssClass="enterprise-toast-success"}); Task Error(string text)=>_toast!.ShowAsync(new(){Title="Error",Content=text,CssClass="enterprise-toast-danger"});
-    sealed class FormModel{[Required,StringLength(200)]public string Title{get;set;}="";public HashSet<Guid> QuoteIds{get;set;}=[];[Required]public string OptionCode{get;set;}="";[Required,StringLength(320)]public string Recipient{get;set;}="";public string RecipientName{get;set;}="";public string RecipientTypeCode{get;set;}="Client";public bool IsPrimary{get;set;}public bool IsSigner{get;set;}public string? Notes{get;set;}public Guid? ReviewerUserId{get;set;}}
+    static bool IsReadyToDeliver(ProposalWorkflowDto item) => string.Equals(item.GovernanceStatusCode, "ReadyToDeliver", StringComparison.OrdinalIgnoreCase);
+    static bool IsActiveDeliveryStatus(string? status) => status is not null && (string.Equals(status, "Queued", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "Processing", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "Configuration Required", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "Sent", StringComparison.OrdinalIgnoreCase));
+    static bool HasActiveDelivery(ProposalWorkflowDto item) => item.LastDeliveryDispatchId.HasValue && IsActiveDeliveryStatus(item.DeliveryStatus);
+    static bool CanQueueDelivery(ProposalWorkflowDto item) => IsReadyToDeliver(item) && !HasActiveDelivery(item);
+    bool HasActiveSelectedDelivery => _selected?.Deliveries.Any(x => x.StatusCode is "Queued" or "Processing" or "Sent") == true;
+    bool IsDeliveryBusy(Guid proposalId) => _deliveryBusy.Contains(proposalId);
+    void SetFilter(string filter) => _activeFilter = filter;
+    string KpiClass(string filter, string color) => $"pb-kpi pb-kpi--{color} {(_activeFilter == filter ? "pb-kpi--active" : string.Empty)}";
+    string RowClass(ProposalWorkflowDto item) => _selected?.ProposalId == item.ProposalId ? "pb-row--selected" : string.Empty;
+    static string StatusClass(string status) => $"pb-status pb-status--{status.Replace(" ", string.Empty).ToLowerInvariant()}";
+    static string DisplayStatus(string? status) => string.IsNullOrWhiteSpace(status) ? "Not available" : System.Text.RegularExpressions.Regex.Replace(status, "(?<!^)([A-Z])", " $1");
+    static string DeliverySummary(ProposalWorkflowDto item) => string.Join(" · ", new[] { item.DeliveryMethod, item.Recipient }.Where(x => !string.IsNullOrWhiteSpace(x)));
+    static string DecisionSummary(ProposalWorkflowDto item) => item.DecisionDateUtc.HasValue ? item.DecisionDateUtc.Value.ToLocalTime().ToString("MMM d, yyyy") : "Awaiting decision";
+    static bool RequiresDeliveryConfiguration(ProposalDeliveryDispatchDto delivery) => string.Equals(delivery.StatusCode, "Configuration Required", StringComparison.OrdinalIgnoreCase);
+    static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy · h:mm tt");
+    static string MoneyOrDash(decimal? value) => value.HasValue ? value.Value.ToString("C0") : "—";
+    static string Initials(string value) => string.Concat(value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(x => char.ToUpperInvariant(x[0])));
+    string DisplayRecipientType(string code) => _recipientTypes.FirstOrDefault(x => x.OptionCode == code)?.OptionName ?? DisplayStatus(code);
+    async Task HandleRowKeyAsync(KeyboardEventArgs args, Guid proposalId) { if (args.Key is "Enter" or " ") await ViewAsync(proposalId); }
+
+    void OpenGenerate() { _target = null; _generateForm = new() { Title = $"{_submission?.AccountName} Insurance Proposal", QuoteIds = ProposalReadyQuotes.Select(x => x.QuoteId).ToHashSet() }; _dialog = "Generate Proposal"; }
+    async Task OpenDeliverAsync(ProposalWorkflowDto item) { if (IsDeliveryBusy(item.ProposalId)) { await Error("Delivery is already being prepared. Please wait for the dialog or status update."); return; } if (!IsReadyToDeliver(item)) { await Error($"This proposal is not ready for delivery. Current stage: {DisplayStatus(item.GovernanceStatusCode)}."); return; } if (HasActiveDelivery(item)) { await Error("A delivery is already queued for this proposal. Review the Delivery panel for the current status."); return; } try { _deliveryBusy.Add(item.ProposalId); StateHasChanged(); var user = _currentUser ??= await CurrentUser.RequireAsync(); _selected = await Api.GetProposalByIdAsync(item.ProposalId, user.TenantId); if (HasActiveSelectedDelivery) { await Error("A delivery is already queued for this proposal. Review the Delivery panel for the current status."); return; } var primary = _selected?.Recipients.FirstOrDefault(x => x.IsPrimary); if (primary is null) { OpenRecipientForTarget(item, true); await Error("Add a primary proposal recipient before delivery. The recipient dialog is open."); return; } var defaultOption = Options("DeliveryMethod").FirstOrDefault(x => x.IsDefault) ?? Options("DeliveryMethod").FirstOrDefault(); if (defaultOption is null) { await Error("No delivery methods are configured for this tenant."); return; } _target = item; _deliverForm = new() { OptionCode = defaultOption.OptionCode, Recipient = primary.RecipientEmail }; _dialog = "Deliver Proposal"; } catch (Exception ex) { await Error($"Unable to prepare delivery: {ex.Message}"); } finally { _deliveryBusy.Remove(item.ProposalId); } }
+    void OpenReview(ProposalWorkflowDto item) { _target = item; _reviewForm = new() { ReviewerUserId = _currentUser?.UserId, Notes = "Internal proposal review requested." }; _dialog = "Submit Review"; }
+    void OpenRecipient() => OpenRecipientForTarget(SelectedWorkflow, !SelectedHasPrimaryRecipient);
+    void OpenRecipientForTarget(ProposalWorkflowDto? target, bool forcePrimary) { _target = target; var defaultType = _recipientTypes.FirstOrDefault(x => x.IsDefault) ?? _recipientTypes.FirstOrDefault(); var hasPrimaryRecipient = _selected?.Recipients.Any(x => x.IsPrimary) == true; var useAccountPrimary = !hasPrimaryRecipient && _submission?.PrimaryContactId.HasValue == true; _recipientForm = new() { ContactId = useAccountPrimary ? _submission!.PrimaryContactId : null, Name = useAccountPrimary ? _submission!.PrimaryContactName ?? string.Empty : string.Empty, Email = useAccountPrimary ? _submission!.PrimaryContactEmail ?? string.Empty : string.Empty, TypeCode = defaultType?.OptionCode ?? string.Empty, IsPrimary = forcePrimary || !hasPrimaryRecipient }; RecipientTypeChanged(); _dialog = "Add Recipient"; }
+    void RecipientTypeChanged() => _recipientForm.IsSigner = _recipientForm.TypeCode == "Signer";
+    async Task ViewAsync(Guid id) { try { var user = _currentUser ??= await CurrentUser.RequireAsync(); _selected = await Api.GetProposalByIdAsync(id, user.TenantId); } catch (Exception ex) { await Error($"Unable to load proposal: {ex.Message}"); } }
+    async Task GenerateAsync() { try { _saving = true; var user = _currentUser ??= await CurrentUser.RequireAsync(); var id = await Api.GenerateProposalAsync(new(SubmissionId, user.TenantId, _generateForm.Title, _generateForm.QuoteIds.ToArray(), _generateForm.Notes, user.UserId)); ForceCloseDialog(); await LoadAsync(); await ViewAsync(id); await Success("Proposal generated successfully."); } catch (Exception ex) { await Error($"Proposal generation failed: {ex.Message}"); } finally { _saving = false; } }
+    async Task DeliverAsync() { if (_target is null || _saving || IsDeliveryBusy(_target.ProposalId)) return; var proposalId = _target.ProposalId; var proposalTitle = _target.Title; try { _saving = true; _deliveryBusy.Add(proposalId); var user = _currentUser ??= await CurrentUser.RequireAsync(); var dispatch = await Api.DeliverProposalAsync(proposalId, new(user.TenantId, _deliverForm.OptionCode, _deliverForm.Recipient, user.UserId)); _activeFilter = "delivered"; ForceCloseDialog(); await LoadAsync(); await ViewAsync(proposalId); _deliveryInfo = new(proposalTitle, dispatch?.ProviderName ?? DisplayStatus(_deliverForm.OptionCode), dispatch?.Recipient ?? _deliverForm.Recipient, dispatch?.StatusCode ?? "Queued"); _dialog = "Delivery Queued"; await Success("Proposal delivery queued. The Delivery panel now shows the persisted dispatch status."); } catch (Exception ex) { await Error($"Proposal delivery failed: {ex.Message}"); } finally { _deliveryBusy.Remove(proposalId); _saving = false; } }
+    async Task SubmitReviewAsync() { if (_target is null || !_reviewForm.ReviewerUserId.HasValue) return; try { _saving = true; var user = _currentUser ??= await CurrentUser.RequireAsync(); var dueDate = DateTime.UtcNow.AddDays(1); var proposalTitle = _target.Title; var reviewer = _users.FirstOrDefault(x => x.UserId == _reviewForm.ReviewerUserId.Value); await Api.SubmitProposalReviewAsync(_target.ProposalId, new(user.TenantId, _reviewForm.ReviewerUserId.Value, _reviewForm.Notes, dueDate, user.UserId)); _reviewInfo = new(proposalTitle, reviewer?.FullName ?? reviewer?.Email ?? "the assigned reviewer", dueDate); ForceCloseDialog(); _dialog = "Review Submitted"; await LoadAsync(); await Success("Proposal submitted for review."); } catch (Exception ex) { await Error($"Review submission failed: {ex.Message}"); } finally { _saving = false; } }
+    async Task SaveRecipientAsync() { if (_target is null) return; try { _saving = true; var user = _currentUser ??= await CurrentUser.RequireAsync(); await Api.UpsertProposalRecipientAsync(_target.ProposalId, new(user.TenantId, null, _recipientForm.ContactId, _recipientForm.TypeCode, _recipientForm.Name, _recipientForm.Email, 1, _recipientForm.IsPrimary, _recipientForm.IsSigner, user.UserId)); ForceCloseDialog(); await LoadAsync(); await Success("Proposal recipient added."); } catch (Exception ex) { await Error($"Adding recipient failed: {ex.Message}"); } finally { _saving = false; } }
+    async Task ConfirmDeleteRecipientAsync(ProposalRecipientDto recipient) { if (!await Confirmations.ConfirmAsync("Remove proposal recipient", $"Remove {recipient.RecipientName} ({recipient.RecipientEmail}) from this proposal?", "Remove")) return; await DeleteRecipientAsync(recipient.ProposalRecipientId); }
+    async Task DeleteRecipientAsync(Guid id) { if (_selected is null || _currentUser is null) return; try { await Api.DeleteProposalRecipientAsync(_selected.ProposalId, id, _currentUser.TenantId); await LoadAsync(); await Success("Proposal recipient removed."); } catch (Exception ex) { await Error($"Removing recipient failed: {ex.Message}"); } }
+    async Task PresentAsync(ProposalWorkflowDto item) { try { var user = _currentUser ??= await CurrentUser.RequireAsync(); await Api.PresentProposalAsync(item.ProposalId, new(user.TenantId, "Proposal presented to customer.", user.UserId)); await LoadAsync(); await Success("Proposal marked as presented."); } catch (Exception ex) { await Error($"Updating proposal presentation failed: {ex.Message}"); } }
+    async Task RetryAsync(Guid id) { try { var user = _currentUser ??= await CurrentUser.RequireAsync(); await Api.RetryProposalDeliveryAsync(id, new(user.TenantId, user.UserId)); await LoadAsync(); await Success("Proposal delivery retry requested."); } catch (Exception ex) { await Error($"Delivery retry failed: {ex.Message}"); } }
+    async Task DecideReviewAsync(ProposalWorkflowDto item, string decision) { try { var user = _currentUser ??= await CurrentUser.RequireAsync(); await Api.DecideProposalReviewAsync(item.ProposalId, new(user.TenantId, decision, decision == "Approved" ? "Proposal approved for delivery." : "Proposal returned for required changes.", user.UserId)); await LoadAsync(); await Success($"Review decision recorded: {DisplayStatus(decision)}."); } catch (Exception ex) { await Error($"Review decision failed: {ex.Message}"); } }
+    async Task RequestBindAsync(ProposalWorkflowDto item) { try { var user = _currentUser ??= await CurrentUser.RequireAsync(); var continuation = await Api.GetProposalBindContinuationAsync(item.ProposalId, user.TenantId); if (continuation?.CanRequestBind != true || !continuation.SelectedQuoteId.HasValue || !continuation.CustomerAuthorizationId.HasValue) { await Error(continuation?.BlockingReason ?? "Proposal is not ready for binding."); return; } Nav.NavigateTo($"/quotes/bind?submissionId={continuation.SubmissionId}&proposalId={continuation.ProposalId}&quoteId={continuation.SelectedQuoteId.Value}&authorizationId={continuation.CustomerAuthorizationId.Value}"); } catch (Exception ex) { await Error($"Bind continuation failed: {ex.Message}"); } }
+    void OpenClientAcceptance(ProposalWorkflowDto item) => Nav.NavigateTo($"/submissions/{SubmissionId}/client-acceptance?proposalId={item.ProposalId}");
+    void ToggleQuote(Guid id, bool selected) { if (selected) _generateForm.QuoteIds.Add(id); else _generateForm.QuoteIds.Remove(id); }
+    void CloseDialog() { if (_saving) return; ForceCloseDialog(); }
+    void ForceCloseDialog() { _dialog = null; _target = null; }
+    void SetFilterAndClose(string filter) { _activeFilter = filter; ForceCloseDialog(); }
+    void OpenDeliveryConfiguration(string deliveryMethodCode) => Nav.NavigateTo($"/tenant/integrations/proposal-delivery?method={Uri.EscapeDataString(deliveryMethodCode)}&returnUrl={Uri.EscapeDataString(Nav.ToBaseRelativePath(Nav.Uri))}");
+    void GoBack() => Nav.NavigateTo($"/submissions/{SubmissionId}");
+    void OpenQuoteComparison() => Nav.NavigateTo($"/quotes/compare/{SubmissionId}");
+    Task Success(string text) => _toast!.ShowAsync(new() { Title = "Success", Content = text, CssClass = "enterprise-toast-success" });
+    Task Error(string text) => _toast!.ShowAsync(new() { Title = "Error", Content = text, CssClass = "enterprise-toast-danger" });
+
+    sealed class GenerateForm { [Required, StringLength(200)] public string Title { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } public HashSet<Guid> QuoteIds { get; set; } = []; }
+    sealed class DeliverForm { [Required, StringLength(50)] public string OptionCode { get; set; } = string.Empty; [Required, EmailAddress, StringLength(320)] public string Recipient { get; set; } = string.Empty; }
+    sealed class ReviewForm { [Required] public Guid? ReviewerUserId { get; set; } [StringLength(2000)] public string? Notes { get; set; } }
+    sealed class RecipientForm { public Guid? ContactId { get; set; } [Required, StringLength(200)] public string Name { get; set; } = string.Empty; [Required, EmailAddress, StringLength(320)] public string Email { get; set; } = string.Empty; [Required, StringLength(50)] public string TypeCode { get; set; } = string.Empty; public bool IsPrimary { get; set; } public bool IsSigner { get; set; } }
+    sealed record WorkflowStepModel(int Number, string Title, string Description, string Icon);
+    sealed record FlowFactModel(string Icon, string Value, string Label);
+    sealed record ReviewSubmittedInfo(string ProposalTitle, string ReviewerName, DateTime DueDate);
+    sealed record DeliveryQueuedInfo(string ProposalTitle, string ProviderName, string Recipient, string StatusCode);
 }

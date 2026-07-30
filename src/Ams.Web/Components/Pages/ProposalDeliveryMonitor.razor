@@ -1,0 +1,216 @@
+@page "/communications/proposal-deliveries"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Proposal Delivery Monitor - AMS</PageTitle>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true" />
+
+<section class="pdm-page">
+    <div class="pdm-hero">
+        <div class="pdm-hero-left">
+            <div class="pdm-hero-icon"><i class="bi bi-send-check" aria-hidden="true"></i></div>
+            <div>
+                <div class="pdm-eyebrow">Tenant Communications - Proposal Delivery</div>
+                <div class="pdm-title-row"><h1>Proposal Delivery Monitor</h1><span>@Filtered.Count() dispatches</span></div>
+                <p>Monitor actual proposal email dispatches, provider status, retry readiness, delivery confirmation, and configuration blockers across the tenant.</p>
+                <div class="pdm-hero-chips"><span><i class="bi bi-check-circle"></i>@DeliveryHealth.ToString("0")% delivery health</span><span><i class="bi bi-exclamation-triangle"></i>@FailedCount failed</span><span><i class="bi bi-sliders"></i>@ConfigurationRequiredCount configuration required</span></div>
+            </div>
+        </div>
+        <div class="pdm-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/tenant/integrations/proposal-delivery?method=Email")'><i class="bi bi-gear"></i> Configure Email</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/notifications")'><i class="bi bi-bell"></i> Notifications</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pdm-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="pdm-kpi-strip">
+        @Kpi("all", "bi-stack", "Total", _items.Count.ToString("N0"), "All dispatches")
+        @Kpi("Queued", "bi-hourglass-split", "Queued", CountStatus("Queued").ToString("N0"), "Waiting for worker")
+        @Kpi("Delivered", "bi-send-check", "Delivered", DeliveredCount.ToString("N0"), "Confirmed delivery")
+        @Kpi("Configuration Required", "bi-sliders", "Config Required", ConfigurationRequiredCount.ToString("N0"), "Provider setup needed")
+        @Kpi("Failed", "bi-exclamation-octagon", "Failed", FailedCount.ToString("N0"), "Retry or investigate")
+    </div>
+
+    <div class="pdm-filter-panel">
+        <div class="pdm-search"><i class="bi bi-search" aria-hidden="true"></i><input value="@_searchTerm" @oninput="SearchChanged" placeholder="Search recipient, proposal, submission, account, provider, or status" /></div>
+        <select class="form-select" value="@_statusFilter" @onchange="StatusChanged" aria-label="Delivery status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@DisplayStatus(status)</option>
+            }
+        </select>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters"><i class="bi bi-x-circle"></i> Clear</button>
+    </div>
+
+    <div class="pdm-panel">
+        <div class="pdm-panel-header"><div><span><i class="bi bi-activity"></i> Live Dispatch Queue</span><strong>@Filtered.Count().ToString("N0") tenant proposal delivery records</strong></div><small>Latest 250 dispatches from Submissions.ProposalDeliveryDispatch</small></div>
+        @if (_loading)
+        {
+            <div class="pdm-empty"><div class="um-spinner" aria-hidden="true"></div><span>Loading proposal delivery dispatches...</span></div>
+        }
+        else if (!Filtered.Any())
+        {
+            <div class="pdm-empty"><i class="bi bi-send-slash"></i><span>No proposal delivery dispatches match this view.</span><button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions")'>Open Submissions</button></div>
+        }
+        else
+        {
+            <div class="pdm-grid-wrap">
+                <table class="pdm-grid">
+                    <thead><tr><th>Delivery</th><th>Proposal</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Provider</th><th>Timeline</th><th>Actions</th></tr></thead>
+                    <tbody>
+                        @foreach (var item in Filtered)
+                        {
+                            <tr @onclick="() => OpenProposal(item)">
+                                <td><div class="pdm-main-cell"><strong>@(item.AccountName ?? "Account not linked")</strong><span>@item.SubmissionNumber · @DisplayStatus(item.SubmissionStatus)</span><small>@(item.OpportunityName ?? "No opportunity")</small></div></td>
+                                <td><div class="pdm-main-cell"><strong>@item.ProposalTitle</strong><span>Version @item.ProposalVersionNumber</span><small>@ShortId(item.ProposalDeliveryDispatchId)</small></div></td>
+                                <td><div class="pdm-main-cell"><strong>@item.Recipient</strong><span>@(item.SenderAddress ?? "Sender not configured")</span><small>@(item.AssignedProducerName ?? "Producer not assigned")</small></div></td>
+                                <td><span class="@StatusClass(item.StatusCode)">@DisplayStatus(item.StatusCode)</span>@if (!string.IsNullOrWhiteSpace(item.ErrorMessage)) { <p class="pdm-error">@item.ErrorMessage</p> }</td>
+                                <td><strong>@item.AttemptCount / @item.MaxAttempts</strong>@if (item.NextAttemptDateUtc.HasValue) { <small>Next @FormatDate(item.NextAttemptDateUtc)</small> }</td>
+                                <td><div class="pdm-main-cell"><strong>@item.ProviderName</strong><span>@DisplayStatus(item.DeliveryMethodCode) · @(item.DeliveryHandlerCode ?? "Handler")</span><small class="@(item.ProviderIsConfigured && item.ProviderIsActive ? "pdm-provider-ok" : "pdm-provider-warn")">@(item.ProviderIsConfigured && item.ProviderIsActive ? "Configured" : "Needs setup")</small></div></td>
+                                <td><div class="pdm-timeline"><span>Queued @FormatDate(item.CreatedDateUtc)</span>@if (item.CompletedDateUtc.HasValue) { <span>Completed @FormatDate(item.CompletedDateUtc)</span> }@if (item.FirstViewedDateUtc.HasValue) { <span>Viewed @FormatDate(item.FirstViewedDateUtc)</span> }@if (item.BouncedDateUtc.HasValue) { <span>Bounced @FormatDate(item.BouncedDateUtc)</span> }</div></td>
+                                <td><div class="pdm-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenProposal(item)" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Proposal</button>@if (RequiresConfiguration(item)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenConfiguration(item)" @onclick:stopPropagation="true"><i class="bi bi-gear"></i> Configure</button> }@if (item.CanRetry) { <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => RetryAsync(item)" @onclick:stopPropagation="true" disabled="@_actionBusy"><i class="bi bi-arrow-repeat"></i> Retry</button> }</div></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    EnterpriseToast? _toast;
+    Ams.Web.Services.CurrentUserContextModel? _currentUser;
+    List<ProposalDeliveryMonitorDto> _items = [];
+    string? _statusFilter;
+    string? _searchTerm;
+    string? _loadError;
+    string _activeKpi = "all";
+    bool _loading;
+    bool _actionBusy;
+
+    IEnumerable<ProposalDeliveryMonitorDto> Filtered => _items.Where(MatchesActiveFilter);
+    IEnumerable<string> Statuses => _items.Select(x => x.StatusCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(DisplayStatus);
+    int FailedCount => CountStatus("Failed");
+    int ConfigurationRequiredCount => CountStatus("Configuration Required");
+    int DeliveredCount => _items.Count(x => IsDelivered(x.StatusCode));
+    decimal DeliveryHealth => _items.Count == 0 ? 100 : (decimal)DeliveredCount / _items.Count * 100;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Proposal Delivery Monitor", null));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            _currentUser ??= await CurrentUser.RequireAsync();
+            _items = (await Api.GetProposalDeliveryMonitorAsync(_currentUser.TenantId, _statusFilter, _searchTerm) ?? []).ToList();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load proposal delivery monitor: {ex.Message}";
+            await ShowToast("Load failed", $"Failed to load proposal delivery monitor: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    async Task RetryAsync(ProposalDeliveryMonitorDto item)
+    {
+        if (_currentUser is null) return;
+        try
+        {
+            _actionBusy = true;
+            await Api.RetryProposalDeliveryAsync(item.ProposalDeliveryDispatchId, new RetryProposalDeliveryRequest(_currentUser.TenantId, _currentUser.UserId));
+            await LoadAsync();
+            await ShowToast("Retry queued", $"Proposal delivery retry queued for {item.Recipient}.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Retry failed", $"Delivery retry failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task SearchChanged(ChangeEventArgs args)
+    {
+        _searchTerm = args.Value?.ToString();
+        await LoadAsync();
+    }
+
+    async Task StatusChanged(ChangeEventArgs args)
+    {
+        _statusFilter = args.Value?.ToString();
+        _activeKpi = string.IsNullOrWhiteSpace(_statusFilter) ? "all" : _statusFilter;
+        await LoadAsync();
+    }
+
+    async Task SetKpi(string status)
+    {
+        _activeKpi = status;
+        _statusFilter = status == "all" ? null : status;
+        await LoadAsync();
+    }
+
+    async Task ClearFilters()
+    {
+        _activeKpi = "all";
+        _statusFilter = null;
+        _searchTerm = null;
+        await LoadAsync();
+    }
+
+    bool MatchesActiveFilter(ProposalDeliveryMonitorDto item) => string.IsNullOrWhiteSpace(_statusFilter) || item.StatusCode.Equals(_statusFilter, StringComparison.OrdinalIgnoreCase);
+    int CountStatus(string status) => _items.Count(x => x.StatusCode.Equals(status, StringComparison.OrdinalIgnoreCase));
+    bool RequiresConfiguration(ProposalDeliveryMonitorDto item) => item.StatusCode.Equals("Configuration Required", StringComparison.OrdinalIgnoreCase) || !item.ProviderIsConfigured || !item.ProviderIsActive;
+    static bool IsDelivered(string status) => status is "Delivered" or "Viewed" or "Downloaded" or "Signed";
+    static string ShortId(Guid id) => id.ToString("N")[..8].ToUpperInvariant();
+    static string FormatDate(DateTime date) => date.ToLocalTime().ToString("g");
+    static string FormatDate(DateTime? date) => date.HasValue ? FormatDate(date.Value) : "-";
+    static string DisplayStatus(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value.Replace("_", " ");
+
+    void OpenProposal(ProposalDeliveryMonitorDto item) => Nav.NavigateTo($"/submissions/{item.SubmissionId}/proposals");
+    void OpenConfiguration(ProposalDeliveryMonitorDto item) => Nav.NavigateTo($"/tenant/integrations/proposal-delivery?method={Uri.EscapeDataString(item.DeliveryMethodCode)}&returnUrl={Uri.EscapeDataString("communications/proposal-deliveries")}");
+
+    string StatusClass(string status) => status switch
+    {
+        "Delivered" or "Viewed" or "Downloaded" or "Signed" => "pdm-status pdm-status--ok",
+        "Queued" or "Processing" or "Pending Dispatch" => "pdm-status pdm-status--info",
+        "Configuration Required" => "pdm-status pdm-status--warn",
+        "Failed" or "Bounced" or "Declined" or "Cancelled" => "pdm-status pdm-status--danger",
+        _ => "pdm-status"
+    };
+
+    string KpiClass(string key) => _activeKpi.Equals(key, StringComparison.OrdinalIgnoreCase) ? "pdm-kpi pdm-kpi--active" : "pdm-kpi";
+
+    RenderFragment Kpi(string key, string icon, string label, string value, string title) => @<button type="button" class="@KpiClass(key)" title="@title" @onclick="() => SetKpi(key)"><span><i class="bi @icon"></i> @label</span><strong>@value</strong><small>@title</small></button>;
+
+    async Task ShowToast(string title, string message, string kind)
+    {
+        if (_toast is not null)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = title, Content = message, CssClass = $"enterprise-toast-{kind}" });
+        }
+    }
+}

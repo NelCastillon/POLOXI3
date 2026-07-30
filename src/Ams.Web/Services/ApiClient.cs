@@ -3179,6 +3179,12 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<ProposalDeliveryDispatchDto>?> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalDeliveryDispatchDto>>($"api/submissions/proposals/{proposalId}/deliveries?tenantId={tenantId}", cancellationToken);
 
+    public Task<IReadOnlyList<ProposalDeliveryMonitorDto>?> GetProposalDeliveryMonitorAsync(Guid tenantId, string? status, string? searchTerm, CancellationToken cancellationToken = default)
+    {
+        var url = $"api/submissions/proposal-deliveries/monitor?tenantId={tenantId}&status={Uri.EscapeDataString(status ?? string.Empty)}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}";
+        return _httpClient.GetFromJsonAsync<IReadOnlyList<ProposalDeliveryMonitorDto>>(url, cancellationToken);
+    }
+
     public async Task<ProposalDeliveryDispatchDto?> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposal-deliveries/{dispatchId}/retry", request, cancellationToken);

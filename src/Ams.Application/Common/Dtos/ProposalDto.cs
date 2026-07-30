@@ -86,6 +86,46 @@ public sealed class ProposalDeliveryDispatchDto
     public bool CanRetry { get; set; }
 }
 
+public sealed class ProposalDeliveryMonitorDto
+{
+    public Guid ProposalDeliveryDispatchId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid SubmissionId { get; set; }
+    public Guid ProposalId { get; set; }
+    public string DeliveryMethodCode { get; set; } = string.Empty;
+    public string ProviderName { get; set; } = string.Empty;
+    public string Recipient { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public int ProposalVersionNumber { get; set; }
+    public int AttemptCount { get; set; }
+    public int MaxAttempts { get; set; }
+    public DateTime? NextAttemptDateUtc { get; set; }
+    public DateTime? CompletedDateUtc { get; set; }
+    public DateTime? FirstViewedDateUtc { get; set; }
+    public DateTime? LastViewedDateUtc { get; set; }
+    public DateTime? DownloadedDateUtc { get; set; }
+    public DateTime? SignedDateUtc { get; set; }
+    public DateTime? DeclinedDateUtc { get; set; }
+    public DateTime? ExpiredDateUtc { get; set; }
+    public DateTime? BouncedDateUtc { get; set; }
+    public DateTime? CancelledDateUtc { get; set; }
+    public string? ExternalDeliveryId { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    public DateTime CreatedDateUtc { get; set; }
+    public bool CanRetry { get; set; }
+    public string ProposalTitle { get; set; } = string.Empty;
+    public string SubmissionNumber { get; set; } = string.Empty;
+    public string SubmissionStatus { get; set; } = string.Empty;
+    public string? AccountName { get; set; }
+    public string? OpportunityName { get; set; }
+    public string? AssignedProducerName { get; set; }
+    public string? DeliveryHandlerCode { get; set; }
+    public string? SenderAddress { get; set; }
+    public bool ProviderIsConfigured { get; set; }
+    public bool ProviderIsActive { get; set; }
+}
+
 public sealed class ProposalReviewDto
 {
     public Guid ProposalReviewId { get; set; }
