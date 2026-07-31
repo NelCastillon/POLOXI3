@@ -129,7 +129,10 @@ SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.Submissi
        provider.EndpointUri, provider.SenderAddress, provider.SecretReference, provider.ConfigurationJson,
        provider.IsConfigured, provider.RetryDelaySeconds,
        proposal.Title, proposal.HtmlContent, proposal.PdfUrl, proposal.DocumentId,
-       submission.AccountId, submission.SubmissionNumber, account.AccountName
+       submission.AccountId, submission.SubmissionNumber, account.AccountName,
+       tenant.TenantName AS AgencyName, agency.ContactEmail AS AgencyEmail, agency.ContactPhone AS AgencyPhone,
+       COALESCE(NULLIF(assignedUser.DisplayName, N''), NULLIF(assignedUser.FullName, N''), assignedUser.UserName) AS AssignedPersonName,
+       assignedUser.Email AS AssignedPersonEmail, assignedUser.PhoneNumber AS AssignedPersonPhone
 FROM Submissions.ProposalDeliveryDispatch dispatch
 INNER JOIN Submissions.ProposalDeliveryProvider provider
   ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
@@ -137,8 +140,14 @@ INNER JOIN Submissions.Proposal proposal
   ON proposal.ProposalId = dispatch.ProposalId AND proposal.TenantId = dispatch.TenantId AND proposal.IsDeleted = 0
 INNER JOIN Submissions.Submission submission
   ON submission.SubmissionId = dispatch.SubmissionId AND submission.TenantId = dispatch.TenantId AND submission.IsDeleted = 0
+INNER JOIN Core.Tenant tenant
+  ON tenant.TenantId = dispatch.TenantId AND tenant.IsDeleted = 0
 LEFT JOIN Client.Account account
   ON account.AccountId = submission.AccountId AND account.TenantId = submission.TenantId AND account.IsDeleted = 0
+LEFT JOIN Agency.Profile agency
+  ON agency.TenantId = dispatch.TenantId AND agency.IsDeleted = 0
+LEFT JOIN IAM.[User] assignedUser
+  ON assignedUser.UserId = submission.AssignedToUserId AND assignedUser.TenantId = submission.TenantId AND assignedUser.IsDeleted = 0
 WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
 """;
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -507,6 +516,10 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         var title = WebUtility.HtmlEncode(dispatch.Title);
         var accountName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AccountName) ? "Valued Client" : dispatch.AccountName);
         var submissionNumber = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.SubmissionNumber) ? dispatch.SubmissionId.ToString("N")[..8].ToUpperInvariant() : dispatch.SubmissionNumber);
+        var agencyName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AgencyName) ? "Your Insurance Agency" : dispatch.AgencyName);
+        var assignedPersonName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AssignedPersonName) ? "Your Agency Representative" : dispatch.AssignedPersonName);
+        var assignedPersonEmail = BuildEmailContactLink(dispatch.AssignedPersonEmail, dispatch.AgencyEmail);
+        var assignedPersonPhone = BuildPhoneContactLink(dispatch.AssignedPersonPhone, dispatch.AgencyPhone);
         var proposalContent = ExtractBodyContent(dispatch.HtmlContent);
 
         return $$"""
@@ -538,7 +551,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                 <tr>
                   <td>
-                    <div style="font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#bfe7f5;">AgencyBinder</div>
+                     <div style="font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#bfe7f5;">{{agencyName}}</div>
                     <div style="margin-top:7px;font-size:27px;line-height:1.2;font-weight:800;">Your Insurance Proposal</div>
                     <div style="margin-top:8px;font-size:14px;line-height:1.5;color:#e4f4fa;">Prepared securely for {{accountName}}</div>
                   </td>
@@ -566,7 +579,10 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
           </tr>
           <tr>
             <td style="padding:20px 30px;border-top:1px solid #e2e8f0;background:#f8fafc;">
-              <div style="font-size:13px;line-height:1.6;color:#475569;"><strong style="color:#0f172a;">Questions?</strong> Reply to this email and an AgencyBinder representative will assist you.</div>
+              <div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#2563eb;">Your proposal contact</div>
+              <div style="margin-top:5px;font-size:16px;font-weight:800;color:#0f172a;">{{assignedPersonName}}</div>
+              <div style="margin-top:7px;font-size:13px;line-height:1.7;color:#475569;">{{assignedPersonEmail}}{{assignedPersonPhone}}</div>
+              <div style="margin-top:10px;font-size:13px;line-height:1.6;color:#475569;"><strong style="color:#0f172a;">Questions?</strong> Contact {{assignedPersonName}} to review coverage options and next steps.</div>
               <div style="margin-top:12px;font-size:11px;line-height:1.55;color:#7c8a9d;">This proposal is provided for review and does not bind or alter coverage. Coverage is effective only after documented authorization and carrier confirmation.</div>
               <div style="margin-top:14px;font-size:11px;color:#94a3b8;">AgencyBinder · Professional insurance workflow and client service</div>
             </td>
@@ -578,6 +594,25 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 </body>
 </html>
 """;
+    }
+
+    private static string BuildEmailContactLink(string? assignedEmail, string? agencyEmail)
+    {
+        var email = string.IsNullOrWhiteSpace(assignedEmail) ? agencyEmail : assignedEmail;
+        if (string.IsNullOrWhiteSpace(email)) return string.Empty;
+
+        var encodedEmail = WebUtility.HtmlEncode(email.Trim());
+        return $"<a href=\"mailto:{encodedEmail}\" style=\"color:#2563eb;font-weight:700;text-decoration:none;\">{encodedEmail}</a>";
+    }
+
+    private static string BuildPhoneContactLink(string? assignedPhone, string? agencyPhone)
+    {
+        var phone = string.IsNullOrWhiteSpace(assignedPhone) ? agencyPhone : assignedPhone;
+        if (string.IsNullOrWhiteSpace(phone)) return string.Empty;
+
+        var encodedPhone = WebUtility.HtmlEncode(phone.Trim());
+        var separator = "<span style=\"padding:0 8px;color:#94a3b8;\">&middot;</span>";
+        return $"{separator}<a href=\"tel:{encodedPhone}\" style=\"color:#2563eb;font-weight:700;text-decoration:none;\">{encodedPhone}</a>";
     }
 
     private static string ExtractBodyContent(string? htmlContent)
@@ -651,6 +686,12 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         public string Title { get; set; } = string.Empty;
         public string? AccountName { get; set; }
         public string? SubmissionNumber { get; set; }
+        public string? AgencyName { get; set; }
+        public string? AgencyEmail { get; set; }
+        public string? AgencyPhone { get; set; }
+        public string? AssignedPersonName { get; set; }
+        public string? AssignedPersonEmail { get; set; }
+        public string? AssignedPersonPhone { get; set; }
         public string? HtmlContent { get; set; }
         public string? PdfUrl { get; set; }
         public Guid? DocumentId { get; set; }
