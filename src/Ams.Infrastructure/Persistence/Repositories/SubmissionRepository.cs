@@ -4895,12 +4895,24 @@ SELECT ProposalId, SubmissionId, TenantId, Title, Status, GovernanceStatusCode, 
 FROM   Submissions.Proposal
 WHERE  ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
-SELECT q.QuoteId, q.QuoteNumber, c.CarrierName, q.AnnualPremium, q.Deductible, q.[Limit], q.CoverageNotes, q.IsSelected, pq.SortOrder
+SELECT q.QuoteId, q.QuoteNumber, c.CarrierName, q.AnnualPremium, q.Deductible, q.[Limit], q.CoverageNotes,
+       q.TaxesAndFees, q.BrokerFee, q.MinimumEarnedPremium, q.PaymentTerms, q.TriaIncluded, q.IsBindable,
+       q.CarrierRating, q.EffectiveDate, q.ExpiresDateUtc, q.IsSelected, pq.SortOrder
 FROM Submissions.ProposalQuote pq
 INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.IsDeleted = 0
 INNER JOIN Core.Carrier c ON c.CarrierId = q.CarrierId AND c.IsDeleted = 0
 WHERE pq.ProposalId = @ProposalId AND pq.TenantId = @TenantId AND pq.IsDeleted = 0
 ORDER BY pq.SortOrder;
+
+SELECT line.QuoteLineId, line.QuoteId, line.LineOfBusiness, line.Status, line.QuotedPremium, line.Deductible, line.[Limit],
+       line.CommissionPercent, line.CoverageForms, line.Subjectivities, line.Exclusions, line.PaymentTerms,
+       line.MinimumEarnedPremium, line.TaxesAndFees, line.BrokerFee, line.TriaIncluded, line.IsBindable,
+       line.CoverageNotes, line.SortOrder
+FROM Submissions.QuoteLine line
+INNER JOIN Submissions.ProposalQuote pq
+  ON pq.QuoteId = line.QuoteId AND pq.ProposalId = @ProposalId AND pq.TenantId = @TenantId AND pq.IsDeleted = 0
+WHERE line.TenantId = @TenantId AND line.IsDeleted = 0
+ORDER BY pq.SortOrder, line.SortOrder, line.LineOfBusiness;
 
 SELECT ProposalLifecycleEventId, EventCode, EventDetail, EventDateUtc
 FROM Submissions.ProposalLifecycleEvent
@@ -4951,7 +4963,13 @@ FROM Submissions.ProposalESignEnvelope WHERE ProposalId = @ProposalId AND Tenant
         using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken));
         var proposal = await multi.ReadSingleOrDefaultAsync<ProposalDto>();
         if (proposal is null) return null;
-        proposal.Quotes = (await multi.ReadAsync<ProposalQuoteDto>()).AsList();
+        var quotes = (await multi.ReadAsync<ProposalQuoteDto>()).AsList();
+        var lines = (await multi.ReadAsync<ProposalQuoteLineDto>()).AsList();
+        foreach (var quote in quotes)
+        {
+            quote.Lines = lines.Where(x => x.QuoteId == quote.QuoteId).ToList();
+        }
+        proposal.Quotes = quotes;
         proposal.Events = (await multi.ReadAsync<ProposalLifecycleEventDto>()).AsList();
         proposal.Deliveries = (await multi.ReadAsync<ProposalDeliveryDispatchDto>()).AsList();
         proposal.CurrentReview = await multi.ReadSingleOrDefaultAsync<ProposalReviewDto>();

@@ -197,7 +197,32 @@ else
                                 <div class="pb-proposal-meta"><span><small style="color:#fff !important;">Submission</small><strong style="color:#fff !important;">@_submission.SubmissionNumber</strong></span><span><small style="color:#fff !important;">Line of business</small><strong style="color:#fff !important;">@_submission.LineOfBusiness</strong></span><span><small style="color:#fff !important;">Effective date</small><strong style="color:#fff !important;">@_submission.EffectiveDate.ToString("MMM d, yyyy")</strong></span><span><small style="color:#fff !important;">Prepared</small><strong style="color:#fff !important;">@FormatDate(_selected.GeneratedDateUtc ?? _selected.CreatedDateUtc)</strong></span></div>
                             </header>
                             <section class="pb-proposal-intro"><span><i class="bi bi-stars"></i> Proposal overview</span><p>This proposal presents the coverage and pricing options prepared for your review. Please evaluate the carrier terms, premiums, limits, deductibles, and coverage notes with your @AgencyName representative before providing authorization.</p></section>
-                            <div class="pb-proposal-content">@((MarkupString)ProposalHtml)</div>
+                            <div class="pb-proposal-content">
+                                @if (!string.IsNullOrWhiteSpace(_selected.CustomIntroduction)) { <p class="pb-proposal-custom-intro">@_selected.CustomIntroduction</p> }
+                                <section class="pb-package-section">
+                                    <div class="pb-package-section__heading"><div><span>Coverage packages</span><h2>Detailed quote options</h2></div><strong>@_selected.Quotes.Count package@(_selected.Quotes.Count == 1 ? string.Empty : "s")</strong></div>
+                                    @foreach (var quote in _selected.Quotes.OrderBy(x => x.SortOrder))
+                                    {
+                                        <article class="pb-package-card">
+                                            <header class="pb-package-header"><div><span>@quote.CarrierName</span><h3>@quote.QuoteNumber</h3></div><div class="pb-package-header__facts"><span><small>Effective</small><strong>@(quote.EffectiveDate?.ToString("MMM d, yyyy") ?? "Not provided")</strong></span><span><small>Expires</small><strong>@quote.ExpiresDateUtc.ToString("MMM d, yyyy")</strong></span><span><small>Carrier rating</small><strong>@DisplayValue(quote.CarrierRating)</strong></span></div></header>
+                                            <div class="pb-package-table-wrap"><table class="pb-package-table"><thead><tr><th>Line of business</th><th>Status</th><th>Limit</th><th>Deductible</th><th>Premium</th><th>Taxes & fees</th><th>Broker fee</th><th>Total</th></tr></thead><tbody>
+                                                @if (quote.Lines.Count == 0) { <tr><td>@_submission.LineOfBusiness</td><td>Quoted</td><td>@MoneyOrDash(quote.Limit)</td><td>@MoneyOrDash(quote.Deductible)</td><td>@quote.AnnualPremium.ToString("C2")</td><td>@MoneyOrDash(quote.TaxesAndFees)</td><td>@MoneyOrDash(quote.BrokerFee)</td><td>@((quote.AnnualPremium + (quote.TaxesAndFees ?? 0) + (quote.BrokerFee ?? 0)).ToString("C2"))</td></tr> }
+                                                @foreach (var line in quote.Lines.OrderBy(x => x.SortOrder)) { <tr><td><strong>@line.LineOfBusiness</strong>@if (!string.IsNullOrWhiteSpace(line.CoverageNotes)) { <small>@line.CoverageNotes</small> }</td><td>@DisplayValue(line.Status)</td><td>@MoneyOrDash(line.Limit)</td><td>@MoneyOrDash(line.Deductible)</td><td>@line.QuotedPremium.ToString("C2")</td><td>@MoneyOrDash(line.TaxesAndFees)</td><td>@MoneyOrDash(line.BrokerFee)</td><td><strong>@line.TotalCost.ToString("C2")</strong></td></tr> }
+                                            </tbody><tfoot><tr><td colspan="4">Package totals</td><td>@quote.LinePremiumTotal.ToString("C2")</td><td>@quote.Lines.Sum(x => x.TaxesAndFees ?? 0).ToString("C2")</td><td>@quote.Lines.Sum(x => x.BrokerFee ?? 0).ToString("C2")</td><td>@quote.PackageCostTotal.ToString("C2")</td></tr></tfoot></table></div>
+                                            <div class="pb-package-terms">
+                                                <div><small>Payment terms</small><strong>@DisplayValue(quote.Lines.Select(x => x.PaymentTerms).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? quote.PaymentTerms)</strong></div>
+                                                <div><small>Minimum earned premium</small><strong>@MoneyOrDash(quote.Lines.Sum(x => x.MinimumEarnedPremium ?? 0) is var mep && mep > 0 ? mep : quote.MinimumEarnedPremium)</strong></div>
+                                                <div><small>TRIA</small><strong>@DisplayBoolean(quote.Lines.Select(x => x.TriaIncluded).FirstOrDefault(x => x.HasValue) ?? quote.TriaIncluded)</strong></div>
+                                                <div><small>Bindable</small><strong>@((quote.Lines.Count > 0 ? quote.Lines.All(x => x.IsBindable) : quote.IsBindable) ? "Yes" : "No")</strong></div>
+                                            </div>
+                                            @foreach (var line in quote.Lines.Where(x => !string.IsNullOrWhiteSpace(x.CoverageForms) || !string.IsNullOrWhiteSpace(x.Subjectivities) || !string.IsNullOrWhiteSpace(x.Exclusions)))
+                                            {
+                                                <div class="pb-line-detail"><strong>@line.LineOfBusiness terms</strong><dl>@if (!string.IsNullOrWhiteSpace(line.CoverageForms)) { <div><dt>Coverage forms</dt><dd>@line.CoverageForms</dd></div> }@if (!string.IsNullOrWhiteSpace(line.Subjectivities)) { <div><dt>Subjectivities</dt><dd>@line.Subjectivities</dd></div> }@if (!string.IsNullOrWhiteSpace(line.Exclusions)) { <div><dt>Exclusions</dt><dd>@line.Exclusions</dd></div> }</dl></div>
+                                            }
+                                        </article>
+                                    }
+                                </section>
+                            </div>
                             <footer class="pb-proposal-footer">
                                 <div class="pb-proposal-contact-heading"><strong>Your proposal team</strong><span>Contact @AgencyName to review coverage options and next steps.</span></div>
                                 <div class="pb-proposal-contacts">
@@ -299,11 +324,8 @@ else if (_dialog == "Add Recipient")
     string AssignedPersonName => !string.IsNullOrWhiteSpace(_submission?.AssignedToUserName) ? _submission.AssignedToUserName : AssignedPerson?.FullName ?? "Not assigned";
     string? AssignedPersonEmail => AssignedPerson?.Email;
     string? AssignedPersonPhone => AssignedPerson?.PhoneNumber;
-    string ProposalHtml => System.Text.RegularExpressions.Regex.Replace(
-        _selected?.HtmlContent ?? "<p>Proposal content is not available.</p>",
-        "<th(?<attributes>[^>]*)>",
-        "<th${attributes} style=\"color:#fff !important;\">",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    static string DisplayValue(string? value) => string.IsNullOrWhiteSpace(value) ? "Not provided" : value;
+    static string DisplayBoolean(bool? value) => value switch { true => "Included", false => "Not included", _ => "Not provided" };
     IReadOnlyList<QuoteComparisonDto> ProposalReadyQuotes => _quotes.Where(x => x.IsProposalReady).ToList();
     IReadOnlyList<ProposalWorkflowDto> FilteredProposals => _proposals.Where(MatchesFilter).ToList();
     ProposalWorkflowDto? SelectedWorkflow => _selected is null ? null : _proposals.FirstOrDefault(x => x.ProposalId == _selected.ProposalId);

@@ -216,8 +216,44 @@ public sealed class ProposalQuoteDto
     public decimal? Deductible { get; set; }
     public decimal? Limit { get; set; }
     public string? CoverageNotes { get; set; }
+    public decimal? TaxesAndFees { get; set; }
+    public decimal? BrokerFee { get; set; }
+    public decimal? MinimumEarnedPremium { get; set; }
+    public string? PaymentTerms { get; set; }
+    public bool? TriaIncluded { get; set; }
+    public bool IsBindable { get; set; }
+    public string? CarrierRating { get; set; }
+    public DateTime? EffectiveDate { get; set; }
+    public DateTime ExpiresDateUtc { get; set; }
     public bool IsSelected { get; set; }
     public int SortOrder { get; set; }
+    public IReadOnlyList<ProposalQuoteLineDto> Lines { get; set; } = [];
+    public decimal LinePremiumTotal => Lines.Count == 0 ? AnnualPremium : Lines.Sum(x => x.QuotedPremium);
+    public decimal PackageCostTotal => LinePremiumTotal + Lines.Sum(x => (x.TaxesAndFees ?? 0) + (x.BrokerFee ?? 0));
+}
+
+public sealed class ProposalQuoteLineDto
+{
+    public Guid QuoteLineId { get; set; }
+    public Guid QuoteId { get; set; }
+    public string LineOfBusiness { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal QuotedPremium { get; set; }
+    public decimal? Deductible { get; set; }
+    public decimal? Limit { get; set; }
+    public decimal? CommissionPercent { get; set; }
+    public string? CoverageForms { get; set; }
+    public string? Subjectivities { get; set; }
+    public string? Exclusions { get; set; }
+    public string? PaymentTerms { get; set; }
+    public decimal? MinimumEarnedPremium { get; set; }
+    public decimal? TaxesAndFees { get; set; }
+    public decimal? BrokerFee { get; set; }
+    public bool? TriaIncluded { get; set; }
+    public bool IsBindable { get; set; }
+    public string? CoverageNotes { get; set; }
+    public int SortOrder { get; set; }
+    public decimal TotalCost => QuotedPremium + (TaxesAndFees ?? 0) + (BrokerFee ?? 0);
 }
 
 public sealed class ProposalLifecycleEventDto

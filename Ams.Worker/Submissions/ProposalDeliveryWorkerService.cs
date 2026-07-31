@@ -132,7 +132,21 @@ SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.Submissi
        submission.AccountId, submission.SubmissionNumber, account.AccountName,
        tenant.TenantName AS AgencyName, agency.ContactEmail AS AgencyEmail, agency.ContactPhone AS AgencyPhone,
        COALESCE(NULLIF(assignedUser.DisplayName, N''), NULLIF(assignedUser.FullName, N''), assignedUser.UserName) AS AssignedPersonName,
-       assignedUser.Email AS AssignedPersonEmail, assignedUser.PhoneNumber AS AssignedPersonPhone
+       assignedUser.Email AS AssignedPersonEmail, assignedUser.PhoneNumber AS AssignedPersonPhone,
+       (SELECT q.QuoteId, q.QuoteNumber, carrier.CarrierName, q.AnnualPremium, q.TaxesAndFees, q.BrokerFee,
+               q.MinimumEarnedPremium, q.PaymentTerms, q.TriaIncluded, q.IsBindable, q.CarrierRating, q.EffectiveDate, q.ExpiresDateUtc,
+               JSON_QUERY((SELECT line.LineOfBusiness, line.Status, line.QuotedPremium, line.Deductible, line.[Limit],
+                                  line.CoverageForms, line.Subjectivities, line.Exclusions, line.PaymentTerms,
+                                  line.MinimumEarnedPremium, line.TaxesAndFees, line.BrokerFee, line.TriaIncluded,
+                                  line.IsBindable, line.CoverageNotes, line.SortOrder
+                           FROM Submissions.QuoteLine line
+                           WHERE line.QuoteId = q.QuoteId AND line.TenantId = dispatch.TenantId AND line.IsDeleted = 0
+                           ORDER BY line.SortOrder, line.LineOfBusiness FOR JSON PATH)) AS Lines
+        FROM Submissions.ProposalQuote pq
+        INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.IsDeleted = 0
+        INNER JOIN Core.Carrier carrier ON carrier.CarrierId = q.CarrierId AND carrier.IsDeleted = 0
+        WHERE pq.ProposalId = dispatch.ProposalId AND pq.TenantId = dispatch.TenantId AND pq.IsDeleted = 0
+        ORDER BY pq.SortOrder FOR JSON PATH) AS PackageJson
 FROM Submissions.ProposalDeliveryDispatch dispatch
 INNER JOIN Submissions.ProposalDeliveryProvider provider
   ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
@@ -520,7 +534,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         var assignedPersonName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AssignedPersonName) ? "Your Agency Representative" : dispatch.AssignedPersonName);
         var assignedPersonEmail = BuildEmailContactLink(dispatch.AssignedPersonEmail, dispatch.AgencyEmail);
         var assignedPersonPhone = BuildPhoneContactLink(dispatch.AssignedPersonPhone, dispatch.AgencyPhone);
-        var proposalContent = ExtractBodyContent(dispatch.HtmlContent);
+        var proposalContent = BuildPackageHtml(dispatch);
 
         return $$"""
 <!doctype html>
@@ -615,6 +629,49 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         return $"{separator}<a href=\"tel:{encodedPhone}\" style=\"color:#2563eb;font-weight:700;text-decoration:none;\">{encodedPhone}</a>";
     }
 
+    private static string BuildPackageHtml(ProposalDeliveryWorkItem dispatch)
+    {
+        var packages = string.IsNullOrWhiteSpace(dispatch.PackageJson)
+            ? []
+            : JsonSerializer.Deserialize<List<ProposalEmailPackage>>(dispatch.PackageJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+        if (packages.Count == 0) return ExtractBodyContent(dispatch.HtmlContent);
+
+        var html = new StringBuilder("<div style=\"font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#2563eb;\">Coverage packages</div><div style=\"margin:5px 0 16px;font-size:22px;font-weight:800;color:#0f172a;\">Detailed quote options</div>");
+        foreach (var package in packages)
+        {
+            var lines = package.Lines.Count == 0
+                ? [new ProposalEmailLine { LineOfBusiness = "Package premium", Status = "Quoted", QuotedPremium = package.AnnualPremium, TaxesAndFees = package.TaxesAndFees, BrokerFee = package.BrokerFee }]
+                : package.Lines;
+            var premiumTotal = lines.Sum(x => x.QuotedPremium);
+            var taxesTotal = lines.Sum(x => x.TaxesAndFees ?? 0);
+            var brokerFeeTotal = lines.Sum(x => x.BrokerFee ?? 0);
+
+            html.Append("<table role=\"presentation\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\" style=\"margin:0 0 18px;border:1px solid #dbe5f0;border-radius:12px;overflow:hidden;\">");
+            html.Append($"<tr><td colspan=\"6\" style=\"padding:14px 16px;background:#123b67;color:#fff;\"><strong style=\"font-size:16px;color:#fff;\">{WebUtility.HtmlEncode(package.CarrierName)}</strong><span style=\"float:right;color:#d9edf6;\">Quote {WebUtility.HtmlEncode(package.QuoteNumber)}</span><div style=\"margin-top:5px;font-size:11px;color:#c7eaf4;\">Effective {FormatEmailDate(package.EffectiveDate)} &middot; Expires {FormatEmailDate(package.ExpiresDateUtc)} &middot; Rating {WebUtility.HtmlEncode(DisplayEmailValue(package.CarrierRating))}</div></td></tr>");
+            html.Append("<tr><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:left;\">Line</th><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:right;\">Limit</th><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:right;\">Deductible</th><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:right;\">Premium</th><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:right;\">Fees</th><th style=\"padding:9px;background:#eaf2fb;color:#123b67;text-align:right;\">Total</th></tr>");
+            foreach (var line in lines.OrderBy(x => x.SortOrder))
+            {
+                var fees = (line.TaxesAndFees ?? 0) + (line.BrokerFee ?? 0);
+                html.Append($"<tr><td style=\"padding:10px;border-top:1px solid #e2e8f0;color:#0f172a;\"><strong>{WebUtility.HtmlEncode(line.LineOfBusiness)}</strong><div style=\"font-size:11px;color:#64748b;\">{WebUtility.HtmlEncode(line.Status)}{BuildEmailLineNotes(line)}</div></td><td style=\"padding:10px;border-top:1px solid #e2e8f0;text-align:right;\">{FormatEmailMoney(line.Limit)}</td><td style=\"padding:10px;border-top:1px solid #e2e8f0;text-align:right;\">{FormatEmailMoney(line.Deductible)}</td><td style=\"padding:10px;border-top:1px solid #e2e8f0;text-align:right;\">{line.QuotedPremium:C2}</td><td style=\"padding:10px;border-top:1px solid #e2e8f0;text-align:right;\">{fees:C2}</td><td style=\"padding:10px;border-top:1px solid #e2e8f0;text-align:right;font-weight:800;\">{line.QuotedPremium + fees:C2}</td></tr>");
+            }
+            html.Append($"<tr><td colspan=\"3\" style=\"padding:11px;background:#e8f1ff;color:#123b67;font-weight:800;\">Package totals</td><td style=\"padding:11px;background:#e8f1ff;text-align:right;font-weight:800;\">{premiumTotal:C2}</td><td style=\"padding:11px;background:#e8f1ff;text-align:right;font-weight:800;\">{taxesTotal + brokerFeeTotal:C2}</td><td style=\"padding:11px;background:#e8f1ff;text-align:right;font-weight:800;color:#123b67;\">{premiumTotal + taxesTotal + brokerFeeTotal:C2}</td></tr>");
+            html.Append($"<tr><td colspan=\"6\" style=\"padding:11px 14px;background:#f8fafc;color:#475569;font-size:11px;\"><strong>Payment:</strong> {WebUtility.HtmlEncode(DisplayEmailValue(lines.Select(x => x.PaymentTerms).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? package.PaymentTerms))} &middot; <strong>MEP:</strong> {FormatEmailMoney(lines.Sum(x => x.MinimumEarnedPremium ?? 0) is var mep && mep > 0 ? mep : package.MinimumEarnedPremium)} &middot; <strong>TRIA:</strong> {FormatEmailBoolean(lines.Select(x => x.TriaIncluded).FirstOrDefault(x => x.HasValue) ?? package.TriaIncluded)} &middot; <strong>Bindable:</strong> {(lines.All(x => x.IsBindable) ? "Yes" : "No")}</td></tr></table>");
+        }
+        return html.ToString();
+    }
+
+    private static string BuildEmailLineNotes(ProposalEmailLine line)
+    {
+        var notes = new[] { line.CoverageNotes, line.CoverageForms, line.Subjectivities, line.Exclusions }.Where(x => !string.IsNullOrWhiteSpace(x)).Select(WebUtility.HtmlEncode);
+        var value = string.Join(" &middot; ", notes);
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : $"<br>{value}";
+    }
+
+    private static string DisplayEmailValue(string? value) => string.IsNullOrWhiteSpace(value) ? "Not provided" : value;
+    private static string FormatEmailMoney(decimal? value) => value.HasValue ? value.Value.ToString("C2") : "Not provided";
+    private static string FormatEmailDate(DateTime? value) => value.HasValue ? value.Value.ToString("MMM d, yyyy") : "Not provided";
+    private static string FormatEmailBoolean(bool? value) => value switch { true => "Included", false => "Not included", _ => "Not provided" };
+
     private static string ExtractBodyContent(string? htmlContent)
     {
         if (string.IsNullOrWhiteSpace(htmlContent)) return "<p style=\"margin:0;color:#475569;\">Your proposal package is ready for review.</p>";
@@ -692,9 +749,47 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         public string? AssignedPersonName { get; set; }
         public string? AssignedPersonEmail { get; set; }
         public string? AssignedPersonPhone { get; set; }
+        public string? PackageJson { get; set; }
         public string? HtmlContent { get; set; }
         public string? PdfUrl { get; set; }
         public Guid? DocumentId { get; set; }
+    }
+
+    private sealed class ProposalEmailPackage
+    {
+        public string QuoteNumber { get; set; } = string.Empty;
+        public string CarrierName { get; set; } = string.Empty;
+        public decimal AnnualPremium { get; set; }
+        public decimal? TaxesAndFees { get; set; }
+        public decimal? BrokerFee { get; set; }
+        public decimal? MinimumEarnedPremium { get; set; }
+        public string? PaymentTerms { get; set; }
+        public bool? TriaIncluded { get; set; }
+        public bool IsBindable { get; set; }
+        public string? CarrierRating { get; set; }
+        public DateTime? EffectiveDate { get; set; }
+        public DateTime? ExpiresDateUtc { get; set; }
+        public List<ProposalEmailLine> Lines { get; set; } = [];
+    }
+
+    private sealed class ProposalEmailLine
+    {
+        public string LineOfBusiness { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public decimal QuotedPremium { get; set; }
+        public decimal? Deductible { get; set; }
+        public decimal? Limit { get; set; }
+        public string? CoverageForms { get; set; }
+        public string? Subjectivities { get; set; }
+        public string? Exclusions { get; set; }
+        public string? PaymentTerms { get; set; }
+        public decimal? MinimumEarnedPremium { get; set; }
+        public decimal? TaxesAndFees { get; set; }
+        public decimal? BrokerFee { get; set; }
+        public bool? TriaIncluded { get; set; }
+        public bool IsBindable { get; set; }
+        public string? CoverageNotes { get; set; }
+        public int SortOrder { get; set; }
     }
 
     private sealed record DeliveryResult(bool IsConfigurationRequired, string? ExternalDeliveryId, string? ResponseJson, string? ErrorCode, string? ErrorMessage)
