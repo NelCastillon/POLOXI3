@@ -883,7 +883,23 @@ WHERE SubmissionId = @SubmissionId AND TenantId = @TenantId AND IsDeleted = 0;";
     private static string NormalizeStatus(string? status)
         => string.IsNullOrWhiteSpace(status) ? string.Empty : status.Replace(" ", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("_", string.Empty, StringComparison.OrdinalIgnoreCase).Replace("-", string.Empty, StringComparison.OrdinalIgnoreCase);
 
-    private sealed record ApiRatingWorkerSettings(int PollIntervalSeconds, int MaxTransmissionsPerPoll, bool Enabled);
+    private sealed class ApiRatingWorkerSettings
+    {
+        public bool Enabled { get; set; }
+        public int PollIntervalSeconds { get; set; }
+        public int MaxTransmissionsPerPoll { get; set; }
+
+        public ApiRatingWorkerSettings()
+        {
+        }
+
+        public ApiRatingWorkerSettings(int pollIntervalSeconds, int maxTransmissionsPerPoll, bool enabled)
+        {
+            PollIntervalSeconds = pollIntervalSeconds;
+            MaxTransmissionsPerPoll = maxTransmissionsPerPoll;
+            Enabled = enabled;
+        }
+    }
 
     private sealed record ApiRatingTransmission(
         Guid CarrierTransmissionId,

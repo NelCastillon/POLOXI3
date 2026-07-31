@@ -203,7 +203,7 @@ BEGIN
            seed.EndpointUri, seed.SenderAddress, seed.SecretReference, seed.ConfigurationJson,
            seed.IsConfigured, 1, seed.MaxAttempts, seed.RetryDelaySeconds, SYSUTCDATETIME(), 0
     FROM (VALUES
-        (N'Email', N'TenantSmtp', N'Smtp', N'NetworkSolutions SMTP', N'smtp://mail.agencybinder.com:587', N'ams_admin@agencybinder.com', N'AMS_PROPOSAL_SMTP_PASSWORD', N'{' + NCHAR(34) + N'username' + NCHAR(34) + N':' + NCHAR(34) + N'ams_admin@agencybinder.com' + NCHAR(34) + N',' + NCHAR(34) + N'enableSsl' + NCHAR(34) + N':' + NCHAR(34) + N'true' + NCHAR(34) + N'}', CAST(1 AS bit), 5, 300),
+        (N'Email', N'TenantSmtp', N'Smtp', N'NetworkSolutions SMTP', N'smtp://netsol-smtp-oxcs.hostingplatform.com:587', N'ams_admin@agencybinder.com', N'AMS_PROPOSAL_SMTP_PASSWORD', N'{' + NCHAR(34) + N'username' + NCHAR(34) + N':' + NCHAR(34) + N'ams_admin@agencybinder.com' + NCHAR(34) + N',' + NCHAR(34) + N'enableSsl' + NCHAR(34) + N':' + NCHAR(34) + N'true' + NCHAR(34) + N'}', CAST(1 AS bit), 5, 300),
         (N'Portal', N'AmsPortal', N'Portal', N'AMS Customer Portal', NULL, NULL, NULL, NULL, CAST(1 AS bit), 3, 60),
         (N'ESignature', N'TenantESignature', N'ESignature', N'Tenant E-Signature', NULL, NULL, NULL, NULL, CAST(0 AS bit), 5, 300),
         (N'InPerson', N'ManualDelivery', N'Manual', N'In-Person / Manual Delivery', NULL, NULL, NULL, NULL, CAST(1 AS bit), 1, 10)
@@ -223,11 +223,11 @@ BEGIN
     UPDATE Submissions.ProposalDeliveryProvider
     SET ProviderCode = CASE WHEN ProviderCode IN (N'SMTP', N'TenantSmtp') THEN N'TenantSmtp' ELSE ProviderCode END,
         DisplayName = CASE WHEN DisplayName IN (N'Email (SMTP)', N'Tenant SMTP') THEN N'NetworkSolutions SMTP' ELSE DisplayName END,
-        EndpointUri = COALESCE(NULLIF(EndpointUri, N''), N'smtp://mail.agencybinder.com:587'),
+        EndpointUri = CASE WHEN EndpointUri IN (N'smtp://mail.agencybinder.com:587', N'mail.agencybinder.com') THEN N'smtp://netsol-smtp-oxcs.hostingplatform.com:587' ELSE COALESCE(NULLIF(EndpointUri, N''), N'smtp://netsol-smtp-oxcs.hostingplatform.com:587') END,
         SenderAddress = COALESCE(NULLIF(SenderAddress, N''), N'ams_admin@agencybinder.com'),
         SecretReference = COALESCE(NULLIF(SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD'),
         ConfigurationJson = COALESCE(NULLIF(ConfigurationJson, N''), N'{' + NCHAR(34) + N'username' + NCHAR(34) + N':' + NCHAR(34) + N'ams_admin@agencybinder.com' + NCHAR(34) + N',' + NCHAR(34) + N'enableSsl' + NCHAR(34) + N':' + NCHAR(34) + N'true' + NCHAR(34) + N'}'),
-        IsConfigured = CASE WHEN COALESCE(NULLIF(EndpointUri, N''), N'smtp://mail.agencybinder.com:587') IS NOT NULL
+        IsConfigured = CASE WHEN COALESCE(NULLIF(EndpointUri, N''), N'smtp://netsol-smtp-oxcs.hostingplatform.com:587') IS NOT NULL
                             AND COALESCE(NULLIF(SenderAddress, N''), N'ams_admin@agencybinder.com') IS NOT NULL
                             AND COALESCE(NULLIF(SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD') IS NOT NULL THEN 1 ELSE IsConfigured END,
         ModifiedDateUtc = SYSUTCDATETIME()
@@ -5420,6 +5420,221 @@ WHERE d.ProposalDeliveryDispatchId = @DispatchId AND d.TenantId = @TenantId;";
         return await cn.QuerySingleAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { DispatchId = dispatchId, request.TenantId, request.RequestedByUserId }, cancellationToken: cancellationToken));
     }
 
+    public async Task<ProposalDeliveryDispatchDto> UpdateProposalDeliveryRecipientAsync(Guid dispatchId, UpdateProposalDeliveryRecipientRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @ProposalId UNIQUEIDENTIFIER;
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+DECLARE @ProviderName NVARCHAR(150);
+
+SELECT @ProposalId = dispatch.ProposalId,
+       @SubmissionId = dispatch.SubmissionId,
+       @ProviderName = COALESCE(provider.DisplayName, dispatch.DeliveryMethodCode)
+FROM Submissions.ProposalDeliveryDispatch dispatch
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
+ AND provider.IsDeleted = 0
+WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId
+  AND dispatch.TenantId = @TenantId
+  AND dispatch.IsDeleted = 0
+  AND dispatch.StatusCode IN (N'Queued', N'Configuration Required', N'Failed');
+
+IF @ProposalId IS NULL THROW 52231, 'Only queued, configuration-required, or failed proposal deliveries can have recipient edited.', 1;
+
+UPDATE Submissions.ProposalDeliveryDispatch
+SET Recipient = @Recipient,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND IsDeleted = 0;
+
+UPDATE proposal
+SET Recipient = @Recipient,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+FROM Submissions.Proposal proposal
+WHERE proposal.ProposalId = @ProposalId
+  AND proposal.TenantId = @TenantId
+  AND proposal.LastDeliveryDispatchId = @DispatchId
+  AND proposal.IsDeleted = 0;
+
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'DeliveryRecipientUpdated',
+     CONCAT(N'Proposal delivery recipient updated to ', @Recipient, CASE WHEN NULLIF(@ChangeReason, N'') IS NULL THEN N'.' ELSE CONCAT(N'. Reason: ', @ChangeReason) END),
+     SYSUTCDATETIME(), SYSUTCDATETIME(), @ModifiedByUserId, 0);
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDeliveryRecipientUpdated', CONCAT(@ProviderName, N' recipient updated to ', @Recipient), SYSUTCDATETIME(), @ModifiedByUserId, N'ProposalDeliveryDispatch', @DispatchId, N'User', 0);
+
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       @ProviderName AS ProviderName, d.Recipient, d.StatusCode, d.AttemptCount, d.MaxAttempts,
+       d.ProposalVersionNumber, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.FirstViewedDateUtc, d.LastViewedDateUtc, d.DownloadedDateUtc, d.SignedDateUtc, d.DeclinedDateUtc, d.ExpiredDateUtc, d.BouncedDateUtc, d.CancelledDateUtc,
+       d.ErrorCode, d.ErrorMessage,
+       d.CreatedDateUtc, CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+WHERE d.ProposalDeliveryDispatchId = @DispatchId AND d.TenantId = @TenantId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { DispatchId = dispatchId, request.TenantId, request.Recipient, request.ChangeReason, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<ProposalDeliveryDispatchDto> ResendProposalDeliveryAsync(Guid dispatchId, ResendProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @NewDispatchId UNIQUEIDENTIFIER = NEWID();
+DECLARE @ProposalId UNIQUEIDENTIFIER;
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+DECLARE @ProviderId UNIQUEIDENTIFIER;
+DECLARE @ProviderName NVARCHAR(150);
+DECLARE @DeliveryMethod NVARCHAR(50);
+DECLARE @Recipient NVARCHAR(320);
+DECLARE @ProposalVersionNumber INT;
+DECLARE @MaxAttempts INT;
+DECLARE @IsConfigured BIT;
+DECLARE @DispatchStatus NVARCHAR(50);
+DECLARE @OriginalStatus NVARCHAR(50);
+
+SELECT @ProposalId = dispatch.ProposalId,
+       @SubmissionId = dispatch.SubmissionId,
+       @ProviderId = dispatch.ProposalDeliveryProviderId,
+       @ProviderName = COALESCE(provider.DisplayName, dispatch.DeliveryMethodCode),
+       @DeliveryMethod = dispatch.DeliveryMethodCode,
+       @Recipient = COALESCE(NULLIF(@RequestedRecipient, N''), dispatch.Recipient),
+       @ProposalVersionNumber = dispatch.ProposalVersionNumber,
+       @MaxAttempts = COALESCE(provider.MaxAttempts, dispatch.MaxAttempts, 5),
+       @IsConfigured = COALESCE(provider.IsConfigured, 0),
+       @OriginalStatus = dispatch.StatusCode
+FROM Submissions.ProposalDeliveryDispatch dispatch
+LEFT JOIN Submissions.ProposalDeliveryProvider provider
+  ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
+ AND provider.TenantId = dispatch.TenantId
+ AND provider.IsActive = 1
+ AND provider.IsDeleted = 0
+WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId
+  AND dispatch.TenantId = @TenantId
+  AND dispatch.IsDeleted = 0;
+
+IF @ProposalId IS NULL THROW 52232, 'Proposal delivery was not found for resend.', 1;
+
+IF EXISTS
+(
+    SELECT 1 FROM Submissions.ProposalDeliveryDispatch
+    WHERE TenantId = @TenantId AND ProposalId = @ProposalId AND IsDeleted = 0
+      AND StatusCode IN (N'Queued', N'Processing', N'Configuration Required', N'Sent')
+      AND ProposalDeliveryDispatchId <> @DispatchId
+)
+    THROW 52233, 'Another active proposal delivery already exists for this proposal.', 1;
+
+SET @DispatchStatus = CASE WHEN @IsConfigured = 1 THEN N'Queued' ELSE N'Configuration Required' END;
+
+IF @OriginalStatus IN (N'Queued', N'Processing', N'Configuration Required', N'Sent')
+BEGIN
+    UPDATE Submissions.ProposalDeliveryDispatch
+    SET StatusCode = N'Cancelled',
+        CancelledDateUtc = COALESCE(CancelledDateUtc, SYSUTCDATETIME()),
+        ErrorMessage = COALESCE(NULLIF(ErrorMessage, N''), N'Replaced by resend request.'),
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @RequestedByUserId
+    WHERE ProposalDeliveryDispatchId = @DispatchId
+      AND TenantId = @TenantId
+      AND IsDeleted = 0;
+END;
+
+INSERT INTO Submissions.ProposalDeliveryDispatch
+    (ProposalDeliveryDispatchId, TenantId, SubmissionId, ProposalId, ProposalDeliveryProviderId,
+     ProposalVersionNumber, DeliveryMethodCode, Recipient, StatusCode, AttemptCount, MaxAttempts, NextAttemptDateUtc,
+     ErrorCode, ErrorMessage, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (@NewDispatchId, @TenantId, @SubmissionId, @ProposalId, @ProviderId,
+     @ProposalVersionNumber, @DeliveryMethod, @Recipient, @DispatchStatus, 0, @MaxAttempts,
+     CASE WHEN @DispatchStatus = N'Queued' THEN SYSUTCDATETIME() ELSE NULL END,
+     CASE WHEN @DispatchStatus = N'Configuration Required' THEN N'PROVIDER_NOT_CONFIGURED' ELSE NULL END,
+     CASE WHEN @DispatchStatus = N'Configuration Required' THEN CONCAT(@ProviderName, N' requires tenant configuration before resend.') ELSE NULL END,
+     SYSUTCDATETIME(), @RequestedByUserId, 0);
+
+UPDATE Submissions.Proposal
+SET DeliveryMethod = @DeliveryMethod,
+    Recipient = @Recipient,
+    DeliveryStatus = @DispatchStatus,
+    LastDeliveryDispatchId = @NewDispatchId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @RequestedByUserId
+WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'DeliveryResendQueued',
+     CONCAT(N'Proposal delivery resend queued through ', @ProviderName, N' to ', @Recipient, CASE WHEN NULLIF(@Reason, N'') IS NULL THEN N'.' ELSE CONCAT(N'. Reason: ', @Reason) END),
+     SYSUTCDATETIME(), SYSUTCDATETIME(), @RequestedByUserId, 0);
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDeliveryResent', CONCAT(@DispatchStatus, N': ', @DeliveryMethod, N' resend to ', @Recipient), SYSUTCDATETIME(), @RequestedByUserId, N'ProposalDeliveryDispatch', @NewDispatchId, N'User', 0);
+
+SELECT d.ProposalDeliveryDispatchId, d.TenantId, d.SubmissionId, d.ProposalId, d.DeliveryMethodCode,
+       @ProviderName AS ProviderName, d.Recipient, d.StatusCode, d.AttemptCount, d.MaxAttempts,
+       d.ProposalVersionNumber, d.NextAttemptDateUtc, d.CompletedDateUtc, d.ExternalDeliveryId,
+       d.FirstViewedDateUtc, d.LastViewedDateUtc, d.DownloadedDateUtc, d.SignedDateUtc, d.DeclinedDateUtc, d.ExpiredDateUtc, d.BouncedDateUtc, d.CancelledDateUtc,
+       d.ErrorCode, d.ErrorMessage,
+       d.CreatedDateUtc, CAST(CASE WHEN d.StatusCode IN (N'Configuration Required', N'Failed') THEN 1 ELSE 0 END AS bit) AS CanRetry
+FROM Submissions.ProposalDeliveryDispatch d
+WHERE d.ProposalDeliveryDispatchId = @NewDispatchId AND d.TenantId = @TenantId;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleAsync<ProposalDeliveryDispatchDto>(new CommandDefinition(sql, new { DispatchId = dispatchId, request.TenantId, RequestedRecipient = request.Recipient, request.Reason, request.RequestedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteProposalDeliveryAsync(Guid dispatchId, DeleteProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @ProposalId UNIQUEIDENTIFIER;
+DECLARE @SubmissionId UNIQUEIDENTIFIER;
+DECLARE @IsLast BIT = 0;
+
+SELECT @ProposalId = dispatch.ProposalId,
+       @SubmissionId = dispatch.SubmissionId,
+       @IsLast = CASE WHEN proposal.LastDeliveryDispatchId = dispatch.ProposalDeliveryDispatchId THEN 1 ELSE 0 END
+FROM Submissions.ProposalDeliveryDispatch dispatch
+INNER JOIN Submissions.Proposal proposal
+  ON proposal.ProposalId = dispatch.ProposalId
+ AND proposal.TenantId = dispatch.TenantId
+ AND proposal.IsDeleted = 0
+WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId
+  AND dispatch.TenantId = @TenantId
+  AND dispatch.IsDeleted = 0;
+
+IF @ProposalId IS NULL THROW 52234, 'Proposal delivery was not found for removal.', 1;
+
+UPDATE Submissions.ProposalDeliveryDispatch
+SET IsDeleted = 1,
+    StatusCode = CASE WHEN StatusCode IN (N'Queued', N'Processing', N'Configuration Required', N'Failed') THEN N'Cancelled' ELSE StatusCode END,
+    CancelledDateUtc = COALESCE(CancelledDateUtc, SYSUTCDATETIME()),
+    ErrorMessage = CASE WHEN StatusCode IN (N'Queued', N'Processing', N'Configuration Required', N'Failed') THEN @Reason ELSE ErrorMessage END,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @DeletedByUserId
+WHERE ProposalDeliveryDispatchId = @DispatchId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @IsLast = 1
+BEGIN
+    UPDATE Submissions.Proposal
+    SET DeliveryStatus = NULL,
+        LastDeliveryDispatchId = NULL,
+        ModifiedDateUtc = SYSUTCDATETIME(),
+        ModifiedByUserId = @DeletedByUserId
+    WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
+END;
+
+INSERT INTO Submissions.ProposalLifecycleEvent
+    (ProposalLifecycleEventId, TenantId, ProposalId, SubmissionId, EventCode, EventDetail, EventDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES
+    (NEWID(), @TenantId, @ProposalId, @SubmissionId, N'DeliveryRemoved', CONCAT(N'Proposal delivery removed from monitor. Reason: ', @Reason), SYSUTCDATETIME(), SYSUTCDATETIME(), @DeletedByUserId, 0);
+
+INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, CreatedByUserId, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
+VALUES (NEWID(), @SubmissionId, @TenantId, N'ProposalDeliveryRemoved', @Reason, SYSUTCDATETIME(), @DeletedByUserId, N'ProposalDeliveryDispatch', @DispatchId, N'User', 0);";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { DispatchId = dispatchId, request.TenantId, request.Reason, request.DeletedByUserId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<IReadOnlyList<ProposalDeliveryProviderDto>> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -5444,15 +5659,24 @@ WHERE ProposalDeliveryProviderId = @ProviderId AND TenantId = @TenantId AND IsDe
 
 IF @HandlerCode IS NULL THROW 52045, 'Proposal delivery provider was not found.', 1;
 IF @ConfigurationJson IS NOT NULL AND ISJSON(@ConfigurationJson) = 0 THROW 52046, 'Provider configuration must be valid JSON.', 1;
-IF @IsConfigured = 1 AND @HandlerCode = N'Smtp' AND (NULLIF(@EndpointUri, N'') IS NULL OR @EndpointUri NOT LIKE N'smtp://%' OR NULLIF(@SenderAddress, N'') IS NULL)
-    THROW 52047, 'Configured SMTP delivery requires an smtp:// endpoint and sender address.', 1;
+
+DECLARE @EffectiveEndpointUri NVARCHAR(1000) = COALESCE(NULLIF(@EndpointUri, N''), CASE WHEN @HandlerCode = N'Smtp' THEN N'smtp://netsol-smtp-oxcs.hostingplatform.com:587' END);
+IF @HandlerCode = N'Smtp' AND @EffectiveEndpointUri IS NOT NULL AND @EffectiveEndpointUri NOT LIKE N'%://%'
+    SET @EffectiveEndpointUri = CONCAT(N'smtp://', @EffectiveEndpointUri);
+IF @HandlerCode = N'Smtp' AND @EffectiveEndpointUri IS NOT NULL AND @EffectiveEndpointUri LIKE N'smtp://%' AND @EffectiveEndpointUri NOT LIKE N'%:[0-9]%'
+    SET @EffectiveEndpointUri = CONCAT(@EffectiveEndpointUri, N':587');
+DECLARE @EffectiveSenderAddress NVARCHAR(320) = COALESCE(NULLIF(@SenderAddress, N''), CASE WHEN @HandlerCode = N'Smtp' THEN N'ams_admin@agencybinder.com' END);
+DECLARE @EffectiveSecretReference NVARCHAR(500) = COALESCE(NULLIF(@SecretReference, N''), CASE WHEN @HandlerCode = N'Smtp' THEN N'AMS_PROPOSAL_SMTP_PASSWORD' END);
+
+IF @IsConfigured = 1 AND @HandlerCode = N'Smtp' AND (@EffectiveEndpointUri IS NULL OR @EffectiveEndpointUri NOT LIKE N'smtp://%' OR @EffectiveSenderAddress IS NULL OR @EffectiveSecretReference IS NULL)
+    THROW 52047, 'Configured SMTP delivery requires an smtp:// endpoint, sender address, and secret reference.', 1;
 IF @IsConfigured = 1 AND @HandlerCode = N'ESignature' AND (NULLIF(@EndpointUri, N'') IS NULL OR @EndpointUri NOT LIKE N'https://%' OR NULLIF(@SecretReference, N'') IS NULL)
     THROW 52048, 'Configured e-signature delivery requires an HTTPS endpoint and secret reference.', 1;
 
 UPDATE Submissions.ProposalDeliveryProvider
-SET EndpointUri = NULLIF(@EndpointUri, N''),
-    SenderAddress = NULLIF(@SenderAddress, N''),
-    SecretReference = NULLIF(@SecretReference, N''),
+SET EndpointUri = @EffectiveEndpointUri,
+    SenderAddress = @EffectiveSenderAddress,
+    SecretReference = @EffectiveSecretReference,
     ConfigurationJson = NULLIF(@ConfigurationJson, N''),
     IsConfigured = @IsConfigured,
     IsActive = @IsActive,

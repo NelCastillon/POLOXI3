@@ -187,7 +187,28 @@ else
                     <button type="button" class="pb-icon-btn" title="Close proposal detail" aria-label="Close proposal detail" @onclick="() => _selected = null"><i class="bi bi-x-lg"></i></button>
                 </div></header>
                 <div class="pb-detail-layout">
-                    <div class="pb-document-shell"><div class="pb-document-toolbar"><span><i class="bi bi-file-earmark-check"></i> Approved proposal content</span><span>Version @_selected.VersionNumber</span></div><div class="pb-document">@((MarkupString)(_selected.HtmlContent ?? "<p>Proposal content is not available.</p>"))</div></div>
+                    <div class="pb-document-shell">
+                        <div class="pb-document-toolbar"><span><i class="bi bi-file-earmark-check"></i> Client-ready proposal</span><span>Version @_selected.VersionNumber</span></div>
+                        <article class="pb-document">
+                            <header class="pb-proposal-cover">
+                                <div class="pb-proposal-brand"><span class="pb-proposal-mark"><i class="bi bi-shield-check"></i></span><div><strong>@AgencyName</strong><small>Insurance Proposal</small></div></div>
+                                <div class="pb-proposal-version"><span>Proposal version</span><strong>@_selected.VersionNumber.ToString("00")</strong></div>
+                                <div class="pb-proposal-heading"><span class="pb-section-kicker">Prepared exclusively for</span><h1>@_submission.AccountName</h1><p>@_selected.Title</p></div>
+                                <div class="pb-proposal-meta"><span><small>Submission</small><strong>@_submission.SubmissionNumber</strong></span><span><small>Line of business</small><strong>@_submission.LineOfBusiness</strong></span><span><small>Effective date</small><strong>@_submission.EffectiveDate.ToString("MMM d, yyyy")</strong></span><span><small>Prepared</small><strong>@FormatDate(_selected.GeneratedDateUtc ?? _selected.CreatedDateUtc)</strong></span></div>
+                            </header>
+                            <section class="pb-proposal-intro"><span><i class="bi bi-stars"></i> Proposal overview</span><p>This proposal presents the coverage and pricing options prepared for your review. Please evaluate the carrier terms, premiums, limits, deductibles, and coverage notes with your @AgencyName representative before providing authorization.</p></section>
+                            <div class="pb-proposal-content">@((MarkupString)(_selected.HtmlContent ?? "<p>Proposal content is not available.</p>"))</div>
+                            <footer class="pb-proposal-footer">
+                                <div class="pb-proposal-contact-heading"><strong>Your proposal team</strong><span>Contact @AgencyName to review coverage options and next steps.</span></div>
+                                <div class="pb-proposal-contacts">
+                                    <div><i class="bi bi-person-badge"></i><span><small>Assigned representative</small><strong>@AssignedPersonName</strong>@if (!string.IsNullOrWhiteSpace(AssignedPersonEmail)) { <a href="mailto:@AssignedPersonEmail">@AssignedPersonEmail</a> }@if (!string.IsNullOrWhiteSpace(AssignedPersonPhone)) { <a href="tel:@AssignedPersonPhone">@AssignedPersonPhone</a> }</span></div>
+                                    <div><i class="bi bi-envelope"></i><span><small>Agency email</small>@if (!string.IsNullOrWhiteSpace(_agencyProfile?.Email)) { <a href="mailto:@_agencyProfile.Email">@_agencyProfile.Email</a> } else { <strong>Not provided</strong> }</span></div>
+                                    <div><i class="bi bi-telephone"></i><span><small>Agency phone</small>@if (!string.IsNullOrWhiteSpace(_agencyProfile?.Phone)) { <a href="tel:@_agencyProfile.Phone">@_agencyProfile.Phone</a> } else { <strong>Not provided</strong> }</span></div>
+                                </div>
+                                <small class="pb-proposal-disclaimer">This proposal is provided for review and does not bind or alter coverage. Coverage is effective only after documented authorization and carrier confirmation.</small>
+                            </footer>
+                        </article>
+                    </div>
                     <div class="pb-detail-rail">
                         <section class="pb-rail-section pb-stage-panel"><div class="pb-rail-heading"><div><i class="bi @NextActionIcon"></i><span><strong>Flow Guidance</strong><small>@NextActionTitle</small></span></div></div><p>@NextActionDescription</p><div class="pb-stage-checks"><span class="@(BuildComplete ? "is-done" : null)"><i class="bi bi-file-earmark-richtext"></i> Built</span><span class="@(ReviewComplete ? "is-done" : null)"><i class="bi bi-person-check"></i> Reviewed</span><span class="@(DeliveryComplete ? "is-done" : null)"><i class="bi bi-send-check"></i> Delivered</span><span class="@(AcceptanceComplete ? "is-done" : null)"><i class="bi bi-check2-circle"></i> Accepted</span></div></section>
                         <section class="pb-rail-section"><div class="pb-rail-heading"><div><i class="bi bi-people"></i><span><strong>Recipients</strong><small>@_selected.Recipients.Count persisted</small></span></div>@if (CanManageSelected) { <button type="button" class="pb-icon-btn" title="Add recipient" aria-label="Add recipient" @onclick="OpenRecipient"><i class="bi bi-person-plus"></i></button> }</div>
@@ -252,6 +273,7 @@ else if (_dialog == "Add Recipient")
     [Parameter] public Guid SubmissionId { get; set; }
 
     SubmissionDto? _submission;
+    AgencyProfileDto? _agencyProfile;
     List<QuoteComparisonDto> _quotes = [];
     List<ProposalWorkflowDto> _proposals = [];
     List<ProposalWorkflowOptionDto> _options = [];
@@ -272,6 +294,11 @@ else if (_dialog == "Add Recipient")
     ReviewForm _reviewForm = new();
     RecipientForm _recipientForm = new();
 
+    string AgencyName => string.IsNullOrWhiteSpace(_agencyProfile?.AgencyName) ? "Agency" : _agencyProfile.AgencyName;
+    UserDto? AssignedPerson => _submission?.AssignedToUserId is Guid assignedToUserId ? _users.FirstOrDefault(x => x.UserId == assignedToUserId) : null;
+    string AssignedPersonName => !string.IsNullOrWhiteSpace(_submission?.AssignedToUserName) ? _submission.AssignedToUserName : AssignedPerson?.FullName ?? "Not assigned";
+    string? AssignedPersonEmail => AssignedPerson?.Email;
+    string? AssignedPersonPhone => AssignedPerson?.PhoneNumber;
     IReadOnlyList<QuoteComparisonDto> ProposalReadyQuotes => _quotes.Where(x => x.IsProposalReady).ToList();
     IReadOnlyList<ProposalWorkflowDto> FilteredProposals => _proposals.Where(MatchesFilter).ToList();
     ProposalWorkflowDto? SelectedWorkflow => _selected is null ? null : _proposals.FirstOrDefault(x => x.ProposalId == _selected.ProposalId);
@@ -307,7 +334,7 @@ else if (_dialog == "Add Recipient")
     protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Submission", $"/submissions/{SubmissionId}"), new("Proposal Workflow", $"/submissions/{SubmissionId}/proposals")); await LoadAsync(); }
     async Task LoadAsync()
     {
-        try { _loading = true; _loadError = null; _currentUser ??= await CurrentUser.RequireAsync(); _submission = await Api.GetSubmissionByIdAsync(SubmissionId); _quotes = (await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? []).ToList(); _proposals = (await Api.GetSubmissionProposalsAsync(SubmissionId, _currentUser.TenantId) ?? []).ToList(); _options = (await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId) ?? []).ToList(); _recipientTypes = (await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId, "ProposalRecipientType") ?? []).ToList(); _users = (await Api.SearchUsersAsync(_currentUser.TenantId, pageSize: 100))?.Items.Where(x => x.StatusCode == "Active").ToList() ?? []; if (_selected is not null) _selected = await Api.GetProposalByIdAsync(_selected.ProposalId, _currentUser.TenantId); }
+        try { _loading = true; _loadError = null; _currentUser ??= await CurrentUser.RequireAsync(); _submission = await Api.GetSubmissionByIdAsync(SubmissionId); _agencyProfile = await Api.GetAgencyProfileAsync(_currentUser.TenantId); _quotes = (await Api.GetSubmissionQuoteComparisonAsync(SubmissionId) ?? []).ToList(); _proposals = (await Api.GetSubmissionProposalsAsync(SubmissionId, _currentUser.TenantId) ?? []).ToList(); _options = (await Api.GetProposalWorkflowOptionsAsync(_currentUser.TenantId) ?? []).ToList(); _recipientTypes = (await Api.GetSubmissionReferenceOptionsAsync(_currentUser.TenantId, "ProposalRecipientType") ?? []).ToList(); _users = (await Api.SearchUsersAsync(_currentUser.TenantId, pageSize: 100))?.Items.Where(x => x.StatusCode == "Active").ToList() ?? []; if (_selected is not null) _selected = await Api.GetProposalByIdAsync(_selected.ProposalId, _currentUser.TenantId); }
         catch (Exception ex) { _loadError = ex.Message; }
         finally { _loading = false; }
     }

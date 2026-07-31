@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Submissions;
+using Microsoft.Data.SqlClient;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -349,6 +350,31 @@ public sealed class SubmissionsController : ControllerBase
         return Ok(await _service.RetryProposalDeliveryAsync(dispatchId, request with { RequestedByUserId = GetUserId() }, cancellationToken));
     }
 
+    [HttpPatch("proposal-deliveries/{dispatchId:guid}/recipient")]
+    [Authorize]
+    public async Task<IActionResult> UpdateProposalDeliveryRecipient(Guid dispatchId, [FromBody] UpdateProposalDeliveryRecipientRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(request.TenantId, "PROPOSAL_DELIVER", out var denied)) return denied;
+        return Ok(await _service.UpdateProposalDeliveryRecipientAsync(dispatchId, request with { ModifiedByUserId = GetUserId() }, cancellationToken));
+    }
+
+    [HttpPost("proposal-deliveries/{dispatchId:guid}/resend")]
+    [Authorize]
+    public async Task<IActionResult> ResendProposalDelivery(Guid dispatchId, [FromBody] ResendProposalDeliveryRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(request.TenantId, "PROPOSAL_DELIVER", out var denied)) return denied;
+        return Ok(await _service.ResendProposalDeliveryAsync(dispatchId, request with { RequestedByUserId = GetUserId() }, cancellationToken));
+    }
+
+    [HttpDelete("proposal-deliveries/{dispatchId:guid}")]
+    [Authorize]
+    public async Task<IActionResult> DeleteProposalDelivery(Guid dispatchId, [FromQuery] Guid tenantId, [FromQuery] string reason, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(tenantId, "PROPOSAL_DELIVER", out var denied)) return denied;
+        await _service.DeleteProposalDeliveryAsync(dispatchId, new DeleteProposalDeliveryRequest(tenantId, reason, GetUserId()), cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("proposal-delivery-providers")]
     [Authorize]
     public async Task<IActionResult> GetProposalDeliveryProviders([FromQuery] Guid tenantId, CancellationToken cancellationToken)
@@ -359,8 +385,15 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> UpdateProposalDeliveryProvider(Guid providerId, [FromBody] UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken)
     {
         if (!CanAccess(request.TenantId, "PROPOSAL_WEBHOOK_MANAGE", out var denied)) return denied;
-        await _service.UpdateProposalDeliveryProviderAsync(providerId, request with { ModifiedByUserId = GetUserId() }, cancellationToken);
-        return NoContent();
+        try
+        {
+            await _service.UpdateProposalDeliveryProviderAsync(providerId, request with { ModifiedByUserId = GetUserId() }, cancellationToken);
+            return NoContent();
+        }
+        catch (SqlException ex) when (ex.Number is 52046 or 52047 or 52048)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     [HttpPost("proposals/{proposalId:guid}/review")]

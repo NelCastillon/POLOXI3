@@ -9,6 +9,9 @@ using Ams.Worker.Submissions;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+builder.Configuration.AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: false);
+
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddInfrastructure(builder.Configuration);
 

@@ -290,6 +290,28 @@ public sealed record RetryProposalDeliveryRequest(
     Guid TenantId,
     Guid? RequestedByUserId);
 
+public sealed record UpdateProposalDeliveryRecipientRequest(
+    Guid TenantId,
+    [Required, EmailAddress, StringLength(320)]
+    string Recipient,
+    [StringLength(1000)]
+    string? ChangeReason,
+    Guid? ModifiedByUserId);
+
+public sealed record ResendProposalDeliveryRequest(
+    Guid TenantId,
+    [StringLength(320)]
+    string? Recipient,
+    [StringLength(1000)]
+    string? Reason,
+    Guid? RequestedByUserId);
+
+public sealed record DeleteProposalDeliveryRequest(
+    Guid TenantId,
+    [Required, StringLength(1000)]
+    string Reason,
+    Guid? DeletedByUserId);
+
 public sealed record UpdateProposalDeliveryProviderRequest(
     Guid TenantId,
     [StringLength(1000)]

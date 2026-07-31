@@ -12,7 +12,7 @@ UNION SELECT DISTINCT TenantId FROM Submissions.ProposalDeliveryProvider;
 INSERT INTO Submissions.ProposalDeliveryProvider
 	(ProposalDeliveryProviderId, TenantId, DeliveryMethodCode, ProviderCode, HandlerCode, DisplayName, EndpointUri, SenderAddress, SecretReference, ConfigurationJson, IsConfigured, IsActive, MaxAttempts, RetryDelaySeconds, CreatedDateUtc, CreatedByUserId, IsDeleted)
 SELECT NEWID(), tenant.TenantId, N'Email', N'TenantSmtp', N'Smtp', N'NetworkSolutions SMTP',
-	   N'smtp://mail.agencybinder.com:587', N'ams_admin@agencybinder.com', N'AMS_PROPOSAL_SMTP_PASSWORD',
+	   N'smtp://netsol-smtp-oxcs.hostingplatform.com:587', N'ams_admin@agencybinder.com', N'AMS_PROPOSAL_SMTP_PASSWORD',
 	   N'{"username":"ams_admin@agencybinder.com","enableSsl":"true"}', 1, 1, 5, 300, SYSUTCDATETIME(), @SeedUserId, 0
 FROM @Tenants tenant
 WHERE NOT EXISTS
@@ -27,12 +27,12 @@ WHERE NOT EXISTS
 UPDATE provider
 SET ProviderCode = CASE WHEN provider.ProviderCode IN (N'SMTP', N'TenantSmtp') THEN N'TenantSmtp' ELSE provider.ProviderCode END,
 	DisplayName = CASE WHEN provider.DisplayName IN (N'Email (SMTP)', N'Tenant SMTP') THEN N'NetworkSolutions SMTP' ELSE provider.DisplayName END,
-	EndpointUri = COALESCE(NULLIF(provider.EndpointUri, N''), N'smtp://mail.agencybinder.com:587'),
+	EndpointUri = CASE WHEN provider.EndpointUri IN (N'smtp://mail.agencybinder.com:587', N'mail.agencybinder.com') THEN N'smtp://netsol-smtp-oxcs.hostingplatform.com:587' ELSE COALESCE(NULLIF(provider.EndpointUri, N''), N'smtp://netsol-smtp-oxcs.hostingplatform.com:587') END,
 	SenderAddress = COALESCE(NULLIF(provider.SenderAddress, N''), N'ams_admin@agencybinder.com'),
 	SecretReference = COALESCE(NULLIF(provider.SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD'),
 	ConfigurationJson = COALESCE(NULLIF(provider.ConfigurationJson, N''), N'{"username":"ams_admin@agencybinder.com","enableSsl":"true"}'),
 	IsConfigured = CASE
-		WHEN COALESCE(NULLIF(provider.EndpointUri, N''), N'smtp://mail.agencybinder.com:587') IS NOT NULL
+		WHEN COALESCE(NULLIF(provider.EndpointUri, N''), N'smtp://netsol-smtp-oxcs.hostingplatform.com:587') IS NOT NULL
 		 AND COALESCE(NULLIF(provider.SenderAddress, N''), N'ams_admin@agencybinder.com') IS NOT NULL
 		 AND COALESCE(NULLIF(provider.SecretReference, N''), N'AMS_PROPOSAL_SMTP_PASSWORD') IS NOT NULL THEN 1
 		ELSE provider.IsConfigured

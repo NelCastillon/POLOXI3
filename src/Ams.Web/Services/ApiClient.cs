@@ -3192,6 +3192,26 @@ public sealed partial class ApiClient
         return await response.Content.ReadFromJsonAsync<ProposalDeliveryDispatchDto>(cancellationToken: cancellationToken);
     }
 
+    public async Task<ProposalDeliveryDispatchDto?> UpdateProposalDeliveryRecipientAsync(Guid dispatchId, UpdateProposalDeliveryRecipientRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/proposal-deliveries/{dispatchId}/recipient", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<ProposalDeliveryDispatchDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<ProposalDeliveryDispatchDto?> ResendProposalDeliveryAsync(Guid dispatchId, ResendProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/proposal-deliveries/{dispatchId}/resend", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<ProposalDeliveryDispatchDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task DeleteProposalDeliveryAsync(Guid dispatchId, Guid tenantId, string reason, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/submissions/proposal-deliveries/{dispatchId}?tenantId={tenantId}&reason={Uri.EscapeDataString(reason)}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<ProposalBindContinuationDto?> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<ProposalBindContinuationDto>($"api/submissions/proposals/{proposalId}/bind-continuation?tenantId={tenantId}", cancellationToken);
 

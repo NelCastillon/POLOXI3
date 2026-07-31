@@ -7,6 +7,7 @@ using System.Text.Json;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Worker.Automation;
 using Dapper;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,17 +18,20 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _configuration;
     private readonly WorkerOptions _options;
     private readonly ILogger<ProposalDeliveryWorkerService> _logger;
 
     public ProposalDeliveryWorkerService(
         IServiceProvider serviceProvider,
         IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
         IOptions<WorkerOptions> options,
         ILogger<ProposalDeliveryWorkerService> logger)
     {
         _serviceProvider = serviceProvider;
         _httpClientFactory = httpClientFactory;
+        _configuration = configuration;
         _options = options.Value;
         _logger = logger;
     }
@@ -35,6 +39,10 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("AMS proposal delivery worker started with {PollIntervalSeconds}s polling interval.", _options.ProposalDeliveryPollIntervalSeconds);
+        _logger.LogInformation("Proposal delivery SMTP local configuration: server={SmtpServer}, username={SmtpUsername}, passwordConfigured={PasswordConfigured}.",
+            _configuration["SmtpSettings:Server"] ?? "not configured",
+            _configuration["SmtpSettings:Username"] ?? "not configured",
+            !string.IsNullOrWhiteSpace(_configuration["SmtpSettings:Password"]));
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -121,7 +129,7 @@ SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.Submissi
        provider.EndpointUri, provider.SenderAddress, provider.SecretReference, provider.ConfigurationJson,
        provider.IsConfigured, provider.RetryDelaySeconds,
        proposal.Title, proposal.HtmlContent, proposal.PdfUrl, proposal.DocumentId,
-       submission.AccountId
+       submission.AccountId, submission.SubmissionNumber, account.AccountName
 FROM Submissions.ProposalDeliveryDispatch dispatch
 INNER JOIN Submissions.ProposalDeliveryProvider provider
   ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
@@ -129,6 +137,8 @@ INNER JOIN Submissions.Proposal proposal
   ON proposal.ProposalId = dispatch.ProposalId AND proposal.TenantId = dispatch.TenantId AND proposal.IsDeleted = 0
 INNER JOIN Submissions.Submission submission
   ON submission.SubmissionId = dispatch.SubmissionId AND submission.TenantId = dispatch.TenantId AND submission.IsDeleted = 0
+LEFT JOIN Client.Account account
+  ON account.AccountId = submission.AccountId AND account.TenantId = submission.TenantId AND account.IsDeleted = 0
 WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
 """;
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -169,11 +179,20 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         }
         catch (Exception ex)
         {
+            var deliveryError = ClassifyDeliveryException(dispatch, ex);
+            _logger.LogError(ex,
+                "Proposal delivery failed for dispatch {DispatchId}. Provider={ProviderName}; Handler={HandlerCode}; Recipient={Recipient}; ErrorCode={ErrorCode}; ErrorMessage={ErrorMessage}",
+                dispatch.ProposalDeliveryDispatchId,
+                dispatch.ProviderName,
+                dispatch.HandlerCode,
+                dispatch.Recipient,
+                deliveryError.ErrorCode,
+                deliveryError.ErrorMessage);
             await MarkFailedOrRetryAsync(connectionFactory, dispatch, ex, cancellationToken);
         }
     }
 
-    private static async Task<DeliveryResult> SendSmtpAsync(ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
+    private async Task<DeliveryResult> SendSmtpAsync(ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
     {
         if (!Uri.TryCreate(dispatch.EndpointUri, UriKind.Absolute, out var endpoint) || !string.Equals(endpoint.Scheme, "smtp", StringComparison.OrdinalIgnoreCase))
             return DeliveryResult.ConfigurationRequired("SMTP_ENDPOINT_REQUIRED", "SMTP delivery requires an smtp:// endpoint URI.");
@@ -183,15 +202,19 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         var settings = ParseConfiguration(dispatch.ConfigurationJson);
         settings.TryGetValue("username", out var username);
         var password = ResolveSecret(dispatch.SecretReference);
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            password = _configuration["SmtpSettings:Password"];
+        }
         if (!string.IsNullOrWhiteSpace(username) && string.IsNullOrWhiteSpace(password))
             return DeliveryResult.ConfigurationRequired("SMTP_SECRET_REQUIRED", "SMTP authentication requires the configured secret reference.");
 
         using var message = new MailMessage
         {
             From = new MailAddress(dispatch.SenderAddress),
-            Subject = dispatch.Title,
-            Body = dispatch.HtmlContent ?? dispatch.Title,
-            IsBodyHtml = !string.IsNullOrWhiteSpace(dispatch.HtmlContent)
+            Subject = BuildEmailSubject(dispatch),
+            Body = BuildEmailHtml(dispatch),
+            IsBodyHtml = true
         };
         message.To.Add(new MailAddress(dispatch.Recipient));
         message.Headers.Add("X-AMS-Proposal-Id", dispatch.ProposalId.ToString());
@@ -203,7 +226,32 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         };
         if (!string.IsNullOrWhiteSpace(username)) client.Credentials = new NetworkCredential(username, password);
 
-        await client.SendMailAsync(message, cancellationToken);
+        _logger.LogInformation("Sending proposal delivery SMTP message. DispatchId={DispatchId}; Host={Host}; Port={Port}; EnableSsl={EnableSsl}; Username={Username}; Sender={Sender}; Recipient={Recipient}",
+            dispatch.ProposalDeliveryDispatchId,
+            endpoint.Host,
+            endpoint.Port > 0 ? endpoint.Port : 25,
+            client.EnableSsl,
+            string.IsNullOrWhiteSpace(username) ? "not configured" : username,
+            dispatch.SenderAddress,
+            dispatch.Recipient);
+
+        try
+        {
+            await client.SendMailAsync(message, cancellationToken);
+        }
+        catch (SmtpException ex)
+        {
+            _logger.LogError(ex,
+                "SMTP send failed. DispatchId={DispatchId}; Host={Host}; Port={Port}; Username={Username}; SmtpStatusCode={SmtpStatusCode}; Message={Message}",
+                dispatch.ProposalDeliveryDispatchId,
+                endpoint.Host,
+                endpoint.Port > 0 ? endpoint.Port : 25,
+                string.IsNullOrWhiteSpace(username) ? "not configured" : username,
+                ex.StatusCode,
+                ex.Message);
+            throw;
+        }
+
         return DeliveryResult.Sent($"smtp:{dispatch.ProposalDeliveryDispatchId}");
     }
 
@@ -374,6 +422,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
     private static async Task MarkFailedOrRetryAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, Exception exception, CancellationToken cancellationToken)
     {
         var retry = dispatch.AttemptCount < dispatch.MaxAttempts;
+        var deliveryError = ClassifyDeliveryException(dispatch, exception);
         const string sql = """
 UPDATE Submissions.ProposalDeliveryDispatch
 SET StatusCode = @StatusCode,
@@ -396,9 +445,153 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
             dispatch.ProposalId,
             StatusCode = retry ? "Queued" : "Failed",
             NextAttemptDateUtc = retry ? DateTime.UtcNow.AddSeconds(dispatch.RetryDelaySeconds) : (DateTime?)null,
-            ErrorCode = exception is HttpRequestException http && http.StatusCode.HasValue ? $"HTTP_{(int)http.StatusCode.Value}" : exception.GetType().Name,
-            ErrorMessage = exception.Message.Length > 2000 ? exception.Message[..2000] : exception.Message
+            deliveryError.ErrorCode,
+            ErrorMessage = deliveryError.ErrorMessage.Length > 2000 ? deliveryError.ErrorMessage[..2000] : deliveryError.ErrorMessage
         }, cancellationToken: cancellationToken));
+    }
+
+    private static (string ErrorCode, string ErrorMessage) ClassifyDeliveryException(ProposalDeliveryWorkItem dispatch, Exception exception)
+    {
+        if (exception is HttpRequestException http && http.StatusCode.HasValue)
+        {
+            return ($"HTTP_{(int)http.StatusCode.Value}", exception.Message);
+        }
+
+        if (dispatch.HandlerCode.Equals("Smtp", StringComparison.OrdinalIgnoreCase) || exception is SmtpException)
+        {
+            var fullMessage = exception.ToString();
+            if (ContainsAny(fullMessage, "authentication", "authenticated", "password", "credential", "5.7", "username", "not accepted", "logon", "login"))
+            {
+                return ("SMTP_AUTH_FAILED", "SMTP authentication failed. The configured username/password was rejected by the SMTP server. Verify the NetworkSolutions password in Ams.Worker appsettings.Development.json SmtpSettings:Password, user-secrets, or the AMS_PROPOSAL_SMTP_PASSWORD environment variable, then restart Ams.Worker and retry delivery.");
+            }
+
+            if (ContainsAny(fullMessage, "RemoteCertificateNameMismatch", "certificate name mismatch", "remote certificate is invalid"))
+            {
+                return ("SMTP_CERTIFICATE_NAME_MISMATCH", "SMTP TLS certificate name mismatch. The endpoint host does not match the certificate returned by the SMTP server. Do not use mail.agencybinder.com if it is only a DNS alias; set the Proposal Delivery Provider Endpoint URI to smtp://netsol-smtp-oxcs.hostingplatform.com:587, then retry delivery.");
+            }
+
+            if (ContainsAny(fullMessage, "secure connection", "ssl", "tls", "starttls", "certificate"))
+            {
+                return ("SMTP_TLS_FAILED", "SMTP TLS/SSL negotiation failed. Verify the endpoint port and enableSsl provider JSON. For NetworkSolutions use port 587 with {\"enableSsl\":\"true\"}.");
+            }
+
+            if (ContainsAny(fullMessage, "no such host", "actively refused", "timed out", "timeout", "unable to connect", "connection"))
+            {
+                return ("SMTP_CONNECTION_FAILED", "SMTP connection failed. Verify the Endpoint URI host and port are reachable from Ams.Worker. For Network Solutions use smtp://netsol-smtp-oxcs.hostingplatform.com:587.");
+            }
+
+            if (ContainsAny(fullMessage, "mailbox unavailable", "recipient", "5.1.1", "user unknown", "invalid mailbox"))
+            {
+                return ("SMTP_RECIPIENT_REJECTED", "SMTP recipient was rejected by the mail server. Verify the proposal recipient email address, then edit the recipient or resend the proposal.");
+            }
+
+            return ("SMTP_SEND_FAILED", $"SMTP send failed. {exception.GetBaseException().Message}");
+        }
+
+        return (exception.GetType().Name, exception.Message);
+    }
+
+    private static bool ContainsAny(string value, params string[] terms)
+        => terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    private static string BuildEmailSubject(ProposalDeliveryWorkItem dispatch)
+    {
+        var accountName = string.IsNullOrWhiteSpace(dispatch.AccountName) ? null : dispatch.AccountName.Trim();
+        return accountName is null
+            ? $"Insurance Proposal | {dispatch.Title}"
+            : $"Insurance Proposal for {accountName} | {dispatch.Title}";
+    }
+
+    private static string BuildEmailHtml(ProposalDeliveryWorkItem dispatch)
+    {
+        var title = WebUtility.HtmlEncode(dispatch.Title);
+        var accountName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AccountName) ? "Valued Client" : dispatch.AccountName);
+        var submissionNumber = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.SubmissionNumber) ? dispatch.SubmissionId.ToString("N")[..8].ToUpperInvariant() : dispatch.SubmissionNumber);
+        var proposalContent = ExtractBodyContent(dispatch.HtmlContent);
+
+        return $$"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{title}}</title>
+  <style>
+    .proposal-content h1 { display:none!important; }
+    .proposal-content p { margin:0 0 16px;color:#475569;font-size:15px;line-height:1.65; }
+    .proposal-content table { width:100%;border-collapse:collapse;margin-top:16px;font-size:13px; }
+    .proposal-content th { padding:11px 10px;background:#123b67;color:#fff;text-align:left;font-size:11px;letter-spacing:.35px;text-transform:uppercase; }
+    .proposal-content td { padding:11px 10px;border-bottom:1px solid #e2e8f0;color:#334155;vertical-align:top; }
+    .proposal-content tr:nth-child(even) td { background:#f8fafc; }
+    @media only screen and (max-width:620px) {
+      .proposal-content table { display:block;overflow-x:auto;white-space:nowrap; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#eef3f8;font-family:Arial,'Helvetica Neue',sans-serif;color:#172033;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#eef3f8;">
+    <tr>
+      <td align="center" style="padding:28px 12px;">
+        <table role="presentation" width="680" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:680px;background:#ffffff;border:1px solid #dbe5f0;border-radius:18px;overflow:hidden;box-shadow:0 12px 36px rgba(15,23,42,.10);">
+          <tr>
+            <td style="padding:26px 30px;background:#123b67;background-image:linear-gradient(135deg,#123b67,#176b87);color:#ffffff;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                <tr>
+                  <td>
+                    <div style="font-size:12px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#bfe7f5;">AgencyBinder</div>
+                    <div style="margin-top:7px;font-size:27px;line-height:1.2;font-weight:800;">Your Insurance Proposal</div>
+                    <div style="margin-top:8px;font-size:14px;line-height:1.5;color:#e4f4fa;">Prepared securely for {{accountName}}</div>
+                  </td>
+                  <td align="right" valign="top" style="font-size:12px;color:#d9edf6;white-space:nowrap;">Submission {{submissionNumber}}<br>Proposal v{{dispatch.ProposalVersionNumber}}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 30px 18px;">
+              <div style="font-size:14px;line-height:1.65;color:#475569;">Hello,</div>
+              <div style="margin-top:8px;font-size:16px;line-height:1.65;color:#334155;">Please review the insurance proposal prepared for <strong style="color:#0f172a;">{{accountName}}</strong>. The proposal details and available quote options are summarized below.</div>
+              <div style="margin-top:22px;padding:18px 20px;border:1px solid #dbeafe;border-left:5px solid #2563eb;border-radius:12px;background:#f8fbff;">
+                <div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#2563eb;">Proposal</div>
+                <div style="margin-top:5px;font-size:21px;line-height:1.35;font-weight:800;color:#0f172a;">{{title}}</div>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 30px 26px;">
+              <div class="proposal-content" style="font-size:15px;line-height:1.6;color:#334155;">
+                {{proposalContent}}
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 30px;border-top:1px solid #e2e8f0;background:#f8fafc;">
+              <div style="font-size:13px;line-height:1.6;color:#475569;"><strong style="color:#0f172a;">Questions?</strong> Reply to this email and an AgencyBinder representative will assist you.</div>
+              <div style="margin-top:12px;font-size:11px;line-height:1.55;color:#7c8a9d;">This proposal is provided for review and does not bind or alter coverage. Coverage is effective only after documented authorization and carrier confirmation.</div>
+              <div style="margin-top:14px;font-size:11px;color:#94a3b8;">AgencyBinder · Professional insurance workflow and client service</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+""";
+    }
+
+    private static string ExtractBodyContent(string? htmlContent)
+    {
+        if (string.IsNullOrWhiteSpace(htmlContent)) return "<p style=\"margin:0;color:#475569;\">Your proposal package is ready for review.</p>";
+
+        var bodyStart = htmlContent.IndexOf("<body", StringComparison.OrdinalIgnoreCase);
+        if (bodyStart < 0) return htmlContent;
+
+        var contentStart = htmlContent.IndexOf('>', bodyStart);
+        if (contentStart < 0) return htmlContent;
+
+        var bodyEnd = htmlContent.LastIndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        return bodyEnd > contentStart ? htmlContent[(contentStart + 1)..bodyEnd] : htmlContent[(contentStart + 1)..];
     }
 
     private static Dictionary<string, string> ParseConfiguration(string? configurationJson)
@@ -408,8 +601,30 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         return document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
     }
 
-    private static string? ResolveSecret(string? secretReference)
-        => string.IsNullOrWhiteSpace(secretReference) ? null : Environment.GetEnvironmentVariable(secretReference);
+    private string? ResolveSecret(string? secretReference)
+    {
+        if (string.IsNullOrWhiteSpace(secretReference)) return null;
+        secretReference = secretReference.Trim();
+
+        var environmentValue = Environment.GetEnvironmentVariable(secretReference);
+        if (!string.IsNullOrWhiteSpace(environmentValue)) return environmentValue;
+
+        var configurationValue = _configuration[secretReference];
+        if (!string.IsNullOrWhiteSpace(configurationValue)) return configurationValue;
+
+        var secretsValue = _configuration[$"Secrets:{secretReference}"];
+        if (!string.IsNullOrWhiteSpace(secretsValue)) return secretsValue;
+
+        var proposalDeliverySecretsValue = _configuration[$"ProposalDelivery:Secrets:{secretReference}"];
+        if (!string.IsNullOrWhiteSpace(proposalDeliverySecretsValue)) return proposalDeliverySecretsValue;
+
+        if (string.Equals(secretReference, "AMS_PROPOSAL_SMTP_PASSWORD", StringComparison.OrdinalIgnoreCase))
+        {
+            return _configuration["SmtpSettings:Password"];
+        }
+
+        return null;
+    }
 
     private sealed class ProposalDeliveryWorkItem
     {
@@ -434,6 +649,8 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         public bool IsConfigured { get; set; }
         public int RetryDelaySeconds { get; set; }
         public string Title { get; set; } = string.Empty;
+        public string? AccountName { get; set; }
+        public string? SubmissionNumber { get; set; }
         public string? HtmlContent { get; set; }
         public string? PdfUrl { get; set; }
         public Guid? DocumentId { get; set; }
