@@ -5769,7 +5769,7 @@ SELECT @SubmissionId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var submissionId = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { ProposalId = proposalId, request.TenantId, request.PresentationNotes, request.PresentedByUserId }, cancellationToken: cancellationToken));
-        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Presented", "Proposal Presented", request.PresentationNotes, "Proposal", proposalId, request.PresentedByUserId, cancellationToken);
+        await RecordOpportunityWorkflowAsync(cn, submissionId, request.TenantId, "Proposal", "Proposal Presented", "Proposal Presented", request.PresentationNotes ?? string.Empty, "Proposal", proposalId, request.PresentedByUserId, cancellationToken);
     }
 
     public async Task<Guid> ProcessProposalProviderCallbackAsync(ProposalProviderCallbackRequest request, CancellationToken cancellationToken = default)

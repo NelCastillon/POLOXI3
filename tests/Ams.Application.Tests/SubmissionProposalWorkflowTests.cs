@@ -422,6 +422,10 @@ public sealed class SubmissionProposalWorkflowTests
         }
         public Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalWorkflowOptionDto>>([]);
         public Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalDeliveryDispatchDto>>([]);
+        public Task<IReadOnlyList<ProposalDeliveryMonitorDto>> GetProposalDeliveryMonitorAsync(Guid tenantId, string? status, string? searchTerm, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ProposalDeliveryMonitorDto>>([]);
+        public Task<ProposalDeliveryDispatchDto> UpdateProposalDeliveryRecipientAsync(Guid dispatchId, UpdateProposalDeliveryRecipientRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new ProposalDeliveryDispatchDto { ProposalDeliveryDispatchId = dispatchId, TenantId = request.TenantId, ProposalId = ProposalId, StatusCode = "Queued" });
+        public Task<ProposalDeliveryDispatchDto> ResendProposalDeliveryAsync(Guid dispatchId, ResendProposalDeliveryRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new ProposalDeliveryDispatchDto { ProposalDeliveryDispatchId = dispatchId, TenantId = request.TenantId, ProposalId = ProposalId, StatusCode = "Queued" });
+        public Task DeleteProposalDeliveryAsync(Guid dispatchId, DeleteProposalDeliveryRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
         {
             LastRetryDispatchId = dispatchId;
