@@ -107,10 +107,14 @@ public sealed class ProposalWorkflowDto
     public string Title { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public string GovernanceStatusCode { get; set; } = string.Empty;
+    public int VersionNumber { get; set; }
     public string? DeliveryMethod { get; set; }
     public string? Recipient { get; set; }
     public string? DeliveryStatus { get; set; }
     public Guid? LastDeliveryDispatchId { get; set; }
+    public int? LatestDeliveryVersionNumber { get; set; }
+    public string? LatestDeliveryStatus { get; set; }
+    public DateTime? LatestDeliveryDateUtc { get; set; }
     public DateTime? SentDateUtc { get; set; }
     public DateTime? PresentedDateUtc { get; set; }
     public DateTime? ApprovedDateUtc { get; set; }

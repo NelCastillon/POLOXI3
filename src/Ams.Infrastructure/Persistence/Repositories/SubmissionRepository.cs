@@ -4986,10 +4986,14 @@ SELECT p.ProposalId,
        p.TenantId,
        p.Title,
        p.Status, p.GovernanceStatusCode,
+       p.VersionNumber,
        p.DeliveryMethod,
        p.Recipient,
        p.DeliveryStatus,
        p.LastDeliveryDispatchId,
+       latestDelivery.ProposalVersionNumber AS LatestDeliveryVersionNumber,
+       latestDelivery.StatusCode AS LatestDeliveryStatus,
+       COALESCE(latestDelivery.ModifiedDateUtc, latestDelivery.CompletedDateUtc, latestDelivery.CreatedDateUtc) AS LatestDeliveryDateUtc,
        p.SentDateUtc, p.PresentedDateUtc, p.ApprovedDateUtc, p.DeliveryConfirmedDateUtc, p.CurrentReviewId,
        p.ClientDecision,
        p.DecisionNotes,
@@ -4998,8 +5002,23 @@ SELECT p.ProposalId,
        d.FileName AS DocumentFileName
 FROM Submissions.Proposal p
 LEFT JOIN DMS.Document d ON d.DocumentId = p.DocumentId AND d.IsDeleted = 0
+ OUTER APPLY
+ (
+     SELECT TOP (1) dispatch.ProposalVersionNumber,
+            dispatch.StatusCode,
+            dispatch.CompletedDateUtc,
+            dispatch.CreatedDateUtc,
+            dispatch.ModifiedDateUtc
+     FROM Submissions.ProposalDeliveryDispatch dispatch
+     WHERE dispatch.ProposalId = p.ProposalId
+       AND dispatch.TenantId = p.TenantId
+       AND dispatch.ProposalVersionNumber = p.VersionNumber
+       AND dispatch.IsDeleted = 0
+     ORDER BY COALESCE(dispatch.ModifiedDateUtc, dispatch.CreatedDateUtc) DESC,
+              dispatch.CreatedDateUtc DESC
+ ) latestDelivery
 WHERE p.SubmissionId = @SubmissionId AND p.TenantId = @TenantId AND p.IsDeleted = 0
-ORDER BY p.CreatedDateUtc DESC;";
+ ORDER BY COALESCE(p.ModifiedDateUtc, p.CreatedDateUtc) DESC, p.VersionNumber DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await EnsureEnterpriseWorkflowSchemaAsync(cn, tenantId, cancellationToken);
         return (await cn.QueryAsync<ProposalWorkflowDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();

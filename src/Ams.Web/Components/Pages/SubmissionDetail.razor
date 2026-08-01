@@ -92,11 +92,41 @@ else
         <section class="sdd-hero">
             <div class="sdd-hero__content">
                 <div class="sdd-hero__eyebrow"><i class="bi bi-send-check" aria-hidden="true"></i> Enterprise submission detail</div>
-                <h1>@_submission.SubmissionNumber</h1>
-                <p>@_submission.OpportunityName for <span class="sdd-hero-account-text">@_submission.AccountName</span>. Monitor market distribution, quote quality, underwriting readiness, and bind workflow from one command center.</p>
+                <div class="sdd-hero__title-row">
+                    <h1>@_submission.SubmissionNumber</h1>
+                    <strong class="sdd-status sdd-status--hero @StatusClass(_submission.Status)">@_submission.Status</strong>
+                    @if (LatestProposal is not null)
+                    {
+                        <div class="sdd-header-status-chain" aria-label="Latest proposal workflow status">
+                            <i class="bi bi-chevron-right sdd-header-status-chain__arrow" aria-hidden="true"></i>
+                            <button type="button" class="sdd-header-status-node sdd-header-status-node--proposal" title="Open proposal workflow" @onclick="OpenProposalWorkflow">
+                                <i class="bi bi-file-earmark-richtext" aria-hidden="true"></i>
+                                <span><small>Latest proposal</small><strong>v@LatestProposal.VersionNumber · @Safe(LatestProposal.GovernanceStatusCode, LatestProposal.Status)</strong></span>
+                            </button>
+                            <i class="bi bi-chevron-right sdd-header-status-chain__arrow" aria-hidden="true"></i>
+                            <div class="sdd-header-status-node @DeliveryStatusClass(LatestProposalDeliveryStatus)" title="@LatestProposalDeliveryTitle">
+                                <i class="bi bi-send-check" aria-hidden="true"></i>
+                                <span><small>Delivery · v@(LatestProposal.LatestDeliveryVersionNumber ?? LatestProposal.VersionNumber)</small><strong>@LatestProposalDeliveryStatus</strong></span>
+                            </div>
+                        </div>
+                    }
+                    <div class="sdd-workflow-guidance @(CurrentWorkflowGuidance.IsWaiting ? "sdd-workflow-guidance--waiting" : "sdd-workflow-guidance--action")">
+                        <i class="bi @CurrentWorkflowGuidance.Icon" aria-hidden="true"></i>
+                        <div>
+                            <span><em class="sdd-ai-indicator" title="AI-assisted workflow guidance"><i class="bi bi-stars" aria-hidden="true"></i> AI</em> @(CurrentWorkflowGuidance.IsWaiting ? "Waiting" : "Action needed")</span>
+                            <strong>@CurrentWorkflowGuidance.Message</strong>
+                            <small>Next: @CurrentWorkflowGuidance.NextAction</small>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(CurrentWorkflowGuidance.ActionCode))
+                        {
+                            <button type="button" @onclick="() => ExecuteWorkflowGuidance(CurrentWorkflowGuidance.ActionCode!)">@CurrentWorkflowGuidance.ActionLabel <i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+                        }
+                    </div>
+                </div>
+                <p class="sdd-hero__summary" title="Monitor market distribution, quote quality, underwriting readiness, and bind workflow from one command center.">Monitor market distribution, quote quality, underwriting readiness, and bind workflow from one command center.</p>
                 <div class="sdd-hero__meta">
                     <span class="sdd-hero-account-pill"><i class="bi bi-building" aria-hidden="true"></i>@_submission.AccountName</span>
-                    <span><i class="bi bi-layers" aria-hidden="true"></i>@_submission.LineOfBusiness</span>
+                    <span><i class="bi bi-layers" aria-hidden="true"></i>@SubmissionLinesDisplay</span>
                     <span><i class="bi bi-flag" aria-hidden="true"></i>@_submission.Priority</span>
                     <span><i class="bi bi-calendar-event" aria-hidden="true"></i>@_submission.EffectiveDate.ToString("MMM d, yyyy")</span>
                     <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@PremiumDisplay</span>
@@ -1431,6 +1461,18 @@ else
 
     TabDef CurrentTab => _tabs[_activeTab];
     string PremiumDisplay => _submission?.TargetPremium is > 0 ? _submission.TargetPremium.Value.ToString("C0") : "Not set";
+    string SubmissionLinesDisplay
+    {
+        get
+        {
+            var lines = _lines
+                .Select(line => line.LineOfBusiness)
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return lines.Count > 0 ? string.Join(" · ", lines) : Safe(_submission?.LineOfBusiness, "Line not set");
+        }
+    }
     int DaysToEffective => _submission is null ? 0 : (int)Math.Ceiling((_submission.EffectiveDate.Date - DateTime.Today).TotalDays);
     decimal LowestQuotePremium => _quotes.Any() ? _quotes.Min(q => q.AnnualPremium) : 0;
     int ReadinessPercent => _readiness?.ReadinessScore ?? 100;
@@ -1447,6 +1489,16 @@ else
     IEnumerable<QuoteComparisonDto> ProposalReadyQuotes => _quotes.Where(q => q.IsProposalReady);
     bool CanGenerateProposal => ProposalReadyQuotes.Any();
     string GenerateProposalTitle => CanGenerateProposal ? "Generate proposal from ready approved quotes." : "At least one non-expired reviewed quote must be approved for presentation with premium, coverage, deductible, carrier, and document data.";
+    ProposalWorkflowDto? LatestProposal => _proposals.FirstOrDefault();
+    ProposalWorkflowDto? ClientAcceptanceProposal => _proposals.FirstOrDefault(proposal =>
+        string.Equals(proposal.GovernanceStatusCode, "Presented", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(proposal.Status, "Presented", StringComparison.OrdinalIgnoreCase)
+        || proposal.PresentedDateUtc.HasValue) ?? LatestProposal;
+    string LatestProposalDeliveryStatus => Safe(LatestProposal?.LatestDeliveryStatus, LatestProposal?.DeliveryStatus ?? "Not sent");
+    string LatestProposalDeliveryTitle => LatestProposal?.LatestDeliveryDateUtc is DateTime deliveryDate
+        ? $"Latest delivery status updated {deliveryDate.ToLocalTime():MMM d, yyyy h:mm tt}"
+        : "No delivery has been recorded for the latest proposal version.";
+    WorkflowGuidance CurrentWorkflowGuidance => BuildWorkflowGuidance();
     IReadOnlyList<SubmissionLineDto> QuoteRequestCoverageLines => _lines.Count > 0 ? _lines : [];
     IEnumerable<SubmissionLineDto> SelectedQuoteRequestLines => QuoteRequestCoverageLines.Where(l => _selectedQuoteRequestLineIds.Contains(l.SubmissionLineId));
     decimal QuoteRequestPackagePremium => SelectedQuoteRequestLines.Any() ? SelectedQuoteRequestLines.Sum(l => l.TargetPremium) : _submission?.TargetPremium ?? 0;
@@ -1670,6 +1722,88 @@ else
     RenderFragment KpiCard(string key, string label, string value, string description, string icon, string color, int tabIndex) => @<button type="button" class="@KpiClass(key, color)" title="@description" @onclick="() => SetKpi(key, tabIndex)"><span><i class="bi @icon" aria-hidden="true"></i>@label</span><strong>@value</strong><small>@description</small></button>;
     RenderFragment StatusBadge(string status) => @<strong class="sdd-status @StatusClass(status)">@status</strong>;
     RenderFragment MarketStatusBadge(string status) => @<strong class="sdd-market-status @MarketStatusClass(status)">@status</strong>;
+
+    WorkflowGuidance BuildWorkflowGuidance()
+    {
+        if (_submission is null)
+            return new("Workflow data is loading.", "Review the submission", "bi-hourglass-split", true);
+
+        var status = _submission.Status;
+        var presentedProposal = _proposals
+            .Where(proposal => string.Equals(proposal.Status, "Presented", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(proposal.GovernanceStatusCode, "Presented", StringComparison.OrdinalIgnoreCase)
+                || proposal.PresentedDateUtc.HasValue)
+            .OrderByDescending(proposal => proposal.PresentedDateUtc)
+            .FirstOrDefault();
+        var acceptedProposal = _proposals
+            .Where(proposal => string.Equals(proposal.ClientDecision, "Accepted", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(proposal => proposal.DecisionDateUtc)
+            .FirstOrDefault();
+        var activeBind = _bindTransactions
+            .OrderByDescending(bind => bind.RequestedDateUtc)
+            .FirstOrDefault(bind => bind.PolicyId is null
+                && !string.Equals(bind.BindStatusCode, "Declined", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(bind.BindStatusCode, "Withdrawn", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(bind.BindStatusCode, "Expired", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(bind.BindStatusCode, "Failed", StringComparison.OrdinalIgnoreCase));
+
+        if (string.Equals(status, "Bound", StringComparison.OrdinalIgnoreCase) || _bindTransactions.Any(bind => bind.PolicyId.HasValue))
+            return new("No submission action is required; coverage is bound.", "Proceed to policy servicing", "bi-shield-check", true);
+
+        if (status is "Declined" or "Withdrawn" or "Lost" or "Cancelled" or "Closed")
+            return new("This submission workflow is closed.", "Copy or remarket when appropriate", "bi-slash-circle", true, "copy", "Copy / remarket");
+
+        if (activeBind is not null)
+            return new($"Waiting for carrier confirmation ({activeBind.BindStatusName}).", "Confirm the bind, then create or service the policy", "bi-hourglass-split", true, "quotes", "View bind");
+
+        if (acceptedProposal is not null || string.Equals(status, "Customer Accepted", StringComparison.OrdinalIgnoreCase))
+            return new("Client acceptance is recorded.", "Request bind from the selected quote", "bi-person-check", false, "policy", "Request bind");
+
+        if ((presentedProposal is not null && string.IsNullOrWhiteSpace(presentedProposal.ClientDecision))
+            || string.Equals(status, "Presented", StringComparison.OrdinalIgnoreCase))
+            return new("Waiting for client acceptance to proceed.", "Record the client decision, then request bind", "bi-hourglass-split", true, "client-acceptance", "Client acceptance");
+
+        if (_readiness?.IsReadyForMarketing == false)
+            return new("Complete the outstanding underwriting requirements.", "Select a market after readiness is complete", "bi-clipboard2-check", false, "readiness", "View readiness");
+
+        if (_markets.Count == 0)
+            return new("Select at least one target market.", "Submit the completed package to market", "bi-bank", false, "markets", "Select market");
+
+        if (_markets.All(market => !market.SubmittedDateUtc.HasValue))
+            return new("Submit the package to a selected market.", "Request pricing and coverage terms", "bi-send", false, "markets", "Submit to market");
+
+        if (_quotes.Count == 0 && _markets.Any(market => market.LatestQuoteRequestId.HasValue))
+            return new("Waiting for a carrier quote response.", "Review and approve usable quote terms", "bi-hourglass-split", true, "markets", "Track requests");
+
+        if (_quotes.Count == 0)
+            return new("Request a quote from a submitted market.", "Review returned pricing and coverage", "bi-journal-plus", false, "quote", "Request quote");
+
+        if (!CanGenerateProposal)
+            return new("Review a quote and complete its proposal-readiness items.", "Generate and present the client proposal", "bi-journal-check", false, "quotes", "Review quotes");
+
+        if (_proposals.Count == 0)
+            return new("Generate a proposal from an approved quote.", "Present the proposal for client acceptance", "bi-file-earmark-richtext", false, "proposal", "Generate proposal");
+
+        return new("Continue the proposal workflow.", "Present the proposal and record the client decision", "bi-envelope-check", false, "proposal", "Open proposal");
+    }
+
+    void ExecuteWorkflowGuidance(string actionCode)
+    {
+        switch (actionCode)
+        {
+            case "readiness": SetTab(3); break;
+            case "markets": GoToMarketsForSubmit(); break;
+            case "quotes": SetTab(2); break;
+            case "quote": OpenActionDialog("quote"); break;
+            case "proposal": OpenProposalWorkflow(); break;
+            case "client-acceptance":
+                if (ClientAcceptanceProposal is not null)
+                    Nav.NavigateTo($"/submissions/{SubmissionId}/client-acceptance?proposalId={ClientAcceptanceProposal.ProposalId}");
+                break;
+            case "policy": OpenActionDialog("policy"); break;
+            case "copy": OpenActionDialog("copy"); break;
+        }
+    }
 
     void OpenCoverageLineDetail(SubmissionLineDto line) => _selectedCoverageLine = line;
     void CloseCoverageLineDetail() => _selectedCoverageLine = null;
@@ -2982,10 +3116,13 @@ else
 
 
     static string StatusClass(string status) => $"sdd-status--{status.ToLowerInvariant().Replace(" ", "-")}";
+    static string DeliveryStatusClass(string status) => $"sdd-header-status-node--delivery sdd-header-status-node--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string MarketStatusClass(string status) => $"sdd-market-status--{status.ToLowerInvariant().Replace(" ", "-")}";
     static string ActivityIcon(string type) => type switch { "SubmitToMarket" => "bi-send", "RequestQuote" => "bi-journal-text", "Decline" => "bi-x-circle", "Note" => "bi-sticky", "FollowUpTask" => "bi-list-check", "DocumentAttached" => "bi-file-earmark", "Assign" => "bi-person-check", _ => "bi-dot" };
     static string CommIcon(string type) => type switch { "Email" => "bi-envelope", "Call" => "bi-telephone", "Note" => "bi-sticky", "SMS" => "bi-chat-text", _ => "bi-chat" };
     static string DocIcon(string name) => System.IO.Path.GetExtension(name).ToLowerInvariant() switch { ".pdf" => "bi-file-earmark-pdf", ".doc" or ".docx" => "bi-file-earmark-word", ".xls" or ".xlsx" => "bi-file-earmark-spreadsheet", _ => "bi-file-earmark" };
+
+    sealed record WorkflowGuidance(string Message, string NextAction, string Icon, bool IsWaiting, string? ActionCode = null, string? ActionLabel = null);
 
     sealed class DocumentMetadataForm
     {
