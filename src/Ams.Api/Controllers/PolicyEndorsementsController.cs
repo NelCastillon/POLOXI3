@@ -35,12 +35,94 @@ public sealed class PolicyEndorsementsController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("{id:guid}/workflow")]
+    public async Task<IActionResult> GetWorkflowDetail(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
+        var item = await _service.GetWorkflowDetailAsync(tenantId, id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet("policies/{policyId:guid}/workspace")]
+    public async Task<IActionResult> GetPolicyWorkspace(Guid policyId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
+        var item = await _service.GetPolicyWorkspaceAsync(tenantId, policyId, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreatePolicyEndorsementRequest request, CancellationToken cancellationToken)
     {
         if (!AuthenticatedRequestContext.CanManagePolicy(User, request.TenantId)) return Forbid();
         request.CreatedByUserId = AuthenticatedRequestContext.GetUserId(User);
         return Ok(new { Id = await _service.CreateAsync(request, cancellationToken) });
+    }
+
+    [HttpPost("transactions")]
+    public async Task<IActionResult> CreateTransaction([FromBody] CreatePolicyEndorsementTransactionRequest request, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_CREATE")) return Forbid();
+        var actorUserId = AuthenticatedRequestContext.GetUserId(User);
+        if (!actorUserId.HasValue) return Forbid();
+
+        request.CreatedByUserId = actorUserId;
+        request.AllowBackdate = AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_BACKDATE");
+        var id = await _service.CreateTransactionAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetWorkflowDetail), new { id, tenantId = request.TenantId }, new { Id = id });
+    }
+
+    [HttpPut("{id:guid}/draft")]
+    public async Task<IActionResult> SaveDraft(Guid id, [FromBody] SavePolicyEndorsementDraftRequest request, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_EDIT_DRAFT")) return Forbid();
+        var actorUserId = AuthenticatedRequestContext.GetUserId(User);
+        if (!actorUserId.HasValue) return Forbid();
+
+        request.ModifiedByUserId = actorUserId;
+        request.AllowBackdate = AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_BACKDATE");
+        await _service.SaveDraftAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/transitions")]
+    public async Task<IActionResult> Transition(Guid id, [FromBody] TransitionPolicyEndorsementRequest request, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.CanAccessPolicyEndorsementWorkflow(User, request.TenantId)) return Forbid();
+        var actorUserId = AuthenticatedRequestContext.GetUserId(User);
+        if (!actorUserId.HasValue) return Forbid();
+
+        request.ActorUserId = actorUserId;
+        request.GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User);
+        await _service.TransitionAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/approvals/{approvalId:guid}/decision")]
+    public async Task<IActionResult> DecideApproval(Guid id, Guid approvalId, [FromBody] DecidePolicyEndorsementApprovalRequest request, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_APPROVE")) return Forbid();
+        var actorUserId = AuthenticatedRequestContext.GetUserId(User);
+        if (!actorUserId.HasValue) return Forbid();
+
+        request.ActorUserId = actorUserId;
+        request.GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User);
+        await _service.DecideApprovalAsync(id, approvalId, request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/reversal")]
+    public async Task<IActionResult> Reverse(Guid id, [FromBody] ReversePolicyEndorsementRequest request, CancellationToken cancellationToken)
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_REVERSE")) return Forbid();
+        var actorUserId = AuthenticatedRequestContext.GetUserId(User);
+        if (!actorUserId.HasValue) return Forbid();
+
+        request.ActorUserId = actorUserId;
+        request.GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User);
+        request.AllowBackdate = AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, request.TenantId, "ENDORSEMENT_BACKDATE");
+        var reversalId = await _service.ReverseAsync(id, request, cancellationToken);
+        return CreatedAtAction(nameof(GetWorkflowDetail), new { id = reversalId, tenantId = request.TenantId }, new { Id = reversalId });
     }
 
     [HttpPut("{id:guid}")]

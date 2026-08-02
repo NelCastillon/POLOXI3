@@ -12,6 +12,28 @@ public static class AuthenticatedRequestContext
         => HasTenantAccess(user, tenantId)
             && HasAnyPermission(user, "POLICY_MANAGE", "POLICY_EDIT");
 
+    public static bool HasPolicyEndorsementPermission(ClaimsPrincipal user, Guid tenantId, params string[] permissions)
+        => HasTenantAccess(user, tenantId)
+            && HasAnyPermission(user, [.. permissions, "ENDORSEMENT_MANAGE"]);
+
+    public static bool CanAccessPolicyEndorsementWorkflow(ClaimsPrincipal user, Guid tenantId)
+        => HasTenantAccess(user, tenantId)
+            && GetGrantedPermissions(user).Any(permission =>
+                permission == "NAV_ALL" || permission.StartsWith("ENDORSEMENT_", StringComparison.OrdinalIgnoreCase));
+
+    public static IReadOnlyCollection<string> GetGrantedPermissions(ClaimsPrincipal user)
+    {
+        var permissions = user.FindAll("permission")
+            .Select(claim => claim.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (user.Identity?.AuthenticationType == "Development" || user.IsInRole("SYSTEM_ADMIN") || user.IsInRole("TENANT_ADMIN"))
+            permissions.Add("NAV_ALL");
+
+        return permissions;
+    }
+
     public static Guid? GetUserId(ClaimsPrincipal user)
     {
         var claim = user.FindFirstValue(ClaimTypes.NameIdentifier)
