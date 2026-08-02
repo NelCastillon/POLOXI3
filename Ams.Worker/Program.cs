@@ -6,6 +6,7 @@ using Ams.Worker.Accounting;
 using Ams.Worker.Certificates;
 using Ams.Worker.Compliance;
 using Ams.Worker.Documents;
+using Ams.Worker.Endorsements;
 using Ams.Worker.Payments;
 using Ams.Worker.Renewals;
 using Ams.Worker.Submissions;
@@ -27,6 +28,7 @@ builder.Services.AddScoped<IJobStepExecutor, CarrierDownloadApplyUpdatesStepExec
 builder.Services.AddScoped<IJobStepExecutor, NotificationStepExecutor>();
 builder.Services.AddHttpClient(nameof(ApiRatingConnectorWorkerService));
 builder.Services.AddHttpClient(nameof(ProposalDeliveryWorkerService));
+builder.Services.AddHttpClient(nameof(PolicyEndorsementCarrierWorkerService));
 builder.Services.AddHostedService<AutomationWorkerService>();
 builder.Services.AddHostedService<PaymentPlatformWorkerService>();
 builder.Services.AddHostedService<SubmitToMarketDispatchWorkerService>();
@@ -39,6 +41,9 @@ builder.Services.AddHostedService<PolicyRenewalInitiationWorkerService>();
 builder.Services.AddHostedService<PolicyGenerationWorkerService>();
 builder.Services.AddHostedService<PolicyCreatedAccountingWorkerService>();
 builder.Services.AddHostedService<ESignDispatchWorkerService>();
+builder.Services.AddHostedService<PolicyEndorsementCarrierWorkerService>();
+builder.Services.AddHostedService<PolicyEndorsementAccountingWorkerService>();
+builder.Services.AddHostedService<PolicyEndorsementDocumentWorkerService>();
 
 var host = builder.Build();
 

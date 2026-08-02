@@ -58,6 +58,7 @@ public sealed class PolicyEndorsementService : IPolicyEndorsementService
 
     public async Task TransitionAsync(Guid endorsementId, TransitionPolicyEndorsementRequest request, CancellationToken cancellationToken = default)
     {
+        if (request.RowVersion.Length == 0) throw new ArgumentException("RowVersion is required.", nameof(request));
         var detail = await _repository.GetWorkflowDetailAsync(request.TenantId, endorsementId, cancellationToken)
             ?? throw new KeyNotFoundException("The endorsement was not found in the tenant.");
         var transition = detail.AvailableTransitions.SingleOrDefault(x => string.Equals(x.ToStatusCode, request.ToStatusCode, StringComparison.OrdinalIgnoreCase))
@@ -71,12 +72,15 @@ public sealed class PolicyEndorsementService : IPolicyEndorsementService
     {
         EnsurePermission(request.GrantedPermissions, "ENDORSEMENT_APPROVE");
         if (!request.ActorUserId.HasValue) throw new UnauthorizedAccessException("An authenticated user is required.");
+        if (request.EndorsementRowVersion.Length == 0 || request.ApprovalRowVersion.Length == 0)
+            throw new ArgumentException("Endorsement and approval row versions are required.", nameof(request));
         return _repository.DecideApprovalAsync(endorsementId, approvalId, request, cancellationToken);
     }
 
     public async Task<Guid> ReverseAsync(Guid endorsementId, ReversePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
     {
         EnsurePermission(request.GrantedPermissions, "ENDORSEMENT_REVERSE");
+        if (request.RowVersion.Length == 0) throw new ArgumentException("RowVersion is required.", nameof(request));
         EnsureEffectiveDate(request.EffectiveDate, request.AllowBackdate);
         var detail = await _repository.GetWorkflowDetailAsync(request.TenantId, endorsementId, cancellationToken)
             ?? throw new KeyNotFoundException("The endorsement was not found in the tenant.");
@@ -109,7 +113,8 @@ public sealed class PolicyEndorsementService : IPolicyEndorsementService
             Changes = detail.Changes.Select(ReverseChange).ToList(),
             CreatedByUserId = request.ActorUserId,
             AllowBackdate = request.AllowBackdate,
-            ReversalOfEndorsementId = endorsementId
+            ReversalOfEndorsementId = endorsementId,
+            ReversalOfRowVersion = request.RowVersion
         };
         ValidateTransaction(create.TenantId, create.PolicyId, create.CreatedByUserId, create.Changes);
         return await _repository.CreateTransactionAsync(create, cancellationToken);

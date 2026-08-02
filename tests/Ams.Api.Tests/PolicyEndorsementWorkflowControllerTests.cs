@@ -107,6 +107,66 @@ public sealed class PolicyEndorsementWorkflowControllerTests
         Assert.Null(service.ApprovalRequest);
     }
 
+    [Fact]
+    public async Task GetWorkflowDetail_RedactsFinancialDataWithoutFinancialPermission()
+    {
+        var service = new CapturingPolicyEndorsementService
+        {
+            WorkflowDetail = new PolicyEndorsementWorkflowDetailDto
+            {
+                Endorsement = new PolicyEndorsementDto { PremiumDelta = 125, BillingImpactCode = "Invoice" },
+                FinancialImpact = new PolicyEndorsementFinancialImpactDto { PremiumChange = 125, TotalDue = 125 },
+                Changes = [new() { CategoryCode = "Financial" }, new() { CategoryCode = "Vehicle" }],
+                AccountingWork = [new() { AccountingWorkId = Guid.NewGuid() }],
+                Versions = [new() { SnapshotJson = "{\"premium\":125}" }]
+            }
+        };
+        var controller = CreateController(service, CreateUser(TenantA, "ENDORSEMENT_VIEW"));
+
+        var result = Assert.IsType<OkObjectResult>(await controller.GetWorkflowDetail(Guid.NewGuid(), TenantA, CancellationToken.None));
+        var detail = Assert.IsType<PolicyEndorsementWorkflowDetailDto>(result.Value);
+
+        Assert.Equal(0, detail.Endorsement.PremiumDelta);
+        Assert.Null(detail.Endorsement.BillingImpactCode);
+        Assert.Equal(0, detail.FinancialImpact.TotalDue);
+        Assert.DoesNotContain(detail.Changes, change => change.CategoryCode == "Financial");
+        Assert.Empty(detail.AccountingWork);
+        Assert.All(detail.Versions, version => Assert.Equal("{}", version.SnapshotJson));
+    }
+
+    [Fact]
+    public async Task GetWorkflowDetail_PreservesFinancialDataWithFinancialPermission()
+    {
+        var service = new CapturingPolicyEndorsementService
+        {
+            WorkflowDetail = new PolicyEndorsementWorkflowDetailDto
+            {
+                Endorsement = new PolicyEndorsementDto { PremiumDelta = 125 },
+                FinancialImpact = new PolicyEndorsementFinancialImpactDto { TotalDue = 125 }
+            }
+        };
+        var controller = CreateController(service, CreateUser(TenantA, "ENDORSEMENT_VIEW", "ENDORSEMENT_FINANCIAL_VIEW"));
+
+        var result = Assert.IsType<OkObjectResult>(await controller.GetWorkflowDetail(Guid.NewGuid(), TenantA, CancellationToken.None));
+        var detail = Assert.IsType<PolicyEndorsementWorkflowDetailDto>(result.Value);
+
+        Assert.Equal(125, detail.Endorsement.PremiumDelta);
+        Assert.Equal(125, detail.FinancialImpact.TotalDue);
+    }
+
+    [Fact]
+    public async Task LegacyCreate_ReturnsGoneWithoutCallingService()
+    {
+        var service = new CapturingPolicyEndorsementService();
+        var controller = CreateController(service, CreateUser(TenantA, "ENDORSEMENT_MANAGE"));
+
+        var result = Assert.IsType<ObjectResult>(await controller.Create(new CreatePolicyEndorsementRequest(), CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status410Gone, result.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(result.Value);
+        Assert.Equal("Legacy endorsement mutation is disabled", problem.Title);
+    }
+
     private static PolicyEndorsementsController CreateController(IPolicyEndorsementService service, ClaimsPrincipal user)
         => new(service)
         {
@@ -130,6 +190,7 @@ public sealed class PolicyEndorsementWorkflowControllerTests
     private sealed class CapturingPolicyEndorsementService : IPolicyEndorsementService
     {
         public int WorkflowDetailCalls { get; private set; }
+        public PolicyEndorsementWorkflowDetailDto? WorkflowDetail { get; init; }
         public CreatePolicyEndorsementTransactionRequest? CreatedTransaction { get; private set; }
         public TransitionPolicyEndorsementRequest? TransitionRequest { get; private set; }
         public DecidePolicyEndorsementApprovalRequest? ApprovalRequest { get; private set; }
@@ -138,7 +199,7 @@ public sealed class PolicyEndorsementWorkflowControllerTests
         public Task<PolicyEndorsementWorkflowDetailDto?> GetWorkflowDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default)
         {
             WorkflowDetailCalls++;
-            return Task.FromResult<PolicyEndorsementWorkflowDetailDto?>(null);
+            return Task.FromResult(WorkflowDetail);
         }
 
         public Task<Guid> CreateTransactionAsync(CreatePolicyEndorsementTransactionRequest request, CancellationToken cancellationToken = default)

@@ -15,6 +15,15 @@ public interface IPolicyEndorsementRepository
     Task SaveDraftAsync(Guid endorsementId, SavePolicyEndorsementDraftRequest request, CancellationToken cancellationToken = default);
     Task TransitionAsync(Guid endorsementId, TransitionPolicyEndorsementRequest request, CancellationToken cancellationToken = default);
     Task DecideApprovalAsync(Guid endorsementId, Guid approvalId, DecidePolicyEndorsementApprovalRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PolicyEndorsementCarrierDispatchWorkItem>> ClaimCarrierDispatchesAsync(string workerId, int take, TimeSpan lease, CancellationToken cancellationToken = default);
+    Task CompleteCarrierDispatchAsync(Guid dispatchId, string workerId, CompletePolicyEndorsementCarrierDispatch result, CancellationToken cancellationToken = default);
+    Task FailCarrierDispatchAsync(Guid dispatchId, string workerId, FailPolicyEndorsementCarrierDispatch result, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PolicyEndorsementAccountingWorkItem>> ClaimAccountingWorkAsync(string workerId, int take, TimeSpan lease, CancellationToken cancellationToken = default);
+    Task CompleteAccountingWorkAsync(Guid workId, string workerId, CompletePolicyEndorsementAccountingWork result, CancellationToken cancellationToken = default);
+    Task FailAccountingWorkAsync(Guid workId, string workerId, FailPolicyEndorsementWork result, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PolicyEndorsementDocumentWorkItem>> ClaimDocumentWorkAsync(string workerId, int take, TimeSpan lease, CancellationToken cancellationToken = default);
+    Task CompleteDocumentWorkAsync(Guid workId, string workerId, CompletePolicyEndorsementDocumentWork result, CancellationToken cancellationToken = default);
+    Task FailDocumentWorkAsync(Guid workId, string workerId, FailPolicyEndorsementWork result, CancellationToken cancellationToken = default);
     Task LinkReversalAsync(Guid tenantId, Guid originalEndorsementId, Guid reversalEndorsementId, Guid? actorUserId, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid endorsementId, UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken = default);
     Task UpdateStatusAsync(Guid endorsementId, UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken = default);

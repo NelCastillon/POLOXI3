@@ -36,6 +36,8 @@ public sealed class CreatePolicyEndorsementTransactionRequest
     public bool AllowBackdate { get; set; }
     [JsonIgnore]
     public Guid? ReversalOfEndorsementId { get; set; }
+    [JsonIgnore]
+    public byte[]? ReversalOfRowVersion { get; set; }
 }
 
 public sealed class SavePolicyEndorsementDraftRequest
@@ -63,7 +65,7 @@ public sealed class SavePolicyEndorsementDraftRequest
     public PolicyEndorsementFinancialImpactInput FinancialImpact { get; set; } = new();
     [MinLength(1)]
     public List<PolicyEndorsementChangeInput> Changes { get; set; } = [];
-    [Required]
+    [Required, MinLength(1)]
     public byte[] RowVersion { get; set; } = [];
     public Guid? ModifiedByUserId { get; set; }
     [JsonIgnore]
@@ -138,6 +140,8 @@ public sealed class TransitionPolicyEndorsementRequest
     public string? Notes { get; set; }
     [Required]
     public Guid CorrelationId { get; set; } = Guid.NewGuid();
+    [Required, MinLength(1)]
+    public byte[] RowVersion { get; set; } = [];
     public Guid? ActorUserId { get; set; }
     [JsonIgnore]
     public IReadOnlyCollection<string> GrantedPermissions { get; set; } = [];
@@ -151,6 +155,12 @@ public sealed class DecidePolicyEndorsementApprovalRequest
     public string DecisionCode { get; set; } = string.Empty;
     [StringLength(2000)]
     public string? Notes { get; set; }
+    [Required, MinLength(1)]
+    public byte[] EndorsementRowVersion { get; set; } = [];
+    [Required, MinLength(1)]
+    public byte[] ApprovalRowVersion { get; set; } = [];
+    [Required]
+    public Guid CorrelationId { get; set; } = Guid.NewGuid();
     public Guid? ActorUserId { get; set; }
     [JsonIgnore]
     public IReadOnlyCollection<string> GrantedPermissions { get; set; } = [];
@@ -180,6 +190,8 @@ public sealed class ReversePolicyEndorsementRequest
     public DateTime EffectiveDate { get; set; }
     [Required, StringLength(1000)]
     public string Reason { get; set; } = string.Empty;
+    [Required, MinLength(1)]
+    public byte[] RowVersion { get; set; } = [];
     public Guid? ActorUserId { get; set; }
     [JsonIgnore]
     public IReadOnlyCollection<string> GrantedPermissions { get; set; } = [];
@@ -200,6 +212,17 @@ public sealed record FailPolicyEndorsementCarrierDispatch(
     DateTime? RetryAtUtc = null,
     string? ResponsePayload = null,
     int? HttpStatusCode = null);
+
+public sealed record CompletePolicyEndorsementAccountingWork(
+    string ResultEntityName,
+    Guid ResultEntityId);
+
+public sealed record FailPolicyEndorsementWork(
+    string ErrorMessage,
+    bool IsRetryable,
+    DateTime? RetryAtUtc = null);
+
+public sealed record CompletePolicyEndorsementDocumentWork(Guid DocumentId);
 
 public sealed class PolicyEndorsementAccountingWorkItem
 {

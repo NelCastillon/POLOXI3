@@ -630,7 +630,7 @@ else
                         </div>
                         <div class="pd-enterprise-list">
                             <div class="pd-list-head pd-list-head--endorsements">
-                                <span>Endorsement</span><span>Effective</span><span>Type</span><span>Description</span><span>Premium ?</span><span>Status</span><span></span>
+                                <span>Endorsement</span><span>Effective</span><span>Type</span><span>Description</span><span>Premium Δ</span><span>Status</span><span></span>
                             </div>
                             @foreach (var e in _endorsements)
                             {
@@ -639,7 +639,7 @@ else
                                     <span class="pd-mono">@e.EffDate.ToString("MM/dd/yyyy")</span>
                                     <span>@e.Type</span>
                                     <span><strong>@e.Description</strong><small>@e.IssuedBy</small></span>
-                                    <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : null)">@(e.PremChange >= 0 ? "+" : "")@e.PremChange.ToString("C2")</span>
+                                    <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : null)">@(_canViewEndorsementFinancial ? $"{(e.PremChange >= 0 ? "+" : "")}{e.PremChange:C2}" : "Restricted")</span>
                                     <span class="pd-end-status pd-es-@e.Status.ToLower()">@e.Status</span>
                                     <span class="pd-open-cell">@OpenDetailsLink(e)</span>
                                 </button>
@@ -1824,6 +1824,7 @@ else
     private string   _dlTab   = "drivers";
     private Guid     _tenantId;
     private Guid?    _currentUserId;
+    private bool     _canViewEndorsementFinancial;
 
     // -- Data ----------------------------------------------------------------
     private PolicyRecord?           _policy;
@@ -2018,7 +2019,7 @@ else
     {
         if (_policy is null) return;
 
-        var endorsementsTask = Api.GetPolicyEndorsementCenterAsync(_tenantId);
+        var endorsementsTask = Api.GetPolicyEndorsementWorkspaceAsync(_tenantId, PolicyId);
         var cancellationsTask = Api.GetPolicyCancellationCenterAsync(_tenantId);
         var certificatesTask = Api.SearchPolicyCertificatesAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
         var documentsTask = Api.SearchPolicyDocumentsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
@@ -2030,7 +2031,6 @@ else
         await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, enterpriseDocumentsTask, submissionsTask, claimsTask, renewalsTask);
 
         var endorsements = endorsementsTask.Result?.Endorsements
-            .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.RequestedDateUtc)
             .ToList() ?? [];
         _endorsements = endorsements.Select(MapEndorsementRow).ToList();
@@ -2598,6 +2598,7 @@ else
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
         _currentUserId = context.UserId;
+        _canViewEndorsementFinancial = context.HasPermission("ENDORSEMENT_FINANCIAL_VIEW") || context.HasPermission("ENDORSEMENT_MANAGE");
     }
 
     private async Task LoadCoverageLookupsAsync()
@@ -2638,6 +2639,12 @@ else
     // -- Action handling -----------------------------------------------------
     private void OpenAction(string action)
     {
+        if (action is "endorse" or "rewrite")
+        {
+            Nav.NavigateTo($"/policies/endorsements?policyId={PolicyId}");
+            return;
+        }
+
         _activeAction    = action;
         _actionNote      = string.Empty;
         _actionReason    = string.Empty;
@@ -2690,7 +2697,7 @@ else
     private async Task ExecuteActionAsync()
     {
         if (_policy is null) return;
-        var refreshLifecycleData = _activeAction is "cancel" or "reinstate" or "endorse" or "rewrite" or "bindRenewal";
+        var refreshLifecycleData = _activeAction is "cancel" or "reinstate" or "bindRenewal";
         _actionDate = _actionForm.ActionDate;
         _actionReason = _actionForm.Reason ?? string.Empty;
         _actionCertHolder = _actionForm.PartyName ?? string.Empty;
@@ -2714,16 +2721,6 @@ else
                 await CreateLifecycleTransactionAsync("Reinstatement", "Issued", _actionReason, _actionNote, 0m, _policy.WrittenPremium, _policy.WrittenPremium);
                 _policy.Status        = "Active";
                 _policy.ReinstateDate = _actionDate;
-                break;
-            case "endorse":
-                await CreatePolicyEndorsementFromActionAsync("Policy endorsement");
-                await CreateLifecycleTransactionAsync("Endorsement", "PendingReview", _actionForm.EndorsementType, _actionNote, _policy.WrittenPremium, _actionPremDelta, _policy.WrittenPremium + _actionPremDelta);
-                toastMessage = "Endorsement request created and synchronized.";
-                break;
-            case "rewrite":
-                await CreatePolicyEndorsementFromActionAsync("Policy rewrite requested");
-                await CreateLifecycleTransactionAsync("Rewrite", "PendingReview", _actionForm.EndorsementType, _actionNote, _policy.WrittenPremium, _actionPremDelta, _policy.WrittenPremium + _actionPremDelta);
-                toastMessage = "Rewrite endorsement request created and synchronized.";
                 break;
             case "remarket":
                 var remarketCase = await EnsureRenewalCaseAsync();
@@ -3252,21 +3249,8 @@ else
     private async Task SaveRiskItemAsync()
     {
         if (_policy is null || string.IsNullOrWhiteSpace(_riskForm.Description)) return;
-        var description = $"{_riskForm.ItemType}: {_riskForm.Description.Trim()}";
-        await CreatePolicyEndorsementFromActionAsync(description);
-        await CreateLifecycleTransactionAsync(
-            "Endorsement", "PendingReview", "RiskScheduleChange",
-            $"Requested risk schedule addition. Year: {_riskForm.Year}; Make: {_riskForm.Make}; VIN: {_riskForm.Vin}; Value: {_riskForm.Value}; Location: {_riskForm.Location}.",
-            _policy.WrittenPremium, 0m, _policy.WrittenPremium);
-        await Api.CreatePolicyServicingActivityAsync(new CreatePolicyServicingActivityRequest
-        {
-            TenantId = _tenantId, PolicyId = PolicyId, ActivityTypeCode = "Endorsement",
-            Subject = $"Risk schedule change requested: {description}", ChannelCode = "Portal",
-            OutcomeCode = "Pending", Notes = _riskForm.Location
-        });
         _showRiskForm = false;
-        await LoadAsync();
-        await ShowToast("Risk schedule endorsement requested.");
+        Nav.NavigateTo($"/policies/endorsements?policyId={PolicyId}");
     }
 
     private void OpenDocumentUpload() => _showDocumentUpload = true;
@@ -3593,63 +3577,6 @@ else
         _showCommForm = false;
         await LoadAsync();
         await ShowToast("Message queued.");
-    }
-
-    private async Task CreatePolicyEndorsementFromActionAsync(string defaultDescription)
-    {
-        if (_policy is null) return;
-
-        var description = string.IsNullOrWhiteSpace(_actionForm.Note) ? defaultDescription : _actionForm.Note!.Trim();
-        var assignedTo = string.IsNullOrWhiteSpace(_policy.AccountManager) ? _policy.Csr : _policy.AccountManager;
-        var requestedBy = string.IsNullOrWhiteSpace(_policy.AccountManager) ? _policy.Csr : _policy.AccountManager;
-        if (string.IsNullOrWhiteSpace(requestedBy)) requestedBy = _policy.Producer;
-        if (string.IsNullOrWhiteSpace(requestedBy)) requestedBy = "Current User";
-        var totalDelta = _actionForm.PremiumDelta + _actionForm.TaxFeeDelta;
-        var endorsementType = string.IsNullOrWhiteSpace(_actionForm.EndorsementType) ? defaultDescription : _actionForm.EndorsementType!.Trim();
-        var request = new CreatePolicyEndorsementRequest
-        {
-            TenantId = _tenantId,
-            PolicyId = PolicyId,
-            AccountId = _policy.AccountId,
-            PolicyNumber = _policy.PolicyNumber,
-            AccountName = _policy.Account,
-            LineOfBusiness = _policy.Lob,
-            Carrier = _policy.Carrier,
-            EndorsementType = endorsementType,
-            RequestSourceCode = _actionForm.RequestSourceCode,
-            ChangeCategoryCode = _actionForm.ChangeCategoryCode,
-            Description = description,
-            EffectiveDate = _actionForm.ActionDate,
-            ExpirationDate = _policy.ExpDate,
-            PremiumDelta = _actionForm.PremiumDelta,
-            TaxFeeDelta = _actionForm.TaxFeeDelta,
-            TotalCostDelta = totalDelta,
-            ProratedPremiumDelta = _actionForm.PremiumDelta,
-            Priority = string.IsNullOrWhiteSpace(_actionForm.Priority) ? "Normal" : _actionForm.Priority,
-            RequestedByName = requestedBy,
-            ClientContactName = _actionForm.ClientContactName,
-            AssignedToName = string.IsNullOrWhiteSpace(assignedTo) ? requestedBy : assignedTo,
-            UnderwriterName = _carrierUw.FirstOrDefault()?.Owner,
-            CarrierReferenceNumber = _actionForm.CarrierReferenceNumber,
-            AgentAuthorityCode = _actionForm.AgentAuthorityCode,
-            ApprovalLevelCode = _actionForm.ApprovalLevelCode,
-            BillingImpactCode = _actionForm.BillingImpactCode,
-            CommissionImpactCode = totalDelta == 0m ? "NoCommissionImpact" : "RecalculateCommission",
-            BillingInstruction = totalDelta == 0m ? "No billing transaction required." : "Apply endorsement billing impact per selected billing option.",
-            DocumentDeliveryCode = _actionForm.DocumentDeliveryCode,
-            CertificateRequired = false,
-            RequiredDocuments = _actionForm.RequiredDocuments,
-            ExternalReferenceNumber = _actionForm.CarrierReferenceNumber,
-            ComplianceReviewRequired = string.Equals(_actionForm.ApprovalLevelCode, "ExecutiveApproval", StringComparison.OrdinalIgnoreCase),
-            ClientFacingNotes = description,
-            Reason = _actionForm.Reason,
-            DueDate = DateTime.Today.AddDays(string.Equals(_actionForm.Priority, "Critical", StringComparison.OrdinalIgnoreCase) ? 1 : 7),
-            IsUrgent = string.Equals(_actionForm.Priority, "Critical", StringComparison.OrdinalIgnoreCase) || string.Equals(_actionForm.Priority, "High", StringComparison.OrdinalIgnoreCase),
-            CreatedByUserId = _currentUserId
-        };
-
-        await Api.CreatePolicyEndorsementAsync(request);
-        await LoadPolicyRelatedDataAsync();
     }
 
     private DocRow NewDocument(string name, string category, string fileType, string fileSize) => new()

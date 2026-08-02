@@ -16,6 +16,44 @@ public sealed partial class ApiClient
     public Task<PolicyEndorsementDetailDto?> GetPolicyEndorsementDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyEndorsementDetailDto>($"api/policy-endorsements/{endorsementId}?tenantId={tenantId}", cancellationToken);
 
+    public Task<PolicyEndorsementWorkflowDetailDto?> GetPolicyEndorsementWorkflowDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyEndorsementWorkflowDetailDto>($"api/policy-endorsements/{endorsementId}/workflow?tenantId={tenantId}", cancellationToken);
+
+    public Task<PolicyEndorsementPolicyWorkspaceDto?> GetPolicyEndorsementWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyEndorsementPolicyWorkspaceDto>($"api/policy-endorsements/policies/{policyId}/workspace?tenantId={tenantId}", cancellationToken);
+
+    public async Task<Guid> CreatePolicyEndorsementTransactionAsync(CreatePolicyEndorsementTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/policy-endorsements/transactions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task SavePolicyEndorsementDraftAsync(Guid endorsementId, SavePolicyEndorsementDraftRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/policy-endorsements/{endorsementId}/draft", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task TransitionPolicyEndorsementAsync(Guid endorsementId, TransitionPolicyEndorsementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-endorsements/{endorsementId}/transitions", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DecidePolicyEndorsementApprovalAsync(Guid endorsementId, Guid approvalId, DecidePolicyEndorsementApprovalRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-endorsements/{endorsementId}/approvals/{approvalId}/decision", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<Guid> ReversePolicyEndorsementAsync(Guid endorsementId, ReversePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-endorsements/{endorsementId}/reversal", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
     public async Task<Guid> CreatePolicyEndorsementAsync(CreatePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/policy-endorsements", request, cancellationToken);

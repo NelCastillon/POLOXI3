@@ -32,4 +32,7 @@ public sealed class WorkerOptions
     public int ESignDispatchPollIntervalSeconds { get; set; } = 30;
     public int MaxESignDispatchesPerPoll { get; set; } = 10;
     public int ESignDispatchClaimLeaseMinutes { get; set; } = 15;
+    public int EndorsementPollIntervalSeconds { get; set; } = 30;
+    public int MaxEndorsementWorkItemsPerPoll { get; set; } = 20;
+    public int EndorsementClaimLeaseMinutes { get; set; } = 15;
 }

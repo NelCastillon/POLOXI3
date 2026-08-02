@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Common.Dtos;
 using Ams.Application.Features.PolicyEndorsements;
 using Ams.Api.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -17,21 +18,25 @@ public sealed class PolicyEndorsementsController : ControllerBase
 
     [HttpGet("center")]
     public async Task<IActionResult> GetCenter([FromQuery] Guid tenantId, CancellationToken cancellationToken)
-        => AuthenticatedRequestContext.CanViewPolicy(User, tenantId)
-            ? Ok(await _service.GetCenterAsync(tenantId, cancellationToken))
-            : Forbid();
+    {
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
+        var center = await _service.GetCenterAsync(tenantId, cancellationToken);
+        if (!CanViewFinancial(tenantId)) RedactFinancial(center);
+        return Ok(center);
+    }
 
     [HttpGet("options")]
     public async Task<IActionResult> GetOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
-        => AuthenticatedRequestContext.CanViewPolicy(User, tenantId)
+        => AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")
             ? Ok(await _service.GetOptionsAsync(tenantId, cancellationToken))
             : Forbid();
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetDetail(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        if (!AuthenticatedRequestContext.CanViewPolicy(User, tenantId)) return Forbid();
+        if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
         var item = await _service.GetDetailAsync(tenantId, id, cancellationToken);
+        if (item is not null && !CanViewFinancial(tenantId)) RedactFinancial(item.Endorsement);
         return item is null ? NotFound() : Ok(item);
     }
 
@@ -40,6 +45,7 @@ public sealed class PolicyEndorsementsController : ControllerBase
     {
         if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
         var item = await _service.GetWorkflowDetailAsync(tenantId, id, cancellationToken);
+        if (item is not null && !CanViewFinancial(tenantId)) RedactFinancial(item);
         return item is null ? NotFound() : Ok(item);
     }
 
@@ -48,16 +54,13 @@ public sealed class PolicyEndorsementsController : ControllerBase
     {
         if (!AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_VIEW")) return Forbid();
         var item = await _service.GetPolicyWorkspaceAsync(tenantId, policyId, cancellationToken);
+        if (item is not null && !CanViewFinancial(tenantId)) RedactFinancial(item);
         return item is null ? NotFound() : Ok(item);
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreatePolicyEndorsementRequest request, CancellationToken cancellationToken)
-    {
-        if (!AuthenticatedRequestContext.CanManagePolicy(User, request.TenantId)) return Forbid();
-        request.CreatedByUserId = AuthenticatedRequestContext.GetUserId(User);
-        return Ok(new { Id = await _service.CreateAsync(request, cancellationToken) });
-    }
+        => LegacyMutationGone();
 
     [HttpPost("transactions")]
     public async Task<IActionResult> CreateTransaction([FromBody] CreatePolicyEndorsementTransactionRequest request, CancellationToken cancellationToken)
@@ -127,47 +130,67 @@ public sealed class PolicyEndorsementsController : ControllerBase
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromQuery] Guid tenantId, [FromBody] UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken)
-    {
-        if (!await CanManageEndorsementAsync(tenantId, id, cancellationToken)) return Forbid();
-        request.ModifiedByUserId = AuthenticatedRequestContext.GetUserId(User);
-        await _service.UpdateAsync(id, request, cancellationToken);
-        return NoContent();
-    }
+        => LegacyMutationGone();
 
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromQuery] Guid tenantId, [FromBody] UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken)
-    {
-        if (!await CanManageEndorsementAsync(tenantId, id, cancellationToken)) return Forbid();
-        request.ModifiedByUserId = AuthenticatedRequestContext.GetUserId(User);
-        await _service.UpdateStatusAsync(id, request, cancellationToken);
-        return NoContent();
-    }
+        => LegacyMutationGone();
 
     [HttpPost("activities")]
     public async Task<IActionResult> AddActivity([FromQuery] Guid tenantId, [FromBody] AddPolicyEndorsementActivityRequest request, CancellationToken cancellationToken)
-    {
-        if (!await CanManageEndorsementAsync(tenantId, request.EndorsementId, cancellationToken)) return Forbid();
-        request.CreatedByUserId = AuthenticatedRequestContext.GetUserId(User);
-        return Ok(new { Id = await _service.AddActivityAsync(request, cancellationToken) });
-    }
+        => LegacyMutationGone();
 
     [HttpPost("deltas")]
     public async Task<IActionResult> UpsertDelta([FromQuery] Guid tenantId, [FromBody] UpsertPolicyEndorsementDeltaRequest request, CancellationToken cancellationToken)
-    {
-        if (!await CanManageEndorsementAsync(tenantId, request.EndorsementId, cancellationToken)) return Forbid();
-        request.CreatedByUserId = AuthenticatedRequestContext.GetUserId(User);
-        return Ok(new { Id = await _service.UpsertDeltaAsync(request, cancellationToken) });
-    }
+        => LegacyMutationGone();
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Archive(Guid id, [FromQuery] Guid tenantId, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+        => LegacyMutationGone();
+
+    private bool CanViewFinancial(Guid tenantId)
+        => AuthenticatedRequestContext.HasPolicyEndorsementPermission(User, tenantId, "ENDORSEMENT_FINANCIAL_VIEW");
+
+    private ObjectResult LegacyMutationGone()
+        => StatusCode(StatusCodes.Status410Gone, new ProblemDetails
+        {
+            Status = StatusCodes.Status410Gone,
+            Title = "Legacy endorsement mutation is disabled",
+            Detail = "Use the transactional endorsement workflow endpoints."
+        });
+
+    private static void RedactFinancial(PolicyEndorsementCenterDto center)
     {
-        if (!await CanManageEndorsementAsync(tenantId, id, cancellationToken)) return Forbid();
-        await _service.ArchiveAsync(id, AuthenticatedRequestContext.GetUserId(User), cancellationToken);
-        return NoContent();
+        foreach (var endorsement in center.Endorsements) RedactFinancial(endorsement);
+        center.Deltas = center.Deltas.Where(delta => delta.NumericDelta == 0).ToList();
     }
 
-    private async Task<bool> CanManageEndorsementAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken)
-        => AuthenticatedRequestContext.CanManagePolicy(User, tenantId)
-            && await _service.GetDetailAsync(tenantId, endorsementId, cancellationToken) is not null;
+    private static void RedactFinancial(PolicyEndorsementWorkflowDetailDto detail)
+    {
+        RedactFinancial(detail.Endorsement);
+        detail.FinancialImpact = new();
+        detail.AccountingWork = [];
+        detail.Changes = detail.Changes.Where(change => !string.Equals(change.CategoryCode, "Financial", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var version in detail.Versions) version.SnapshotJson = "{}";
+    }
+
+    private static void RedactFinancial(PolicyEndorsementPolicyWorkspaceDto workspace)
+    {
+        workspace.Policy.AnnualPremium = 0;
+        if (workspace.CurrentVersion is not null) workspace.CurrentVersion.SnapshotJson = "{}";
+        foreach (var endorsement in workspace.Endorsements) RedactFinancial(endorsement);
+    }
+
+    private static void RedactFinancial(PolicyEndorsementDto endorsement)
+    {
+        endorsement.PremiumDelta = 0;
+        endorsement.AgencyFeeDelta = 0;
+        endorsement.TaxDelta = 0;
+        endorsement.TaxFeeDelta = 0;
+        endorsement.TotalCostDelta = 0;
+        endorsement.ProratedPremiumDelta = 0;
+        endorsement.BillingImpactCode = null;
+        endorsement.CommissionImpactCode = null;
+        endorsement.BillingInstruction = null;
+    }
 }

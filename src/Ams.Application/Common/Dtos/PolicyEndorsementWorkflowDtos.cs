@@ -212,6 +212,7 @@ public sealed class PolicyEndorsementApprovalDto
     public DateTime? DecidedDateUtc { get; set; }
     public Guid? DecidedByUserId { get; set; }
     public string? DecisionNotes { get; set; }
+    public byte[] RowVersion { get; set; } = [];
 }
 
 public sealed class PolicyEndorsementEventDto
