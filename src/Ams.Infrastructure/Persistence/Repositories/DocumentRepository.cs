@@ -23,6 +23,27 @@ public sealed class DocumentRepository : IDocumentRepository
         return await cn.QuerySingleOrDefaultAsync<DocumentDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
+    public async Task<DocumentDto?> GetPolicyDocumentAsync(Guid tenantId, Guid policyId, Guid documentId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT document.DocumentId, document.TenantId, document.DocumentTypeCode, document.CategoryCode,
+       document.EntityName, document.EntityId, document.FileName, document.StoragePath, document.ContentType,
+       document.FileSizeBytes, document.VersionNumber, document.StatusCode, document.RetentionDate,
+       document.Description, document.Tags, document.UploadedByName, document.CreatedDateUtc, document.ModifiedDateUtc
+FROM DMS.Document document
+INNER JOIN Submissions.BoundPolicy policy
+    ON policy.TenantId = document.TenantId
+   AND policy.PolicyId = document.EntityId
+   AND policy.IsDeleted = 0
+WHERE document.TenantId = @TenantId
+  AND policy.PolicyId = @PolicyId
+  AND document.DocumentId = @DocumentId
+  AND document.EntityName = N'Policy'
+  AND document.IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleOrDefaultAsync<DocumentDto>(new CommandDefinition(sql, new { TenantId = tenantId, PolicyId = policyId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<PagedResult<DocumentDto>> SearchAsync(Guid tenantId, string? categoryCode, string? entityName, Guid? entityId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var sql = $@"

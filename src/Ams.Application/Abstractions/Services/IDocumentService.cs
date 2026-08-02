@@ -8,6 +8,7 @@ public interface IDocumentService
 {
     // ── Core CRUD ────────────────────────────────────────────
     Task<DocumentDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<DocumentDto?> GetPolicyDocumentAsync(Guid tenantId, Guid policyId, Guid documentId, CancellationToken cancellationToken = default);
     Task<PagedResult<DocumentDto>> SearchAsync(Guid tenantId, string? categoryCode, string? entityName, Guid? entityId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DocumentDto>> GetByEntityAsync(Guid tenantId, string entityName, Guid entityId, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default);

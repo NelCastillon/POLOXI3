@@ -22,6 +22,15 @@ public static class AuthenticatedRequestContext
         return Guid.TryParse(claim, out var userId) ? userId : null;
     }
 
+    public static Guid? GetTenantId(ClaimsPrincipal user)
+    {
+        var claim = user.FindFirstValue("tenant_id")
+            ?? user.FindFirstValue("tenantId")
+            ?? user.FindFirstValue("TenantId");
+
+        return Guid.TryParse(claim, out var tenantId) ? tenantId : null;
+    }
+
     private static bool HasTenantAccess(ClaimsPrincipal user, Guid tenantId)
     {
         var claim = user.FindFirstValue("tenant_id")

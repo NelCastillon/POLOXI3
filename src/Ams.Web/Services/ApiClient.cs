@@ -3387,6 +3387,12 @@ public sealed partial class ApiClient
     public string GetDocumentPreviewUrl(Guid documentId)
         => GetDocumentDownloadUrl(documentId, inline: true);
 
+    public string GetPolicyDocumentDownloadUrl(Guid tenantId, Guid policyId, Guid documentId, bool inline = false)
+        => new Uri(_httpClient.BaseAddress!, $"api/documents/policies/{policyId}/documents/{documentId}/download?tenantId={tenantId}&inline={inline.ToString().ToLowerInvariant()}").ToString();
+
+    public string GetPolicyDocumentPreviewUrl(Guid tenantId, Guid policyId, Guid documentId)
+        => new Uri(_httpClient.BaseAddress!, $"api/documents/policies/{policyId}/documents/{documentId}/preview?tenantId={tenantId}").ToString();
+
     public async Task<Guid> CreateDocumentAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/documents", request, cancellationToken);
@@ -3540,15 +3546,15 @@ public sealed partial class ApiClient
         return result!.Id;
     }
 
-    public async Task VoidESignRequestAsync(Guid eSignRequestId, string? voidReason, CancellationToken cancellationToken = default)
+    public async Task VoidESignRequestAsync(Guid tenantId, Guid eSignRequestId, string? voidReason, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync($"api/esign/{eSignRequestId}/void", new VoidESignRequest(eSignRequestId, voidReason), cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync($"api/esign/{eSignRequestId}/void", new VoidESignRequest(tenantId, eSignRequestId, voidReason), cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task RemindESignRequestAsync(Guid eSignRequestId, CancellationToken cancellationToken = default)
+    public async Task RemindESignRequestAsync(Guid tenantId, Guid eSignRequestId, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync($"api/esign/{eSignRequestId}/remind", null, cancellationToken);
+        var response = await _httpClient.PostAsync($"api/esign/{eSignRequestId}/remind?tenantId={tenantId}", null, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 

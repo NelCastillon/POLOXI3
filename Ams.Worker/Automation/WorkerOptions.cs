@@ -29,4 +29,7 @@ public sealed class WorkerOptions
     public int MaxPolicyAccountingEventsPerPoll { get; set; } = 20;
     public int MaxPolicyAccountingAttempts { get; set; } = 8;
     public int PolicyAccountingClaimLeaseMinutes { get; set; } = 15;
+    public int ESignDispatchPollIntervalSeconds { get; set; } = 30;
+    public int MaxESignDispatchesPerPoll { get; set; } = 10;
+    public int ESignDispatchClaimLeaseMinutes { get; set; } = 15;
 }

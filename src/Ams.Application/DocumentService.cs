@@ -34,6 +34,16 @@ public sealed class DocumentService : IDocumentService
     }
 
     public Task<DocumentDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => _repository.GetByIdAsync(id, cancellationToken);
+    public Task<DocumentDto?> GetPolicyDocumentAsync(Guid tenantId, Guid policyId, Guid documentId, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty || policyId == Guid.Empty || documentId == Guid.Empty)
+        {
+            return Task.FromResult<DocumentDto?>(null);
+        }
+
+        return _repository.GetPolicyDocumentAsync(tenantId, policyId, documentId, cancellationToken);
+    }
+
     public Task<PagedResult<DocumentDto>> SearchAsync(Guid tenantId, string? categoryCode, string? entityName, Guid? entityId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchAsync(tenantId, categoryCode, entityName, entityId, searchTerm, pageNumber, pageSize, cancellationToken);
 
     public async Task<Guid> CreateAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default)

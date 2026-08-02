@@ -1,11 +1,14 @@
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Documents;
+using Ams.Api.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public sealed class DocumentsController : ControllerBase
 {
@@ -28,6 +31,7 @@ public sealed class DocumentsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
+        if (item is not null && !CanViewDocument(item.TenantId)) return Forbid();
         return item is null ? NotFound() : Ok(item);
     }
 
@@ -36,6 +40,7 @@ public sealed class DocumentsController : ControllerBase
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         if (item is null) return NotFound();
+        if (!CanViewDocument(item.TenantId)) return Forbid();
 
         var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
         if (download is null) return NotFound();
@@ -50,6 +55,7 @@ public sealed class DocumentsController : ControllerBase
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         if (item is null) return NotFound();
+        if (!CanViewDocument(item.TenantId)) return Forbid();
 
         var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
         if (download is null) return NotFound();
@@ -63,6 +69,25 @@ public sealed class DocumentsController : ControllerBase
         await _service.LogAccessAsync(item.TenantId, item.DocumentId, GetCurrentUserId(), null, "Preview", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
         return File(download.Content, contentType);
     }
+
+    [HttpGet("policies/{policyId:guid}/documents/{documentId:guid}/download")]
+    public async Task<IActionResult> DownloadPolicyDocument(Guid policyId, Guid documentId, [FromQuery] Guid tenantId, [FromQuery] bool inline = false, CancellationToken cancellationToken = default)
+    {
+        if (!AuthenticatedRequestContext.CanViewPolicy(User, tenantId)) return Forbid();
+        var item = await _service.GetPolicyDocumentAsync(tenantId, policyId, documentId, cancellationToken);
+        if (item is null) return NotFound();
+
+        var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
+        if (download is null) return NotFound();
+
+        await _service.LogAccessAsync(tenantId, documentId, AuthenticatedRequestContext.GetUserId(User), null, inline ? "PolicyPreview" : "PolicyDownload", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        var contentType = download.ContentType ?? item.ContentType ?? "application/octet-stream";
+        return inline ? File(download.Content, contentType) : File(download.Content, contentType, item.FileName);
+    }
+
+    [HttpGet("policies/{policyId:guid}/documents/{documentId:guid}/preview")]
+    public Task<IActionResult> PreviewPolicyDocument(Guid policyId, Guid documentId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => DownloadPolicyDocument(policyId, documentId, tenantId, true, cancellationToken);
 
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? categoryCode, [FromQuery] string? entityName, [FromQuery] Guid? entityId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
@@ -255,6 +280,15 @@ public sealed class DocumentsController : ControllerBase
         var value = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub") ?? User.FindFirstValue("userId");
         return Guid.TryParse(value, out var userId) ? userId : null;
     }
+
+    private bool CanViewDocument(Guid tenantId)
+        => AuthenticatedRequestContext.GetTenantId(User) == tenantId
+            && (User.HasClaim("permission", "DMS.POLICY_DOCUMENTS.READ")
+                || User.HasClaim("permission", "POLICY_VIEW")
+                || User.HasClaim("permission", "NAV_ALL")
+                || User.IsInRole("SYSTEM_ADMIN")
+                || User.IsInRole("TENANT_ADMIN")
+                || User.Identity?.AuthenticationType == "Development");
 }
 
 public sealed class UploadDocumentForm

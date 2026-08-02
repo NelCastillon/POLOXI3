@@ -5,6 +5,8 @@ public sealed class PolicyEndorsementDto
     public Guid EndorsementId { get; set; }
     public Guid TenantId { get; set; }
     public Guid? PolicyId { get; set; }
+    public Guid? PolicyVersionBeforeId { get; set; }
+    public Guid? PolicyVersionAfterId { get; set; }
     public Guid? AccountId { get; set; }
     public string EndorsementNumber { get; set; } = string.Empty;
     public string PolicyNumber { get; set; } = string.Empty;
@@ -12,6 +14,8 @@ public sealed class PolicyEndorsementDto
     public string LineOfBusiness { get; set; } = string.Empty;
     public string Carrier { get; set; } = string.Empty;
     public string EndorsementType { get; set; } = string.Empty;
+    public string? ReasonCode { get; set; }
+    public string? CarrierMethodCode { get; set; }
     public string? RequestSourceCode { get; set; }
     public string? ChangeCategoryCode { get; set; }
     public string Description { get; set; } = string.Empty;
@@ -21,6 +25,8 @@ public sealed class PolicyEndorsementDto
     public DateTime? DiscoveryDate { get; set; }
     public DateTime RequestedDateUtc { get; set; }
     public decimal PremiumDelta { get; set; }
+    public decimal AgencyFeeDelta { get; set; }
+    public decimal TaxDelta { get; set; }
     public decimal TaxFeeDelta { get; set; }
     public decimal TotalCostDelta { get; set; }
     public decimal ProratedPremiumDelta { get; set; }
@@ -61,6 +67,14 @@ public sealed class PolicyEndorsementDto
     public DateTime? DueDate { get; set; }
     public DateTime? ApprovedDateUtc { get; set; }
     public DateTime? IssuedDateUtc { get; set; }
+    public DateTime? SubmittedDateUtc { get; set; }
+    public DateTime? CompletedDateUtc { get; set; }
+    public DateTime? RejectedDateUtc { get; set; }
+    public DateTime? CancelledDateUtc { get; set; }
+    public Guid? ReversalOfEndorsementId { get; set; }
+    public Guid? ReversedByEndorsementId { get; set; }
+    public string CurrencyCode { get; set; } = "USD";
+    public byte[] RowVersion { get; set; } = [];
     public bool IsUrgent { get; set; }
     public bool IsArchived { get; set; }
     public int DaysOpen => Math.Max(0, (DateTime.UtcNow.Date - RequestedDateUtc.Date).Days);

@@ -471,8 +471,11 @@ else
                                     </div>
                                     <div class="pd-doc-actions">
                                         @OpenDetailsLink(doc)
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        @if (doc.HasStoredContent)
+                                        {
+                                            <button class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                            <button class="um-btn um-btn-ghost um-btn-sm" title="Preview" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        }
                                     </div>
                                 </div>
                             }
@@ -2259,6 +2262,7 @@ else
     private static DocRow MapEnterpriseDocumentRow(DocumentDto document) => new()
     {
         DocumentId = document.DocumentId,
+        HasStoredContent = true,
         Name = document.FileName,
         Category = document.CategoryCode,
         FileType = Path.GetExtension(document.FileName).TrimStart('.').ToUpperInvariant() is { Length: > 0 } extension ? extension : "Record",
@@ -2300,7 +2304,8 @@ else
 
     private static DocRow MapDocumentRow(PolicyDocumentDto document) => new()
     {
-        DocumentId = document.PolicyDocumentId,
+        ComplianceDocumentId = document.PolicyDocumentId,
+        HasStoredContent = false,
         Name = document.PolicyTitle,
         Category = document.PolicyTypeCode,
         FileType = "Record",
@@ -2704,15 +2709,11 @@ else
                 await CreateLifecycleTransactionAsync("Cancellation", "Issued", _actionReason, _actionNote, _policy.WrittenPremium, -_policy.WrittenPremium, 0m);
                 _policy.Status     = "Cancelled";
                 _policy.CancelDate = _actionDate;
-                _activities.Insert(0, NewActivity("Policy cancellation recorded", "Endorsement", "Portal", "Completed", $"Reason: {_actionReason}. {_actionNote}"));
-                AddAuditEntry("Policy Cancelled", "Status", "Active", "Cancelled");
                 break;
             case "reinstate":
                 await CreateLifecycleTransactionAsync("Reinstatement", "Issued", _actionReason, _actionNote, 0m, _policy.WrittenPremium, _policy.WrittenPremium);
                 _policy.Status        = "Active";
                 _policy.ReinstateDate = _actionDate;
-                _activities.Insert(0, NewActivity("Policy reinstated", "Endorsement", "Portal", "Completed", _actionNote));
-                AddAuditEntry("Policy Reinstated", "Status", "Cancelled", "Active");
                 break;
             case "endorse":
                 await CreatePolicyEndorsementFromActionAsync("Policy endorsement");
@@ -2722,8 +2723,6 @@ else
             case "rewrite":
                 await CreatePolicyEndorsementFromActionAsync("Policy rewrite requested");
                 await CreateLifecycleTransactionAsync("Rewrite", "PendingReview", _actionForm.EndorsementType, _actionNote, _policy.WrittenPremium, _actionPremDelta, _policy.WrittenPremium + _actionPremDelta);
-                _activities.Insert(0, NewActivity("Policy rewrite workflow started", "Renewal", "Portal", "Pending", _actionNote));
-                AddAuditEntry("Rewrite Started", "Workflow", "?", "Pending");
                 toastMessage = "Rewrite endorsement request created and synchronized.";
                 break;
             case "remarket":
@@ -3275,8 +3274,6 @@ else
     private async Task HandlePolicyDocumentUploadedAsync(Guid documentId)
     {
         await LoadPolicyRelatedDataAsync();
-        var document = _documents.FirstOrDefault(x => x.DocumentId == documentId);
-        AddAuditEntry("Document Uploaded", "Documents", "-", document?.Name ?? documentId.ToString());
         await ShowToast("Policy document uploaded successfully.");
     }
 
@@ -3284,16 +3281,16 @@ else
 
     private async Task DownloadDocumentAsync(DocRow doc)
     {
-        _activities.Insert(0, NewActivity($"Document downloaded: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
-        AddAuditEntry("Document Downloaded", "Documents", doc.Name, "Downloaded");
-        await ShowToast($"Download queued for {doc.Name}.");
+        if (!doc.DocumentId.HasValue || !doc.HasStoredContent) return;
+        Nav.NavigateTo(Api.GetPolicyDocumentDownloadUrl(_tenantId, PolicyId, doc.DocumentId.Value), forceLoad: true);
+        await Task.CompletedTask;
     }
 
     private async Task PreviewDocumentAsync(DocRow doc)
     {
-        _activities.Insert(0, NewActivity($"Document previewed: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
-        AddAuditEntry("Document Previewed", "Documents", doc.Name, "Previewed");
-        await ShowToast($"Preview opened for {doc.Name}.");
+        if (!doc.DocumentId.HasValue || !doc.HasStoredContent) return;
+        Nav.NavigateTo(Api.GetPolicyDocumentPreviewUrl(_tenantId, PolicyId, doc.DocumentId.Value), forceLoad: true);
+        await Task.CompletedTask;
     }
 
     private void OpenClaimForm()
@@ -3598,15 +3595,6 @@ else
         await ShowToast("Message queued.");
     }
 
-    private void AddAuditEntry(string action, string field, string oldVal, string newVal)
-    {
-        _auditLog.Insert(0, new AuditEntry
-        {
-            Timestamp = DateTime.Now, Action = action, Field = field,
-            OldValue = oldVal, NewValue = newVal, ChangedBy = "Current User", IpAddress = "10.0.0.1",
-        });
-    }
-
     private async Task CreatePolicyEndorsementFromActionAsync(string defaultDescription)
     {
         if (_policy is null) return;
@@ -3662,43 +3650,7 @@ else
 
         await Api.CreatePolicyEndorsementAsync(request);
         await LoadPolicyRelatedDataAsync();
-        AddAuditEntry("Endorsement Created", "Endorsement", "?", endorsementType);
     }
-
-    private void AddEndorsement(string type, string description, decimal premiumChange, DateTime effectiveDate, string status = "Issued")
-    {
-        if (_policy is not null && status == "Issued" && premiumChange != 0m)
-        {
-            _policy.WrittenPremium += premiumChange;
-            _policy.AnnualPremium += premiumChange;
-            _policy.BalanceDue += Math.Round(premiumChange / 10m, 2);
-        }
-
-        var nextNumber = $"END-{_endorsements.Count + 1:000}";
-        _endorsements.Insert(0, new EndorsementRow
-        {
-            EndNum = nextNumber,
-            EffDate = effectiveDate,
-            Type = type,
-            Description = description,
-            PremChange = premiumChange,
-            Status = status,
-            IssuedBy = "Current User",
-        });
-        _activities.Insert(0, NewActivity($"{type}: {nextNumber}", "Endorsement", "Portal", status == "Issued" ? "Completed" : "Pending", description));
-        AddAuditEntry(status == "Issued" ? "Endorsement Issued" : "Endorsement Started", "Endorsement", "?", nextNumber);
-    }
-
-    private ActivityRow NewActivity(string subject, string category, string channel, string outcome, string? notes) => new()
-    {
-        Subject = subject,
-        Category = category,
-        Channel = channel,
-        Outcome = outcome,
-        ActivityDate = DateTime.Now,
-        Notes = notes,
-        CreatedBy = "Current User",
-    };
 
     private DocRow NewDocument(string name, string category, string fileType, string fileSize) => new()
     {
@@ -4090,6 +4042,8 @@ else
     private sealed class DocRow
     {
         public Guid?    DocumentId { get; set; }
+        public Guid?    ComplianceDocumentId { get; set; }
+        public bool     HasStoredContent { get; set; }
         public string   Name       { get; set; } = string.Empty;
         public string   Category   { get; set; } = string.Empty;
         public string   FileType   { get; set; } = string.Empty;

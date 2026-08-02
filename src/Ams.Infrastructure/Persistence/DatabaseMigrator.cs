@@ -316,6 +316,8 @@ public sealed partial class DatabaseMigrator
         new("0261_PolicyCreated_Accounting_Lifecycle", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0069_PolicyCreatedAccountingLifecycle.sql")),
         new("0262_Delivery_Categories_Commission_Snapshots", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0070_DeliveryCategoriesAndCommissionSnapshots.sql")),
         new("0263_Enterprise_Policy_Servicing_Workspace", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0071_EnterprisePolicyServicingWorkspace.sql")),
+        new("0264_DocuSign_Envelope_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0072_DocuSignEnvelopeWorkflow.sql")),
+        new("0265_Enterprise_Policy_Endorsement_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0073_EnterprisePolicyEndorsementWorkflow.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

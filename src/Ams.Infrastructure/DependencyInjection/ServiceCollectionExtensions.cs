@@ -470,6 +470,7 @@ public static class ServiceCollectionExtensions
         // ── Documents — E-Sign (Epic 11) ─────────────────────────────
         services.AddScoped<IESignRepository, ESignRepository>();
         services.AddScoped<IESignService, ESignService>();
+        services.AddHttpClient<IESignEnvelopeProvider, DocuSignEnvelopeProvider>();
 
         // ── Communications (Epic 10) ──────────────────────────────────
         services.AddScoped<IMessageRepository, MessageRepository>();

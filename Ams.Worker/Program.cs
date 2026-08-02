@@ -5,6 +5,7 @@ using Ams.Worker.Automation.Executors;
 using Ams.Worker.Accounting;
 using Ams.Worker.Certificates;
 using Ams.Worker.Compliance;
+using Ams.Worker.Documents;
 using Ams.Worker.Payments;
 using Ams.Worker.Renewals;
 using Ams.Worker.Submissions;
@@ -37,6 +38,7 @@ builder.Services.AddHostedService<LeadDncScreeningWorker>();
 builder.Services.AddHostedService<PolicyRenewalInitiationWorkerService>();
 builder.Services.AddHostedService<PolicyGenerationWorkerService>();
 builder.Services.AddHostedService<PolicyCreatedAccountingWorkerService>();
+builder.Services.AddHostedService<ESignDispatchWorkerService>();
 
 var host = builder.Build();
 
