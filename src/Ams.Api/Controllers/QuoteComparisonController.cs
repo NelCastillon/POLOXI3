@@ -13,8 +13,14 @@ public sealed class QuoteComparisonController : ControllerBase
     public QuoteComparisonController(ISubmissionService service) => _service = service;
 
     [HttpGet("compare/{submissionId:guid}")]
-    public async Task<IActionResult> Compare(Guid submissionId, CancellationToken cancellationToken)
-        => Ok(await _service.GetQuoteComparisonAsync(submissionId, cancellationToken));
+    [Authorize]
+    public async Task<IActionResult> Compare(Guid submissionId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        return tenantId != Guid.Empty && Guid.TryParse(claim, out var authenticatedTenantId) && authenticatedTenantId == tenantId
+            ? Ok(await _service.GetQuoteComparisonAsync(submissionId, tenantId, cancellationToken))
+            : Forbid();
+    }
 
     [HttpGet("{quoteId:guid}")]
     [Authorize]

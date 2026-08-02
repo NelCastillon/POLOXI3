@@ -78,6 +78,31 @@ public sealed class SubmissionProposalWorkflowTests
     }
 
     [Fact]
+    public async Task GetQuoteComparisonAsync_ForwardsSubmissionAndTenantScope()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+
+        await service.GetQuoteComparisonAsync(SubmissionId, TenantId);
+
+        Assert.Equal(SubmissionId, repository.LastQuoteComparisonSubmissionId);
+        Assert.Equal(TenantId, repository.LastQuoteComparisonTenantId);
+    }
+
+    [Fact]
+    public async Task GetBindQueueAsync_ForwardsTenantScopeAndReturnsRepositoryRows()
+    {
+        var expected = new BindQueueItemDto { TenantId = TenantId, SubmissionId = SubmissionId, QuoteId = QuoteId };
+        var repository = new FakeSubmissionRepository { BindQueueItems = [expected] };
+        var service = CreateService(repository);
+
+        var result = await service.GetBindQueueAsync(TenantId);
+
+        Assert.Equal(TenantId, repository.LastBindQueueTenantId);
+        Assert.Same(expected, Assert.Single(result));
+    }
+
+    [Fact]
     public async Task GetProposalWorkflowLaunchAsync_ForwardsOpportunityAndTenant()
     {
         var repository = new FakeSubmissionRepository();
@@ -178,7 +203,7 @@ public sealed class SubmissionProposalWorkflowTests
 
         Assert.Same(request, repository.LastBindPolicyRequest);
         Assert.Equal(ProposalId, repository.LastBindPolicyRequest!.ProposalId);
-        Assert.Equal("Pending", repository.LastBindPolicyRequest.BindStatusCode);
+        Assert.Equal("Draft", repository.LastBindPolicyRequest.BindStatusCode);
         Assert.Equal("EmailApproval", repository.LastBindPolicyRequest.CustomerAuthorizationMethodCode);
         Assert.Equal("client approval email", repository.LastBindPolicyRequest.CustomerAuthorizationReference);
     }
@@ -305,6 +330,10 @@ public sealed class SubmissionProposalWorkflowTests
         public UpdateSubmissionQuoteRequest? LastUpdateQuoteRequest { get; private set; }
         public Guid? LastQuoteReadId { get; private set; }
         public Guid? LastQuoteReadTenantId { get; private set; }
+        public Guid? LastQuoteComparisonSubmissionId { get; private set; }
+        public Guid? LastQuoteComparisonTenantId { get; private set; }
+        public Guid? LastBindQueueTenantId { get; private set; }
+        public IReadOnlyList<BindQueueItemDto> BindQueueItems { get; set; } = [];
 
         public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         {
@@ -374,6 +403,11 @@ public sealed class SubmissionProposalWorkflowTests
         public Task<SubmissionActionResult> CreatePolicyAsync(Guid id, CreatePolicyFromSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(new SubmissionActionResult(Guid.NewGuid(), "ok"));
         public Task<IReadOnlyList<PolicyCreationSourceDto>> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyCreationSourceDto>>([]);
         public Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyBindStatusDto>>([]);
+        public Task<IReadOnlyList<BindQueueItemDto>> GetBindQueueAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastBindQueueTenantId = tenantId;
+            return Task.FromResult(BindQueueItems);
+        }
         public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PolicyBindTransactionDto>>([]);
         public Task<PolicyBindTransactionDto?> GetPolicyBindTransactionAsync(Guid policyBindTransactionId, CancellationToken cancellationToken = default) => Task.FromResult<PolicyBindTransactionDto?>(null);
         public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionMarketDto>>([]);
@@ -383,7 +417,12 @@ public sealed class SubmissionProposalWorkflowTests
         public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
-        public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<QuoteComparisonDto>>([]);
+        public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastQuoteComparisonSubmissionId = submissionId;
+            LastQuoteComparisonTenantId = tenantId;
+            return Task.FromResult<IReadOnlyList<QuoteComparisonDto>>([]);
+        }
         public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
         {
             LastQuoteReadId = quoteId;
@@ -462,6 +501,22 @@ public sealed class SubmissionProposalWorkflowTests
             LastBindPolicyRequest = request;
             return Task.FromResult(Guid.NewGuid());
         }
+        public Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult<BindRequestDetailDto?>(null);
+        public Task<BindCommissionEstimateDto> GetBindCommissionEstimateAsync(Guid submissionId, Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new BindCommissionEstimateDto());
+        public Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid policyBindTransactionId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<BindValidationResultDto>>([]);
+        public Task UpdateBindRequestStatusAsync(Guid policyBindTransactionId, UpdateBindRequestStatusRequest request, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+        public Task<Guid> RequestBindApprovalAsync(Guid policyBindTransactionId, RequestBindApprovalRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(Guid.NewGuid());
+        public Task DecideBindApprovalAsync(Guid policyBindTransactionId, Guid bindApprovalId, DecideBindApprovalRequest request, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+        public Task RecordBindCarrierResponseAsync(Guid policyBindTransactionId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+        public Task<BindPackageDto> PrepareBindPackageAsync(Guid policyBindTransactionId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new BindPackageDto { BindPackageId = Guid.NewGuid(), PolicyBindTransactionId = policyBindTransactionId, PackageNumber = "BPK-TEST", StatusCode = "Prepared" });
     }
 
     private sealed class FakeAccountRepository : IAccountRepository

@@ -2970,6 +2970,9 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<SubmissionLineDto>?> GetSubmissionLinesAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionLineDto>>($"api/submissions/{submissionId}/lines", cancellationToken);
 
+    public Task<BindCommissionEstimateDto?> GetBindCommissionEstimateAsync(Guid submissionId, Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<BindCommissionEstimateDto>($"api/submissions/{submissionId}/quotes/{quoteId}/commission-estimate?tenantId={tenantId}", cancellationToken);
+
     public Task<IReadOnlyList<SubmissionIntakeQuestionDto>?> GetSubmissionIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionIntakeQuestionDto>>($"api/submissions/{submissionId}/intake", cancellationToken);
 
@@ -3067,6 +3070,53 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<PolicyBindStatusDto>?> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyBindStatusDto>>($"api/submissions/policy-bind-statuses?tenantId={tenantId}", cancellationToken);
 
+    public Task<IReadOnlyList<BindQueueItemDto>?> GetBindQueueAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<BindQueueItemDto>>($"api/submissions/bind-queue?tenantId={tenantId}", cancellationToken);
+
+    public Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid bindRequestId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<BindRequestDetailDto>($"api/submissions/bind-requests/{bindRequestId}?tenantId={tenantId}", cancellationToken);
+
+    public async Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid bindRequestId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/validate", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<IReadOnlyList<BindValidationResultDto>>(cancellationToken: cancellationToken)) ?? [];
+    }
+
+    public async Task UpdateBindRequestStatusAsync(Guid bindRequestId, UpdateBindRequestStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/status", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<Guid> RequestBindApprovalAsync(Guid bindRequestId, RequestBindApprovalRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/approvals", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task DecideBindApprovalAsync(Guid bindRequestId, Guid approvalId, DecideBindApprovalRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PatchAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/approvals/{approvalId}", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<Guid?> RecordBindCarrierResponseAsync(Guid bindRequestId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/carrier-responses", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<BindCarrierResponseResult>(cancellationToken: cancellationToken);
+        return result?.PolicyId;
+    }
+
+    public async Task<BindPackageDto> PrepareBindPackageAsync(Guid bindRequestId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/packages", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<BindPackageDto>(cancellationToken: cancellationToken))!;
+    }
+
     public Task<IReadOnlyList<PolicyBindTransactionDto>?> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyBindTransactionDto>>($"api/submissions/{submissionId}/policy-bind-transactions", cancellationToken);
 
@@ -3078,8 +3128,8 @@ public sealed partial class ApiClient
         return result!.Id;
     }
 
-    public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes", cancellationToken);
+    public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes?tenantId={tenantId}", cancellationToken);
 
     public Task<QuoteComparisonDto?> GetSubmissionQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<QuoteComparisonDto>($"api/quotes/{quoteId}?tenantId={tenantId}", cancellationToken);

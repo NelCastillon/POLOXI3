@@ -69,6 +69,16 @@ DECLARE @AssignedToUserId UNIQUEIDENTIFIER;
 DECLARE @Deductible DECIMAL(18,2);
 DECLARE @Limit DECIMAL(18,2);
 DECLARE @CoverageNotes NVARCHAR(1000);
+DECLARE @CommissionPlanId UNIQUEIDENTIFIER;
+DECLARE @CommissionPlanVersionId UNIQUEIDENTIFIER;
+DECLARE @CommissionPayeeId UNIQUEIDENTIFIER;
+DECLARE @CommissionSplitRuleId UNIQUEIDENTIFIER;
+DECLARE @CommissionBusinessTypeCode NVARCHAR(50);
+DECLARE @CommissionRatePct DECIMAL(9,4);
+DECLARE @CommissionSplitPct DECIMAL(9,4);
+DECLARE @CommissionablePremium DECIMAL(18,2);
+DECLARE @EstimatedGrossCommission DECIMAL(18,2);
+DECLARE @EstimatedProducerCommission DECIMAL(18,2);
 DECLARE @RenewalRetentionCaseId UNIQUEIDENTIFIER;
 DECLARE @SourcePolicyId UNIQUEIDENTIFIER;
 DECLARE @SourcePolicyTermId UNIQUEIDENTIFIER;
@@ -99,6 +109,16 @@ SELECT @CreatesPolicy = pbs.CreatesPolicy,
        @Deductible = q.Deductible,
        @Limit = q.[Limit],
        @CoverageNotes = q.CoverageNotes
+       ,@CommissionPlanId = pbt.CommissionPlanId
+       ,@CommissionPlanVersionId = pbt.CommissionPlanVersionId
+       ,@CommissionPayeeId = pbt.CommissionPayeeId
+       ,@CommissionSplitRuleId = pbt.CommissionSplitRuleId
+       ,@CommissionBusinessTypeCode = pbt.CommissionBusinessTypeCode
+       ,@CommissionRatePct = pbt.CommissionRatePct
+       ,@CommissionSplitPct = pbt.CommissionSplitPct
+       ,@CommissionablePremium = pbt.CommissionablePremium
+       ,@EstimatedGrossCommission = pbt.EstimatedGrossCommission
+       ,@EstimatedProducerCommission = pbt.EstimatedProducerCommission
 FROM Submissions.PolicyBindTransaction pbt
 INNER JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = pbt.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsActive = 1 AND pbs.IsDeleted = 0
 LEFT JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId AND s.TenantId = pbt.TenantId AND s.IsDeleted = 0
@@ -200,8 +220,42 @@ WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyAssignment WHERE TenantId = @Tenant
 
 INSERT INTO Policy.PolicyCommissionEstimate
     (PolicyCommissionEstimateId, TenantId, PolicyId, PolicyTermId, CommissionTypeCode, CommissionStatusCode, CommissionRate, EstimatedCommission, ProducerSplitPercent, CreatedDateUtc, IsDeleted)
-SELECT NEWID(), @TenantId, @PolicyId, @PolicyTermId, N'Estimated', N'Estimated', NULL, NULL, NULL, @Now, 0
-WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCommissionEstimate WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND PolicyTermId = @PolicyTermId AND IsDeleted = 0);
+SELECT NEWID(), @TenantId, @PolicyId, @PolicyTermId, COALESCE(@CommissionBusinessTypeCode, N'Estimated'), N'Estimated', @CommissionRatePct, @EstimatedGrossCommission, @CommissionSplitPct, @Now, 0
+WHERE @CommissionPlanId IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM Policy.PolicyCommissionEstimate WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND PolicyTermId = @PolicyTermId AND IsDeleted = 0);
+
+IF @CommissionPlanId IS NOT NULL
+   AND @CommissionPlanVersionId IS NOT NULL
+   AND @CommissionPayeeId IS NOT NULL
+   AND @CommissionRatePct IS NOT NULL
+   AND @CommissionSplitPct IS NOT NULL
+   AND @CommissionablePremium > 0
+   AND @EstimatedProducerCommission IS NOT NULL
+BEGIN
+    DECLARE @CommissionTransactionId UNIQUEIDENTIFIER;
+    SELECT @CommissionTransactionId = TransactionId
+    FROM Commission.CommissionTransaction WITH (UPDLOCK, HOLDLOCK)
+    WHERE TenantId = @TenantId AND SourceEntityName = N'Policy' AND SourceEntityId = @PolicyId AND PayeeId = @CommissionPayeeId AND IsDeleted = 0;
+
+    IF @CommissionTransactionId IS NULL
+    BEGIN
+        SET @CommissionTransactionId = NEWID();
+        INSERT INTO Commission.CommissionTransaction
+            (TransactionId, TenantId, PayeeId, CommissionPlanId, SourceEntityName, SourceEntityId, TransactionDate, GrossAmount, CommissionRate, CommissionAmount, StatusCode, PayoutId, CreatedDateUtc, IsDeleted)
+        VALUES
+            (@CommissionTransactionId, @TenantId, @CommissionPayeeId, @CommissionPlanId, N'Policy', @PolicyId, @EffectiveDate, @CommissionablePremium, @CommissionRatePct, @EstimatedProducerCommission, N'Pending', NULL, @Now, 0);
+    END;
+
+    INSERT INTO Commission.CommissionCalculationResult
+        (CalculationResultId, TenantId, TransactionId, PayeeId, CommissionPlanId, BaseAmount, RatePct, SplitPct, CalculatedAmount, AdjustedAmount, StatusCode, CalculatedDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), @TenantId, @CommissionTransactionId, @CommissionPayeeId, @CommissionPlanId, @CommissionablePremium, @CommissionRatePct, @CommissionSplitPct, @EstimatedProducerCommission, NULL, N'Calculated', @Now, @Now, 0
+    WHERE NOT EXISTS (SELECT 1 FROM Commission.CommissionCalculationResult WHERE TenantId = @TenantId AND TransactionId = @CommissionTransactionId AND PayeeId = @CommissionPayeeId AND IsDeleted = 0);
+
+    INSERT INTO Commission.CommissionAccrualEntry
+        (AccrualEntryId, TenantId, TransactionId, GLAccountId, AccrualDate, AccruedAmount, ReversalDate, ReversedAmount, JournalEntryId, StatusCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), @TenantId, @CommissionTransactionId, NULL, @EffectiveDate, @EstimatedProducerCommission, NULL, NULL, NULL, N'Pending', @Now, @RequestedByUserId, 0
+    WHERE NOT EXISTS (SELECT 1 FROM Commission.CommissionAccrualEntry WHERE TenantId = @TenantId AND TransactionId = @CommissionTransactionId AND IsDeleted = 0);
+END;
 
 INSERT INTO Policy.PolicyAuditEvent
     (PolicyAuditEventId, TenantId, EntityType, EntityId, ActionCode, SourceCode, ReasonCode, UserId, BeforeJson, AfterJson, CreatedDateUtc, IsDeleted)

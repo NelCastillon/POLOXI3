@@ -236,6 +236,7 @@ public sealed class ProposalQuoteLineDto
 {
     public Guid QuoteLineId { get; set; }
     public Guid QuoteId { get; set; }
+    public Guid? SubmissionLineId { get; set; }
     public string LineOfBusiness { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public decimal QuotedPremium { get; set; }

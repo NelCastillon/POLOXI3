@@ -91,6 +91,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetReadinessAsync(submissionId, tenantId, cancellationToken);
 
+    public Task<BindCommissionEstimateDto> GetBindCommissionEstimateAsync(Guid submissionId, Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindCommissionEstimateAsync(submissionId, quoteId, tenantId, cancellationToken);
+
     public Task<SubmissionReadinessDto> GetMarketReadinessAsync(Guid submissionId, Guid submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetMarketReadinessAsync(submissionId, submissionMarketId, tenantId, cancellationToken);
 
@@ -117,6 +120,9 @@ public sealed class SubmissionService : ISubmissionService
 
     public Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetPolicyBindStatusesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<BindQueueItemDto>> GetBindQueueAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindQueueAsync(tenantId, cancellationToken);
 
     public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken);
@@ -176,8 +182,8 @@ public sealed class SubmissionService : ISubmissionService
     public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default)
         => _repository.SynchronizeOverdueMarketRequestsAsync(cancellationToken);
 
-    public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
-        => _repository.GetQuoteComparisonAsync(submissionId, cancellationToken);
+    public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetQuoteComparisonAsync(submissionId, tenantId, cancellationToken);
 
     public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteByIdAsync(quoteId, tenantId, cancellationToken);
@@ -335,13 +341,110 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent submission is not linked to the supplied account; the bind chain is inconsistent.");
         }
 
-        var bindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
-        if (await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken))
+        var createsPolicy = await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken);
+        var requestedStatus = request.BindStatusCode;
+        var createRequest = createsPolicy || string.Equals(request.BindStatusCode, "Draft", StringComparison.OrdinalIgnoreCase)
+            ? request
+            : request with { BindStatusCode = "Draft" };
+        var bindTransactionId = await _repository.BindPolicyAsync(createRequest, cancellationToken);
+        if (createsPolicy)
         {
             return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.RequestedByUserId), cancellationToken);
         }
 
+        await _repository.ValidateBindRequestAsync(bindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.RequestedByUserId), cancellationToken);
+        if (!string.Equals(requestedStatus, "Draft", StringComparison.OrdinalIgnoreCase))
+        {
+            await UpdateBindRequestStatusAsync(bindTransactionId, new UpdateBindRequestStatusRequest(request.TenantId, requestedStatus, "Initial bind request workflow status.", request.RequestedByUserId), cancellationToken);
+        }
+
         return bindTransactionId;
+    }
+
+    public Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindRequestDetailAsync(policyBindTransactionId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid policyBindTransactionId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
+        => _repository.ValidateBindRequestAsync(policyBindTransactionId, request, cancellationToken);
+
+    public async Task UpdateBindRequestStatusAsync(Guid policyBindTransactionId, UpdateBindRequestStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var current = detail.Request.BindStatusCode;
+        var next = request.StatusCode;
+        if (string.Equals(current, next, StringComparison.OrdinalIgnoreCase)) return;
+
+        var currentStatus = (await _repository.GetPolicyBindStatusesAsync(request.TenantId, cancellationToken))
+            .SingleOrDefault(x => string.Equals(x.StatusCode, current, StringComparison.OrdinalIgnoreCase));
+        if (currentStatus?.IsTerminal == true)
+            throw new InvalidOperationException($"A terminal bind request in '{currentStatus.StatusName}' cannot transition to another status.");
+        if (string.Equals(next, "Bound", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Bound status can only be recorded through an authoritative carrier response.");
+
+        var transition = detail.AllowedTransitions.SingleOrDefault(x => string.Equals(x.ToStatusCode, next, StringComparison.OrdinalIgnoreCase));
+        if (transition is null || transition.RequiresCarrierResponse)
+            throw new InvalidOperationException($"Transition from '{current}' to '{next}' is not allowed through a manual status change.");
+
+        if (transition.RequiresValidation)
+        {
+            var validations = await _repository.ValidateBindRequestAsync(policyBindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.ChangedByUserId), cancellationToken);
+            var blockers = validations.Where(x => x.IsBlocking && x.StatusCode is not ("Passed" or "Waived")).ToArray();
+            if (blockers.Length > 0)
+                throw new InvalidOperationException("Bind request is blocked: " + string.Join("; ", blockers.Select(x => x.Message ?? x.RequirementName)));
+            if (detail.Request.ApprovalRequired && !detail.Approvals.Any(x => x.StatusCode == "Approved"))
+                throw new InvalidOperationException("Required manager approval has not been completed.");
+            if (detail.Request.PaymentRequired && !detail.Request.PaymentVerified)
+                throw new InvalidOperationException("Required payment has not been verified.");
+        }
+
+        await _repository.UpdateBindRequestStatusAsync(policyBindTransactionId, request, cancellationToken);
+    }
+
+    public Task<Guid> RequestBindApprovalAsync(Guid policyBindTransactionId, RequestBindApprovalRequest request, CancellationToken cancellationToken = default)
+        => _repository.RequestBindApprovalAsync(policyBindTransactionId, request, cancellationToken);
+
+    public Task DecideBindApprovalAsync(Guid policyBindTransactionId, Guid bindApprovalId, DecideBindApprovalRequest request, CancellationToken cancellationToken = default)
+        => _repository.DecideBindApprovalAsync(policyBindTransactionId, bindApprovalId, request, cancellationToken);
+
+    public async Task<Guid?> RecordBindCarrierResponseAsync(Guid policyBindTransactionId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var createsPolicy = await BindStatusCreatesPolicyAsync(request.TenantId, request.StatusCode, cancellationToken);
+        var transition = detail.AllowedTransitions.SingleOrDefault(x => string.Equals(x.ToStatusCode, request.StatusCode, StringComparison.OrdinalIgnoreCase));
+        if (transition is null || !transition.RequiresCarrierResponse)
+            throw new InvalidOperationException($"Carrier response cannot transition this bind request from '{detail.Request.BindStatusCode}' to '{request.StatusCode}'.");
+        if (createsPolicy)
+        {
+            if (!request.ConfirmationCertified || string.IsNullOrWhiteSpace(request.ConfirmationSourceCode))
+                throw new InvalidOperationException("Certified carrier confirmation and its source are required before coverage can be marked bound.");
+            if (string.IsNullOrWhiteSpace(request.CarrierReferenceNumber) && string.IsNullOrWhiteSpace(request.BinderNumber) && !request.ConfirmationDocumentId.HasValue)
+                throw new InvalidOperationException("Carrier confirmation requires a carrier reference, binder number, or confirmation document.");
+        }
+
+        await _repository.RecordBindCarrierResponseAsync(policyBindTransactionId, request, cancellationToken);
+        await _repository.UpdateBindRequestStatusAsync(policyBindTransactionId, new UpdateBindRequestStatusRequest(request.TenantId, request.StatusCode, request.MessageBody, request.RecordedByUserId), cancellationToken);
+
+        if (request.StatusCode == "NeedInformation")
+        {
+            await _repository.CreateFollowUpTaskAsync(detail.Request.SubmissionId, new CreateSubmissionFollowUpTaskRequest(request.TenantId, "Carrier requested bind information", request.MessageBody, "High", detail.Request.RequestedByUserId, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)), request.RecordedByUserId), cancellationToken);
+        }
+
+        return createsPolicy
+            ? await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, policyBindTransactionId, request.RecordedByUserId), cancellationToken)
+            : null;
+    }
+
+    public async Task<BindPackageDto> PrepareBindPackageAsync(Guid policyBindTransactionId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var validations = await _repository.ValidateBindRequestAsync(policyBindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.PreparedByUserId), cancellationToken);
+        var missingDocuments = validations.Where(x => x.RequirementTypeCode == "Document" && x.IsBlocking && x.StatusCode is not ("Passed" or "Waived")).ToArray();
+        if (missingDocuments.Length > 0)
+            throw new InvalidOperationException("Binder package cannot be prepared until required documents are available: " + string.Join(", ", missingDocuments.Select(x => x.RequirementName)));
+        return await _repository.PrepareBindPackageAsync(policyBindTransactionId, request, cancellationToken);
     }
 
     private async Task<bool> BindStatusCreatesPolicyAsync(Guid tenantId, string statusCode, CancellationToken cancellationToken)

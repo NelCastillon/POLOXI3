@@ -588,46 +588,112 @@ public sealed record AppetiteSearchRequest(
 public sealed record BindPolicyRequest(
     Guid? SubmissionId,
     Guid? QuoteId,
+    [property: Required]
     Guid TenantId,
+    [property: Required]
     Guid AccountId,
+    [property: Required]
     Guid CarrierId,
+    [property: Range(typeof(decimal), "0.01", "999999999999")]
     decimal AnnualPremium,
+    [property: Required]
     DateTime EffectiveDate,
+    [property: Required]
     DateTime ExpirationDate,
-    string? PolicyNumber = null,
-    string PolicySourceCode = "QuoteBound",
-    string? PolicySourceReason = null,
-    string? PolicySourceNotes = null,
+    [property: StringLength(80)] string? PolicyNumber = null,
+    [property: Required, StringLength(50)] string PolicySourceCode = "QuoteBound",
+    [property: StringLength(500)] string? PolicySourceReason = null,
+    [property: StringLength(1000)] string? PolicySourceNotes = null,
     Guid? RequestedByUserId = null,
     Guid? ApprovedByUserId = null,
     Guid? BoundByUserId = null,
-    string BindStatusCode = "Pending",
+    [property: Required, StringLength(50)] string BindStatusCode = "Draft",
     Guid? ProposalId = null,
     Guid? CustomerAuthorizationId = null,
-    string? CustomerAuthorizationMethodCode = null,
-    string? CustomerAuthorizationReference = null,
-    string? CustomerAuthorizationNotes = null,
-    string? CustomerAuthorizedByName = null,
+    [property: StringLength(50)] string? CustomerAuthorizationMethodCode = null,
+    [property: StringLength(200)] string? CustomerAuthorizationReference = null,
+    [property: StringLength(1000)] string? CustomerAuthorizationNotes = null,
+    [property: StringLength(200)] string? CustomerAuthorizedByName = null,
     DateTime? CustomerAuthorizedDateUtc = null,
     Guid? CustomerAuthorizationDocumentId = null,
     TimeSpan? RequestedEffectiveTime = null,
-    string? ConfirmationSourceCode = null,
-    string? CarrierReferenceNumber = null,
-    string? BinderNumber = null,
-    decimal? FinalPremium = null,
-    decimal? DownPaymentAmount = null,
-    string? SubjectivitiesOutstanding = null,
-    string? ConfirmationNotes = null,
+    [property: StringLength(50)] string? ConfirmationSourceCode = null,
+    [property: StringLength(120)] string? CarrierReferenceNumber = null,
+    [property: StringLength(120)] string? BinderNumber = null,
+    [property: Range(typeof(decimal), "0.01", "999999999999")] decimal? FinalPremium = null,
+    [property: Range(typeof(decimal), "0", "999999999999")] decimal? DownPaymentAmount = null,
+    [property: StringLength(2000)] string? SubjectivitiesOutstanding = null,
+    [property: StringLength(2000)] string? ConfirmationNotes = null,
     Guid? ConfirmationDocumentId = null,
-    string? ConfirmationReceivedFrom = null,
-    string? ConfirmationMessageId = null,
-    string? UnderwriterName = null,
-    string? UnderwriterCompany = null,
+    [property: StringLength(320)] string? ConfirmationReceivedFrom = null,
+    [property: StringLength(200)] string? ConfirmationMessageId = null,
+    Guid? UnderwriterContactId = null,
+    Guid? CommissionPlanApplicabilityId = null,
+    Guid? CommissionPlanVersionId = null,
+    Guid? CommissionPayeeId = null,
+    Guid? CommissionSplitRuleId = null,
+    [property: StringLength(200)] string? UnderwriterName = null,
+    [property: StringLength(200)] string? UnderwriterCompany = null,
     bool FollowUpWrittenConfirmationRequired = false,
-    string? IntegrationCorrelationId = null,
-    string? ExternalTransactionId = null,
+    [property: StringLength(120)] string? IntegrationCorrelationId = null,
+    [property: StringLength(120)] string? ExternalTransactionId = null,
     bool ConfirmedManually = false,
+    bool ConfirmationCertified = false,
+    Guid? ClientAcceptanceId = null,
+    [property: StringLength(50)] string? BindingAuthorityCode = null,
+    [property: StringLength(50)] string? BindingMethodCode = null,
+    [property: StringLength(2000)] string? ProducerNotes = null,
+    [property: StringLength(2000)] string? CarrierInstructions = null,
+    [property: StringLength(2000)] string? SpecialConditions = null,
+    bool ApprovalRequired = false,
+    bool PaymentRequired = false,
+    bool PaymentVerified = false,
+    DateTime? ResponseDueDateUtc = null);
+
+public sealed record UpdateBindRequestStatusRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, StringLength(50)] string StatusCode,
+    [property: StringLength(2000)] string? Comments,
+    Guid? ChangedByUserId,
+    [property: StringLength(64)] string? IpAddress = null,
+    [property: StringLength(500)] string? DeviceInfo = null);
+
+public sealed record ValidateBindRequestRequest(
+    [property: Required] Guid TenantId,
+    Guid? ValidatedByUserId);
+
+public sealed record RequestBindApprovalRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, StringLength(100)] string ApprovalReasonCode,
+    Guid? AssignedApproverUserId,
+    Guid? RequestedByUserId);
+
+public sealed record DecideBindApprovalRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, RegularExpression("Approved|Rejected")] string DecisionCode,
+    [property: StringLength(2000)] string? DecisionNotes,
+    Guid DecisionByUserId);
+
+public sealed record RecordBindCarrierResponseRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, StringLength(50)] string StatusCode,
+    [property: Required, StringLength(50)] string MessageTypeCode,
+    [property: StringLength(50)] string? DeliveryMethodCode,
+    [property: StringLength(200)] string? ExternalMessageId,
+    [property: StringLength(300)] string? Subject,
+    [property: StringLength(4000)] string? MessageBody,
+    [property: StringLength(120)] string? CarrierReferenceNumber,
+    [property: StringLength(120)] string? BinderNumber,
+    [property: Range(typeof(decimal), "0.01", "999999999999")] decimal? FinalPremium,
+    Guid? ConfirmationDocumentId,
+    Guid? RecordedByUserId,
+    [property: StringLength(50)] string? ConfirmationSourceCode = null,
     bool ConfirmationCertified = false);
+
+public sealed record PrepareBindPackageRequest(
+    [property: Required] Guid TenantId,
+    [property: StringLength(2000)] string? Notes,
+    Guid? PreparedByUserId);
 
 public sealed class UpsertPolicyRegisterRequest
 {

@@ -34,6 +34,7 @@ public sealed class CarrierContactService : ICarrierContactService
     public CarrierContactService(ICarrierContactRepository repo) => _repo = repo;
     public Task<CarrierContactDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => _repo.GetByIdAsync(id, ct);
     public Task<PagedResult<CarrierContactDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default) => _repo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct);
+    public Task<IReadOnlyList<CarrierContactDto>> GetActiveByCarrierAsync(Guid tenantId, Guid carrierId, CancellationToken ct = default) => _repo.GetActiveByCarrierAsync(tenantId, carrierId, ct);
     public Task<Guid> CreateAsync(CreateCarrierContactRequest request, CancellationToken ct = default) => _repo.CreateAsync(request, ct);
     public Task UpdateAsync(Guid id, UpdateCarrierContactRequest request, CancellationToken ct = default) => _repo.UpdateAsync(id, request, ct);
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);

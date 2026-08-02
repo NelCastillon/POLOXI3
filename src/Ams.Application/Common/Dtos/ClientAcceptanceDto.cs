@@ -93,6 +93,7 @@ public sealed class ClientAcceptanceReadinessDto
     public bool IsQuoteUnexpired { get; set; }
     public bool IsQuoteBindable { get; set; }
     public bool HasCoverageLines { get; set; }
+    public bool HasCompleteBindableCoverage { get; set; }
     public bool CanAccept { get; set; }
     public IReadOnlyList<string> BlockingReasons { get; set; } = [];
     public IReadOnlyList<ProposalQuoteDto> Quotes { get; set; } = [];

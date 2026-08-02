@@ -293,6 +293,7 @@ public sealed partial class DatabaseMigrator
         new("0255_Client_Acceptance_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0064_ClientAcceptanceWorkflow.sql")),
         new("0256_Enterprise_Proposal_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0065_EnterpriseProposalWorkflow.sql")),
         new("0257_Enterprise_Proposal_Workflow_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0066_EnterpriseProposalWorkflowHardening.sql")),
+        new("0258_Enterprise_Bind_Request_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -17366,8 +17367,20 @@ BEGIN
         ConfirmationDocumentId UNIQUEIDENTIFIER NULL,
         ConfirmationReceivedFrom NVARCHAR(320) NULL,
         ConfirmationMessageId NVARCHAR(200) NULL,
+        UnderwriterContactId UNIQUEIDENTIFIER NULL,
         UnderwriterName NVARCHAR(200) NULL,
         UnderwriterCompany NVARCHAR(200) NULL,
+        CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NULL,
+        CommissionPlanVersionId UNIQUEIDENTIFIER NULL,
+        CommissionPayeeId UNIQUEIDENTIFIER NULL,
+        CommissionSplitRuleId UNIQUEIDENTIFIER NULL,
+        CommissionBusinessTypeCode NVARCHAR(50) NULL,
+        CommissionRatePct DECIMAL(9,4) NULL,
+        CommissionSplitPct DECIMAL(9,4) NULL,
+        CommissionablePremium DECIMAL(18,2) NULL,
+        EstimatedGrossCommission DECIMAL(18,2) NULL,
+        EstimatedProducerCommission DECIMAL(18,2) NULL,
         FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_0214 DEFAULT 0,
         IntegrationCorrelationId NVARCHAR(120) NULL,
         ExternalTransactionId NVARCHAR(120) NULL,
@@ -17403,8 +17416,20 @@ IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NUL
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterContactId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterContactId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanApplicabilityId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanVersionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanVersionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPayeeId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPayeeId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitRuleId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionBusinessTypeCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionBusinessTypeCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionRatePct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionRatePct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitPct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitPct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionablePremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionablePremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedGrossCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedGrossCommission DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedProducerCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedProducerCommission DECIMAL(18,2) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWrittenB_0214 DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
@@ -17455,8 +17480,120 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_Submission_0214')
     EXEC(N'CREATE INDEX IX_PolicyBindTransaction_Submission_0214 ON Submissions.PolicyBindTransaction(SubmissionId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
 
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_BindQueue')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_BindQueue ON Submissions.PolicyBindTransaction(TenantId, SubmissionId, QuoteId, CreatedDateUtc DESC) INCLUDE (PolicyBindTransactionId, PolicyId, PolicyNumber, BindStatusCode, BindReason, Notes) WHERE IsDeleted = 0;');
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_Policy_0214')
     EXEC(N'CREATE INDEX IX_PolicyBindTransaction_Policy_0214 ON Submissions.PolicyBindTransaction(PolicyId) WHERE IsDeleted = 0 AND PolicyId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_UnderwriterContact')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_UnderwriterContact ON Submissions.PolicyBindTransaction(TenantId, UnderwriterContactId, CreatedDateUtc DESC) WHERE IsDeleted = 0 AND UnderwriterContactId IS NOT NULL;');
+
+IF OBJECT_ID(N'Agency.CarrierContact', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_PolicyBindTransaction_UnderwriterContact')
+    ALTER TABLE Submissions.PolicyBindTransaction WITH CHECK
+        ADD CONSTRAINT FK_PolicyBindTransaction_UnderwriterContact FOREIGN KEY (UnderwriterContactId) REFERENCES Agency.CarrierContact(CarrierContactId);
+
+IF OBJECT_ID(N'Commission.CommissionPlanApplicability', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionPlanApplicability
+    (
+        CommissionPlanApplicabilityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPlanApplicability PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(160) NULL,
+        BusinessTypeCode NVARCHAR(50) NOT NULL,
+        EffectiveStartDate DATE NOT NULL,
+        EffectiveEndDate DATE NULL,
+        Priority INT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_Priority DEFAULT 100,
+        IsActive BIT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPlanApplicability_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionPlanVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionPlanVersion
+    (
+        PlanVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPlanVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        PlanName NVARCHAR(200) NOT NULL,
+        BaseRatePct DECIMAL(9,4) NOT NULL,
+        EffectiveStartDate DATE NOT NULL,
+        EffectiveEndDate DATE NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPlanVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPlanVersion_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionPlanVersion') AND name = N'IX_CommissionPlanVersion_Effective')
+    CREATE INDEX IX_CommissionPlanVersion_Effective ON Commission.CommissionPlanVersion(TenantId, CommissionPlanId, StatusCode, EffectiveStartDate, EffectiveEndDate, VersionNumber DESC) INCLUDE (BaseRatePct, PlanName) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionPlanApplicability') AND name = N'IX_CommissionPlanApplicability_Resolve')
+    CREATE INDEX IX_CommissionPlanApplicability_Resolve ON Commission.CommissionPlanApplicability(TenantId, CarrierId, BusinessTypeCode, IsActive, IsDeleted, EffectiveStartDate, EffectiveEndDate, Priority) INCLUDE (CommissionPlanId, LineOfBusiness);
+
+IF OBJECT_ID(N'Commission.CommissionCalculationResult', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionCalculationResult
+    (
+        CalculationResultId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionCalculationResult PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionId UNIQUEIDENTIFIER NOT NULL,
+        PayeeId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        BaseAmount DECIMAL(18,2) NOT NULL,
+        RatePct DECIMAL(9,4) NOT NULL,
+        SplitPct DECIMAL(9,4) NOT NULL,
+        CalculatedAmount DECIMAL(18,2) NOT NULL,
+        AdjustedAmount DECIMAL(18,2) NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CalculatedDateUtc DATETIME2 NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionCalculationResult_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionCalculationResult_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionAccrualEntry', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionAccrualEntry
+    (
+        AccrualEntryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccrualEntry PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionId UNIQUEIDENTIFIER NOT NULL,
+        GLAccountId UNIQUEIDENTIFIER NULL,
+        AccrualDate DATE NOT NULL,
+        AccruedAmount DECIMAL(18,2) NOT NULL,
+        ReversalDate DATE NULL,
+        ReversedAmount DECIMAL(18,2) NULL,
+        JournalEntryId UNIQUEIDENTIFIER NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccrualEntry_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionAccrualEntry_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionTransaction') AND name = N'UX_CommissionTransaction_PolicyPayee')
+    CREATE UNIQUE INDEX UX_CommissionTransaction_PolicyPayee ON Commission.CommissionTransaction(TenantId, SourceEntityName, SourceEntityId, PayeeId) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionCalculationResult') AND name = N'UX_CommissionCalculationResult_TransactionPayee')
+    CREATE UNIQUE INDEX UX_CommissionCalculationResult_TransactionPayee ON Commission.CommissionCalculationResult(TenantId, TransactionId, PayeeId) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionAccrualEntry') AND name = N'UX_CommissionAccrualEntry_Transaction')
+    CREATE UNIQUE INDEX UX_CommissionAccrualEntry_Transaction ON Commission.CommissionAccrualEntry(TenantId, TransactionId) WHERE IsDeleted = 0;
 
 IF OBJECT_ID(N'tempdb..#PolicyBindTenants') IS NOT NULL DROP TABLE #PolicyBindTenants;
 CREATE TABLE #PolicyBindTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
@@ -19312,6 +19449,12 @@ IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ModifiedByUserId') IS NULL A
 IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityName') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityName NVARCHAR(100) NULL;
 IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ActionSource') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ActionSource NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionActionLog') AND name = N'IX_SubmissionActionLog_SubmissionDate')
+    EXEC(N'CREATE INDEX IX_SubmissionActionLog_SubmissionDate ON Submissions.SubmissionActionLog(SubmissionId, CreatedDateUtc DESC) INCLUDE (TenantId, ActionCode, Notes) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.TaskItem') AND name = N'IX_TaskItem_RelatedEntity')
+    EXEC(N'CREATE INDEX IX_TaskItem_RelatedEntity ON OPS.TaskItem(TenantId, RelatedEntityName, RelatedEntityId, IsDeleted, StatusCode, DueDate) INCLUDE (TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, AssignedToUserId, CreatedDateUtc);');
 
 IF OBJECT_ID(N'DMS.Document', N'U') IS NULL
 BEGIN

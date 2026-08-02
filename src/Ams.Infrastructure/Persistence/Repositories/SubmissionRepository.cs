@@ -1089,6 +1089,98 @@ END;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
     }
 
+    public async Task<BindCommissionEstimateDto> GetBindCommissionEstimateAsync(Guid submissionId, Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var resolved = await ResolveBindCommissionEstimateAsync(cn, submissionId, quoteId, tenantId, null, null, cancellationToken);
+        return resolved ?? new BindCommissionEstimateDto
+        {
+            IsConfigured = false,
+            UnavailableReason = "No active commission plan is configured for this carrier, line of business, producer, business type, and effective date."
+        };
+    }
+
+    private static async Task<BindCommissionEstimateDto?> ResolveBindCommissionEstimateAsync(
+        System.Data.IDbConnection cn,
+        Guid submissionId,
+        Guid quoteId,
+        Guid tenantId,
+        decimal? commissionablePremium,
+        DateTime? effectiveDate,
+        CancellationToken cancellationToken)
+    {
+        const string sql = @"
+DECLARE @ResolvedEffectiveDate DATE;
+DECLARE @ResolvedPremium DECIMAL(18,2);
+DECLARE @ProducerUserId UNIQUEIDENTIFIER;
+DECLARE @CarrierId UNIQUEIDENTIFIER;
+DECLARE @LineOfBusiness NVARCHAR(160);
+DECLARE @BusinessTypeCode NVARCHAR(50);
+
+SELECT @ResolvedEffectiveDate = COALESCE(@EffectiveDate, s.EffectiveDate),
+       @ResolvedPremium = COALESCE(@CommissionablePremium, q.AnnualPremium),
+       @ProducerUserId = s.AssignedToUserId,
+       @CarrierId = q.CarrierId,
+       @LineOfBusiness = NULLIF(s.LineOfBusiness, N''),
+       @BusinessTypeCode = CASE WHEN EXISTS
+       (
+           SELECT 1 FROM Renewal.RetentionCase rc
+           WHERE rc.TenantId = s.TenantId AND rc.RenewalSubmissionId = s.SubmissionId AND rc.IsDeleted = 0
+       ) THEN N'Renewal' ELSE N'NewBusiness' END
+FROM Submissions.Submission s
+INNER JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.QuoteId = @QuoteId AND q.IsDeleted = 0
+WHERE s.SubmissionId = @SubmissionId AND s.TenantId = @TenantId AND s.IsDeleted = 0;
+
+SELECT TOP 1
+       CAST(1 AS bit) AS IsConfigured,
+       app.CommissionPlanApplicabilityId,
+       p.CommissionPlanId,
+       p.PlanName AS CommissionPlanName,
+       pv.PlanVersionId AS CommissionPlanVersionId,
+       pv.VersionNumber AS PlanVersionNumber,
+       payee.PayeeId AS CommissionPayeeId,
+       split.SplitRuleId AS CommissionSplitRuleId,
+       @BusinessTypeCode AS BusinessTypeCode,
+       COALESCE(split.OverrideRatePct, pv.BaseRatePct) AS CommissionRatePct,
+       COALESCE(split.SplitPct, payee.SplitPercentage) AS CommissionSplitPct,
+       @ResolvedPremium AS CommissionablePremium,
+       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, pv.BaseRatePct) / 100.0, 2) AS EstimatedGrossCommission,
+       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, pv.BaseRatePct) / 100.0 * COALESCE(split.SplitPct, payee.SplitPercentage) / 100.0, 2) AS EstimatedProducerCommission
+FROM Commission.CommissionPlanApplicability app
+INNER JOIN Commission.CommissionPlan p
+    ON p.CommissionPlanId = app.CommissionPlanId AND p.TenantId = app.TenantId AND p.StatusCode = N'Active' AND p.IsDeleted = 0
+INNER JOIN Commission.CommissionPayee payee
+    ON payee.CommissionPlanId = p.CommissionPlanId AND payee.TenantId = p.TenantId AND payee.UserId = @ProducerUserId
+   AND payee.StatusCode = N'Active' AND payee.EffectiveDate <= @ResolvedEffectiveDate AND payee.IsDeleted = 0
+INNER JOIN Commission.CommissionPlanVersion pv
+    ON pv.CommissionPlanId = p.CommissionPlanId AND pv.TenantId = p.TenantId AND pv.StatusCode = N'Active'
+   AND pv.EffectiveStartDate <= @ResolvedEffectiveDate AND (pv.EffectiveEndDate IS NULL OR pv.EffectiveEndDate >= @ResolvedEffectiveDate) AND pv.IsDeleted = 0
+OUTER APPLY
+(
+    SELECT TOP 1 sr.SplitRuleId, sr.SplitPct, sr.OverrideRatePct
+    FROM Commission.CommissionSplitRule sr
+    WHERE sr.TenantId = p.TenantId AND sr.CommissionPlanId = p.CommissionPlanId
+      AND (sr.PayeeId = payee.PayeeId OR sr.PayeeId IS NULL) AND sr.StatusCode = N'Active'
+      AND sr.EffectiveStartDate <= @ResolvedEffectiveDate AND (sr.EffectiveEndDate IS NULL OR sr.EffectiveEndDate >= @ResolvedEffectiveDate)
+      AND sr.IsDeleted = 0
+    ORDER BY CASE WHEN sr.PayeeId = payee.PayeeId THEN 0 ELSE 1 END, sr.Priority, sr.EffectiveStartDate DESC
+) split
+WHERE app.TenantId = @TenantId AND app.CarrierId = @CarrierId AND app.BusinessTypeCode = @BusinessTypeCode
+  AND (app.LineOfBusiness = @LineOfBusiness OR app.LineOfBusiness IS NULL)
+  AND app.EffectiveStartDate <= @ResolvedEffectiveDate AND (app.EffectiveEndDate IS NULL OR app.EffectiveEndDate >= @ResolvedEffectiveDate)
+  AND app.IsActive = 1 AND app.IsDeleted = 0 AND @ResolvedPremium > 0 AND @ProducerUserId IS NOT NULL
+ORDER BY CASE WHEN app.LineOfBusiness = @LineOfBusiness THEN 0 ELSE 1 END, app.Priority, app.EffectiveStartDate DESC, pv.VersionNumber DESC;";
+
+        return await cn.QuerySingleOrDefaultAsync<BindCommissionEstimateDto>(new CommandDefinition(sql, new
+        {
+            SubmissionId = submissionId,
+            QuoteId = quoteId,
+            TenantId = tenantId,
+            CommissionablePremium = commissionablePremium,
+            EffectiveDate = effectiveDate
+        }, cancellationToken: cancellationToken));
+    }
+
     private async Task EnsureDefaultIntakeAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken)
     {
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -1526,6 +1618,43 @@ SELECT @ReviewId = review.ProposalReviewId, @SubmissionId = review.SubmissionId,
 FROM Submissions.ProposalReview review WITH (UPDLOCK) INNER JOIN Submissions.Proposal proposal ON proposal.ProposalId = review.ProposalId AND proposal.CurrentReviewId = review.ProposalReviewId
 WHERE review.ProposalId = @ProposalId AND review.TenantId = @TenantId AND review.AssignedReviewerUserId = @DecidedByUserId AND review.StatusCode = N'Pending' AND review.IsDeleted = 0;
 IF @ReviewId IS NULL THROW 52203, 'The active review is not assigned to this reviewer.', 1;
+IF @DecisionCode = N'Approved' AND NOT EXISTS (SELECT 1 FROM Submissions.ProposalQuote WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52212, 'Proposal approval requires at least one included bindable quote with persisted bindable coverage lines.', 1;
+IF @DecisionCode = N'Approved' AND EXISTS
+(
+    SELECT 1
+    FROM Submissions.ProposalQuote proposalQuote
+    INNER JOIN Submissions.Quote quote ON quote.QuoteId = proposalQuote.QuoteId
+    WHERE proposalQuote.ProposalId = @ProposalId
+      AND proposalQuote.TenantId = @TenantId
+      AND proposalQuote.IsDeleted = 0
+      AND
+      (
+          quote.IsDeleted = 1
+          OR quote.IsBindable = 0
+          OR NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0)
+          OR EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0 AND quoteLine.IsBindable = 0)
+          OR EXISTS
+          (
+              SELECT 1
+              FROM Submissions.SubmissionLine submissionLine
+              WHERE submissionLine.SubmissionId = quote.SubmissionId
+                AND submissionLine.TenantId = @TenantId
+                AND submissionLine.IsDeleted = 0
+                AND NOT EXISTS
+                (
+                    SELECT 1
+                    FROM Submissions.QuoteLine quoteLine
+                    WHERE quoteLine.QuoteId = quote.QuoteId
+                      AND quoteLine.TenantId = @TenantId
+                      AND quoteLine.SubmissionLineId = submissionLine.SubmissionLineId
+                      AND quoteLine.IsDeleted = 0
+                      AND quoteLine.IsBindable = 1
+                )
+          )
+      )
+)
+    THROW 52212, 'Proposal approval requires every included quote and persisted coverage line to be marked bindable. Open Quote Review and resolve all bindability items before approving.', 1;
 UPDATE Submissions.ProposalReview SET StatusCode = @DecisionCode, DecisionNotes = @DecisionNotes, CompletedDateUtc = SYSUTCDATETIME(), ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @DecidedByUserId WHERE ProposalReviewId = @ReviewId;
 IF @DecisionCode = N'Approved'
 BEGIN
@@ -2475,6 +2604,86 @@ ORDER BY SortOrder, StatusName;";
         return (await cn.QueryAsync<PolicyBindStatusDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
 
+    public async Task<IReadOnlyList<BindQueueItemDto>> GetBindQueueAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SELECT q.QuoteId,
+       s.SubmissionId,
+       s.TenantId,
+       s.AccountId,
+       a.AccountName,
+       s.SubmissionNumber,
+       s.LineOfBusiness,
+       COALESCE(u.FullName, u.DisplayName, u.UserName, N'') AS ProducerName,
+       CAST(s.EffectiveDate AS DATETIME2) AS EffectiveDate,
+       CAST(s.ExpirationDate AS DATETIME2) AS ExpirationDate,
+       q.CarrierId,
+       c.CarrierName,
+       q.QuoteNumber,
+       q.Status AS QuoteStatus,
+       q.AnnualPremium,
+       q.Deductible,
+       q.[Limit],
+       q.CommissionPercent,
+       q.Subjectivities,
+       q.Exclusions,
+       q.CarrierRating,
+       q.PaymentTerms,
+       q.MinimumEarnedPremium,
+       q.TaxesAndFees,
+       q.BrokerFee,
+       q.TriaIncluded,
+       q.QuoteDocumentId,
+       q.CoverageNotes,
+       q.IsSelected,
+       q.IsRecommended,
+       q.RecommendationScore,
+       q.RecommendationReason,
+       q.ExpiresDateUtc AS QuoteExpiresDateUtc,
+       latest.PolicyBindTransactionId,
+       latest.PolicyId,
+       COALESCE(bp.PolicyNumber, latest.PolicyNumber) AS PolicyNumber,
+       latest.BindStatusCode,
+       COALESCE(pbs.StatusName, latest.BindStatusCode) AS BindStatusName,
+       latest.BindReason,
+       latest.Notes AS BindNotes,
+       latest.CreatedDateUtc AS BindCreatedDateUtc
+FROM Submissions.Submission s
+INNER JOIN Client.Account a ON a.AccountId = s.AccountId
+INNER JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0
+INNER JOIN Core.Carrier c ON c.CarrierId = q.CarrierId
+LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
+OUTER APPLY
+(
+    SELECT TOP 1 pbt.PolicyBindTransactionId,
+           pbt.PolicyId,
+           pbt.PolicyNumber,
+           pbt.BindStatusCode,
+           pbt.BindReason,
+           pbt.Notes,
+           pbt.CreatedDateUtc
+    FROM Submissions.PolicyBindTransaction pbt
+    WHERE pbt.TenantId = s.TenantId
+      AND pbt.SubmissionId = s.SubmissionId
+      AND pbt.QuoteId = q.QuoteId
+      AND pbt.IsDeleted = 0
+    ORDER BY pbt.CreatedDateUtc DESC, pbt.PolicyBindTransactionId DESC
+) latest
+LEFT JOIN Submissions.BoundPolicy bp ON bp.PolicyId = latest.PolicyId AND bp.IsDeleted = 0
+LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = s.TenantId AND pbs.StatusCode = latest.BindStatusCode AND pbs.IsDeleted = 0
+WHERE s.TenantId = @TenantId
+  AND s.IsDeleted = 0
+  AND (q.IsSelected = 1 OR q.IsRecommended = 1 OR q.AnnualPremium > 0 OR NULLIF(q.Status, N'') IS NOT NULL)
+ORDER BY COALESCE(latest.CreatedDateUtc, q.QuoteReceivedDateUtc, q.CreatedDateUtc) DESC,
+         s.SubmissionNumber,
+         q.IsSelected DESC,
+         q.RecommendationScore DESC;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await EnsurePolicyBindTransactionSchemaAsync(cn, tenantId, cancellationToken);
+        return (await cn.QueryAsync<BindQueueItemDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public async Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
@@ -2545,8 +2754,20 @@ SELECT pbt.PolicyBindTransactionId,
        pbt.ConfirmationDocumentId,
        pbt.ConfirmationReceivedFrom,
        pbt.ConfirmationMessageId,
+       pbt.UnderwriterContactId,
        pbt.UnderwriterName,
        pbt.UnderwriterCompany,
+       pbt.CommissionPlanApplicabilityId,
+       pbt.CommissionPlanId,
+       pbt.CommissionPlanVersionId,
+       pbt.CommissionPayeeId,
+       pbt.CommissionSplitRuleId,
+       pbt.CommissionBusinessTypeCode,
+       pbt.CommissionRatePct,
+       pbt.CommissionSplitPct,
+       pbt.CommissionablePremium,
+       pbt.EstimatedGrossCommission,
+       pbt.EstimatedProducerCommission,
        pbt.FollowUpWrittenConfirmationRequired,
        pbt.IntegrationCorrelationId,
        pbt.ExternalTransactionId,
@@ -2619,8 +2840,20 @@ SELECT TOP 1 pbt.PolicyBindTransactionId,
        pbt.ConfirmationDocumentId,
        pbt.ConfirmationReceivedFrom,
        pbt.ConfirmationMessageId,
+       pbt.UnderwriterContactId,
        pbt.UnderwriterName,
        pbt.UnderwriterCompany,
+       pbt.CommissionPlanApplicabilityId,
+       pbt.CommissionPlanId,
+       pbt.CommissionPlanVersionId,
+       pbt.CommissionPayeeId,
+       pbt.CommissionSplitRuleId,
+       pbt.CommissionBusinessTypeCode,
+       pbt.CommissionRatePct,
+       pbt.CommissionSplitPct,
+       pbt.CommissionablePremium,
+       pbt.EstimatedGrossCommission,
+       pbt.EstimatedProducerCommission,
        pbt.FollowUpWrittenConfirmationRequired,
        pbt.IntegrationCorrelationId,
        pbt.ExternalTransactionId,
@@ -2653,6 +2886,227 @@ WHERE PolicyBindTransactionId = @PolicyBindTransactionId
         await EnsurePolicyBindTransactionSchemaAsync(cn, tenantId ?? Guid.Parse("00000000-0000-0000-0000-000000000001"), cancellationToken);
 
         return await cn.QuerySingleOrDefaultAsync<PolicyBindTransactionDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SELECT pbt.*, s.SubmissionNumber, q.QuoteNumber, a.AccountName, c.CarrierName,
+       COALESCE(pcs.SourceName, pbt.PolicySourceCode) AS PolicySourceName,
+       COALESCE(pbs.StatusName, pbt.BindStatusCode) AS BindStatusName,
+       cso.OptionName AS ConfirmationSourceName,
+       bmo.OptionName AS BindingMethodName,
+       bao.OptionName AS BindingAuthorityName
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId AND s.TenantId = pbt.TenantId
+LEFT JOIN Submissions.Quote q ON q.QuoteId = pbt.QuoteId AND q.IsDeleted = 0
+LEFT JOIN Client.Account a ON a.AccountId = pbt.AccountId
+LEFT JOIN Core.Carrier c ON c.CarrierId = pbt.CarrierId
+LEFT JOIN Submissions.PolicyCreationSource pcs ON pcs.TenantId = pbt.TenantId AND pcs.SourceCode = pbt.PolicySourceCode AND pcs.IsDeleted = 0
+LEFT JOIN Submissions.PolicyBindStatus pbs ON pbs.TenantId = pbt.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsDeleted = 0
+LEFT JOIN Submissions.SubmissionReferenceOption cso ON cso.TenantId = pbt.TenantId AND cso.OptionGroup = N'BindConfirmationSource' AND cso.OptionCode = pbt.ConfirmationSourceCode AND cso.IsDeleted = 0
+LEFT JOIN Submissions.SubmissionReferenceOption bmo ON bmo.TenantId = pbt.TenantId AND bmo.OptionGroup = N'BindMethod' AND bmo.OptionCode = pbt.BindingMethodCode AND bmo.IsDeleted = 0
+LEFT JOIN Submissions.SubmissionReferenceOption bao ON bao.TenantId = pbt.TenantId AND bao.OptionGroup = N'BindingAuthority' AND bao.OptionCode = pbt.BindingAuthorityCode AND bao.IsDeleted = 0
+WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId AND pbt.TenantId = @TenantId AND pbt.IsDeleted = 0;
+
+SELECT br.* FROM Submissions.BindRequirement br
+INNER JOIN Submissions.PolicyBindTransaction pbt ON pbt.PolicyBindTransactionId = @PolicyBindTransactionId AND pbt.TenantId = br.TenantId
+INNER JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId
+WHERE br.TenantId = @TenantId AND br.IsActive = 1 AND br.IsDeleted = 0
+  AND (br.CarrierId IS NULL OR br.CarrierId = pbt.CarrierId)
+  AND (br.LineOfBusiness IS NULL OR br.LineOfBusiness = s.LineOfBusiness)
+ORDER BY br.SortOrder, br.RequirementName;
+
+SELECT * FROM Submissions.BindValidationResult WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY ValidatedDateUtc DESC, RequirementName;
+SELECT h.*, COALESCE(u.FullName, u.DisplayName, u.UserName) AS ChangedByName FROM Submissions.BindStatusHistory h LEFT JOIN IAM.[User] u ON u.UserId = h.ChangedByUserId WHERE h.PolicyBindTransactionId = @PolicyBindTransactionId AND h.TenantId = @TenantId AND h.IsDeleted = 0 ORDER BY h.ChangedDateUtc DESC;
+SELECT a.*, o.OptionName AS ApprovalReasonName FROM Submissions.BindApproval a LEFT JOIN Submissions.SubmissionReferenceOption o ON o.TenantId = a.TenantId AND o.OptionGroup = N'BindApprovalReason' AND o.OptionCode = a.ApprovalReasonCode AND o.IsDeleted = 0 WHERE a.PolicyBindTransactionId = @PolicyBindTransactionId AND a.TenantId = @TenantId AND a.IsDeleted = 0 ORDER BY a.RequestedDateUtc DESC;
+SELECT bd.*, d.FileName, d.CategoryCode AS Category FROM Submissions.BindDocument bd INNER JOIN DMS.Document d ON d.DocumentId = bd.DocumentId AND d.TenantId = bd.TenantId AND d.IsDeleted = 0 WHERE bd.PolicyBindTransactionId = @PolicyBindTransactionId AND bd.TenantId = @TenantId AND bd.IsDeleted = 0 ORDER BY bd.CreatedDateUtc DESC;
+SELECT * FROM Submissions.BindCarrierMessage WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY SentReceivedDateUtc DESC;
+SELECT * FROM Submissions.BindPackage WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY PreparedDateUtc DESC;
+SELECT FromStatusCode, ToStatusCode, RequiresValidation, RequiresApproval, RequiresCarrierResponse
+FROM Submissions.BindStatusTransition
+WHERE TenantId = @TenantId AND FromStatusCode = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0)
+  AND IsActive = 1 AND IsDeleted = 0
+ORDER BY ToStatusCode;
+SELECT * FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'BindMethod' AND IsActive = 1 AND IsDeleted = 0 ORDER BY SortOrder;
+SELECT * FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'BindingAuthority' AND IsActive = 1 AND IsDeleted = 0 ORDER BY SortOrder;
+SELECT * FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'BindApprovalReason' AND IsActive = 1 AND IsDeleted = 0 ORDER BY SortOrder;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+        var request = await multi.ReadSingleOrDefaultAsync<PolicyBindTransactionDto>();
+        if (request is null) return null;
+        var detail = new BindRequestDetailDto
+        {
+            Request = request,
+            Requirements = (await multi.ReadAsync<BindRequirementDto>()).AsList(),
+            Validations = (await multi.ReadAsync<BindValidationResultDto>()).AsList(),
+            StatusHistory = (await multi.ReadAsync<BindStatusHistoryDto>()).AsList(),
+            Approvals = (await multi.ReadAsync<BindApprovalDto>()).AsList(),
+            Documents = (await multi.ReadAsync<BindDocumentDto>()).AsList(),
+            CarrierMessages = (await multi.ReadAsync<BindCarrierMessageDto>()).AsList(),
+            Packages = (await multi.ReadAsync<BindPackageDto>()).AsList(),
+            AllowedTransitions = (await multi.ReadAsync<BindStatusTransitionDto>()).AsList(),
+            BindingMethods = (await multi.ReadAsync<SubmissionReferenceOptionDto>()).AsList(),
+            BindingAuthorities = (await multi.ReadAsync<SubmissionReferenceOptionDto>()).AsList(),
+            ApprovalReasons = (await multi.ReadAsync<SubmissionReferenceOptionDto>()).AsList()
+        };
+        detail.BlockingValidationCount = detail.Validations.Count(x => x.IsBlocking && x.StatusCode is not ("Passed" or "Waived"));
+        detail.IsReadyToSubmit = detail.Validations.Count > 0 && detail.BlockingValidationCount == 0;
+        return detail;
+    }
+
+    public async Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid policyBindTransactionId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52100, 'Bind request was not found.', 1;
+
+UPDATE Submissions.BindValidationResult SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ValidatedByUserId
+WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO Submissions.BindValidationResult
+    (BindValidationResultId, TenantId, PolicyBindTransactionId, BindRequirementId, RequirementCode, RequirementName, RequirementTypeCode, StatusCode, IsBlocking, Message, EvidenceDocumentId, ValidatedDateUtc, ValidatedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), br.TenantId, pbt.PolicyBindTransactionId, br.BindRequirementId, br.RequirementCode, br.RequirementName, br.RequirementTypeCode,
+       result.StatusCode,
+       CAST(CASE WHEN br.BlocksSubmission = 1 AND result.StatusCode NOT IN (N'Passed', N'Waived') THEN 1 ELSE 0 END AS bit),
+       result.Message, result.EvidenceDocumentId, SYSUTCDATETIME(), @ValidatedByUserId, SYSUTCDATETIME(), @ValidatedByUserId, 0
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN Submissions.Submission s ON s.SubmissionId = pbt.SubmissionId AND s.TenantId = pbt.TenantId
+INNER JOIN Submissions.BindRequirement br ON br.TenantId = pbt.TenantId AND (br.CarrierId IS NULL OR br.CarrierId = pbt.CarrierId) AND (br.LineOfBusiness IS NULL OR br.LineOfBusiness = s.LineOfBusiness) AND br.IsRequired = 1 AND br.IsActive = 1 AND br.IsDeleted = 0
+OUTER APPLY
+(
+    SELECT TOP 1 d.DocumentId
+    FROM DMS.Document d
+    WHERE d.TenantId = pbt.TenantId AND d.EntityName = N'Submission' AND d.EntityId = pbt.SubmissionId AND d.IsDeleted = 0
+      AND (d.CategoryCode = br.DocumentCategoryCode OR EXISTS (SELECT 1 FROM Submissions.BindDocument bd WHERE bd.TenantId = pbt.TenantId AND bd.PolicyBindTransactionId = pbt.PolicyBindTransactionId AND bd.DocumentId = d.DocumentId AND bd.DocumentRoleCode = br.RequirementCode AND bd.IsDeleted = 0))
+) evidence
+CROSS APPLY
+(
+    SELECT
+      CASE
+        WHEN br.RequirementTypeCode = N'Document' THEN CASE WHEN evidence.DocumentId IS NOT NULL THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'ProposalAccepted' THEN CASE WHEN EXISTS (SELECT 1 FROM Submissions.ClientAcceptance ca WHERE ca.TenantId = pbt.TenantId AND ca.SubmissionId = pbt.SubmissionId AND ca.QuoteId = pbt.QuoteId AND ca.StatusCode IN (N'Accepted', N'BindRequested', N'CarrierBound') AND ca.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'QuoteBindable' THEN CASE WHEN EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = pbt.QuoteId AND q.SubmissionId = pbt.SubmissionId AND q.IsBindable = 1 AND q.ExpiresDateUtc > SYSUTCDATETIME() AND q.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'EffectiveDateValid' THEN CASE WHEN pbt.EffectiveDate >= CAST(SYSUTCDATETIME() AS date) AND pbt.ExpirationDate > pbt.EffectiveDate THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'UnderwritingComplete' THEN CASE WHEN NOT EXISTS (SELECT 1 FROM Submissions.SubmissionIntakeQuestion iq WHERE iq.SubmissionId = pbt.SubmissionId AND iq.TenantId = pbt.TenantId AND iq.IsRequired = 1 AND iq.IsAnswered = 0 AND iq.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'ProducerLicensed' THEN CASE WHEN EXISTS (SELECT 1 FROM Agency.Staff st WHERE st.StaffId = s.AssignedToUserId AND st.TenantId = pbt.TenantId AND NULLIF(st.LicenseNumber, N'') IS NOT NULL AND (st.LicenseExpiryDate IS NULL OR st.LicenseExpiryDate >= pbt.EffectiveDate) AND st.IsActive = 1 AND st.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'CarrierAppointment' THEN CASE WHEN EXISTS (SELECT 1 FROM Agency.CarrierAppointment ca WHERE ca.TenantId = pbt.TenantId AND ca.CarrierId = pbt.CarrierId AND (NULLIF(ca.LineOfBusiness, N'') IS NULL OR ca.LineOfBusiness = s.LineOfBusiness) AND ca.AppointmentDate <= pbt.EffectiveDate AND (ca.ExpirationDate IS NULL OR ca.ExpirationDate >= pbt.EffectiveDate) AND ca.IsActive = 1 AND ca.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'AgencyAppointment' THEN CASE WHEN EXISTS (SELECT 1 FROM Agency.CarrierAppointment ca WHERE ca.TenantId = pbt.TenantId AND ca.CarrierId = pbt.CarrierId AND ca.AppointmentDate <= pbt.EffectiveDate AND (ca.ExpirationDate IS NULL OR ca.ExpirationDate >= pbt.EffectiveDate) AND ca.IsActive = 1 AND ca.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'PremiumCalculated' THEN CASE WHEN pbt.AnnualPremium > 0 THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'TaxesCalculated' THEN CASE WHEN EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = pbt.QuoteId AND q.TenantId = pbt.TenantId AND q.TaxesAndFees IS NOT NULL AND q.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'RequiredNotes' THEN CASE WHEN NULLIF(LTRIM(RTRIM(COALESCE(pbt.ProducerNotes, pbt.Notes))), N'') IS NOT NULL THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'RequiredActivities' THEN CASE WHEN NOT EXISTS (SELECT 1 FROM OPS.TaskItem t WHERE t.TenantId = pbt.TenantId AND t.RelatedEntityName = N'Submission' AND t.RelatedEntityId = pbt.SubmissionId AND t.StatusCode NOT IN (N'Completed', N'Cancelled', N'Closed') AND t.DueDate < CAST(SYSUTCDATETIME() AS date) AND t.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'ComplianceClear' THEN CASE WHEN NOT EXISTS (SELECT 1 FROM OPS.TaskItem t WHERE t.TenantId = pbt.TenantId AND t.RelatedEntityName = N'Submission' AND t.RelatedEntityId = pbt.SubmissionId AND (t.TaskTypeCode LIKE N'%Compliance%' OR t.Title LIKE N'%DNC%') AND t.StatusCode NOT IN (N'Completed', N'Cancelled', N'Closed') AND t.IsDeleted = 0) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode IN (N'OutstandingInspection', N'OutstandingSurvey', N'OutstandingMvr', N'OutstandingClaimsReview') THEN CASE WHEN NOT EXISTS (SELECT 1 FROM OPS.TaskItem t WHERE t.TenantId = pbt.TenantId AND t.RelatedEntityName = N'Submission' AND t.RelatedEntityId = pbt.SubmissionId AND t.StatusCode NOT IN (N'Completed', N'Cancelled', N'Closed') AND t.IsDeleted = 0 AND ((br.RequirementCode = N'OutstandingInspection' AND (t.TaskTypeCode LIKE N'%Inspection%' OR t.Title LIKE N'%Inspection%')) OR (br.RequirementCode = N'OutstandingSurvey' AND (t.TaskTypeCode LIKE N'%Survey%' OR t.Title LIKE N'%Survey%')) OR (br.RequirementCode = N'OutstandingMvr' AND (t.TaskTypeCode LIKE N'%MVR%' OR t.Title LIKE N'%MVR%')) OR (br.RequirementCode = N'OutstandingClaimsReview' AND (t.TaskTypeCode LIKE N'%Claim%' OR t.Title LIKE N'%Claim%')))) THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementCode = N'DownPaymentVerified' AND pbt.PaymentRequired = 0 THEN N'Waived'
+        WHEN br.RequirementCode = N'DownPaymentVerified' THEN CASE WHEN pbt.PaymentVerified = 1 AND COALESCE(pbt.DownPaymentAmount, 0) > 0 THEN N'Passed' ELSE N'Failed' END
+        WHEN br.RequirementTypeCode = N'Payment' AND pbt.PaymentRequired = 0 THEN N'Waived'
+        WHEN br.RequirementTypeCode = N'Payment' AND pbt.PaymentVerified = 1 THEN N'Passed'
+        ELSE N'Pending'
+      END AS StatusCode,
+      CASE
+        WHEN br.RequirementTypeCode = N'Document' AND evidence.DocumentId IS NULL THEN CONCAT(br.RequirementName, N' is required before submission.')
+        WHEN br.RequirementCode = N'ProducerLicensed' THEN N'The assigned producer license must cover the requested effective date.'
+        WHEN br.RequirementCode = N'CarrierAppointment' THEN N'An active carrier appointment must cover this line and effective date.'
+        ELSE NULL
+      END AS Message,
+      evidence.DocumentId AS EvidenceDocumentId
+) result
+WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId AND pbt.TenantId = @TenantId AND pbt.IsDeleted = 0;
+
+SELECT * FROM Submissions.BindValidationResult WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY IsBlocking DESC, RequirementName;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<BindValidationResultDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.ValidatedByUserId }, cancellationToken: cancellationToken))).AsList();
+    }
+
+    public async Task UpdateBindRequestStatusAsync(Guid policyBindTransactionId, UpdateBindRequestStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0);
+IF @OldStatusCode IS NULL THROW 52100, 'Bind request was not found.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = @StatusCode AND IsActive = 1 AND IsDeleted = 0) THROW 52101, 'Bind request status is not configured.', 1;
+UPDATE Submissions.PolicyBindTransaction SET BindStatusCode = @StatusCode,
+    PreparedDateUtc = CASE WHEN @StatusCode = N'Ready' THEN COALESCE(PreparedDateUtc, SYSUTCDATETIME()) ELSE PreparedDateUtc END,
+    SubmittedDateUtc = CASE WHEN @StatusCode = N'Submitted' THEN COALESCE(SubmittedDateUtc, SYSUTCDATETIME()) ELSE SubmittedDateUtc END,
+    ReceivedDateUtc = CASE WHEN @StatusCode = N'Received' THEN COALESCE(ReceivedDateUtc, SYSUTCDATETIME()) ELSE ReceivedDateUtc END,
+    ApprovedDateUtc = CASE WHEN @StatusCode = N'Approved' THEN COALESCE(ApprovedDateUtc, SYSUTCDATETIME()) ELSE ApprovedDateUtc END,
+    BoundDateUtc = CASE WHEN @StatusCode = N'Bound' THEN COALESCE(BoundDateUtc, SYSUTCDATETIME()) ELSE BoundDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ChangedByUserId
+WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0;
+INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, IpAddress, DeviceInfo, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, @OldStatusCode, @StatusCode, @Comments, @IpAddress, @DeviceInfo, SYSUTCDATETIME(), @ChangedByUserId, SYSUTCDATETIME(), @ChangedByUserId, 0);
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.StatusCode, request.Comments, request.ChangedByUserId, request.IpAddress, request.DeviceInfo }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<Guid> RequestBindApprovalAsync(Guid policyBindTransactionId, RequestBindApprovalRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0) THROW 52100, 'Bind request was not found.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'BindApprovalReason' AND OptionCode = @ApprovalReasonCode AND IsActive = 1 AND IsDeleted = 0) THROW 52102, 'Approval reason is not configured.', 1;
+DECLARE @Id UNIQUEIDENTIFIER = NEWID();
+INSERT INTO Submissions.BindApproval (BindApprovalId, TenantId, PolicyBindTransactionId, ApprovalReasonCode, StatusCode, RequestedByUserId, RequestedDateUtc, AssignedApproverUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (@Id, @TenantId, @PolicyBindTransactionId, @ApprovalReasonCode, N'Pending', @RequestedByUserId, SYSUTCDATETIME(), @AssignedApproverUserId, SYSUTCDATETIME(), @RequestedByUserId, 0);
+DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId);
+UPDATE Submissions.PolicyBindTransaction SET ApprovalRequired = 1, BindStatusCode = N'PendingApproval', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RequestedByUserId WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId;
+INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, @OldStatusCode, N'PendingApproval', N'Bind approval requested.', SYSUTCDATETIME(), @RequestedByUserId, SYSUTCDATETIME(), @RequestedByUserId, 0);
+SELECT @Id;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.ApprovalReasonCode, request.AssignedApproverUserId, request.RequestedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DecideBindApprovalAsync(Guid policyBindTransactionId, Guid bindApprovalId, DecideBindApprovalRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+UPDATE Submissions.BindApproval SET StatusCode = @DecisionCode, DecisionByUserId = @DecisionByUserId, DecisionDateUtc = SYSUTCDATETIME(), DecisionNotes = @DecisionNotes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @DecisionByUserId
+WHERE BindApprovalId = @BindApprovalId AND PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND StatusCode = N'Pending' AND IsDeleted = 0;
+IF @@ROWCOUNT = 0 THROW 52103, 'Pending bind approval was not found.', 1;
+UPDATE Submissions.PolicyBindTransaction SET ApprovedByUserId = CASE WHEN @DecisionCode = N'Approved' THEN @DecisionByUserId ELSE ApprovedByUserId END, ApprovedDateUtc = CASE WHEN @DecisionCode = N'Approved' THEN SYSUTCDATETIME() ELSE ApprovedDateUtc END, BindStatusCode = CASE WHEN @DecisionCode = N'Approved' THEN N'Ready' ELSE N'Draft' END, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @DecisionByUserId
+WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0;
+INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, N'PendingApproval', CASE WHEN @DecisionCode = N'Approved' THEN N'Ready' ELSE N'Draft' END, CONCAT(N'Approval ', LOWER(@DecisionCode), N'. ', COALESCE(@DecisionNotes, N'')), SYSUTCDATETIME(), @DecisionByUserId, SYSUTCDATETIME(), @DecisionByUserId, 0);
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, BindApprovalId = bindApprovalId, request.TenantId, request.DecisionCode, request.DecisionNotes, request.DecisionByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task RecordBindCarrierResponseAsync(Guid policyBindTransactionId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0) THROW 52100, 'Bind request was not found.', 1;
+INSERT INTO Submissions.BindCarrierMessage (BindCarrierMessageId, TenantId, PolicyBindTransactionId, DirectionCode, MessageTypeCode, DeliveryMethodCode, ExternalMessageId, Subject, MessageBody, StatusCode, SentReceivedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, N'Inbound', @MessageTypeCode, @DeliveryMethodCode, @ExternalMessageId, @Subject, @MessageBody, @StatusCode, SYSUTCDATETIME(), SYSUTCDATETIME(), @RecordedByUserId, 0);
+UPDATE Submissions.PolicyBindTransaction SET CarrierReferenceNumber = COALESCE(NULLIF(@CarrierReferenceNumber, N''), CarrierReferenceNumber), BinderNumber = COALESCE(NULLIF(@BinderNumber, N''), BinderNumber), FinalPremium = COALESCE(@FinalPremium, FinalPremium), ConfirmationDocumentId = COALESCE(@ConfirmationDocumentId, ConfirmationDocumentId), ConfirmationSourceCode = COALESCE(NULLIF(@ConfirmationSourceCode, N''), ConfirmationSourceCode), ConfirmationCertified = CASE WHEN @ConfirmationCertified = 1 THEN 1 ELSE ConfirmationCertified END, ConfirmationNotes = COALESCE(NULLIF(@MessageBody, N''), ConfirmationNotes), ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RecordedByUserId
+WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.StatusCode, request.MessageTypeCode, request.DeliveryMethodCode, request.ExternalMessageId, request.Subject, request.MessageBody, request.CarrierReferenceNumber, request.BinderNumber, request.FinalPremium, request.ConfirmationDocumentId, request.RecordedByUserId, request.ConfirmationSourceCode, request.ConfirmationCertified }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<BindPackageDto> PrepareBindPackageAsync(Guid policyBindTransactionId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0) THROW 52100, 'Bind request was not found.', 1;
+DECLARE @PackageId UNIQUEIDENTIFIER = NEWID();
+DECLARE @PackageNumber NVARCHAR(80) = CONCAT(N'BPK-', FORMAT(SYSUTCDATETIME(), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), @PackageId), N'-', N''), 8));
+INSERT INTO Submissions.BindDocument (BindDocumentId, TenantId, PolicyBindTransactionId, DocumentId, DocumentRoleCode, IsRequiredEvidence, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), pbt.TenantId, pbt.PolicyBindTransactionId, d.DocumentId, COALESCE(NULLIF(d.CategoryCode, N''), N'SupportingDocument'), 0, SYSUTCDATETIME(), @PreparedByUserId, 0
+FROM Submissions.PolicyBindTransaction pbt
+INNER JOIN DMS.Document d ON d.TenantId = pbt.TenantId AND d.EntityName = N'Submission' AND d.EntityId = pbt.SubmissionId AND d.IsDeleted = 0
+WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId AND pbt.TenantId = @TenantId AND pbt.IsDeleted = 0
+AND NOT EXISTS (SELECT 1 FROM Submissions.BindDocument bd WHERE bd.TenantId = pbt.TenantId AND bd.PolicyBindTransactionId = pbt.PolicyBindTransactionId AND bd.DocumentId = d.DocumentId AND bd.DocumentRoleCode = COALESCE(NULLIF(d.CategoryCode, N''), N'SupportingDocument') AND bd.IsDeleted = 0);
+DECLARE @DocumentCount INT = (SELECT COUNT(*) FROM Submissions.BindDocument WHERE TenantId = @TenantId AND PolicyBindTransactionId = @PolicyBindTransactionId AND IsDeleted = 0);
+INSERT INTO Submissions.BindPackage (BindPackageId, TenantId, PolicyBindTransactionId, PackageNumber, StatusCode, PreparedDateUtc, PreparedByUserId, DocumentCount, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (@PackageId, @TenantId, @PolicyBindTransactionId, @PackageNumber, N'Prepared', SYSUTCDATETIME(), @PreparedByUserId, @DocumentCount, @Notes, SYSUTCDATETIME(), @PreparedByUserId, 0);
+SELECT BindPackageId, PolicyBindTransactionId, PackageNumber, StatusCode, PreparedDateUtc, PreparedByUserId, DocumentCount, Notes FROM Submissions.BindPackage WHERE BindPackageId = @PackageId;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleAsync<BindPackageDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.Notes, request.PreparedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
@@ -3254,7 +3708,7 @@ SELECT @SubmissionId;";
         }
         else if (source.RequiresQuote)
         {
-            var quotes = await GetQuoteComparisonAsync(id, cancellationToken);
+            var quotes = await GetQuoteComparisonAsync(id, request.TenantId, cancellationToken);
             quote = quotes
                 .Where(q => q.Status is "Selected" or "Bound")
                 .OrderByDescending(q => q.Status == "Selected")
@@ -3474,8 +3928,20 @@ BEGIN
         ConfirmationDocumentId UNIQUEIDENTIFIER NULL,
         ConfirmationReceivedFrom NVARCHAR(320) NULL,
         ConfirmationMessageId NVARCHAR(200) NULL,
+        UnderwriterContactId UNIQUEIDENTIFIER NULL,
         UnderwriterName NVARCHAR(200) NULL,
         UnderwriterCompany NVARCHAR(200) NULL,
+        CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NULL,
+        CommissionPlanVersionId UNIQUEIDENTIFIER NULL,
+        CommissionPayeeId UNIQUEIDENTIFIER NULL,
+        CommissionSplitRuleId UNIQUEIDENTIFIER NULL,
+        CommissionBusinessTypeCode NVARCHAR(50) NULL,
+        CommissionRatePct DECIMAL(9,4) NULL,
+        CommissionSplitPct DECIMAL(9,4) NULL,
+        CommissionablePremium DECIMAL(18,2) NULL,
+        EstimatedGrossCommission DECIMAL(18,2) NULL,
+        EstimatedProducerCommission DECIMAL(18,2) NULL,
         FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_Runtime DEFAULT 0,
         IntegrationCorrelationId NVARCHAR(120) NULL,
         ExternalTransactionId NVARCHAR(120) NULL,
@@ -3508,8 +3974,20 @@ IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NUL
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterContactId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterContactId UNIQUEIDENTIFIER NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanApplicabilityId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanVersionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanVersionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPayeeId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPayeeId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitRuleId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionBusinessTypeCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionBusinessTypeCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionRatePct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionRatePct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitPct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitPct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionablePremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionablePremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedGrossCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedGrossCommission DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedProducerCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedProducerCommission DECIMAL(18,2) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_Ensure DEFAULT 0;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
 IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
@@ -4003,7 +4481,7 @@ WHERE  SubmissionId = (SELECT SubmissionId FROM Submissions.SubmissionMarket WHE
 
     // ── Quotes ────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = """
 SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierName,
@@ -4016,6 +4494,7 @@ SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierNa
        CAST(CASE WHEN q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL OR q.Status IN (N'Under Review', N'Approved for Presentation', N'Presented', N'Selected', N'Bound') THEN 1 ELSE 0 END AS bit) AS IsReviewed,
        q.ReviewedByUserId, q.ReviewedDateUtc, q.ApprovedForPresentationByUserId, q.ApprovedForPresentationDateUtc, q.PresentationReadinessNotes,
        CAST(CASE WHEN q.Status = N'Approved for Presentation'
+                   AND q.IsBindable = 1
                   AND q.ExpiresDateUtc > SYSUTCDATETIME()
                   AND q.AnnualPremium > 0
                   AND q.CarrierId IS NOT NULL
@@ -4024,9 +4503,33 @@ SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierNa
                   AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
                   AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
                   AND q.QuoteDocumentId IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0)
+                    AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM Submissions.SubmissionLine sl
+                        WHERE sl.SubmissionId = q.SubmissionId
+                          AND sl.TenantId = s.TenantId
+                          AND sl.IsDeleted = 0
+                          AND NOT EXISTS
+                          (
+                              SELECT 1
+                              FROM Submissions.QuoteLine ql
+                              WHERE ql.QuoteId = q.QuoteId
+                                AND ql.TenantId = s.TenantId
+                                AND ql.SubmissionLineId = sl.SubmissionLineId
+                                AND ql.IsDeleted = 0
+                                AND ql.IsBindable = 1
+                          )
+                    )
                  THEN 1 ELSE 0 END AS bit) AS IsProposalReady,
        CASE
            WHEN q.Status <> N'Approved for Presentation' THEN CONCAT(N'Current status: ', COALESCE(NULLIF(q.Status, N''), N'Not set'), N'. Open Review, select Approved for Presentation, and save the quote.')
+            WHEN q.IsBindable = 0 THEN N'The quote is not bindable. Open Review Quote Terms and mark every persisted coverage line bindable before creating a proposal.'
+             WHEN NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0) THEN N'The quote has no persisted coverage lines. Open Review Quote Terms and save the required coverage lines before creating a proposal.'
+             WHEN EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0) THEN N'One or more coverage lines are not bindable. Open Review Quote Terms, mark every eligible line bindable, and save the quote.'
+             WHEN EXISTS (SELECT 1 FROM Submissions.SubmissionLine sl WHERE sl.SubmissionId = q.SubmissionId AND sl.TenantId = s.TenantId AND sl.IsDeleted = 0 AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.SubmissionLineId = sl.SubmissionLineId AND ql.IsDeleted = 0 AND ql.IsBindable = 1)) THEN N'This multi-line submission is not fully covered. Open Review Quote Terms and persist a bindable quote line for every submission line.'
            WHEN q.ExpiresDateUtc IS NULL THEN N'Quote expiration date is missing. Open Review Quote Terms and enter the carrier expiration date.'
            WHEN q.ExpiresDateUtc <= SYSUTCDATETIME() THEN N'The quote expiration date has passed. Open Review and enter a current carrier expiration date.'
            WHEN q.AnnualPremium <= 0 THEN N'Annual premium is missing or zero. Open Review and enter the quoted premium.'
@@ -4043,6 +4546,7 @@ SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierNa
        q.CarrierReferenceNumber, q.RequestedByUserId, q.ReceivedByUserId,
        q.CoverageNotes, q.QuotedDateUtc, q.ExpiresDateUtc
 FROM   Submissions.Quote q
+JOIN   Submissions.Submission s ON s.SubmissionId = q.SubmissionId AND s.TenantId = @TenantId AND s.IsDeleted = 0
 JOIN   Core.Carrier      c ON c.CarrierId = q.CarrierId
 LEFT JOIN DMS.Document d ON d.DocumentId = q.QuoteDocumentId AND d.IsDeleted = 0
 WHERE  q.SubmissionId = @SubmissionId AND q.IsDeleted = 0
@@ -4050,7 +4554,7 @@ ORDER BY q.IsSelected DESC, q.RecommendationScore DESC, q.AnnualPremium ASC;
 """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await EnsureEnterpriseWorkflowSchemaAsync(cn, null, cancellationToken);
-        var quotes = (await cn.QueryAsync<QuoteComparisonDto>(new CommandDefinition(sql, new { SubmissionId = submissionId }, cancellationToken: cancellationToken))).AsList();
+        var quotes = (await cn.QueryAsync<QuoteComparisonDto>(new CommandDefinition(sql, new { SubmissionId = submissionId, TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
         var lines = await GetQuoteLinesAsync(cn, submissionId, null, cancellationToken);
         var factors = await GetProposalReadinessFactorsAsync(cn, submissionId, null, cancellationToken);
         var linesByQuote = lines.GroupBy(line => line.QuoteId).ToDictionary(group => group.Key, group => (IReadOnlyList<SubmissionQuoteLineDto>)group.OrderBy(line => line.SortOrder).ThenBy(line => line.LineOfBusiness).ToList());
@@ -4076,6 +4580,7 @@ SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierNa
        CAST(CASE WHEN q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL OR q.Status IN (N'Under Review', N'Approved for Presentation', N'Presented', N'Selected', N'Bound') THEN 1 ELSE 0 END AS bit) AS IsReviewed,
        q.ReviewedByUserId, q.ReviewedDateUtc, q.ApprovedForPresentationByUserId, q.ApprovedForPresentationDateUtc, q.PresentationReadinessNotes,
        CAST(CASE WHEN q.Status = N'Approved for Presentation'
+                   AND q.IsBindable = 1
                   AND q.ExpiresDateUtc > SYSUTCDATETIME()
                   AND q.AnnualPremium > 0
                   AND q.CarrierId IS NOT NULL
@@ -4084,9 +4589,33 @@ SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, c.CarrierNa
                   AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
                   AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
                   AND q.QuoteDocumentId IS NOT NULL
+                    AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0)
+                    AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+                    AND NOT EXISTS
+                    (
+                        SELECT 1
+                        FROM Submissions.SubmissionLine sl
+                        WHERE sl.SubmissionId = q.SubmissionId
+                          AND sl.TenantId = s.TenantId
+                          AND sl.IsDeleted = 0
+                          AND NOT EXISTS
+                          (
+                              SELECT 1
+                              FROM Submissions.QuoteLine ql
+                              WHERE ql.QuoteId = q.QuoteId
+                                AND ql.TenantId = s.TenantId
+                                AND ql.SubmissionLineId = sl.SubmissionLineId
+                                AND ql.IsDeleted = 0
+                                AND ql.IsBindable = 1
+                          )
+                    )
                  THEN 1 ELSE 0 END AS bit) AS IsProposalReady,
        CASE
            WHEN q.Status <> N'Approved for Presentation' THEN CONCAT(N'Current status: ', COALESCE(NULLIF(q.Status, N''), N'Not set'), N'. Open Review, select Approved for Presentation, and save the quote.')
+            WHEN q.IsBindable = 0 THEN N'The quote is not bindable. Open Review Quote Terms and mark every persisted coverage line bindable before creating a proposal.'
+             WHEN NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0) THEN N'The quote has no persisted coverage lines. Open Review Quote Terms and save the required coverage lines before creating a proposal.'
+             WHEN EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0) THEN N'One or more coverage lines are not bindable. Open Review Quote Terms, mark every eligible line bindable, and save the quote.'
+             WHEN EXISTS (SELECT 1 FROM Submissions.SubmissionLine sl WHERE sl.SubmissionId = q.SubmissionId AND sl.TenantId = s.TenantId AND sl.IsDeleted = 0 AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = s.TenantId AND ql.SubmissionLineId = sl.SubmissionLineId AND ql.IsDeleted = 0 AND ql.IsBindable = 1)) THEN N'This multi-line submission is not fully covered. Open Review Quote Terms and persist a bindable quote line for every submission line.'
            WHEN q.ExpiresDateUtc IS NULL THEN N'Quote expiration date is missing. Open Review Quote Terms and enter the carrier expiration date.'
            WHEN q.ExpiresDateUtc <= SYSUTCDATETIME() THEN N'The quote expiration date has passed. Open Review and enter a current carrier expiration date.'
            WHEN q.AnnualPremium <= 0 THEN N'Annual premium is missing or zero. Open Review and enter the quoted premium.'
@@ -4904,7 +5433,7 @@ INNER JOIN Core.Carrier c ON c.CarrierId = q.CarrierId AND c.IsDeleted = 0
 WHERE pq.ProposalId = @ProposalId AND pq.TenantId = @TenantId AND pq.IsDeleted = 0
 ORDER BY pq.SortOrder;
 
-SELECT line.QuoteLineId, line.QuoteId, line.LineOfBusiness, line.Status, line.QuotedPremium, line.Deductible, line.[Limit],
+SELECT line.QuoteLineId, line.QuoteId, line.SubmissionLineId, line.LineOfBusiness, line.Status, line.QuotedPremium, line.Deductible, line.[Limit],
        line.CommissionPercent, line.CoverageForms, line.Subjectivities, line.Exclusions, line.PaymentTerms,
        line.MinimumEarnedPremium, line.TaxesAndFees, line.BrokerFee, line.TriaIncluded, line.IsBindable,
        line.CoverageNotes, line.SortOrder
@@ -5043,7 +5572,28 @@ IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityI
                             AND q.[Limit] IS NOT NULL
                             AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
                             AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
-                            AND q.QuoteDocumentId IS NOT NULL
+                             AND q.QuoteDocumentId IS NOT NULL
+                             AND q.IsBindable = 1
+                             AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0)
+                             AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+                             AND NOT EXISTS
+                             (
+                                 SELECT 1
+                                 FROM Submissions.SubmissionLine sl
+                                 WHERE sl.SubmissionId = s.SubmissionId
+                                   AND sl.TenantId = @TenantId
+                                   AND sl.IsDeleted = 0
+                                   AND NOT EXISTS
+                                   (
+                                       SELECT 1
+                                       FROM Submissions.QuoteLine ql
+                                       WHERE ql.QuoteId = q.QuoteId
+                                         AND ql.TenantId = @TenantId
+                                         AND ql.SubmissionLineId = sl.SubmissionLineId
+                                         AND ql.IsDeleted = 0
+                                         AND ql.IsBindable = 1
+                                   )
+                             )
                       THEN 1 END) AS ProposalReadyQuoteCount
     FROM Submissions.Submission s
     LEFT JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0
@@ -5106,6 +5656,7 @@ FROM Submissions.Quote q
 WHERE q.SubmissionId = @SubmissionId
   AND q.IsDeleted = 0
   AND q.Status = N'Approved for Presentation'
+  AND q.IsBindable = 1
   AND q.ExpiresDateUtc > SYSUTCDATETIME()
   AND q.AnnualPremium > 0
   AND q.CarrierId IS NOT NULL
@@ -5114,10 +5665,30 @@ WHERE q.SubmissionId = @SubmissionId
   AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
   AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
   AND q.QuoteDocumentId IS NOT NULL
+  AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0)
+  AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM Submissions.SubmissionLine sl
+      WHERE sl.SubmissionId = q.SubmissionId
+        AND sl.TenantId = @TenantId
+        AND sl.IsDeleted = 0
+        AND NOT EXISTS
+        (
+            SELECT 1
+            FROM Submissions.QuoteLine ql
+            WHERE ql.QuoteId = q.QuoteId
+              AND ql.TenantId = @TenantId
+              AND ql.SubmissionLineId = sl.SubmissionLineId
+              AND ql.IsDeleted = 0
+              AND ql.IsBindable = 1
+        )
+  )
   AND EXISTS (SELECT 1 FROM STRING_SPLIT(@QuoteIdsCsv, N',') s WHERE TRY_CONVERT(uniqueidentifier, s.value) = q.QuoteId);
 
 IF NOT EXISTS (SELECT 1 FROM @QuoteScope) AND COALESCE(NULLIF(@QuoteIdsCsv, N''), N'') <> N''
-    THROW 52035, 'Proposal can only include non-expired, reviewed quotes approved for presentation with premium, coverage, deductible, carrier, and document data.', 1;
+    THROW 52035, 'Proposal can only include non-expired, reviewed, bindable quotes approved for presentation with persisted bindable coverage lines and complete premium, coverage, deductible, carrier, and document data.', 1;
 
 IF NOT EXISTS (SELECT 1 FROM @QuoteScope)
 BEGIN
@@ -5127,6 +5698,7 @@ BEGIN
     WHERE q.SubmissionId = @SubmissionId
       AND q.IsDeleted = 0
       AND q.Status = N'Approved for Presentation'
+      AND q.IsBindable = 1
       AND q.ExpiresDateUtc > SYSUTCDATETIME()
       AND q.AnnualPremium > 0
       AND q.CarrierId IS NOT NULL
@@ -5134,11 +5706,31 @@ BEGIN
       AND q.[Limit] IS NOT NULL
       AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
       AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
-      AND q.QuoteDocumentId IS NOT NULL;
+      AND q.QuoteDocumentId IS NOT NULL
+      AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0)
+      AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionLine sl
+          WHERE sl.SubmissionId = q.SubmissionId
+            AND sl.TenantId = @TenantId
+            AND sl.IsDeleted = 0
+            AND NOT EXISTS
+            (
+                SELECT 1
+                FROM Submissions.QuoteLine ql
+                WHERE ql.QuoteId = q.QuoteId
+                  AND ql.TenantId = @TenantId
+                  AND ql.SubmissionLineId = sl.SubmissionLineId
+                  AND ql.IsDeleted = 0
+                  AND ql.IsBindable = 1
+            )
+      );
 END;
 
 IF NOT EXISTS (SELECT 1 FROM @QuoteScope)
-    THROW 52036, 'Proposal requires at least one usable quote approved for presentation.', 1;
+    THROW 52036, 'Proposal requires at least one non-expired, reviewed, bindable quote with persisted bindable coverage lines that is approved for presentation.', 1;
 
 DECLARE @QuoteRows NVARCHAR(MAX);
 SELECT @QuoteRows = STRING_AGG(CONCAT(N'<tr><td>', c.CarrierName, N'</td><td>', q.QuoteNumber, N'</td><td>', FORMAT(q.AnnualPremium, N'C'), N'</td><td>', COALESCE(q.CarrierRating, N''), N'</td><td>', CONVERT(nvarchar(20), q.ExpiresDateUtc, 101), N'</td><td>', COALESCE(q.CoverageNotes, N''), N'</td></tr>'), N'')
@@ -5233,6 +5825,43 @@ FROM Submissions.Proposal
 WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0 AND GovernanceStatusCode = N'ReadyToDeliver' AND ApprovalVersionNumber = VersionNumber AND ApprovedSnapshotHash IS NOT NULL;
 
 IF @SubmissionId IS NULL THROW 52016, 'Proposal was not found for delivery.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.ProposalQuote WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52212, 'Proposal delivery requires at least one included bindable quote with persisted bindable coverage lines.', 1;
+IF EXISTS
+(
+    SELECT 1
+    FROM Submissions.ProposalQuote proposalQuote
+    INNER JOIN Submissions.Quote quote ON quote.QuoteId = proposalQuote.QuoteId
+    WHERE proposalQuote.ProposalId = @ProposalId
+      AND proposalQuote.TenantId = @TenantId
+      AND proposalQuote.IsDeleted = 0
+      AND
+      (
+          quote.IsDeleted = 1
+          OR quote.IsBindable = 0
+          OR NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0)
+          OR EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0 AND quoteLine.IsBindable = 0)
+          OR EXISTS
+          (
+              SELECT 1
+              FROM Submissions.SubmissionLine submissionLine
+              WHERE submissionLine.SubmissionId = quote.SubmissionId
+                AND submissionLine.TenantId = @TenantId
+                AND submissionLine.IsDeleted = 0
+                AND NOT EXISTS
+                (
+                    SELECT 1
+                    FROM Submissions.QuoteLine quoteLine
+                    WHERE quoteLine.QuoteId = quote.QuoteId
+                      AND quoteLine.TenantId = @TenantId
+                      AND quoteLine.SubmissionLineId = submissionLine.SubmissionLineId
+                      AND quoteLine.IsDeleted = 0
+                      AND quoteLine.IsBindable = 1
+                )
+          )
+      )
+)
+    THROW 52212, 'Proposal delivery requires every included quote and persisted coverage line to remain bindable. Open Quote Review and resolve all bindability items before delivery.', 1;
 IF NOT EXISTS (SELECT 1 FROM Submissions.ProposalRecipient WHERE ProposalId=@ProposalId AND TenantId=@TenantId AND IsPrimary=1 AND IsDeleted=0) THROW 52207, 'Proposal requires a primary recipient before delivery.', 1;
 IF NOT EXISTS (SELECT 1 FROM Submissions.ProposalRecipient WHERE ProposalId=@ProposalId AND TenantId=@TenantId AND IsPrimary=1 AND IsDeleted=0 AND LOWER(RecipientEmail)=LOWER(@Recipient)) THROW 52211, 'Delivery recipient must match the persisted primary proposal recipient.', 1;
 IF NOT EXISTS (SELECT 1 FROM Submissions.ProposalApprovedSnapshot WHERE ProposalId=@ProposalId AND TenantId=@TenantId AND ProposalVersionNumber=@ProposalVersionNumber) THROW 52208, 'Approved proposal snapshot is missing.', 1;
@@ -5745,14 +6374,8 @@ WHERE ProposalDeliveryProviderId = @ProviderId AND TenantId = @TenantId AND IsDe
         const string sql = @"
 DECLARE @SubmissionId UNIQUEIDENTIFIER;
 
-UPDATE Submissions.Proposal
-SET Status = N'Presented',
-    GovernanceStatusCode = N'Presented',
-    PresentedDateUtc = SYSUTCDATETIME(),
-    PresentedByUserId = @PresentedByUserId,
-    ModifiedDateUtc = SYSUTCDATETIME(),
-    ModifiedByUserId = @PresentedByUserId,
-    @SubmissionId = SubmissionId
+SELECT @SubmissionId = SubmissionId
+FROM Submissions.Proposal
 WHERE ProposalId = @ProposalId
   AND TenantId = @TenantId
   AND IsDeleted = 0
@@ -5760,6 +6383,39 @@ WHERE ProposalId = @ProposalId
   AND DeliveryConfirmedDateUtc IS NOT NULL;
 
 IF @SubmissionId IS NULL THROW 52038, 'Proposal must be delivered before it can be presented.', 1;
+
+IF NOT EXISTS (SELECT 1 FROM Submissions.ProposalQuote WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0)
+    THROW 52212, 'Proposal presentation requires at least one included bindable quote with persisted bindable coverage lines.', 1;
+IF EXISTS
+(
+    SELECT 1
+    FROM Submissions.ProposalQuote proposalQuote
+    INNER JOIN Submissions.Quote quote ON quote.QuoteId = proposalQuote.QuoteId
+    WHERE proposalQuote.ProposalId = @ProposalId
+      AND proposalQuote.TenantId = @TenantId
+      AND proposalQuote.IsDeleted = 0
+      AND
+      (
+          quote.IsDeleted = 1
+          OR quote.IsBindable = 0
+          OR NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0)
+          OR EXISTS (SELECT 1 FROM Submissions.QuoteLine quoteLine WHERE quoteLine.QuoteId = quote.QuoteId AND quoteLine.TenantId = @TenantId AND quoteLine.IsDeleted = 0 AND quoteLine.IsBindable = 0)
+      )
+)
+    THROW 52212, 'Proposal presentation requires every included quote and persisted coverage line to remain bindable. Open Quote Review and resolve all bindability items before presentation.', 1;
+
+UPDATE Submissions.Proposal
+SET Status = N'Presented',
+    GovernanceStatusCode = N'Presented',
+    PresentedDateUtc = SYSUTCDATETIME(),
+    PresentedByUserId = @PresentedByUserId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @PresentedByUserId
+WHERE ProposalId = @ProposalId
+  AND TenantId = @TenantId
+  AND IsDeleted = 0
+  AND GovernanceStatusCode IN (N'Delivered', N'Presented')
+  AND DeliveryConfirmedDateUtc IS NOT NULL;
 
 UPDATE q
 SET Status = CASE WHEN q.Status IN (N'Bound', N'Selected') THEN q.Status ELSE N'Presented' END,
@@ -5917,7 +6573,25 @@ SELECT TOP 1 p.ProposalId, p.SubmissionId, p.TenantId, p.VersionNumber AS Propos
        CAST(CASE WHEN q.Status NOT IN (N'Declined', N'Expired', N'Withdrawn', N'Not Selected') THEN 1 ELSE 0 END AS bit) AS IsQuoteActive,
        CAST(CASE WHEN q.ExpiresDateUtc > SYSUTCDATETIME() THEN 1 ELSE 0 END AS bit) AS IsQuoteUnexpired,
        q.IsBindable AS IsQuoteBindable,
-       CAST(CASE WHEN EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.SubmissionLineId IS NOT NULL AND ql.IsDeleted = 0) THEN 1 ELSE 0 END AS bit) AS HasCoverageLines
+       CAST(CASE WHEN EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = p.TenantId AND ql.SubmissionLineId IS NOT NULL AND ql.IsDeleted = 0) THEN 1 ELSE 0 END AS bit) AS HasCoverageLines,
+       CAST(CASE WHEN NOT EXISTS
+       (
+           SELECT 1
+           FROM Submissions.SubmissionLine sl
+           WHERE sl.SubmissionId = p.SubmissionId
+             AND sl.TenantId = p.TenantId
+             AND sl.IsDeleted = 0
+             AND NOT EXISTS
+             (
+                 SELECT 1
+                 FROM Submissions.QuoteLine ql
+                 WHERE ql.QuoteId = q.QuoteId
+                   AND ql.TenantId = p.TenantId
+                   AND ql.SubmissionLineId = sl.SubmissionLineId
+                   AND ql.IsDeleted = 0
+                   AND ql.IsBindable = 1
+             )
+       ) THEN 1 ELSE 0 END AS bit) AS HasCompleteBindableCoverage
 FROM Submissions.Proposal p
 LEFT JOIN Submissions.ProposalQuote pq ON pq.ProposalId = p.ProposalId AND pq.TenantId = p.TenantId AND pq.IsDeleted = 0 AND (@QuoteId IS NULL OR pq.QuoteId = @QuoteId)
 LEFT JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.SubmissionId = p.SubmissionId AND q.IsDeleted = 0
@@ -5954,6 +6628,7 @@ ORDER BY ql.SortOrder, ql.LineOfBusiness;";
         if (!readiness.IsQuoteUnexpired) blockers.Add("The selected quote has expired.");
         if (!readiness.IsQuoteBindable) blockers.Add("The selected quote is not marked bindable.");
         if (!readiness.HasCoverageLines) blockers.Add("The selected quote has no persisted coverage lines.");
+        if (!readiness.HasCompleteBindableCoverage) blockers.Add("Every active submission line must have a corresponding persisted bindable quote line before client acceptance.");
         readiness.BlockingReasons = blockers;
         readiness.CanAccept = blockers.Count == 0;
         return readiness;
@@ -6044,7 +6719,7 @@ BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM Submissions.Proposal p
         INNER JOIN Submissions.ProposalQuote pq ON pq.ProposalId = p.ProposalId AND pq.QuoteId = @QuoteId AND pq.TenantId = @TenantId AND pq.IsDeleted = 0
-        INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.SubmissionId = p.SubmissionId AND q.TenantId = @TenantId AND q.IsDeleted = 0
+        INNER JOIN Submissions.Quote q ON q.QuoteId = pq.QuoteId AND q.SubmissionId = p.SubmissionId AND q.IsDeleted = 0
         WHERE p.ProposalId = @ProposalId AND p.TenantId = @TenantId AND p.VersionNumber = @ProposalVersionNumber AND p.IsDeleted = 0
           AND p.DeliveryConfirmedDateUtc IS NOT NULL AND p.PresentedDateUtc IS NOT NULL
           AND p.VersionNumber = (SELECT MAX(p2.VersionNumber) FROM Submissions.Proposal p2 WHERE p2.TenantId = p.TenantId AND p2.SubmissionId = p.SubmissionId AND p2.IsDeleted = 0)
@@ -6126,6 +6801,7 @@ SELECT @ClientAcceptanceId;";
                 ConsentsJson = JsonSerializer.Serialize(request.Consents),
                 AuditJson = JsonSerializer.Serialize(new { request.ProposalVersionNumber, request.QuoteId, request.QuoteFingerprint, request.AuthorizationMethodCode, ElectionCount = request.CoverageElections.Count, ConsentCount = request.Consents.Count })
             }, tx, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition(RecalculateSubmissionStatusSql, new { SubmissionId = readiness.SubmissionId, request.TenantId }, tx, cancellationToken: cancellationToken));
             tx.Commit();
             return result;
         }
@@ -6750,6 +7426,55 @@ WHERE  SubmissionId = @SubmissionId AND IsDeleted = 0;";
             throw new InvalidOperationException("Policy annual premium must be greater than zero.");
         }
 
+        if (request.DownPaymentAmount < 0 || request.DownPaymentAmount > (request.FinalPremium ?? request.AnnualPremium))
+        {
+            throw new InvalidOperationException("Down payment must be between zero and the final premium.");
+        }
+
+        string? underwriterName = null;
+        string? underwriterCompany = null;
+        if (request.UnderwriterContactId.HasValue)
+        {
+            var underwriter = await cn.QuerySingleOrDefaultAsync<(string ContactName, string CarrierName)>(new CommandDefinition(@"
+SELECT cc.ContactName, c.CarrierName
+FROM Agency.CarrierContact cc
+INNER JOIN Core.Carrier c
+    ON c.CarrierId = cc.CarrierId
+   AND c.TenantId = cc.TenantId
+   AND c.IsActive = 1
+   AND c.IsDeleted = 0
+WHERE cc.CarrierContactId = @UnderwriterContactId
+  AND cc.TenantId = @TenantId
+  AND cc.CarrierId = @CarrierId
+  AND cc.IsActive = 1
+  AND cc.IsDeleted = 0;", new { request.UnderwriterContactId, request.TenantId, request.CarrierId }, cancellationToken: cancellationToken));
+
+            if (string.IsNullOrWhiteSpace(underwriter.ContactName))
+            {
+                throw new InvalidOperationException("The selected underwriter contact is inactive or does not belong to this tenant and carrier.");
+            }
+
+            underwriterName = underwriter.ContactName;
+            underwriterCompany = underwriter.CarrierName;
+        }
+
+        BindCommissionEstimateDto? commissionEstimate = null;
+        if (submissionId.HasValue && quoteId.HasValue)
+        {
+            commissionEstimate = await ResolveBindCommissionEstimateAsync(cn, submissionId.Value, quoteId.Value, request.TenantId, request.FinalPremium ?? request.AnnualPremium, request.EffectiveDate, cancellationToken);
+            if (request.CommissionPlanApplicabilityId.HasValue || request.CommissionPlanVersionId.HasValue || request.CommissionPayeeId.HasValue || request.CommissionSplitRuleId.HasValue)
+            {
+                if (commissionEstimate is null
+                    || request.CommissionPlanApplicabilityId != commissionEstimate.CommissionPlanApplicabilityId
+                    || request.CommissionPlanVersionId != commissionEstimate.CommissionPlanVersionId
+                    || request.CommissionPayeeId != commissionEstimate.CommissionPayeeId
+                    || request.CommissionSplitRuleId != commissionEstimate.CommissionSplitRuleId)
+                {
+                    throw new InvalidOperationException("Commission configuration changed after the estimate was loaded. Review the refreshed estimate before submitting the bind request.");
+                }
+            }
+        }
+
         if (source.RequiresQuote)
         {
             var quoteIsBindable = await cn.ExecuteScalarAsync<bool>(new CommandDefinition(@"
@@ -6757,8 +7482,8 @@ SELECT CAST(CASE WHEN EXISTS
 (
     SELECT 1
     FROM Submissions.Quote q
-    WHERE q.TenantId = @TenantId
-      AND q.SubmissionId = @SubmissionId
+    INNER JOIN Submissions.Submission s ON s.SubmissionId = q.SubmissionId AND s.TenantId = @TenantId AND s.IsDeleted = 0
+    WHERE q.SubmissionId = @SubmissionId
       AND q.QuoteId = @QuoteId
       AND q.IsDeleted = 0
       AND q.IsBindable = 1
@@ -6858,22 +7583,33 @@ BEGIN
 END;
 
 INSERT INTO Submissions.PolicyBindTransaction
-    (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, ProposalId, CustomerAuthorizationId, PolicyId, AccountId, CarrierId,
+    (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, ProposalId, CustomerAuthorizationId, ClientAcceptanceId, PolicyId, AccountId, CarrierId,
      PolicySourceCode, BindStatusCode, PolicyNumber, AnnualPremium, EffectiveDate, ExpirationDate,
+     BindingAuthorityCode, BindingMethodCode, ProducerNotes, CarrierInstructions, SpecialConditions, ApprovalRequired, PaymentRequired, PaymentVerified, ResponseDueDateUtc,
      BindReason, Notes, RequestedEffectiveTime, ConfirmationSourceCode, CarrierReferenceNumber, BinderNumber, FinalPremium,
      DownPaymentAmount, SubjectivitiesOutstanding, ConfirmationNotes, ConfirmationDocumentId, ConfirmationReceivedFrom,
-     ConfirmationMessageId, UnderwriterName, UnderwriterCompany, FollowUpWrittenConfirmationRequired, IntegrationCorrelationId,
+     ConfirmationMessageId, UnderwriterContactId, UnderwriterName, UnderwriterCompany,
+     CommissionPlanApplicabilityId, CommissionPlanId, CommissionPlanVersionId, CommissionPayeeId, CommissionSplitRuleId,
+     CommissionBusinessTypeCode, CommissionRatePct, CommissionSplitPct, CommissionablePremium, EstimatedGrossCommission, EstimatedProducerCommission,
+     FollowUpWrittenConfirmationRequired, IntegrationCorrelationId,
      ExternalTransactionId, ConfirmedManually, ConfirmationCertified, RequestedByUserId, RequestedDateUtc, ApprovedByUserId, ApprovedDateUtc,
      BoundByUserId, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
-    (@PolicyBindTransactionId, @TenantId, COALESCE(@SubmissionId, '00000000-0000-0000-0000-000000000000'), COALESCE(@QuoteId, '00000000-0000-0000-0000-000000000000'), @ProposalId, @CustomerAuthorizationId, NULL, @AccountId, @CarrierId,
+    (@PolicyBindTransactionId, @TenantId, COALESCE(@SubmissionId, '00000000-0000-0000-0000-000000000000'), COALESCE(@QuoteId, '00000000-0000-0000-0000-000000000000'), @ProposalId, @CustomerAuthorizationId, @ClientAcceptanceId, NULL, @AccountId, @CarrierId,
      @PolicySourceCode, @BindStatusCode, NULLIF(@PolicyNumber, N''), @AnnualPremium, @EffectiveDate, @ExpirationDate,
+     @BindingAuthorityCode, @BindingMethodCode, @ProducerNotes, @CarrierInstructions, @SpecialConditions, @ApprovalRequired, @PaymentRequired, @PaymentVerified, @ResponseDueDateUtc,
      @PolicySourceReason, @PolicySourceNotes, @RequestedEffectiveTime, @ConfirmationSourceCode, @CarrierReferenceNumber, @BinderNumber, @FinalPremium,
      @DownPaymentAmount, @SubjectivitiesOutstanding, @ConfirmationNotes, @ConfirmationDocumentId, @ConfirmationReceivedFrom,
-     @ConfirmationMessageId, @UnderwriterName, @UnderwriterCompany, @FollowUpWrittenConfirmationRequired, @IntegrationCorrelationId,
+     @ConfirmationMessageId, @UnderwriterContactId, @UnderwriterName, @UnderwriterCompany,
+     @CommissionPlanApplicabilityId, @CommissionPlanId, @CommissionPlanVersionId, @CommissionPayeeId, @CommissionSplitRuleId,
+     @CommissionBusinessTypeCode, @CommissionRatePct, @CommissionSplitPct, @CommissionablePremium, @EstimatedGrossCommission, @EstimatedProducerCommission,
+     @FollowUpWrittenConfirmationRequired, @IntegrationCorrelationId,
      @ExternalTransactionId, @ConfirmedManually, @ConfirmationCertified, @RequestedByUserId, @RequestedDateUtc, @ApprovedByUserId,
      CASE WHEN @ApprovedByUserId IS NULL THEN NULL ELSE @RequestedDateUtc END,
      CASE WHEN @CreatesPolicy = 1 THEN @BoundByUserId ELSE NULL END, CASE WHEN @CreatesPolicy = 1 THEN @RequestedDateUtc ELSE NULL END, @RequestedDateUtc, @RequestedByUserId, 0);
+
+INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, NULL, @BindStatusCode, COALESCE(NULLIF(@ProducerNotes, N''), N'Bind request created.'), @RequestedDateUtc, @RequestedByUserId, @RequestedDateUtc, @RequestedByUserId, 0);
 
 UPDATE Submissions.ClientAcceptance
 SET PolicyBindTransactionId = @PolicyBindTransactionId,
@@ -6951,13 +7687,35 @@ SELECT @PolicyBindTransactionId;";
             request.ConfirmationDocumentId,
             request.ConfirmationReceivedFrom,
             request.ConfirmationMessageId,
-            request.UnderwriterName,
-            request.UnderwriterCompany,
+            request.UnderwriterContactId,
+            UnderwriterName = underwriterName,
+            UnderwriterCompany = underwriterCompany,
+            CommissionPlanApplicabilityId = commissionEstimate?.CommissionPlanApplicabilityId,
+            CommissionPlanId = commissionEstimate?.CommissionPlanId,
+            CommissionPlanVersionId = commissionEstimate?.CommissionPlanVersionId,
+            CommissionPayeeId = commissionEstimate?.CommissionPayeeId,
+            CommissionSplitRuleId = commissionEstimate?.CommissionSplitRuleId,
+            CommissionBusinessTypeCode = commissionEstimate?.BusinessTypeCode,
+            CommissionRatePct = commissionEstimate?.CommissionRatePct,
+            CommissionSplitPct = commissionEstimate?.CommissionSplitPct,
+            CommissionablePremium = commissionEstimate?.CommissionablePremium,
+            EstimatedGrossCommission = commissionEstimate?.EstimatedGrossCommission,
+            EstimatedProducerCommission = commissionEstimate?.EstimatedProducerCommission,
             request.FollowUpWrittenConfirmationRequired,
             request.IntegrationCorrelationId,
             request.ExternalTransactionId,
             request.ConfirmedManually,
             request.ConfirmationCertified,
+            request.ClientAcceptanceId,
+            request.BindingAuthorityCode,
+            request.BindingMethodCode,
+            request.ProducerNotes,
+            request.CarrierInstructions,
+            request.SpecialConditions,
+            request.ApprovalRequired,
+            request.PaymentRequired,
+            request.PaymentVerified,
+            request.ResponseDueDateUtc,
             CreatesPolicy = bindStatus.CreatesPolicy,
         }, cancellationToken: cancellationToken));
 

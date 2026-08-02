@@ -1,0 +1,338 @@
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+
+@if (_stage != DialogStage.Closed && Context is not null)
+{
+    <div class="rbd-backdrop" role="presentation">
+        @if (_stage == DialogStage.Form)
+        {
+            <div class="rbd-modal" style="height:min(94dvh, calc(100dvh - 2.5rem)); max-height:calc(100dvh - 2.5rem); display:flex; flex-direction:column; overflow:hidden;" role="dialog" aria-modal="true" aria-labelledby="rbd-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header rbd-header" style="flex:0 0 auto;">
+                    <div class="rbd-title"><span class="rbd-title-icon"><i class="bi bi-shield-check"></i></span><div><span id="rbd-title">Request Bind</span><small>Customer-authorized enterprise bind workflow</small></div></div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CancelAsync" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <EditForm id="request-bind-form" class="rbd-form" style="min-height:0; flex:1 1 0; display:block; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;" Model="_form" OnValidSubmit="ReviewAsync" OnInvalidSubmit="InvalidAsync">
+                    <DataAnnotationsValidator />
+                    <div class="rbd-body">
+                        <section class="rbd-intro"><span><i class="bi bi-person-check-fill"></i></span><div><strong>Persisted customer authority verified</strong><p>The accepted proposal and authorization remain locked to preserve audit integrity. A pending bind request does not represent bound coverage or create a policy.</p></div></section>
+                        @if (!string.IsNullOrWhiteSpace(_error))
+                        {
+                            <div class="alert alert-danger rbd-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;"><i class="bi bi-exclamation-triangle-fill"></i><span>@_error</span></div>
+                        }
+                        <section class="rbd-summary" aria-label="Bind request summary">
+                            @Summary("Account", Context.AccountName)
+                            @Summary("Submission", Context.SubmissionNumber)
+                            @Summary("Quote", Context.QuoteNumber)
+                            @Summary("Carrier", Context.CarrierName)
+                            @Summary("Coverage", Context.LineOfBusiness)
+                            @Summary("Quoted premium", Context.AnnualPremium.ToString("C0"))
+                            @Summary("Proposal", $"Version {Context.Acceptance.ProposalVersionNumber}")
+                            @Summary("Effective", Context.EffectiveDate.ToString("MMM d, yyyy"))
+                        </section>
+                        <div class="rbd-section-heading"><span><i class="bi bi-lock-fill"></i></span><div><strong>Customer authorization</strong><small>Authoritative values recorded during client acceptance</small></div></div>
+                        <div class="um-form-grid rbd-grid">
+                            <div class="rbd-field"><label>Authorization Method</label><input class="form-control" value="@AuthorizationMethodDisplay" readonly /></div>
+                            <div class="rbd-field"><label>Authorization Date</label><input class="form-control" value="@Context.Acceptance.AuthorizedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")" readonly /></div>
+                            <div class="rbd-field"><label>Authorized By</label><input class="form-control" value="@Context.Acceptance.AuthorizedByName" readonly /></div>
+                            <div class="rbd-field"><label>Authorized By Title</label><input class="form-control" value="@Display(Context.Acceptance.AuthorizedByTitle)" readonly /></div>
+                            <div class="rbd-field"><label>Authority Basis</label><input class="form-control" value="@Display(Context.Acceptance.AuthorityBasisCode)" readonly /></div>
+                            <div class="rbd-field"><label>Authorization Reference</label><input class="form-control" value="@Display(Context.Acceptance.AuthorizationReference)" readonly /></div>
+                        </div>
+                        <div class="rbd-section-heading"><span><i class="bi bi-sliders"></i></span><div><strong>Bind instructions</strong><small>Configure the request or record authoritative carrier confirmation</small></div></div>
+                        <div class="um-form-grid rbd-grid">
+                            <div class="rbd-field"><label>Policy Source <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.PolicySourceCode">@foreach (var source in PolicySources){<option value="@source.SourceCode">@source.SourceName</option>}</InputSelect><ValidationMessage For="() => _form.PolicySourceCode" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Bind Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindStatusCode">@foreach (var status in BindStatuses){<option value="@status.StatusCode">@status.StatusName</option>}</InputSelect><ValidationMessage For="() => _form.BindStatusCode" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Binding Authority <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindingAuthorityCode"><option value="">Select authority</option>@foreach (var option in BindingAuthorities){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><ValidationMessage For="() => _form.BindingAuthorityCode" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Binding Method <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindingMethodCode"><option value="">Select method</option>@foreach (var option in BindingMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><ValidationMessage For="() => _form.BindingMethodCode" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Annual / Final Premium <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.AnnualPremium" /><ValidationMessage For="() => _form.AnnualPremium" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Down Payment</label><InputNumber class="form-control" @bind-Value="_form.DownPaymentAmount" /><ValidationMessage For="() => _form.DownPaymentAmount" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Effective Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.EffectiveDate" /><ValidationMessage For="() => _form.EffectiveDate" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Effective Time <span class="text-danger">*</span></label><InputText type="time" class="form-control" @bind-Value="_form.EffectiveTime" /><ValidationMessage For="() => _form.EffectiveTime" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Expiration Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.ExpirationDate" /><ValidationMessage For="() => _form.ExpirationDate" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Confirmation Method @if (CreatesPolicy){<span class="text-danger">*</span>}</label><InputSelect class="form-select" @bind-Value="_form.ConfirmationSourceCode"><option value="">Awaiting carrier confirmation</option>@foreach (var option in ConfirmationSources){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><ValidationMessage For="() => _form.ConfirmationSourceCode" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Carrier Confirmation Number @if (CreatesPolicy){<span class="text-danger">†</span>}</label><InputText class="form-control" @bind-Value="_form.CarrierReferenceNumber" /><ValidationMessage For="() => _form.CarrierReferenceNumber" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Binder Number</label><InputText class="form-control" @bind-Value="_form.BinderNumber" /><ValidationMessage For="() => _form.BinderNumber" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Policy Number @if (SelectedSource?.RequiresPolicyNumber == true){<span class="text-danger">*</span>}else if (CreatesPolicy){<span class="text-danger">†</span>}</label><InputText class="form-control" @bind-Value="_form.PolicyNumber" /><ValidationMessage For="() => _form.PolicyNumber" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Underwriter</label><InputSelect class="form-select" @bind-Value="_form.UnderwriterContactId" disabled="@_loadingUnderwriters"><option value="">@(_loadingUnderwriters ? "Loading carrier contacts…" : "Select carrier contact")</option>@foreach (var contact in _underwriterContacts){<option value="@contact.CarrierContactId">@UnderwriterDisplay(contact)</option>}</InputSelect><ValidationMessage For="() => _form.UnderwriterContactId" class="text-danger" />@if (!_loadingUnderwriters && _underwriterContacts.Count == 0){<small class="text-muted">No active contacts are configured for this carrier.</small>}</div>
+                            <div class="rbd-field"><label>Underwriting Company</label><input class="form-control" value="@Context.CarrierName" readonly /></div>
+                            <div class="rbd-field rbd-field--full"><div class="rbd-section-heading"><span><i class="bi bi-cash-coin"></i></span><div><strong>Commission estimate</strong><small>Read-only estimate resolved from tenant commission configuration</small></div></div>@if (_loadingCommission){<div class="text-muted">Loading commission configuration…</div>}else if (_commissionEstimate?.IsConfigured == true){<section class="rbd-summary" aria-label="Commission estimate">@Summary("Plan", _commissionEstimate.CommissionPlanName ?? string.Empty)@Summary("Business type", _commissionEstimate.BusinessTypeCode)@Summary("Rate", $"{_commissionEstimate.CommissionRatePct:N4}%")@Summary("Producer split", $"{_commissionEstimate.CommissionSplitPct:N4}%")@Summary("Commissionable premium", _commissionEstimate.CommissionablePremium.ToString("C2"))@Summary("Estimated gross", _commissionEstimate.EstimatedGrossCommission.ToString("C2"))@Summary("Estimated producer", _commissionEstimate.EstimatedProducerCommission.ToString("C2"))</section>}else{<div class="alert alert-warning mb-0" role="status"><i class="bi bi-info-circle me-2"></i>@(_commissionEstimate?.UnavailableReason ?? "Commission is not configured for this bind context.")</div>}</div>
+                            <div class="rbd-field rbd-field--full"><label>Outstanding Requirements</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.SubjectivitiesOutstanding" /><ValidationMessage For="() => _form.SubjectivitiesOutstanding" class="text-danger" /></div>
+                            <div class="rbd-field rbd-field--full"><label>Bind Instructions and Audit Notes @if (SelectedSource?.RequiresReason == true){<span class="text-danger">*</span>}</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
+                            <div class="rbd-field rbd-field--full"><label>Carrier Instructions</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.CarrierInstructions" /><ValidationMessage For="() => _form.CarrierInstructions" class="text-danger" /></div>
+                            <div class="rbd-field rbd-field--full"><label>Special Conditions</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.SpecialConditions" /><ValidationMessage For="() => _form.SpecialConditions" class="text-danger" /></div>
+                            <div class="rbd-field"><label class="rbd-certify"><InputCheckbox @bind-Value="_form.PaymentRequired" /><span>Payment is required before submission</span></label></div>
+                            <div class="rbd-field"><label class="rbd-certify"><InputCheckbox @bind-Value="_form.PaymentVerified" disabled="@(!_form.PaymentRequired)" /><span>Required payment has been verified</span></label></div>
+                            <div class="rbd-field rbd-field--full"><label>Carrier Confirmation Evidence</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.ConfirmationNotes" /><ValidationMessage For="() => _form.ConfirmationNotes" class="text-danger" /></div>
+                            <div class="rbd-field rbd-field--full"><label class="rbd-certify"><InputCheckbox @bind-Value="_form.ConfirmationCertified" /><span>I certify that binding authority was received from the carrier, MGA, wholesaler, or authorized underwriter.@if (CreatesPolicy){<span class="text-danger"> *</span>}</span></label><ValidationMessage For="() => _form.ConfirmationCertified" class="text-danger" />@if (CreatesPolicy){<small class="text-danger">† Enter at least one carrier confirmation number, binder number, or policy number.</small>}</div>
+                        </div>
+                    </div>
+                </EditForm>
+                <div class="um-modal-footer" style="flex:0 0 auto;"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelAsync" disabled="@_busy">Cancel</button><button type="submit" form="request-bind-form" class="um-btn um-btn-success" disabled="@_busy"><i class="bi bi-arrow-right-circle"></i> Review Request</button></div>
+            </div>
+        }
+        else if (_stage == DialogStage.Confirm)
+        {
+            <div class="um-confirm-dialog rbd-confirm" role="dialog" aria-modal="true" aria-labelledby="rbd-confirm-title" @onclick:stopPropagation="true">
+                <div class="um-confirm-icon"><i class="bi bi-shield-check"></i></div>
+                <div class="rbd-confirm-content"><span class="rbd-eyebrow">Governed workflow confirmation</span><h3 id="rbd-confirm-title">@ConfirmationTitle</h3><p>@ConfirmationMessage</p><div class="rbd-confirm-facts">@Summary("Authorized by", Context.Acceptance.AuthorizedByName)@Summary("Status after save", BindStatusDisplay)@Summary("Premium", _form.AnnualPremium.ToString("C0"))</div><div class="rbd-next"><strong><i class="bi bi-signpost-split"></i> Next expected process</strong><ol>@foreach (var step in NextSteps){<li>@step</li>}</ol></div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="BackToForm" disabled="@_busy">Back</button><button type="button" class="um-btn um-btn-success" @onclick="SubmitAsync" disabled="@_busy">@if (_busy){<span class="spinner-border spinner-border-sm me-2"></span>}<i class="bi bi-shield-check"></i> @ConfirmationAction</button></div>
+            </div>
+        }
+        else
+        {
+            <div class="um-confirm-dialog rbd-complete" role="dialog" aria-modal="true" aria-labelledby="rbd-complete-title" @onclick:stopPropagation="true">
+                <div class="um-confirm-icon rbd-success-icon"><i class="bi bi-check2-circle"></i></div>
+                <div class="rbd-confirm-content"><span class="rbd-eyebrow">Workflow saved successfully</span><h3 id="rbd-complete-title">@CompletionTitle</h3><p>@CompletionMessage</p><div class="rbd-next"><strong><i class="bi bi-signpost-split"></i> Continue the process</strong><ol>@foreach (var step in NextSteps){<li>@step</li>}</ol></div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-success" @onclick="CompleteAsync"><i class="bi bi-arrow-right-circle"></i> @ContinueLabel</button></div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public RequestBindDialogContext? Context { get; set; }
+    [Parameter] public EventCallback OnCancelled { get; set; }
+    [Parameter] public EventCallback<RequestBindDialogResult> OnCompleted { get; set; }
+    [Parameter] public string ContinueLabel { get; set; } = "Continue to Bind Center";
+
+    readonly BindForm _form = new();
+    DialogStage _stage;
+    bool _busy;
+    bool _loadingUnderwriters;
+    bool _loadingCommission;
+    string? _error;
+    Guid _resultId;
+    readonly List<CarrierContactDto> _underwriterContacts = [];
+    BindCommissionEstimateDto? _commissionEstimate;
+
+    IEnumerable<PolicyCreationSourceDto> PolicySources => Context?.PolicySources.Where(x => x.IsActive && x.RequiresQuote).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<PolicyCreationSourceDto>();
+    IEnumerable<PolicyBindStatusDto> BindStatuses => Context?.BindStatuses.Where(x => x.IsActive && !x.CreatesPolicy).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<PolicyBindStatusDto>();
+    IEnumerable<SubmissionReferenceOptionDto> ConfirmationSources => Context?.ConfirmationSources.Where(x => x.IsActive).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<SubmissionReferenceOptionDto>();
+    IEnumerable<SubmissionReferenceOptionDto> BindingMethods => Context?.BindingMethods.Where(x => x.IsActive).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<SubmissionReferenceOptionDto>();
+    IEnumerable<SubmissionReferenceOptionDto> BindingAuthorities => Context?.BindingAuthorities.Where(x => x.IsActive).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<SubmissionReferenceOptionDto>();
+    string AuthorizationMethodDisplay => Context?.AuthorizationMethods.FirstOrDefault(x => string.Equals(x.OptionCode, Context.Acceptance.AuthorizationMethodCode, StringComparison.OrdinalIgnoreCase))?.OptionName ?? Display(Context?.Acceptance.AuthorizationMethodCode);
+    PolicyBindStatusDto? SelectedStatus => Context?.BindStatuses.FirstOrDefault(x => string.Equals(x.StatusCode, _form.BindStatusCode, StringComparison.OrdinalIgnoreCase));
+    PolicyCreationSourceDto? SelectedSource => Context?.PolicySources.FirstOrDefault(x => string.Equals(x.SourceCode, _form.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
+    bool CreatesPolicy => SelectedStatus?.CreatesPolicy == true;
+    string BindStatusDisplay => SelectedStatus?.StatusName ?? Display(_form.BindStatusCode);
+    string ConfirmationTitle => CreatesPolicy ? "Confirm carrier-authorized bind" : "Create bind request";
+    string ConfirmationMessage => CreatesPolicy ? "This status records authoritative carrier confirmation and may create the AMS policy record. Verify the evidence before proceeding." : "This creates an auditable bind request from the accepted proposal and customer authorization. It does not create a policy or represent bound coverage.";
+    string ConfirmationAction => CreatesPolicy ? "Confirm Bind" : "Create Bind Request";
+    string CompletionTitle => CreatesPolicy ? "Carrier bind confirmed" : "Bind request created";
+    string CompletionMessage => CreatesPolicy ? $"Transaction {_resultId} recorded carrier confirmation and advanced the policy workflow." : $"Bind request {_resultId} was created for carrier response tracking.";
+    IReadOnlyList<string> NextSteps => CreatesPolicy
+        ? ["Review the created policy record and issuance requirements.", "Complete policy documents, billing, commissions, and servicing setup.", "Resolve any outstanding subjectivities and renewal tasks."]
+        : ["Monitor carrier acknowledgement and underwriting review.", "Complete outstanding subjectivities or additional-information requests.", "Record authoritative carrier confirmation before AMS creates the policy."];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Context is null || _stage != DialogStage.Closed) return;
+        var source = PolicySources.FirstOrDefault(x => x.IsDefault) ?? PolicySources.FirstOrDefault();
+        var status = BindStatuses.FirstOrDefault(x => x.IsDefault) ?? BindStatuses.FirstOrDefault(x => x.StatusCode == "Pending") ?? BindStatuses.FirstOrDefault();
+        _form.Reset(Context, source?.SourceCode, status?.StatusCode);
+        _error = source is null || status is null ? "No active DB-backed policy source or bind status is configured." : null;
+        _stage = DialogStage.Form;
+        _loadingUnderwriters = true;
+        try
+        {
+            _underwriterContacts.Clear();
+            _underwriterContacts.AddRange(await Api.GetActiveCarrierContactsAsync(Context.TenantId, Context.CarrierId) ?? []);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Carrier contacts could not be loaded: {ex.Message}";
+        }
+        finally
+        {
+            _loadingUnderwriters = false;
+        }
+
+        _loadingCommission = true;
+        try
+        {
+            _commissionEstimate = await Api.GetBindCommissionEstimateAsync(Context.SubmissionId, Context.QuoteId, Context.TenantId);
+        }
+        catch (Exception ex)
+        {
+            _commissionEstimate = new BindCommissionEstimateDto { IsConfigured = false, UnavailableReason = $"Commission estimate could not be loaded: {ex.Message}" };
+        }
+        finally
+        {
+            _loadingCommission = false;
+        }
+    }
+
+    async Task ReviewAsync()
+    {
+        _error = ValidateContext();
+        if (_error is not null) return;
+        _stage = DialogStage.Confirm;
+        await Task.CompletedTask;
+    }
+
+    Task InvalidAsync()
+    {
+        _error = "Correct the highlighted bind fields before continuing.";
+        return Task.CompletedTask;
+    }
+
+    void BackToForm() => _stage = DialogStage.Form;
+
+    async Task SubmitAsync()
+    {
+        if (Context is null) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            _resultId = await Api.BindPolicyAsync(new BindPolicyRequest(
+                SubmissionId: Context.SubmissionId,
+                QuoteId: Context.QuoteId,
+                TenantId: Context.TenantId,
+                AccountId: Context.AccountId,
+                CarrierId: Context.CarrierId,
+                AnnualPremium: _form.AnnualPremium,
+                EffectiveDate: _form.EffectiveDate,
+                ExpirationDate: _form.ExpirationDate,
+                PolicyNumber: _form.PolicyNumber,
+                PolicySourceCode: _form.PolicySourceCode,
+                PolicySourceReason: _form.Notes,
+                PolicySourceNotes: _form.Notes,
+                RequestedByUserId: Context.UserId,
+                ApprovedByUserId: Context.UserId,
+                BoundByUserId: CreatesPolicy ? Context.UserId : null,
+                BindStatusCode: _form.BindStatusCode,
+                ProposalId: Context.ProposalId,
+                CustomerAuthorizationId: Context.CustomerAuthorizationId,
+                CustomerAuthorizationMethodCode: Context.Acceptance.AuthorizationMethodCode,
+                CustomerAuthorizationReference: Context.Acceptance.AuthorizationReference,
+                CustomerAuthorizationNotes: _form.Notes,
+                CustomerAuthorizedByName: Context.Acceptance.AuthorizedByName,
+                CustomerAuthorizedDateUtc: Context.Acceptance.AuthorizedDateUtc,
+                CustomerAuthorizationDocumentId: Context.Acceptance.AuthorizationDocumentId,
+                RequestedEffectiveTime: _form.RequestedEffectiveTime,
+                ConfirmationSourceCode: _form.ConfirmationSourceCode,
+                CarrierReferenceNumber: _form.CarrierReferenceNumber,
+                BinderNumber: _form.BinderNumber,
+                FinalPremium: _form.AnnualPremium,
+                DownPaymentAmount: _form.DownPaymentAmount,
+                SubjectivitiesOutstanding: _form.SubjectivitiesOutstanding,
+                ConfirmationNotes: _form.ConfirmationNotes,
+                UnderwriterContactId: _form.UnderwriterContactId,
+                CommissionPlanApplicabilityId: _commissionEstimate?.CommissionPlanApplicabilityId,
+                CommissionPlanVersionId: _commissionEstimate?.CommissionPlanVersionId,
+                CommissionPayeeId: _commissionEstimate?.CommissionPayeeId,
+                CommissionSplitRuleId: _commissionEstimate?.CommissionSplitRuleId,
+                FollowUpWrittenConfirmationRequired: string.Equals(_form.ConfirmationSourceCode, "Phone", StringComparison.OrdinalIgnoreCase),
+                ConfirmedManually: IsManualConfirmationSource(_form.ConfirmationSourceCode),
+                ConfirmationCertified: _form.ConfirmationCertified,
+                ClientAcceptanceId: Context.ClientAcceptanceId,
+                BindingAuthorityCode: _form.BindingAuthorityCode,
+                BindingMethodCode: _form.BindingMethodCode,
+                ProducerNotes: _form.Notes,
+                CarrierInstructions: _form.CarrierInstructions,
+                SpecialConditions: _form.SpecialConditions,
+                PaymentRequired: _form.PaymentRequired,
+                PaymentVerified: _form.PaymentVerified));
+            _stage = DialogStage.Complete;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Bind request failed: {ex.Message}";
+            _stage = DialogStage.Form;
+        }
+        finally { _busy = false; }
+    }
+
+    async Task CompleteAsync()
+    {
+        if (Context is null) return;
+        var result = new RequestBindDialogResult(_resultId, Context.SubmissionId, Context.QuoteId, _form.BindStatusCode, CreatesPolicy);
+        Reset();
+        await OnCompleted.InvokeAsync(result);
+    }
+
+    async Task CancelAsync()
+    {
+        if (_busy) return;
+        Reset();
+        await OnCancelled.InvokeAsync();
+    }
+
+    void Reset() { _stage = DialogStage.Closed; _error = null; _resultId = Guid.Empty; }
+    string? ValidateContext()
+    {
+        if (Context is null) return "Bind context is unavailable.";
+        if (Context.TenantId == Guid.Empty || Context.SubmissionId == Guid.Empty || Context.QuoteId == Guid.Empty) return "Tenant, submission, and quote context are required.";
+        if (Context.AccountId == Guid.Empty || Context.CarrierId == Guid.Empty) return "Account and carrier context are required.";
+        if (Context.ProposalId == Guid.Empty || Context.CustomerAuthorizationId == Guid.Empty || Context.ClientAcceptanceId == Guid.Empty) return "The accepted proposal, customer authorization, and client acceptance must remain linked.";
+        if (!string.Equals(Context.Acceptance.StatusCode, "Accepted", StringComparison.OrdinalIgnoreCase) && !string.Equals(Context.Acceptance.StatusCode, "BindRequested", StringComparison.OrdinalIgnoreCase)) return "The persisted client acceptance is not eligible for binding.";
+        if (string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizationMethodCode) || string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizedByName)) return "The persisted customer authorization is incomplete.";
+        if (string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizationReference) && !Context.Acceptance.AuthorizationDocumentId.HasValue) return "The persisted customer authorization requires a reference or evidence document.";
+        return null;
+    }
+
+    static bool IsManualConfirmationSource(string? code) => code is "Manual" or "Phone" or "Email" or "CarrierPortal" or "BinderDocument";
+    static string UnderwriterDisplay(CarrierContactDto contact) => string.IsNullOrWhiteSpace(contact.Title) ? contact.ContactName : $"{contact.ContactName} — {contact.Title}";
+    static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "Not recorded" : value;
+    RenderFragment Summary(string label, string value) => @<span><small>@label</small><strong>@Display(value)</strong></span>;
+
+    enum DialogStage { Closed, Form, Confirm, Complete }
+
+    sealed class BindForm : IValidatableObject
+    {
+        [StringLength(80)] public string? PolicyNumber { get; set; }
+        [Required, StringLength(50)] public string PolicySourceCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string BindStatusCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string BindingAuthorityCode { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string BindingMethodCode { get; set; } = string.Empty;
+        [StringLength(50)] public string? ConfirmationSourceCode { get; set; }
+        [StringLength(120)] public string? CarrierReferenceNumber { get; set; }
+        [StringLength(120)] public string? BinderNumber { get; set; }
+        [Range(0.01, 999999999999)] public decimal AnnualPremium { get; set; }
+        [Range(0, 999999999999)] public decimal? DownPaymentAmount { get; set; }
+        [Required] public DateTime EffectiveDate { get; set; }
+        [Required, StringLength(8)] public string EffectiveTime { get; set; } = "00:01";
+        [Required] public DateTime ExpirationDate { get; set; }
+        public Guid? UnderwriterContactId { get; set; }
+        [StringLength(2000)] public string? SubjectivitiesOutstanding { get; set; }
+        [StringLength(2000)] public string? ConfirmationNotes { get; set; }
+        [StringLength(1000)] public string? Notes { get; set; }
+        [StringLength(2000)] public string? CarrierInstructions { get; set; }
+        [StringLength(2000)] public string? SpecialConditions { get; set; }
+        public bool PaymentRequired { get; set; }
+        public bool PaymentVerified { get; set; }
+        public bool ConfirmationCertified { get; set; }
+        public Func<string, bool> CreatesPolicyStatus { get; set; } = _ => false;
+        public Func<string, PolicyCreationSourceDto?> PolicySourceSettings { get; set; } = _ => null;
+        public TimeSpan? RequestedEffectiveTime => TimeSpan.TryParse(EffectiveTime, out var value) ? value : null;
+
+        public void Reset(RequestBindDialogContext context, string? sourceCode, string? statusCode)
+        {
+            PolicyNumber = context.PolicyNumber; PolicySourceCode = sourceCode ?? string.Empty; BindStatusCode = statusCode ?? string.Empty;
+            BindingAuthorityCode = context.BindingAuthorities.FirstOrDefault(x => x.IsActive)?.OptionCode ?? string.Empty;
+            BindingMethodCode = context.BindingMethods.FirstOrDefault(x => x.IsActive)?.OptionCode ?? string.Empty;
+            ConfirmationSourceCode = null; CarrierReferenceNumber = null; BinderNumber = null; AnnualPremium = context.AnnualPremium;
+            DownPaymentAmount = null; EffectiveDate = context.EffectiveDate; EffectiveTime = "00:01"; ExpirationDate = context.ExpirationDate;
+            UnderwriterContactId = null; SubjectivitiesOutstanding = context.Subjectivities; ConfirmationNotes = null;
+            Notes = context.Subjectivities; CarrierInstructions = null; SpecialConditions = null; PaymentRequired = false; PaymentVerified = false; ConfirmationCertified = false;
+            CreatesPolicyStatus = code => context.BindStatuses.FirstOrDefault(x => string.Equals(x.StatusCode, code, StringComparison.OrdinalIgnoreCase))?.CreatesPolicy == true;
+            PolicySourceSettings = code => context.PolicySources.FirstOrDefault(x => x.IsActive && x.RequiresQuote && string.Equals(x.SourceCode, code, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            var source = PolicySourceSettings(PolicySourceCode);
+            if (source is null) yield return new("Select an active policy source.", [nameof(PolicySourceCode)]);
+            if (source?.RequiresReason == true && string.IsNullOrWhiteSpace(Notes)) yield return new("Bind instructions and audit notes are required for this policy source.", [nameof(Notes)]);
+            if (source?.RequiresPolicyNumber == true && string.IsNullOrWhiteSpace(PolicyNumber)) yield return new("Policy number is required for this policy source.", [nameof(PolicyNumber)]);
+            if (DownPaymentAmount > AnnualPremium) yield return new("Down payment cannot exceed the final premium.", [nameof(DownPaymentAmount)]);
+            if (ExpirationDate <= EffectiveDate) yield return new("Expiration date must be after effective date.", [nameof(ExpirationDate)]);
+            if (!string.IsNullOrWhiteSpace(EffectiveTime) && RequestedEffectiveTime is null) yield return new("Effective time must be valid.", [nameof(EffectiveTime)]);
+            if (!CreatesPolicyStatus(BindStatusCode)) yield break;
+            if (string.IsNullOrWhiteSpace(ConfirmationSourceCode)) yield return new("Confirmation method is required before marking the bind Bound.", [nameof(ConfirmationSourceCode)]);
+            if (!ConfirmationCertified) yield return new("Carrier confirmation certification is required before marking the bind Bound.", [nameof(ConfirmationCertified)]);
+            if (string.IsNullOrWhiteSpace(CarrierReferenceNumber) && string.IsNullOrWhiteSpace(BinderNumber) && string.IsNullOrWhiteSpace(PolicyNumber)) yield return new("Enter a carrier reference, binder number, or policy number before marking the bind Bound.", [nameof(CarrierReferenceNumber)]);
+        }
+    }
+}
