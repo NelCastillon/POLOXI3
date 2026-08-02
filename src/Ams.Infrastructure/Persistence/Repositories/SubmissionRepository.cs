@@ -2923,6 +2923,8 @@ SELECT a.*, o.OptionName AS ApprovalReasonName FROM Submissions.BindApproval a L
 SELECT bd.*, d.FileName, d.CategoryCode AS Category FROM Submissions.BindDocument bd INNER JOIN DMS.Document d ON d.DocumentId = bd.DocumentId AND d.TenantId = bd.TenantId AND d.IsDeleted = 0 WHERE bd.PolicyBindTransactionId = @PolicyBindTransactionId AND bd.TenantId = @TenantId AND bd.IsDeleted = 0 ORDER BY bd.CreatedDateUtc DESC;
 SELECT * FROM Submissions.BindCarrierMessage WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY SentReceivedDateUtc DESC;
 SELECT * FROM Submissions.BindPackage WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY PreparedDateUtc DESC;
+SELECT TOP 1 br.*, c.CarrierName FROM Submissions.BinderReview br INNER JOIN Core.Carrier c ON c.CarrierId = br.CarrierId AND c.TenantId = br.TenantId WHERE br.PolicyBindTransactionId = @PolicyBindTransactionId AND br.TenantId = @TenantId AND br.IsDeleted = 0;
+SELECT TOP 1 * FROM Submissions.PolicyGenerationRequest WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0 ORDER BY RequestedDateUtc DESC;
 SELECT FromStatusCode, ToStatusCode, RequiresValidation, RequiresApproval, RequiresCarrierResponse
 FROM Submissions.BindStatusTransition
 WHERE TenantId = @TenantId AND FromStatusCode = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0)
@@ -2946,6 +2948,8 @@ SELECT * FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId A
             Documents = (await multi.ReadAsync<BindDocumentDto>()).AsList(),
             CarrierMessages = (await multi.ReadAsync<BindCarrierMessageDto>()).AsList(),
             Packages = (await multi.ReadAsync<BindPackageDto>()).AsList(),
+            BinderReview = await multi.ReadSingleOrDefaultAsync<BinderReviewDto>(),
+            PolicyGeneration = await multi.ReadSingleOrDefaultAsync<PolicyGenerationRequestDto>(),
             AllowedTransitions = (await multi.ReadAsync<BindStatusTransitionDto>()).AsList(),
             BindingMethods = (await multi.ReadAsync<SubmissionReferenceOptionDto>()).AsList(),
             BindingAuthorities = (await multi.ReadAsync<SubmissionReferenceOptionDto>()).AsList(),

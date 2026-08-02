@@ -24,16 +24,33 @@ public sealed partial class DatabaseMigrator
 
     public async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureMigrationsTableAsync(cancellationToken);
+        using var lockConnection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var lockResult = await lockConnection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "DECLARE @Result INT; EXEC @Result = sys.sp_getapplock @Resource = N'Ams.DatabaseMigrator', @LockMode = N'Exclusive', @LockOwner = N'Session', @LockTimeout = 120000; SELECT @Result;",
+            commandTimeout: 130,
+            cancellationToken: cancellationToken));
+        if (lockResult < 0)
+            throw new InvalidOperationException($"Could not acquire the database migration lock. SQL application lock result: {lockResult}.");
 
-        foreach (var migration in AllMigrations)
+        try
         {
-            if (await HasBeenAppliedAsync(migration.Name, cancellationToken))
-                continue;
+            await EnsureMigrationsTableAsync(cancellationToken);
 
-            _logger.LogInformation("Applying migration: {Name}", migration.Name);
-            await ApplyAsync(migration, cancellationToken);
-            _logger.LogInformation("Migration applied: {Name}", migration.Name);
+            foreach (var migration in AllMigrations)
+            {
+                if (await HasBeenAppliedAsync(migration.Name, cancellationToken))
+                    continue;
+
+                _logger.LogInformation("Applying migration: {Name}", migration.Name);
+                await ApplyAsync(migration, cancellationToken);
+                _logger.LogInformation("Migration applied: {Name}", migration.Name);
+            }
+        }
+        finally
+        {
+            await lockConnection.ExecuteAsync(new CommandDefinition(
+                "EXEC sys.sp_releaseapplock @Resource = N'Ams.DatabaseMigrator', @LockOwner = N'Session';",
+                cancellationToken: cancellationToken));
         }
     }
 
@@ -294,6 +311,11 @@ public sealed partial class DatabaseMigrator
         new("0256_Enterprise_Proposal_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0065_EnterpriseProposalWorkflow.sql")),
         new("0257_Enterprise_Proposal_Workflow_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0066_EnterpriseProposalWorkflowHardening.sql")),
         new("0258_Enterprise_Bind_Request_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0259_Binder_Review_Policy_Generation_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0260_Binder_To_Policy_Gap_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0261_PolicyCreated_Accounting_Lifecycle", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0069_PolicyCreatedAccountingLifecycle.sql")),
+        new("0262_Delivery_Categories_Commission_Snapshots", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0070_DeliveryCategoriesAndCommissionSnapshots.sql")),
+        new("0263_Enterprise_Policy_Servicing_Workspace", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0071_EnterprisePolicyServicingWorkspace.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

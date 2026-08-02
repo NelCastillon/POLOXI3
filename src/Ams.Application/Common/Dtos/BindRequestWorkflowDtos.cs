@@ -10,12 +10,59 @@ public sealed class BindRequestDetailDto
     public IReadOnlyList<BindDocumentDto> Documents { get; set; } = [];
     public IReadOnlyList<BindCarrierMessageDto> CarrierMessages { get; set; } = [];
     public IReadOnlyList<BindPackageDto> Packages { get; set; } = [];
+    public BinderReviewDto? BinderReview { get; set; }
+    public PolicyGenerationRequestDto? PolicyGeneration { get; set; }
     public IReadOnlyList<BindStatusTransitionDto> AllowedTransitions { get; set; } = [];
     public IReadOnlyList<SubmissionReferenceOptionDto> BindingMethods { get; set; } = [];
     public IReadOnlyList<SubmissionReferenceOptionDto> BindingAuthorities { get; set; } = [];
     public IReadOnlyList<SubmissionReferenceOptionDto> ApprovalReasons { get; set; } = [];
     public bool IsReadyToSubmit { get; set; }
     public int BlockingValidationCount { get; set; }
+}
+
+public sealed class BinderReviewDto
+{
+    public Guid BinderReviewId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyBindTransactionId { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public string? PolicyNumber { get; set; }
+    public Guid CarrierId { get; set; }
+    public string CarrierName { get; set; } = string.Empty;
+    public string LineOfBusiness { get; set; } = string.Empty;
+    public DateOnly EffectiveDate { get; set; }
+    public DateOnly ExpirationDate { get; set; }
+    public decimal Premium { get; set; }
+    public decimal? Fees { get; set; }
+    public decimal? Taxes { get; set; }
+    public decimal? CommissionPercent { get; set; }
+    public string? PaymentPlan { get; set; }
+    public string? BillingTypeCode { get; set; }
+    public Guid? ProducerId { get; set; }
+    public Guid? CsrId { get; set; }
+    public string CoverageSnapshotJson { get; set; } = "{}";
+    public string RiskSnapshotJson { get; set; } = "{}";
+    public string ComparisonSnapshotJson { get; set; } = "{}";
+    public string? ReviewNotes { get; set; }
+    public DateTime? ReviewedDateUtc { get; set; }
+    public Guid? ReviewedByUserId { get; set; }
+    public DateTime? AcceptedDateUtc { get; set; }
+    public Guid? AcceptedByUserId { get; set; }
+}
+
+public sealed class PolicyGenerationRequestDto
+{
+    public Guid PolicyGenerationRequestId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyBindTransactionId { get; set; }
+    public Guid BinderReviewId { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public DateTime RequestedDateUtc { get; set; }
+    public Guid? RequestedByUserId { get; set; }
+    public DateTime? CompletedDateUtc { get; set; }
+    public int AttemptCount { get; set; }
+    public string? ErrorDetails { get; set; }
+    public Guid? PolicyId { get; set; }
 }
 
 public sealed class BindStatusTransitionDto

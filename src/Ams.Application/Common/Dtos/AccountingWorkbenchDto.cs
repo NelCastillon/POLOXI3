@@ -9,6 +9,13 @@ public sealed class AccountingWorkbenchDto
     public List<AccountingWorkbenchItemDto> CommissionAdjustments { get; set; } = [];
     public List<AccountingWorkbenchItemDto> DirectBillExceptions { get; set; } = [];
     public List<AccountingWorkbenchItemDto> MonthEnd { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> NewPolicyBilling { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> AccountingFailures { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> InvoicesDue { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> CarrierRemittances { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> FailedPayments { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> PremiumFinance { get; set; } = [];
+    public List<AccountingWorkbenchItemDto> CommissionApprovals { get; set; } = [];
 }
 
 public sealed class AccountingWorkbenchCountsDto
@@ -23,6 +30,16 @@ public sealed class AccountingWorkbenchCountsDto
     public int DirectBillExceptions { get; set; }
     public int MonthEndOpen { get; set; }
     public int MonthEndComplete { get; set; }
+    public int NewPoliciesAwaitingBilling { get; set; }
+    public decimal NewPolicyBillingAmount { get; set; }
+    public int AccountingFailures { get; set; }
+    public int InvoicesDue { get; set; }
+    public decimal InvoicesDueAmount { get; set; }
+    public int CarrierRemittances { get; set; }
+    public decimal CarrierRemittanceAmount { get; set; }
+    public int FailedPayments { get; set; }
+    public int PremiumFinancePending { get; set; }
+    public int CommissionApprovals { get; set; }
 }
 
 public sealed class AccountingWorkbenchItemDto

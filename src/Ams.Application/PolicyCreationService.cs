@@ -1,5 +1,6 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Common.Dtos;
 using Ams.Application.Features.Submissions;
 
 namespace Ams.Application;
@@ -26,6 +27,30 @@ public sealed class PolicyCreationService : IPolicyCreationService
         }
 
         return _repository.CreatePolicyFromConfirmedBindAsync(request, cancellationToken);
+    }
+
+    public Task<BinderReviewDto?> GetBinderReviewAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        if (policyBindTransactionId == Guid.Empty || tenantId == Guid.Empty) throw new InvalidOperationException("Binder review requires bind request and tenant identifiers.");
+        return _repository.GetBinderReviewAsync(policyBindTransactionId, tenantId, cancellationToken);
+    }
+
+    public Task<BinderReviewDto> SaveBinderReviewAsync(Guid policyBindTransactionId, UpsertBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        if (policyBindTransactionId == Guid.Empty || request.TenantId == Guid.Empty) throw new InvalidOperationException("Binder review requires bind request and tenant identifiers.");
+        return _repository.SaveBinderReviewAsync(policyBindTransactionId, request, cancellationToken);
+    }
+
+    public Task DecideBinderReviewAsync(Guid policyBindTransactionId, DecideBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        if (policyBindTransactionId == Guid.Empty || request.TenantId == Guid.Empty) throw new InvalidOperationException("Binder review decision requires bind request and tenant identifiers.");
+        return _repository.DecideBinderReviewAsync(policyBindTransactionId, request, cancellationToken);
+    }
+
+    public Task<PolicyGenerationRequestDto> QueuePolicyGenerationAsync(Guid policyBindTransactionId, QueuePolicyGenerationRequest request, CancellationToken cancellationToken = default)
+    {
+        if (policyBindTransactionId == Guid.Empty || request.TenantId == Guid.Empty) throw new InvalidOperationException("Policy generation requires bind request and tenant identifiers.");
+        return _repository.QueuePolicyGenerationAsync(policyBindTransactionId, request, cancellationToken);
     }
 
     public Task<IReadOnlyList<ManualPolicyOptionDto>> GetManualPolicyOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)

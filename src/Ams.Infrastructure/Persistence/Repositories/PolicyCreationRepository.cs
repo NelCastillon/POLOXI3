@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Common.Dtos;
 using Ams.Application.Features.Submissions;
 using Dapper;
 using System.Data;
@@ -42,7 +43,7 @@ BEGIN
     GOTO SynchronizeOpportunity;
 END;
 
-DECLARE @CreatesPolicy BIT;
+DECLARE @GenerationAuthorized BIT;
 DECLARE @SubmissionId UNIQUEIDENTIFIER;
 DECLARE @QuoteId UNIQUEIDENTIFIER;
 DECLARE @AccountId UNIQUEIDENTIFIER;
@@ -63,9 +64,18 @@ DECLARE @IssueStatus NVARCHAR(50);
 DECLARE @CoverageStatus NVARCHAR(50);
 DECLARE @IssuedDateUtc DATETIME2;
 DECLARE @PolicyTermId UNIQUEIDENTIFIER;
+DECLARE @BinderReviewId UNIQUEIDENTIFIER;
+DECLARE @CoverageSnapshotJson NVARCHAR(MAX);
+DECLARE @RiskSnapshotJson NVARCHAR(MAX);
+DECLARE @ComparisonSnapshotJson NVARCHAR(MAX);
+DECLARE @Fees DECIMAL(18,2);
+DECLARE @Taxes DECIMAL(18,2);
+DECLARE @BillingTypeCode NVARCHAR(50);
+DECLARE @PaymentPlan NVARCHAR(200);
 DECLARE @LineOfBusiness NVARCHAR(160);
 DECLARE @NamedInsured NVARCHAR(240);
 DECLARE @AssignedToUserId UNIQUEIDENTIFIER;
+DECLARE @CsrId UNIQUEIDENTIFIER;
 DECLARE @Deductible DECIMAL(18,2);
 DECLARE @Limit DECIMAL(18,2);
 DECLARE @CoverageNotes NVARCHAR(1000);
@@ -86,7 +96,13 @@ DECLARE @SourceCarrierId UNIQUEIDENTIFIER;
 DECLARE @IsIncumbentRenewal BIT = 0;
 DECLARE @TermNumber INT = 1;
 
-SELECT @CreatesPolicy = pbs.CreatesPolicy,
+SELECT @GenerationAuthorized = CASE WHEN EXISTS
+       (
+           SELECT 1 FROM Submissions.PolicyGenerationRequest pgr
+           INNER JOIN Submissions.BinderReview br ON br.BinderReviewId = pgr.BinderReviewId AND br.TenantId = pgr.TenantId AND br.PolicyBindTransactionId = pgr.PolicyBindTransactionId
+           WHERE pgr.TenantId = pbt.TenantId AND pgr.PolicyBindTransactionId = pbt.PolicyBindTransactionId AND pgr.StatusCode = N'Processing' AND pgr.IsDeleted = 0
+             AND br.StatusCode = N'GenerationQueued' AND br.IsDeleted = 0
+       ) THEN 1 ELSE 0 END,
        @SubmissionId = pbt.SubmissionId,
        @QuoteId = pbt.QuoteId,
        @AccountId = pbt.AccountId,
@@ -128,13 +144,79 @@ WHERE pbt.PolicyBindTransactionId = @PolicyBindTransactionId
   AND pbt.TenantId = @TenantId
   AND pbt.IsDeleted = 0;
 
-IF @CreatesPolicy IS NULL THROW 52100, 'Confirmed bind request was not found for policy creation.', 1;
-IF @CreatesPolicy = 0 THROW 52101, 'Bind request status does not allow policy creation.', 1;
+SELECT @BinderReviewId = br.BinderReviewId,
+       @PolicyNumber = COALESCE(NULLIF(br.PolicyNumber, N''), @PolicyNumber),
+       @CarrierId = br.CarrierId,
+       @LineOfBusiness = br.LineOfBusiness,
+       @EffectiveDate = br.EffectiveDate,
+       @ExpirationDate = br.ExpirationDate,
+       @AnnualPremium = br.Premium,
+       @Fees = br.Fees,
+       @Taxes = br.Taxes,
+       @CommissionRatePct = COALESCE(br.CommissionPercent, @CommissionRatePct),
+       @PaymentPlan = br.PaymentPlan,
+       @BillingTypeCode = br.BillingTypeCode,
+       @AssignedToUserId = COALESCE(br.ProducerId, @AssignedToUserId),
+       @CsrId = br.CsrId,
+       @CoverageSnapshotJson = br.CoverageSnapshotJson,
+       @RiskSnapshotJson = br.RiskSnapshotJson,
+       @ComparisonSnapshotJson = br.ComparisonSnapshotJson
+FROM Submissions.BinderReview br
+WHERE br.PolicyBindTransactionId = @PolicyBindTransactionId
+  AND br.TenantId = @TenantId
+  AND br.StatusCode = N'GenerationQueued'
+  AND br.IsDeleted = 0;
+
+IF @GenerationAuthorized IS NULL THROW 52100, 'Confirmed bind request was not found for policy creation.', 1;
+IF @GenerationAuthorized = 0 OR @BinderReviewId IS NULL THROW 52101, 'An accepted binder and active policy generation request are required.', 1;
 IF @ConfirmationCertified = 0 THROW 52102, 'Carrier confirmation must be certified before policy creation.', 1;
 IF NULLIF(@ConfirmationSourceCode, N'') IS NULL THROW 52103, 'Carrier confirmation source is required before policy creation.', 1;
 IF NULLIF(@CarrierReferenceNumber, N'') IS NULL AND NULLIF(@BinderNumber, N'') IS NULL AND NULLIF(@PolicyNumber, N'') IS NULL THROW 52104, 'Carrier confirmation requires a carrier reference, binder number, or policy number.', 1;
 IF @AnnualPremium <= 0 THROW 52105, 'Policy creation requires a final premium greater than zero.', 1;
 IF @ExpirationDate <= @EffectiveDate THROW 52106, 'Policy expiration date must be after the effective date.', 1;
+
+IF @CommissionPlanId IS NOT NULL AND @CommissionPayeeId IS NOT NULL AND @CommissionRatePct IS NOT NULL AND @CommissionSplitPct IS NOT NULL
+BEGIN
+    DECLARE @CsrPayeeId UNIQUEIDENTIFIER,@CsrSplitRuleId UNIQUEIDENTIFIER,@CsrSplitPct DECIMAL(9,4)=0,@AgencySplitPct DECIMAL(9,4),@SnapshotGrossCommission DECIMAL(18,2);
+    SET @SnapshotGrossCommission=COALESCE(@EstimatedGrossCommission,ROUND(COALESCE(@CommissionablePremium,@AnnualPremium)*@CommissionRatePct/100.0,2));
+
+    IF @CsrId IS NOT NULL
+    BEGIN
+        SELECT TOP 1 @CsrPayeeId=p.PayeeId
+        FROM Commission.CommissionPayee p
+        WHERE p.TenantId=@TenantId AND p.CommissionPlanId=@CommissionPlanId AND p.UserId=@CsrId
+          AND p.PayeeTypeCode IN(N'CSR',N'Service') AND p.StatusCode=N'Active' AND p.EffectiveDate<=@EffectiveDate AND p.IsDeleted=0
+        ORDER BY p.EffectiveDate DESC,p.CreatedDateUtc DESC;
+
+        IF @CsrPayeeId IS NOT NULL
+        BEGIN
+            SELECT TOP 1 @CsrSplitRuleId=sr.SplitRuleId,@CsrSplitPct=sr.SplitPct
+            FROM Commission.CommissionSplitRule sr
+            WHERE sr.TenantId=@TenantId AND sr.CommissionPlanId=@CommissionPlanId AND sr.SplitTypeCode IN(N'CSR',N'Service')
+              AND (sr.PayeeId=@CsrPayeeId OR sr.PayeeId IS NULL) AND sr.StatusCode=N'Active'
+              AND sr.EffectiveStartDate<=@EffectiveDate AND (sr.EffectiveEndDate IS NULL OR sr.EffectiveEndDate>=@EffectiveDate) AND sr.IsDeleted=0
+            ORDER BY CASE WHEN sr.PayeeId=@CsrPayeeId THEN 0 ELSE 1 END,sr.Priority,sr.EffectiveStartDate DESC;
+        END;
+    END;
+
+    IF @CommissionSplitPct+COALESCE(@CsrSplitPct,0)>100 THROW 52107,'Configured producer and CSR commission allocations exceed 100 percent.',1;
+    SET @AgencySplitPct=100-@CommissionSplitPct-COALESCE(@CsrSplitPct,0);
+
+    INSERT Submissions.PolicyBindCommissionAllocationSnapshot(PolicyBindCommissionAllocationSnapshotId,TenantId,PolicyBindTransactionId,CommissionPlanId,CommissionPlanVersionId,CommissionSplitRuleId,PayeeId,PayeeUserId,PayeeTypeCode,SplitPercent,CommissionRatePct,CommissionablePremium,GrossCommissionAmount,AllocationAmount,SnapshotDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    SELECT NEWID(),@TenantId,@PolicyBindTransactionId,@CommissionPlanId,@CommissionPlanVersionId,@CommissionSplitRuleId,@CommissionPayeeId,@AssignedToUserId,N'Producer',@CommissionSplitPct,@CommissionRatePct,COALESCE(@CommissionablePremium,@AnnualPremium),@SnapshotGrossCommission,ROUND(@SnapshotGrossCommission*@CommissionSplitPct/100.0,2),@Now,@Now,@RequestedByUserId,0
+    WHERE @CommissionSplitPct>0 AND NOT EXISTS(SELECT 1 FROM Submissions.PolicyBindCommissionAllocationSnapshot WHERE TenantId=@TenantId AND PolicyBindTransactionId=@PolicyBindTransactionId AND PayeeTypeCode=N'Producer' AND IsDeleted=0);
+
+    INSERT Submissions.PolicyBindCommissionAllocationSnapshot(PolicyBindCommissionAllocationSnapshotId,TenantId,PolicyBindTransactionId,CommissionPlanId,CommissionPlanVersionId,CommissionSplitRuleId,PayeeId,PayeeUserId,PayeeTypeCode,SplitPercent,CommissionRatePct,CommissionablePremium,GrossCommissionAmount,AllocationAmount,SnapshotDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    SELECT NEWID(),@TenantId,@PolicyBindTransactionId,@CommissionPlanId,@CommissionPlanVersionId,@CsrSplitRuleId,@CsrPayeeId,@CsrId,N'CSR',@CsrSplitPct,@CommissionRatePct,COALESCE(@CommissionablePremium,@AnnualPremium),@SnapshotGrossCommission,ROUND(@SnapshotGrossCommission*@CsrSplitPct/100.0,2),@Now,@Now,@RequestedByUserId,0
+    WHERE @CsrPayeeId IS NOT NULL AND @CsrSplitPct>0 AND NOT EXISTS(SELECT 1 FROM Submissions.PolicyBindCommissionAllocationSnapshot WHERE TenantId=@TenantId AND PolicyBindTransactionId=@PolicyBindTransactionId AND PayeeTypeCode=N'CSR' AND IsDeleted=0);
+
+    INSERT Submissions.PolicyBindCommissionAllocationSnapshot(PolicyBindCommissionAllocationSnapshotId,TenantId,PolicyBindTransactionId,CommissionPlanId,CommissionPlanVersionId,CommissionSplitRuleId,PayeeId,PayeeUserId,PayeeTypeCode,SplitPercent,CommissionRatePct,CommissionablePremium,GrossCommissionAmount,AllocationAmount,SnapshotDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    SELECT NEWID(),@TenantId,@PolicyBindTransactionId,@CommissionPlanId,@CommissionPlanVersionId,NULL,NULL,NULL,N'Agency',@AgencySplitPct,@CommissionRatePct,COALESCE(@CommissionablePremium,@AnnualPremium),@SnapshotGrossCommission,@SnapshotGrossCommission-ROUND(@SnapshotGrossCommission*@CommissionSplitPct/100.0,2)-ROUND(@SnapshotGrossCommission*COALESCE(@CsrSplitPct,0)/100.0,2),@Now,@Now,@RequestedByUserId,0
+    WHERE @AgencySplitPct>0 AND NOT EXISTS(SELECT 1 FROM Submissions.PolicyBindCommissionAllocationSnapshot WHERE TenantId=@TenantId AND PolicyBindTransactionId=@PolicyBindTransactionId AND PayeeTypeCode=N'Agency' AND IsDeleted=0);
+
+    IF ABS((SELECT COALESCE(SUM(SplitPercent),0) FROM Submissions.PolicyBindCommissionAllocationSnapshot WHERE TenantId=@TenantId AND PolicyBindTransactionId=@PolicyBindTransactionId AND IsDeleted=0)-100)>0.0001
+        THROW 52108,'Bind-time commission allocation snapshot must total 100 percent.',1;
+END;
 
 SET @IssueStatus = CASE WHEN NULLIF(@PolicyNumber, N'') IS NULL THEN N'PendingIssue' ELSE N'Issued' END;
 SET @CoverageStatus = CASE WHEN @IssueStatus = N'Issued' THEN N'Active' ELSE N'Bound' END;
@@ -190,7 +272,7 @@ END;
 
 INSERT INTO Policy.PolicyTerm
     (PolicyTermId, TenantId, PolicyId, TermNumber, EffectiveDate, ExpirationDate, TermStatusCode, TransactionTypeCode, WrittenPremium, AnnualizedPremium, Taxes, Fees, Surcharges, TotalCost, BillingTypeCode, DataCompletenessCode, RenewalRetentionCaseId, PriorPolicyTermId, CreatedDateUtc, IsDeleted)
-SELECT @PolicyTermId, @TenantId, @PolicyId, @TermNumber, @EffectiveDate, @ExpirationDate, CASE WHEN @CoverageStatus = N'Bound' THEN N'Active' ELSE @CoverageStatus END, CASE WHEN @RenewalRetentionCaseId IS NULL THEN N'NewBusiness' ELSE N'Renewal' END, @AnnualPremium, @AnnualPremium, NULL, NULL, NULL, @AnnualPremium, NULL, N'Partial', @RenewalRetentionCaseId, @SourcePolicyTermId, @Now, 0
+SELECT @PolicyTermId, @TenantId, @PolicyId, @TermNumber, @EffectiveDate, @ExpirationDate, CASE WHEN @CoverageStatus = N'Bound' THEN N'Active' ELSE @CoverageStatus END, CASE WHEN @RenewalRetentionCaseId IS NULL THEN N'NewBusiness' ELSE N'Renewal' END, @AnnualPremium, @AnnualPremium, @Taxes, @Fees, NULL, @AnnualPremium + COALESCE(@Taxes,0) + COALESCE(@Fees,0), @BillingTypeCode, N'Verified', @RenewalRetentionCaseId, @SourcePolicyTermId, @Now, 0
 WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyTerm WHERE TenantId = @TenantId AND PolicyId = @PolicyId AND TermNumber = @TermNumber AND IsDeleted = 0);
 
 INSERT INTO Policy.PolicyLine
@@ -210,8 +292,20 @@ WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyNamedInsured WHERE TenantId = @Tena
 
 INSERT INTO Policy.PolicyCoverageSummary
     (PolicyCoverageSummaryId, TenantId, PolicyTermId, CoverageSummary, LimitsSummary, DeductibleSummary, CoverageNotes, RiskSnapshotJson, CreatedDateUtc, IsDeleted)
-SELECT NEWID(), @TenantId, @PolicyTermId, @CoverageNotes, CASE WHEN @Limit IS NULL THEN NULL ELSE CONCAT(N'Limit: ', FORMAT(@Limit, N'N2')) END, CASE WHEN @Deductible IS NULL THEN NULL ELSE CONCAT(N'Deductible: ', FORMAT(@Deductible, N'N2')) END, @PolicySourceNotes, NULL, @Now, 0
+SELECT NEWID(), @TenantId, @PolicyTermId, @CoverageNotes, CASE WHEN @Limit IS NULL THEN NULL ELSE CONCAT(N'Limit: ', FORMAT(@Limit, N'N2')) END, CASE WHEN @Deductible IS NULL THEN NULL ELSE CONCAT(N'Deductible: ', FORMAT(@Deductible, N'N2')) END, @PolicySourceNotes, @RiskSnapshotJson, @Now, 0
 WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyCoverageSummary WHERE TenantId = @TenantId AND PolicyTermId = @PolicyTermId AND IsDeleted = 0);
+
+INSERT INTO Policy.PolicyVersion (PolicyVersionId, TenantId, PolicyId, PolicyTermId, PolicyTransactionId, VersionNumber, VersionReasonCode, SnapshotJson, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @PolicyId, @PolicyTermId, NULL, 1, N'Original',
+       JSON_OBJECT(N'policyNumber': @PolicyNumber, N'carrierId': @CarrierId, N'lineOfBusiness': @LineOfBusiness, N'premium': @AnnualPremium, N'fees': @Fees, N'taxes': @Taxes, N'paymentPlan': @PaymentPlan, N'billingType': @BillingTypeCode, N'coverage': JSON_QUERY(COALESCE(@CoverageSnapshotJson,N'{}')), N'risk': JSON_QUERY(COALESCE(@RiskSnapshotJson,N'{}')), N'comparison': JSON_QUERY(COALESCE(@ComparisonSnapshotJson,N'{}'))),
+       @Now, @RequestedByUserId, 0
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyVersion WHERE TenantId=@TenantId AND PolicyId=@PolicyId AND VersionNumber=1 AND IsDeleted=0);
+
+INSERT INTO Policy.PolicyDocumentLink (PolicyDocumentLinkId,TenantId,PolicyId,PolicyTermId,DocumentId,DocumentRoleCode,SourceEntityName,SourceEntityId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,@PolicyId,@PolicyTermId,bd.DocumentId,bd.DocumentRoleCode,N'PolicyBindTransaction',@PolicyBindTransactionId,@Now,@RequestedByUserId,0
+FROM Submissions.BindDocument bd
+WHERE bd.TenantId=@TenantId AND bd.PolicyBindTransactionId=@PolicyBindTransactionId AND bd.IsDeleted=0
+AND NOT EXISTS(SELECT 1 FROM Policy.PolicyDocumentLink pdl WHERE pdl.TenantId=@TenantId AND pdl.PolicyId=@PolicyId AND pdl.DocumentId=bd.DocumentId AND pdl.DocumentRoleCode=bd.DocumentRoleCode AND pdl.IsDeleted=0);
 
 INSERT INTO Policy.PolicyAssignment
     (PolicyAssignmentId, TenantId, PolicyId, Agency, Branch, Department, ProducerId, AccountManagerId, CsrId, ProducerName, AccountManagerName, CsrName, CreatedDateUtc, IsDeleted)
@@ -261,6 +355,41 @@ INSERT INTO Policy.PolicyAuditEvent
     (PolicyAuditEventId, TenantId, EntityType, EntityId, ActionCode, SourceCode, ReasonCode, UserId, BeforeJson, AfterJson, CreatedDateUtc, IsDeleted)
 SELECT NEWID(), @TenantId, N'Policy', @PolicyId, N'PolicyCreatedFromBindConfirmation', N'PolicyService', @PolicySourceCode, @RequestedByUserId, NULL, JSON_OBJECT(N'PolicyId': @PolicyId, N'PolicyBindTransactionId': @PolicyBindTransactionId, N'SubmissionId': @SubmissionId, N'QuoteId': @QuoteId, N'LineOfBusiness': @LineOfBusiness, N'AnnualPremium': @AnnualPremium), @Now, 0
 WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyAuditEvent WHERE TenantId = @TenantId AND EntityType = N'Policy' AND EntityId = @PolicyId AND ActionCode = N'PolicyCreatedFromBindConfirmation' AND IsDeleted = 0);
+
+INSERT INTO Accounting.PolicyCreatedEvent
+    (PolicyCreatedEventId, TenantId, PolicyId, PolicyTermId, PolicyBindTransactionId, EventTypeCode, EventVersion, CorrelationId, PayloadJson, StatusCode, AttemptCount, OccurredDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), @TenantId, @PolicyId, @PolicyTermId, @PolicyBindTransactionId, N'PolicyCreated', 1, @PolicyBindTransactionId,
+       JSON_OBJECT(
+           N'policyId': @PolicyId,
+           N'policyTermId': @PolicyTermId,
+           N'policyBindTransactionId': @PolicyBindTransactionId,
+           N'policyNumber': COALESCE((SELECT TOP 1 bp.PolicyNumber FROM Submissions.BoundPolicy bp WHERE bp.PolicyId = @PolicyId AND bp.TenantId = @TenantId AND bp.IsDeleted = 0), @PolicyNumber, @BinderNumber, @CarrierReferenceNumber),
+           N'accountId': @AccountId,
+           N'carrierId': @CarrierId,
+           N'billingTypeCode': COALESCE(NULLIF(@BillingTypeCode, N''), N'AgencyBill'),
+           N'annualPremium': @AnnualPremium,
+           N'fees': COALESCE(@Fees, 0),
+           N'taxes': COALESCE(@Taxes, 0),
+           N'paymentPlan': @PaymentPlan,
+           N'commissionRatePct': COALESCE(@CommissionRatePct, 0),
+           N'estimatedGrossCommission': COALESCE(@EstimatedGrossCommission, 0),
+           N'effectiveDate': @EffectiveDate,
+           N'expirationDate': @ExpirationDate,
+           N'issuedDateUtc': @IssuedDateUtc,
+           N'boundDateUtc': @BoundDateUtc
+       ),
+       N'Pending', 0, @Now, @RequestedByUserId, 0
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Accounting.PolicyCreatedEvent existing
+    WHERE existing.TenantId = @TenantId
+      AND existing.PolicyId = @PolicyId
+      AND existing.PolicyTermId = @PolicyTermId
+      AND existing.EventTypeCode = N'PolicyCreated'
+      AND existing.EventVersion = 1
+      AND existing.IsDeleted = 0
+);
 
 UPDATE pbt
 SET PolicyId = @PolicyId,
@@ -329,10 +458,11 @@ INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId
 SELECT NEWID(), @SubmissionId, @TenantId, N'PolicyRecordCreated', CONCAT(N'AMS policy record created. Carrier legal policy issue status: ', @IssueStatus, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), @Now, N'Policy', @PolicyId, N'PolicyService', 0
 WHERE @SubmissionId IS NOT NULL;
 
-INSERT INTO OPS.TaskItem (TaskItemId, TenantId, TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, StatusCode, RelatedEntityName, RelatedEntityId, AccountId, DueDate, CreatedDateUtc, IsDeleted)
-SELECT NEWID(), @TenantId, CONCAT(N'TASK-', FORMAT(@Now, N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 6)),
-       v.Title, v.Description, N'DocumentCollection', N'PostBind', N'High', N'Open', CASE WHEN @SubmissionId IS NULL THEN N'Policy' ELSE N'Submission' END, COALESCE(@SubmissionId, @PolicyId), @AccountId, DATEADD(day, 7, CONVERT(date, @Now)), @Now, 0
-FROM (VALUES (N'Collect binder', N'Attach the binder document.'), (N'Collect policy', N'Attach issued policy.'), (N'Collect invoice', N'Attach invoice.'), (N'Collect certificates', N'Attach certificates.'), (N'Collect evidence of insurance', N'Attach evidence of insurance.'), (N'Collect endorsements', N'Attach required endorsements.')) v(Title, Description);
+INSERT INTO OPS.TaskItem (TaskItemId,TenantId,TaskNumber,Title,Description,TaskTypeCode,StageCode,PriorityCode,StatusCode,RelatedEntityName,RelatedEntityId,AccountId,AssignedToUserId,DueDate,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,CONCAT(N'TASK-',FORMAT(@Now,N'yyyyMMdd'),N'-',RIGHT(REPLACE(CONVERT(NVARCHAR(36),NEWID()),N'-',N''),6)),t.Title,t.Description,t.TaskTypeCode,N'PolicyAdministration',t.PriorityCode,N'Open',N'Policy',@PolicyId,@AccountId,COALESCE(@AssignedToUserId,@RequestedByUserId),DATEADD(day,t.DueDays,CONVERT(date,@Now)),@Now,@RequestedByUserId,0
+FROM Submissions.PolicyGenerationTaskTemplate t
+WHERE t.TenantId=@TenantId AND t.IsActive=1 AND t.IsDeleted=0
+AND NOT EXISTS(SELECT 1 FROM OPS.TaskItem existing WHERE existing.TenantId=@TenantId AND existing.RelatedEntityName=N'Policy' AND existing.RelatedEntityId=@PolicyId AND existing.TaskTypeCode=t.TaskTypeCode AND existing.IsDeleted=0);
 
 SynchronizeOpportunity:
 
@@ -457,6 +587,93 @@ SELECT @PolicyId;";
 
         using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+    }
+
+    public async Task<BinderReviewDto?> GetBinderReviewAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SELECT br.*, c.CarrierName
+FROM Submissions.BinderReview br
+INNER JOIN Core.Carrier c ON c.CarrierId = br.CarrierId AND c.TenantId = br.TenantId AND c.IsDeleted = 0
+WHERE br.PolicyBindTransactionId = @PolicyBindTransactionId AND br.TenantId = @TenantId AND br.IsDeleted = 0;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<BinderReviewDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<BinderReviewDto> SaveBinderReviewAsync(Guid policyBindTransactionId, UpsertBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+IF @ReviewedByUserId IS NULL THROW 52204, 'An authenticated reviewer is required.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND BindStatusCode = N'BinderReceived' AND ConfirmationCertified = 1 AND IsDeleted = 0) THROW 52200, 'A certified received carrier binder is required before review.', 1;
+IF NOT EXISTS (SELECT 1 FROM Core.Carrier WHERE CarrierId = @CarrierId AND TenantId = @TenantId AND IsActive = 1 AND IsDeleted = 0) THROW 52201, 'The selected carrier is not active for this tenant.', 1;
+SELECT @CoverageSnapshotJson=JSON_OBJECT(N'quoteId':pbt.QuoteId,N'limit':q.[Limit],N'deductible':q.Deductible,N'coverageNotes':q.CoverageNotes,N'subjectivities':q.Subjectivities,N'exclusions':q.Exclusions),
+       @RiskSnapshotJson=JSON_OBJECT(N'accountId':pbt.AccountId,N'submissionId':pbt.SubmissionId,N'quoteId':pbt.QuoteId,N'lineOfBusiness':s.LineOfBusiness),
+       @ComparisonSnapshotJson=JSON_OBJECT(N'quotedPremium':pbt.AnnualPremium,N'binderPremium':@Premium,N'premiumVariance':@Premium-pbt.AnnualPremium,N'requestedEffectiveDate':CONVERT(date,pbt.EffectiveDate),N'binderEffectiveDate':@EffectiveDate,N'requestedExpirationDate':CONVERT(date,pbt.ExpirationDate),N'binderExpirationDate':@ExpirationDate,N'carrierId':pbt.CarrierId,N'verifiedCarrierId':@CarrierId)
+FROM Submissions.PolicyBindTransaction pbt LEFT JOIN Submissions.Quote q ON q.QuoteId=pbt.QuoteId AND q.SubmissionId=pbt.SubmissionId AND q.IsDeleted=0 LEFT JOIN Submissions.Submission s ON s.SubmissionId=pbt.SubmissionId AND s.TenantId=pbt.TenantId AND s.IsDeleted=0 WHERE pbt.PolicyBindTransactionId=@PolicyBindTransactionId AND pbt.TenantId=@TenantId AND pbt.IsDeleted=0;
+DECLARE @BinderReviewId UNIQUEIDENTIFIER = (SELECT BinderReviewId FROM Submissions.BinderReview WITH (UPDLOCK, HOLDLOCK) WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0);
+IF @BinderReviewId IS NULL
+BEGIN
+ SET @BinderReviewId = NEWID();
+ INSERT INTO Submissions.BinderReview (BinderReviewId,TenantId,PolicyBindTransactionId,StatusCode,PolicyNumber,CarrierId,LineOfBusiness,EffectiveDate,ExpirationDate,Premium,Fees,Taxes,CommissionPercent,PaymentPlan,BillingTypeCode,ProducerId,CsrId,CoverageSnapshotJson,RiskSnapshotJson,ComparisonSnapshotJson,ReviewNotes,ReviewedDateUtc,ReviewedByUserId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+ VALUES (@BinderReviewId,@TenantId,@PolicyBindTransactionId,N'PendingReview',@PolicyNumber,@CarrierId,@LineOfBusiness,@EffectiveDate,@ExpirationDate,@Premium,@Fees,@Taxes,@CommissionPercent,@PaymentPlan,@BillingTypeCode,@ProducerId,@CsrId,@CoverageSnapshotJson,@RiskSnapshotJson,@ComparisonSnapshotJson,@ReviewNotes,SYSUTCDATETIME(),@ReviewedByUserId,SYSUTCDATETIME(),@ReviewedByUserId,0);
+END
+ELSE UPDATE Submissions.BinderReview SET PolicyNumber=@PolicyNumber,CarrierId=@CarrierId,LineOfBusiness=@LineOfBusiness,EffectiveDate=@EffectiveDate,ExpirationDate=@ExpirationDate,Premium=@Premium,Fees=@Fees,Taxes=@Taxes,CommissionPercent=@CommissionPercent,PaymentPlan=@PaymentPlan,BillingTypeCode=@BillingTypeCode,ProducerId=@ProducerId,CsrId=@CsrId,CoverageSnapshotJson=@CoverageSnapshotJson,RiskSnapshotJson=@RiskSnapshotJson,ComparisonSnapshotJson=@ComparisonSnapshotJson,ReviewNotes=@ReviewNotes,ReviewedDateUtc=SYSUTCDATETIME(),ReviewedByUserId=@ReviewedByUserId,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ReviewedByUserId WHERE BinderReviewId=@BinderReviewId AND StatusCode IN(N'PendingReview',N'CorrectionRequested');
+IF @BinderReviewId IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Submissions.BinderReview WHERE BinderReviewId=@BinderReviewId AND StatusCode IN(N'PendingReview',N'CorrectionRequested')) THROW 52205,'An accepted or generated binder review is immutable.',1;
+COMMIT;
+SELECT br.*,c.CarrierName FROM Submissions.BinderReview br INNER JOIN Core.Carrier c ON c.CarrierId=br.CarrierId AND c.TenantId=br.TenantId WHERE br.BinderReviewId=@BinderReviewId;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleAsync<BinderReviewDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.PolicyNumber, request.CarrierId, request.LineOfBusiness, request.EffectiveDate, request.ExpirationDate, request.Premium, request.Fees, request.Taxes, request.CommissionPercent, request.PaymentPlan, request.BillingTypeCode, request.ProducerId, request.CsrId, request.CoverageSnapshotJson, request.RiskSnapshotJson, request.ComparisonSnapshotJson, request.ReviewNotes, request.ReviewedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task DecideBinderReviewAsync(Guid policyBindTransactionId, DecideBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+IF @DecidedByUserId IS NULL THROW 52206,'An authenticated decision maker is required.',1;
+DECLARE @OldBindStatus NVARCHAR(50)=(SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId AND IsDeleted=0);
+DECLARE @ReviewStatus NVARCHAR(50)=CASE @DecisionCode WHEN N'Accepted' THEN N'Accepted' WHEN N'Rejected' THEN N'Rejected' ELSE N'CorrectionRequested' END;
+DECLARE @BindStatus NVARCHAR(50)=CASE @DecisionCode WHEN N'Accepted' THEN N'BinderAccepted' WHEN N'Rejected' THEN N'Rejected' ELSE N'NeedInformation' END;
+UPDATE Submissions.BinderReview SET StatusCode=@ReviewStatus,ReviewNotes=COALESCE(NULLIF(@Notes,N''),ReviewNotes),AcceptedDateUtc=CASE WHEN @DecisionCode=N'Accepted' THEN SYSUTCDATETIME() ELSE AcceptedDateUtc END,AcceptedByUserId=CASE WHEN @DecisionCode=N'Accepted' THEN @DecidedByUserId ELSE AcceptedByUserId END,RejectedDateUtc=CASE WHEN @DecisionCode=N'Rejected' THEN SYSUTCDATETIME() ELSE RejectedDateUtc END,RejectedByUserId=CASE WHEN @DecisionCode=N'Rejected' THEN @DecidedByUserId ELSE RejectedByUserId END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@DecidedByUserId WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId AND StatusCode IN(N'PendingReview',N'CorrectionRequested') AND IsDeleted=0;
+IF @@ROWCOUNT=0 THROW 52202,'A pending binder review was not found.',1;
+INSERT INTO Submissions.BinderReviewDecision(BinderReviewDecisionId,TenantId,BinderReviewId,PolicyBindTransactionId,DecisionCode,Notes,SnapshotJson,DecidedDateUtc,DecidedByUserId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,BinderReviewId,@PolicyBindTransactionId,@DecisionCode,@Notes,JSON_OBJECT(N'policyNumber':PolicyNumber,N'carrierId':CarrierId,N'lineOfBusiness':LineOfBusiness,N'effectiveDate':EffectiveDate,N'expirationDate':ExpirationDate,N'premium':Premium,N'fees':Fees,N'taxes':Taxes,N'commissionPercent':CommissionPercent,N'paymentPlan':PaymentPlan,N'billingType':BillingTypeCode,N'coverage':JSON_QUERY(CoverageSnapshotJson),N'risk':JSON_QUERY(RiskSnapshotJson),N'comparison':JSON_QUERY(ComparisonSnapshotJson)),SYSUTCDATETIME(),@DecidedByUserId,SYSUTCDATETIME(),@DecidedByUserId,0 FROM Submissions.BinderReview WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId AND IsDeleted=0;
+UPDATE Submissions.PolicyBindTransaction SET BindStatusCode=@BindStatus,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@DecidedByUserId WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId AND IsDeleted=0;
+INSERT INTO Submissions.BindStatusHistory(BindStatusHistoryId,TenantId,PolicyBindTransactionId,OldStatusCode,NewStatusCode,Comments,ChangedDateUtc,ChangedByUserId,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@TenantId,@PolicyBindTransactionId,@OldBindStatus,@BindStatus,COALESCE(NULLIF(@Notes,N''),CONCAT(N'Binder review ',LOWER(@DecisionCode),N'.')),SYSUTCDATETIME(),@DecidedByUserId,SYSUTCDATETIME(),@DecidedByUserId,0);
+COMMIT;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.DecisionCode, request.Notes, request.DecidedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<PolicyGenerationRequestDto> QueuePolicyGenerationAsync(Guid policyBindTransactionId, QueuePolicyGenerationRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+DECLARE @Id UNIQUEIDENTIFIER=(SELECT PolicyGenerationRequestId FROM Submissions.PolicyGenerationRequest WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND IdempotencyKey=@IdempotencyKey AND IsDeleted=0);
+IF @Id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Submissions.PolicyGenerationRequest WHERE PolicyGenerationRequestId=@Id AND PolicyBindTransactionId=@PolicyBindTransactionId) THROW 52207,'The idempotency key belongs to a different bind request.',1;
+DECLARE @BinderReviewId UNIQUEIDENTIFIER=(SELECT BinderReviewId FROM Submissions.BinderReview WITH(UPDLOCK,HOLDLOCK) WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId AND StatusCode=N'Accepted' AND IsDeleted=0);
+IF @Id IS NULL AND @RequestedByUserId IS NULL THROW 52208,'An authenticated policy generation requester is required.',1;
+IF @Id IS NULL AND @BinderReviewId IS NULL THROW 52203,'The carrier binder must be reviewed and accepted before policy generation.',1;
+IF @Id IS NULL
+BEGIN
+ SET @Id=NEWID();
+ INSERT INTO Submissions.PolicyGenerationRequest(PolicyGenerationRequestId,TenantId,PolicyBindTransactionId,BinderReviewId,IdempotencyKey,StatusCode,RequestedDateUtc,RequestedByUserId,NextAttemptDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(@Id,@TenantId,@PolicyBindTransactionId,@BinderReviewId,@IdempotencyKey,N'Queued',SYSUTCDATETIME(),@RequestedByUserId,SYSUTCDATETIME(),SYSUTCDATETIME(),@RequestedByUserId,0);
+ UPDATE Submissions.BinderReview SET StatusCode=N'GenerationQueued',ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@RequestedByUserId WHERE BinderReviewId=@BinderReviewId;
+ UPDATE Submissions.PolicyBindTransaction SET BindStatusCode=N'PolicyGenerationQueued',ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@RequestedByUserId WHERE PolicyBindTransactionId=@PolicyBindTransactionId AND TenantId=@TenantId;
+ INSERT INTO Submissions.BindStatusHistory(BindStatusHistoryId,TenantId,PolicyBindTransactionId,OldStatusCode,NewStatusCode,Comments,ChangedDateUtc,ChangedByUserId,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@TenantId,@PolicyBindTransactionId,N'BinderAccepted',N'PolicyGenerationQueued',N'Producer queued policy generation.',SYSUTCDATETIME(),@RequestedByUserId,SYSUTCDATETIME(),@RequestedByUserId,0);
+END;
+ELSE UPDATE Submissions.PolicyGenerationRequest SET StatusCode=N'Queued',NextAttemptDateUtc=SYSUTCDATETIME(),FailedDateUtc=NULL,ErrorDetails=NULL,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@RequestedByUserId WHERE PolicyGenerationRequestId=@Id AND StatusCode=N'Failed';
+COMMIT;
+SELECT PolicyGenerationRequestId,TenantId,PolicyBindTransactionId,BinderReviewId,StatusCode,RequestedDateUtc,RequestedByUserId,CompletedDateUtc,AttemptCount,ErrorDetails,PolicyId FROM Submissions.PolicyGenerationRequest WHERE PolicyGenerationRequestId=@Id;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleAsync<PolicyGenerationRequestDto>(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.IdempotencyKey, request.RequestedByUserId }, cancellationToken: cancellationToken));
     }
 
     public async Task<IReadOnlyList<ManualPolicyOptionDto>> GetManualPolicyOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)

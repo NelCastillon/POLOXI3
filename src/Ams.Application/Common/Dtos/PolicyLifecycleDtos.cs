@@ -193,3 +193,104 @@ public sealed class PolicyLifecycleDetailDto
     public IReadOnlyList<PolicyStatusHistoryDto> StatusHistory { get; set; } = [];
     public IReadOnlyList<PolicyTransactionTransitionDto> Transitions { get; set; } = [];
 }
+
+public sealed class PolicyServicingWorkspaceDto
+{
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public PolicyLifecyclePolicySummaryDto Policy { get; set; } = new();
+    public IReadOnlyList<PolicyLifecycleOptionDto> Options { get; set; } = [];
+    public IReadOnlyList<PolicyTransactionDto> Transactions { get; set; } = [];
+    public IReadOnlyList<PolicyVersionDto> Versions { get; set; } = [];
+    public IReadOnlyList<PolicyStatusHistoryDto> StatusHistory { get; set; } = [];
+    public IReadOnlyList<PolicyServicingActivityDto> Activities { get; set; } = [];
+    public IReadOnlyList<PolicyServicingCommunicationDto> Communications { get; set; } = [];
+    public IReadOnlyList<PolicyServicingTaskDto> Tasks { get; set; } = [];
+    public IReadOnlyList<PolicyServicingComplianceDocumentDto> ComplianceDocuments { get; set; } = [];
+    public IReadOnlyList<PolicyServicingTimelineEntryDto> Timeline { get; set; } = [];
+}
+
+public sealed class PolicyServicingActivityDto
+{
+    public Guid ActivityId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public Guid? PolicyTransactionId { get; set; }
+    public DateTime ActivityDateUtc { get; set; }
+    public string ActivityTypeCode { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string? Notes { get; set; }
+    public string? ChannelCode { get; set; }
+    public string? OutcomeCode { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public Guid? PerformedByUserId { get; set; }
+    public string? PerformedByName { get; set; }
+}
+
+public sealed class PolicyServicingCommunicationDto
+{
+    public Guid ThreadId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public Guid? PolicyTransactionId { get; set; }
+    public string ChannelCode { get; set; } = string.Empty;
+    public string DirectionCode { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string? Recipient { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public int MessageCount { get; set; }
+    public DateTime LastActivityDateUtc { get; set; }
+}
+
+public sealed class PolicyServicingTaskDto
+{
+    public Guid TaskId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public string TaskTypeCode { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public string PriorityCode { get; set; } = string.Empty;
+    public DateTime? DueDateUtc { get; set; }
+    public Guid? AssignedToUserId { get; set; }
+    public string? AssignedToName { get; set; }
+}
+
+public sealed class PolicyServicingComplianceDocumentDto
+{
+    public Guid PolicyDocumentId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public string PolicyCode { get; set; } = string.Empty;
+    public string PolicyTitle { get; set; } = string.Empty;
+    public string PolicyTypeCode { get; set; } = string.Empty;
+    public string Version { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public DateTime? EffectiveDateUtc { get; set; }
+    public bool IsActive { get; set; }
+}
+
+public sealed class PolicyServicingTimelineEntryDto
+{
+    public Guid EntryId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid PolicyId { get; set; }
+    public string EntryTypeCode { get; set; } = string.Empty;
+    public string ActionCode { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public string? StatusCode { get; set; }
+    public DateTime OccurredDateUtc { get; set; }
+    public Guid? ActorUserId { get; set; }
+    public string? ActorName { get; set; }
+}
+
+public sealed class PolicyServicingActionResultDto
+{
+    public Guid PolicyId { get; set; }
+    public Guid RecordId { get; set; }
+    public Guid? PolicyTransactionId { get; set; }
+    public string RecordTypeCode { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public DateTime CreatedDateUtc { get; set; }
+}

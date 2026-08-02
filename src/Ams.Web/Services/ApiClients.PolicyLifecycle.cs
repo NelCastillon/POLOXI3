@@ -19,6 +19,9 @@ public sealed partial class ApiClient
     public Task<PolicyLifecycleDetailDto?> GetPolicyLifecycleDetailAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PolicyLifecycleDetailDto>($"api/policy-lifecycle/policies/{policyId}?tenantId={tenantId}", cancellationToken);
 
+    public Task<PolicyServicingWorkspaceDto?> GetPolicyServicingWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyServicingWorkspaceDto>($"api/policy-lifecycle/policies/{policyId}/workspace?tenantId={tenantId}", cancellationToken);
+
     public async Task<Guid> CreatePolicyLifecycleTransactionAsync(CreatePolicyLifecycleTransactionRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/policy-lifecycle/transactions", request, cancellationToken);
@@ -30,5 +33,19 @@ public sealed partial class ApiClient
     {
         var response = await _httpClient.PutAsJsonAsync($"api/policy-lifecycle/transactions/{policyTransactionId}/status", request, cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<PolicyServicingActionResultDto> CreatePolicyServicingActivityAsync(CreatePolicyServicingActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-lifecycle/policies/{request.PolicyId}/activities", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<PolicyServicingActionResultDto>(cancellationToken: cancellationToken))!;
+    }
+
+    public async Task<PolicyServicingActionResultDto> SendPolicyCommunicationAsync(SendPolicyCommunicationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-lifecycle/policies/{request.PolicyId}/communications", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<PolicyServicingActionResultDto>(cancellationToken: cancellationToken))!;
     }
 }

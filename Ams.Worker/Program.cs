@@ -1,6 +1,8 @@
 using Ams.Infrastructure.DependencyInjection;
+using Ams.Infrastructure.Persistence;
 using Ams.Worker.Automation;
 using Ams.Worker.Automation.Executors;
+using Ams.Worker.Accounting;
 using Ams.Worker.Certificates;
 using Ams.Worker.Compliance;
 using Ams.Worker.Payments;
@@ -33,6 +35,15 @@ builder.Services.AddHostedService<ApiRatingConnectorWorkerService>();
 builder.Services.AddHostedService<CertificateRenewalWorkerService>();
 builder.Services.AddHostedService<LeadDncScreeningWorker>();
 builder.Services.AddHostedService<PolicyRenewalInitiationWorkerService>();
+builder.Services.AddHostedService<PolicyGenerationWorkerService>();
+builder.Services.AddHostedService<PolicyCreatedAccountingWorkerService>();
 
 var host = builder.Build();
-host.Run();
+
+using (var scope = host.Services.CreateScope())
+{
+    var migrator = scope.ServiceProvider.GetRequiredService<DatabaseMigrator>();
+    await migrator.MigrateAsync();
+}
+
+await host.RunAsync();

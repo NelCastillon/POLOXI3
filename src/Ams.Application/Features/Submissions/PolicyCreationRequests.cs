@@ -1,9 +1,68 @@
 namespace Ams.Application.Features.Submissions;
 
+using System.ComponentModel.DataAnnotations;
+
 public sealed record PolicyCreationFromConfirmedBindRequest(
     Guid TenantId,
     Guid PolicyBindTransactionId,
     Guid? RequestedByUserId = null);
+
+public sealed class UpsertBinderReviewRequest : IValidatableObject
+{
+    [Required] public Guid TenantId { get; set; }
+    [StringLength(80)] public string? PolicyNumber { get; set; }
+    [Required] public Guid CarrierId { get; set; }
+    [Required, StringLength(160)] public string LineOfBusiness { get; set; } = string.Empty;
+    [Required] public DateOnly EffectiveDate { get; set; }
+    [Required] public DateOnly ExpirationDate { get; set; }
+    [Range(typeof(decimal), "0.01", "999999999999")] public decimal Premium { get; set; }
+    [Range(typeof(decimal), "0", "999999999999")] public decimal? Fees { get; set; }
+    [Range(typeof(decimal), "0", "999999999999")] public decimal? Taxes { get; set; }
+    [Range(typeof(decimal), "0", "100")] public decimal? CommissionPercent { get; set; }
+    [StringLength(200)] public string? PaymentPlan { get; set; }
+    [StringLength(50)] public string? BillingTypeCode { get; set; }
+    public Guid? ProducerId { get; set; }
+    public Guid? CsrId { get; set; }
+    [Required] public string CoverageSnapshotJson { get; set; } = "{}";
+    [Required] public string RiskSnapshotJson { get; set; } = "{}";
+    [Required] public string ComparisonSnapshotJson { get; set; } = "{}";
+    [StringLength(2000)] public string? ReviewNotes { get; set; }
+    public Guid? ReviewedByUserId { get; set; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (ExpirationDate <= EffectiveDate)
+            yield return new ValidationResult("Expiration date must be after the effective date.", [nameof(ExpirationDate)]);
+        foreach (var value in new[] { (CoverageSnapshotJson, nameof(CoverageSnapshotJson)), (RiskSnapshotJson, nameof(RiskSnapshotJson)), (ComparisonSnapshotJson, nameof(ComparisonSnapshotJson)) })
+        {
+            var isValidJson = true;
+            try
+            {
+                using var document = System.Text.Json.JsonDocument.Parse(value.Item1);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                isValidJson = false;
+            }
+
+            if (!isValidJson)
+            {
+                yield return new ValidationResult($"{value.Item2} must contain valid JSON.", [value.Item2]);
+            }
+        }
+    }
+}
+
+public sealed record DecideBinderReviewRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, RegularExpression("Accepted|Rejected|CorrectionRequested")] string DecisionCode,
+    [property: StringLength(2000)] string? Notes,
+    Guid? DecidedByUserId);
+
+public sealed record QueuePolicyGenerationRequest(
+    [property: Required] Guid TenantId,
+    [property: Required, StringLength(120)] string IdempotencyKey,
+    Guid? RequestedByUserId);
 
 public sealed class ManualPolicyOptionDto
 {

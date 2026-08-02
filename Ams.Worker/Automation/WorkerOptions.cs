@@ -21,4 +21,12 @@ public sealed class WorkerOptions
     public int MaxCertificateRenewalsPerPoll { get; set; } = 50;
     public int RenewalInitiationPollIntervalSeconds { get; set; } = 3600;
     public int MaxRenewalInitiationsPerPoll { get; set; } = 100;
+    public int PolicyGenerationPollIntervalSeconds { get; set; } = 30;
+    public int MaxPolicyGenerationsPerPoll { get; set; } = 10;
+    public int MaxPolicyGenerationAttempts { get; set; } = 5;
+    public int PolicyGenerationClaimLeaseMinutes { get; set; } = 15;
+    public int PolicyAccountingPollIntervalSeconds { get; set; } = 30;
+    public int MaxPolicyAccountingEventsPerPoll { get; set; } = 20;
+    public int MaxPolicyAccountingAttempts { get; set; } = 8;
+    public int PolicyAccountingClaimLeaseMinutes { get; set; } = 15;
 }

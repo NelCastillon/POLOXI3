@@ -142,3 +142,57 @@ public sealed class TransitionPolicyLifecycleTransactionRequest
 
     public Guid? ChangedByUserId { get; set; }
 }
+
+public sealed class CreatePolicyServicingActivityRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required]
+    public Guid PolicyId { get; set; }
+
+    public Guid? PolicyTransactionId { get; set; }
+
+    [Required, StringLength(80)]
+    public string ActivityTypeCode { get; set; } = string.Empty;
+
+    [Required, StringLength(200)]
+    public string Subject { get; set; } = string.Empty;
+
+    [StringLength(2000)]
+    public string? Notes { get; set; }
+
+    [StringLength(80)]
+    public string? ChannelCode { get; set; }
+
+    [StringLength(80)]
+    public string? OutcomeCode { get; set; }
+
+    public DateTime? ActivityDateUtc { get; set; }
+    public Guid? PerformedByUserId { get; set; }
+}
+
+public sealed class SendPolicyCommunicationRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+
+    [Required]
+    public Guid PolicyId { get; set; }
+
+    public Guid? PolicyTransactionId { get; set; }
+
+    [Required, StringLength(80)]
+    public string ChannelCode { get; set; } = string.Empty;
+
+    [Required, StringLength(254)]
+    public string Recipient { get; set; } = string.Empty;
+
+    [Required, StringLength(300)]
+    public string Subject { get; set; } = string.Empty;
+
+    [Required, StringLength(8000)]
+    public string Body { get; set; } = string.Empty;
+
+    public Guid? SentByUserId { get; set; }
+}

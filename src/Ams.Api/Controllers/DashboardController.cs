@@ -813,36 +813,48 @@ END;";
             }
         };
 
-        const string seedSql = @"
-IF NOT EXISTS (SELECT 1 FROM Analytics.DashboardRecord WHERE TenantId=@TenantId AND Kind=@Kind AND IsDeleted=0)
-BEGIN
-    INSERT INTO Analytics.DashboardRecord (DashboardRecordId,TenantId,Kind,Code,Name,Status,JsonData,CreatedDateUtc,IsDeleted)
-    VALUES (NEWID(),@TenantId,@Kind,@Code,@Name,@Status,@JsonData,SYSUTCDATETIME(),0);
-END;";
+        var records = new List<DashboardSeedRecord>
+        {
+            Record(tenantId, "ExecutiveDashboard", "executive", "Executive Dashboard", "Active", executive)
+        };
+        records.AddRange(dashboards.Select(x => Record(tenantId, "CustomDashboard", Slug(x.Name), x.Name, x.IsDefault ? "Default" : "Active", x)));
+        records.AddRange(kpis.Select(x => Record(tenantId, "KpiDefinition", Slug(x.Name), x.Name, x.IsActive ? "Active" : "Inactive", x)));
+        records.AddRange(salesAnalytics.Select(x => Record(tenantId, "SalesAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(policyAnalytics.Select(x => Record(tenantId, "PolicyAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(retentionAnalytics.Select(x => Record(tenantId, "RetentionAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(claimsAnalytics.Select(x => Record(tenantId, "ClaimsAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(financeAnalytics.Select(x => Record(tenantId, "FinanceAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(producerAnalytics.Select(x => Record(tenantId, "ProducerAnalytics", Slug(x.Title), x.Title, x.Status, x)));
+        records.AddRange(marketingAnalytics.Select(x => Record(tenantId, "MarketingAnalytics", Slug(x.Title), x.Title, x.Status, x)));
 
-        await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "ExecutiveDashboard", "executive", "Executive Dashboard", "Active", executive), cancellationToken: cancellationToken));
-        foreach (var dashboard in dashboards)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "CustomDashboard", Slug(dashboard.Name), dashboard.Name, dashboard.IsDefault ? "Default" : "Active", dashboard), cancellationToken: cancellationToken));
-        foreach (var kpi in kpis)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "KpiDefinition", Slug(kpi.Name), kpi.Name, kpi.IsActive ? "Active" : "Inactive", kpi), cancellationToken: cancellationToken));
-        foreach (var salesRecord in salesAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "SalesAnalytics", Slug(salesRecord.Title), salesRecord.Title, salesRecord.Status, salesRecord), cancellationToken: cancellationToken));
-        foreach (var policyRecord in policyAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "PolicyAnalytics", Slug(policyRecord.Title), policyRecord.Title, policyRecord.Status, policyRecord), cancellationToken: cancellationToken));
-        foreach (var retentionRecord in retentionAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "RetentionAnalytics", Slug(retentionRecord.Title), retentionRecord.Title, retentionRecord.Status, retentionRecord), cancellationToken: cancellationToken));
-        foreach (var claimsRecord in claimsAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "ClaimsAnalytics", Slug(claimsRecord.Title), claimsRecord.Title, claimsRecord.Status, claimsRecord), cancellationToken: cancellationToken));
-        foreach (var financeRecord in financeAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "FinanceAnalytics", Slug(financeRecord.Title), financeRecord.Title, financeRecord.Status, financeRecord), cancellationToken: cancellationToken));
-        foreach (var producerRecord in producerAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "ProducerAnalytics", Slug(producerRecord.Title), producerRecord.Title, producerRecord.Status, producerRecord), cancellationToken: cancellationToken));
-        foreach (var marketingRecord in marketingAnalytics)
-            await cn.ExecuteAsync(new CommandDefinition(seedSql, Record(tenantId, "MarketingAnalytics", Slug(marketingRecord.Title), marketingRecord.Title, marketingRecord.Status, marketingRecord), cancellationToken: cancellationToken));
+        const string seedSql = """
+INSERT INTO Analytics.DashboardRecord (DashboardRecordId,TenantId,Kind,Code,Name,Status,JsonData,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),source.TenantId,source.Kind,source.Code,source.Name,source.Status,source.JsonData,SYSUTCDATETIME(),0
+FROM OPENJSON(@RecordsJson)
+WITH
+(
+    TenantId UNIQUEIDENTIFIER '$.tenantId',
+    Kind NVARCHAR(100) '$.kind',
+    Code NVARCHAR(200) '$.code',
+    Name NVARCHAR(250) '$.name',
+    Status NVARCHAR(80) '$.status',
+    JsonData NVARCHAR(MAX) '$.jsonData'
+) source
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Analytics.DashboardRecord existing
+    WHERE existing.TenantId=source.TenantId AND existing.Kind=source.Kind AND existing.IsDeleted=0
+);
+""";
+        var recordsJson = JsonSerializer.Serialize(records, JsonOptions);
+        await cn.ExecuteAsync(new CommandDefinition(seedSql, new { RecordsJson = recordsJson }, cancellationToken: cancellationToken));
     }
 
-    private static object Record<T>(Guid tenantId, string kind, string code, string name, string status, T data) => new { TenantId = tenantId, Kind = kind, Code = code, Name = name, Status = status, JsonData = JsonSerializer.Serialize(data, JsonOptions) };
+    private static DashboardSeedRecord Record<T>(Guid tenantId, string kind, string code, string name, string status, T data)
+        => new(tenantId, kind, code, name, status, JsonSerializer.Serialize(data, JsonOptions));
     private static string Slug(string value) => value.Trim().ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
+
+    private sealed record DashboardSeedRecord(Guid TenantId, string Kind, string Code, string Name, string Status, string JsonData);
 
     [HttpGet]
     public async Task<IActionResult> GetKpi([FromQuery] Guid tenantId, CancellationToken cancellationToken = default)

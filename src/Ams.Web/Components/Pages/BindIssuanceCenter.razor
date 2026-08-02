@@ -2,6 +2,7 @@
 @page "/submissions/bind-requests"
 @namespace Ams.Web.Components.Pages
 @using System.ComponentModel.DataAnnotations
+@using System.Text.Json
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Submissions
 @inject ApiClient Api
@@ -334,6 +335,23 @@
                             {
                                 <div class="bc-note-card"><span>@Display(history.OldStatusCode) → @history.NewStatusCode</span><strong>@history.ChangedDateUtc.ToLocalTime().ToString("g") · @Display(history.ChangedByName)@if (!string.IsNullOrWhiteSpace(history.Comments)){<text> — @history.Comments</text>}</strong></div>
                             }
+                            @if (_bindDetail.BinderReview is not null)
+                            {
+                                <h3 class="bc-drawer-sec-head">Carrier Binder Review</h3>
+                                @DrawRow("Review status", _bindDetail.BinderReview.StatusCode)
+                                @DrawRow("Verified policy number", Display(_bindDetail.BinderReview.PolicyNumber))
+                                @DrawRow("Verified premium", _bindDetail.BinderReview.Premium.ToString("C2"))
+                            }
+                            @if (_bindDetail.PolicyGeneration is not null)
+                            {
+                                <h3 class="bc-drawer-sec-head">Policy Generation</h3>
+                                @DrawRow("Generation status", _bindDetail.PolicyGeneration.StatusCode)
+                                @DrawRow("Attempts", _bindDetail.PolicyGeneration.AttemptCount.ToString())
+                                @if (!string.IsNullOrWhiteSpace(_bindDetail.PolicyGeneration.ErrorDetails))
+                                {
+                                    <div class="bc-note-card"><span>Generation error</span><strong>@_bindDetail.PolicyGeneration.ErrorDetails</strong></div>
+                                }
+                            }
                         }
                         @if (!string.IsNullOrWhiteSpace(_selected.BindTransaction.BindReason))
                         {
@@ -353,7 +371,61 @@
                             <button type="button" class="bc-btn bc-btn--ghost" @onclick="OpenApprovalDialog" disabled="@(_detailBusy || !CanRequestApproval)"><i class="bi bi-person-check"></i> Approval</button>
                             <button type="button" class="bc-btn bc-btn--ghost" @onclick="PrepareBinderPackageAsync" disabled="@(_detailBusy || !CanPrepareBinderPackage)"><i class="bi bi-file-earmark-zip"></i> Prepare Binder</button>
                             <button type="button" class="bc-btn bc-btn--success" @onclick="OpenCarrierResponseDialog" disabled="@(_detailBusy || !CarrierResponseTransitions.Any())"><i class="bi bi-broadcast"></i> Carrier Response</button>
+                            @if (CanReviewCarrierBinder)
+                            {
+                                <button type="button" class="bc-btn bc-btn--success" @onclick="OpenBinderReviewDialog" disabled="@_detailBusy"><i class="bi bi-journal-check"></i> Accept Carrier Binder</button>
+                            }
                         }
+
+@if (_showBinderReviewDialog && _bindDetail is not null)
+{
+    <div class="rbd-backdrop"><div class="rbd-modal bc-review-modal" role="dialog" aria-modal="true">
+        <div class="um-modal-header"><i class="bi bi-journal-check"></i><span>Accept Carrier Binder → Create Policy</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showBinderReviewDialog = false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_binderReviewForm" OnValidSubmit="SaveBinderReviewAsync"><DataAnnotationsValidator /><ValidationSummary class="text-danger" />
+            <div class="um-modal-body">
+                <div class="bc-review-step"><strong>1. Verify binder terms</strong><span>Compare the authoritative carrier binder to the quoted and requested terms before acceptance.</span></div>
+                <div class="um-form-grid">
+                    <div><label>Policy Number</label><InputText class="form-control" @bind-Value="_binderReviewForm.PolicyNumber" /></div>
+                    <div><label>Carrier</label><input class="form-control" value="@_bindDetail.Request.CarrierName" disabled /></div>
+                    <div><label>Line of Business</label><InputText class="form-control" @bind-Value="_binderReviewForm.LineOfBusiness" /><ValidationMessage For="() => _binderReviewForm.LineOfBusiness" class="text-danger" /></div>
+                    <div><label>Effective Date</label><InputDate class="form-control" @bind-Value="_binderReviewForm.EffectiveDate" /></div>
+                    <div><label>Expiration Date</label><InputDate class="form-control" @bind-Value="_binderReviewForm.ExpirationDate" /></div>
+                    <div><label>Premium</label><InputNumber class="form-control" @bind-Value="_binderReviewForm.Premium" /></div>
+                    <div><label>Fees</label><InputNumber class="form-control" @bind-Value="_binderReviewForm.Fees" /></div>
+                    <div><label>Taxes</label><InputNumber class="form-control" @bind-Value="_binderReviewForm.Taxes" /></div>
+                    <div><label>Commission %</label><InputNumber class="form-control" @bind-Value="_binderReviewForm.CommissionPercent" /></div>
+                    <div><label>Payment Plan</label><InputText class="form-control" @bind-Value="_binderReviewForm.PaymentPlan" /></div>
+                    <div><label>Billing Type</label><InputText class="form-control" @bind-Value="_binderReviewForm.BillingTypeCode" /></div>
+                    <div class="rbd-field--full"><label>Review Notes</label><InputTextArea class="form-control" rows="3" @bind-Value="_binderReviewForm.ReviewNotes" /></div>
+                </div>
+                <div class="bc-review-status"><span>Quoted → Binder premium</span><strong>@_bindDetail.Request.AnnualPremium.ToString("C2") → @_binderReviewForm.Premium.ToString("C2") (@((_binderReviewForm.Premium - _bindDetail.Request.AnnualPremium).ToString("+0.00;-0.00;0.00")))</strong></div>
+                <div class="bc-review-status"><span>Requested → Binder term</span><strong>@_bindDetail.Request.EffectiveDate.ToString("MM/dd/yyyy")–@_bindDetail.Request.ExpirationDate.ToString("MM/dd/yyyy") → @_binderReviewForm.EffectiveDate.ToString("MM/dd/yyyy")–@_binderReviewForm.ExpirationDate.ToString("MM/dd/yyyy")</strong></div>
+                <label class="bc-review-attestation"><InputCheckbox @bind-Value="_binderReviewAttested" /> I verified the carrier binder, attached evidence, coverage, dates, premium, taxes, fees, commission, and billing terms against authoritative AMS data.</label>
+                <div class="bc-review-step"><strong>2. Record producer decision</strong><span>Save verified values, then accept, reject, or request correction. Only an accepted review can generate a policy.</span></div>
+                @if (_bindDetail.BinderReview is not null)
+                {
+                    <div class="bc-review-status"><span>Current review</span><strong>@_bindDetail.BinderReview.StatusCode</strong></div>
+                }
+                @if (_bindDetail.PolicyGeneration is not null)
+                {
+                    <div class="bc-review-status"><span>Generation</span><strong>@_bindDetail.PolicyGeneration.StatusCode · @_bindDetail.PolicyGeneration.AttemptCount attempt(s)</strong></div>
+                }
+            </div>
+            <div class="um-modal-footer bc-review-actions">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showBinderReviewDialog = false">Close</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_detailBusy">Save Verification</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => DecideBinderReviewAsync("CorrectionRequested")' disabled="@_detailBusy">Request Correction</button>
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => DecideBinderReviewAsync("Rejected")' disabled="@_detailBusy">Reject</button>
+                <button type="button" class="um-btn um-btn-success" @onclick='() => DecideBinderReviewAsync("Accepted")' disabled="@(_detailBusy || !_binderReviewAttested)">Accept Binder</button>
+                <button type="button" class="um-btn um-btn-success" @onclick="QueuePolicyGenerationAsync" disabled="@(!CanGeneratePolicy || _detailBusy)"><i class="bi bi-gear"></i> @(_bindDetail.PolicyGeneration?.StatusCode == "Failed" ? "Retry Policy Generation" : "Generate Policy")</button>
+                @if (_bindDetail.PolicyGeneration?.PolicyId is Guid generatedPolicyId)
+                {
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenPolicy(generatedPolicyId)">Open Policy Workspace</button>
+                }
+            </div>
+        </EditForm>
+    </div></div>
+}
                         <button type="button" class="bc-btn bc-btn--ghost" @onclick="() => SelectQuoteAsync(_selected)" disabled="@(_selected.IsSelected || IsBound(_selected))">
                             <i class="bi bi-check2-square" aria-hidden="true"></i> Select Quote
                         </button>
@@ -417,10 +489,13 @@
     bool _detailBusy;
     bool _showApprovalDialog;
     bool _showCarrierResponseDialog;
+    bool _showBinderReviewDialog;
     RequestBindDialogContext? _requestBindContext;
     BindRequestDetailDto? _bindDetail;
     readonly ApprovalForm _approvalForm = new();
     readonly CarrierResponseForm _carrierResponseForm = new();
+    UpsertBinderReviewRequest _binderReviewForm = new();
+    bool _binderReviewAttested;
     string? _loadError;
     string? _search;
     string _statusFilter = string.Empty;
@@ -449,6 +524,8 @@
     IEnumerable<BindStatusTransitionDto> CarrierResponseTransitions => _bindDetail?.AllowedTransitions.Where(x => x.RequiresCarrierResponse) ?? [];
     bool CanRequestApproval => _bindDetail is not null && _bindDetail.AllowedTransitions.Any(x => x.ToStatusCode == "PendingApproval") && !_bindDetail.Approvals.Any(x => x.StatusCode == "Pending");
     bool CanPrepareBinderPackage => _bindDetail?.IsReadyToSubmit == true;
+    bool CanReviewCarrierBinder => _bindDetail?.Request.ConfirmationCertified == true && _bindDetail.Request.BindStatusCode is "BinderReceived" or "Approved" or "BinderAccepted" or "PolicyGenerationQueued" or "PolicyCreated";
+    bool CanGeneratePolicy => _bindDetail?.BinderReview?.StatusCode is "Accepted" or "GenerationQueued" && (_bindDetail.PolicyGeneration is null || _bindDetail.PolicyGeneration.StatusCode == "Failed");
     IEnumerable<BreakdownItem> StatusBreakdown => BuildBreakdown(FilteredRows.Select(r => r.DisplayStatus));
     IEnumerable<BreakdownItem> LineBreakdown => BuildBreakdown(FilteredRows.Select(r => r.LineOfBusiness));
     IEnumerable<BindMetric> Metrics =>
@@ -726,19 +803,114 @@
         _detailBusy = true;
         try
         {
-            var policyId = await Api.RecordBindCarrierResponseAsync(bindRequestId, new RecordBindCarrierResponseRequest(
+            await Api.RecordBindCarrierResponseAsync(bindRequestId, new RecordBindCarrierResponseRequest(
                 _currentUser.TenantId, _carrierResponseForm.StatusCode, _carrierResponseForm.MessageTypeCode, _bindDetail?.Request.BindingMethodCode,
                 null, null, _carrierResponseForm.MessageBody, _carrierResponseForm.CarrierReferenceNumber, _carrierResponseForm.BinderNumber,
                 _carrierResponseForm.FinalPremium, _carrierResponseForm.ConfirmationDocumentId, _currentUser.UserId, _carrierResponseForm.ConfirmationSourceCode, _carrierResponseForm.ConfirmationCertified));
             _showCarrierResponseDialog = false;
             await LoadAsync();
-            await ShowToastAsync(policyId.HasValue ? "Policy created" : "Carrier response recorded", policyId.HasValue ? "Certified carrier confirmation created the policy workflow." : "The carrier response and status history were recorded.", "enterprise-toast-success");
+            await ShowToastAsync("Carrier response recorded", "The carrier response was recorded. Producer binder review is required before policy generation.", "enterprise-toast-success");
         }
         catch (Exception ex)
         {
             await ShowToastAsync("Carrier response failed", $"Carrier response failed: {ex.Message}", "enterprise-toast-danger");
         }
         finally { _detailBusy = false; }
+    }
+
+    void OpenBinderReviewDialog()
+    {
+        if (_currentUser is null || _bindDetail is null) return;
+        var review = _bindDetail.BinderReview;
+        _binderReviewForm = new UpsertBinderReviewRequest
+        {
+            TenantId = _currentUser.TenantId,
+            PolicyNumber = review?.PolicyNumber ?? _bindDetail.Request.PolicyNumber ?? _bindDetail.Request.BinderNumber,
+            CarrierId = review?.CarrierId ?? _bindDetail.Request.CarrierId,
+            LineOfBusiness = review?.LineOfBusiness ?? _selected?.LineOfBusiness ?? string.Empty,
+            EffectiveDate = review?.EffectiveDate ?? DateOnly.FromDateTime(_bindDetail.Request.EffectiveDate),
+            ExpirationDate = review?.ExpirationDate ?? DateOnly.FromDateTime(_bindDetail.Request.ExpirationDate),
+            Premium = review?.Premium ?? _bindDetail.Request.FinalPremium ?? _bindDetail.Request.AnnualPremium,
+            Fees = review?.Fees,
+            Taxes = review?.Taxes ?? _selected?.TaxesAndFees,
+            CommissionPercent = review?.CommissionPercent ?? _bindDetail.Request.CommissionRatePct,
+            PaymentPlan = review?.PaymentPlan ?? _selected?.PaymentTerms,
+            BillingTypeCode = review?.BillingTypeCode,
+            ProducerId = review?.ProducerId ?? _bindDetail.Request.RequestedByUserId,
+            CsrId = review?.CsrId,
+            CoverageSnapshotJson = review?.CoverageSnapshotJson ?? JsonSerializer.Serialize(new { _selected?.Limit, _selected?.Deductible, _selected?.Subjectivities }),
+            RiskSnapshotJson = review?.RiskSnapshotJson ?? JsonSerializer.Serialize(new { _bindDetail.Request.AccountId, _bindDetail.Request.SubmissionId, _bindDetail.Request.QuoteId }),
+            ComparisonSnapshotJson = review?.ComparisonSnapshotJson ?? JsonSerializer.Serialize(new { QuotedPremium = _bindDetail.Request.AnnualPremium, BinderPremium = _bindDetail.Request.FinalPremium, _bindDetail.Request.EffectiveDate, _bindDetail.Request.ExpirationDate }),
+            ReviewNotes = review?.ReviewNotes
+        };
+        _binderReviewAttested = false;
+        _showBinderReviewDialog = true;
+    }
+
+    async Task SaveBinderReviewAsync()
+    {
+        if (_selected?.BindTransaction?.PolicyBindTransactionId is not Guid bindRequestId) return;
+        _detailBusy = true;
+        try
+        {
+            await Api.SaveBinderReviewAsync(bindRequestId, _binderReviewForm);
+            await LoadBindDetailAsync(bindRequestId);
+            await ShowToastAsync("Verification saved", "The carrier binder verification snapshot was saved.", "enterprise-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync("Verification failed", ex.Message, "enterprise-toast-danger");
+        }
+        finally { _detailBusy = false; }
+    }
+
+    async Task DecideBinderReviewAsync(string decisionCode)
+    {
+        if (_currentUser is null || _selected?.BindTransaction?.PolicyBindTransactionId is not Guid bindRequestId) return;
+        _detailBusy = true;
+        try
+        {
+            await Api.SaveBinderReviewAsync(bindRequestId, _binderReviewForm);
+            await Api.DecideBinderReviewAsync(bindRequestId, new DecideBinderReviewRequest(_currentUser.TenantId, decisionCode, _binderReviewForm.ReviewNotes, _currentUser.UserId));
+            await LoadAsync();
+            _showBinderReviewDialog = true;
+            await ShowToastAsync("Binder review updated", $"The carrier binder review is now {decisionCode}.", "enterprise-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync("Binder decision failed", ex.Message, "enterprise-toast-danger");
+        }
+        finally { _detailBusy = false; }
+    }
+
+    async Task QueuePolicyGenerationAsync()
+    {
+        if (_currentUser is null || _selected?.BindTransaction?.PolicyBindTransactionId is not Guid bindRequestId) return;
+        _detailBusy = true;
+        try
+        {
+            await Api.QueuePolicyGenerationAsync(bindRequestId, new QueuePolicyGenerationRequest(_currentUser.TenantId, $"binder-{bindRequestId:N}", _currentUser.UserId));
+            await MonitorPolicyGenerationAsync(bindRequestId);
+            _showBinderReviewDialog = true;
+            await ShowToastAsync("Policy generation queued", "The accepted carrier binder was queued for idempotent policy generation.", "enterprise-toast-success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToastAsync("Policy generation failed", ex.Message, "enterprise-toast-danger");
+        }
+        finally { _detailBusy = false; }
+    }
+
+    async Task MonitorPolicyGenerationAsync(Guid bindRequestId)
+    {
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            await LoadBindDetailAsync(bindRequestId);
+            if (_bindDetail?.PolicyGeneration?.StatusCode is "Completed" or "Failed") break;
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+        await LoadAsync();
+        if (_bindDetail?.PolicyGeneration?.PolicyId is Guid policyId) OpenPolicy(policyId);
     }
 
     string MetricCardClass(BindMetric metric) => $"bind-kpi bind-kpi--{metric.Tone} {(_kpiFilter == metric.Filter || (metric.Filter == "all" && string.IsNullOrWhiteSpace(_kpiFilter)) ? "bind-kpi--active" : string.Empty)}";

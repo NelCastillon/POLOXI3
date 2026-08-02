@@ -1972,9 +1972,9 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task DeleteServiceRequestAsync(Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
+    public async Task DeleteServiceRequestAsync(Guid tenantId, Guid id, Guid? modifiedByUserId = null, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.DeleteAsync($"api/ops/service-requests/{id}?modifiedByUserId={modifiedByUserId}", cancellationToken);
+        var response = await _httpClient.DeleteAsync($"api/ops/service-requests/{id}?tenantId={tenantId}&modifiedByUserId={modifiedByUserId}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
@@ -2059,6 +2059,21 @@ public sealed partial class ApiClient
         if (!string.IsNullOrWhiteSpace(branchId)) url += $"&branchId={Uri.EscapeDataString(branchId)}";
         if (!string.IsNullOrWhiteSpace(teamId)) url += $"&teamId={Uri.EscapeDataString(teamId)}";
         return _httpClient.GetFromJsonAsync<AccountingWorkbenchDto>(url, cancellationToken);
+    }
+
+    public async Task<PolicyAccountingDashboardDto?> GetPolicyAccountingDashboardAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync($"api/policies/{policyId}/accounting?tenantId={tenantId}", cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<PolicyAccountingDashboardDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task<InvoiceDeliveryDispatchDto?> EmailPolicyInvoiceAsync(Guid policyId, Guid invoiceId, EmailPolicyInvoiceRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.PostAsJsonAsync($"api/policies/{policyId}/accounting/invoices/{invoiceId}/email", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<InvoiceDeliveryDispatchDto>(cancellationToken: cancellationToken);
     }
 
     // -- Billing ----------------------------------------------
@@ -3075,6 +3090,29 @@ public sealed partial class ApiClient
 
     public Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid bindRequestId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<BindRequestDetailDto>($"api/submissions/bind-requests/{bindRequestId}?tenantId={tenantId}", cancellationToken);
+
+    public Task<BinderReviewDto?> GetBinderReviewAsync(Guid bindRequestId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<BinderReviewDto>($"api/submissions/bind-requests/{bindRequestId}/binder-review?tenantId={tenantId}", cancellationToken);
+
+    public async Task<BinderReviewDto> SaveBinderReviewAsync(Guid bindRequestId, UpsertBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/binder-review", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<BinderReviewDto>(cancellationToken: cancellationToken))!;
+    }
+
+    public async Task DecideBinderReviewAsync(Guid bindRequestId, DecideBinderReviewRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/binder-review/decision", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<PolicyGenerationRequestDto> QueuePolicyGenerationAsync(Guid bindRequestId, QueuePolicyGenerationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/submissions/bind-requests/{bindRequestId}/policy-generation", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<PolicyGenerationRequestDto>(cancellationToken: cancellationToken))!;
+    }
 
     public async Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid bindRequestId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
     {

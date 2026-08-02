@@ -11,11 +11,11 @@ public sealed class ServiceRequestRepository : IServiceRequestRepository
     private readonly ISqlConnectionFactory _connectionFactory;
     public ServiceRequestRepository(ISqlConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
-    public async Task<ServiceRequestDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<ServiceRequestDto?> GetByIdAsync(Guid tenantId, Guid id, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+        const string sql = "SELECT ServiceRequestId, TenantId, AccountId, AgreementId, EngagementId, RequestNumber, RequestTypeCode, Subject, Description, PriorityCode, AssignedToUserId, StatusCode, ResolvedDate, CreatedDateUtc FROM OPS.ServiceRequest WHERE TenantId = @TenantId AND ServiceRequestId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.QuerySingleOrDefaultAsync<ServiceRequestDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
+        return await cn.QuerySingleOrDefaultAsync<ServiceRequestDto>(new CommandDefinition(sql, new { TenantId = tenantId, Id = id }, cancellationToken: cancellationToken));
     }
 
     public async Task<PagedResult<ServiceRequestDto>> SearchAsync(Guid tenantId, Guid? accountId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
@@ -59,20 +59,20 @@ SET AccountId = @AccountId,
     ResolvedDate = @ResolvedDate,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
-WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+WHERE TenantId = @TenantId AND ServiceRequestId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.AccountId, request.AgreementId, request.EngagementId, request.RequestNumber, request.RequestTypeCode, request.Subject, request.Description, request.PriorityCode, request.AssignedToUserId, request.StatusCode, request.ResolvedDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, request.TenantId, request.AccountId, request.AgreementId, request.EngagementId, request.RequestNumber, request.RequestTypeCode, request.Subject, request.Description, request.PriorityCode, request.AssignedToUserId, request.StatusCode, request.ResolvedDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 
-    public async Task DeleteAsync(Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    public async Task DeleteAsync(Guid tenantId, Guid id, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
 UPDATE OPS.ServiceRequest
 SET IsDeleted = 1,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
-WHERE ServiceRequestId = @Id AND IsDeleted = 0;";
+WHERE TenantId = @TenantId AND ServiceRequestId = @Id AND IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, Id = id, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
     }
 }

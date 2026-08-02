@@ -5,10 +5,14 @@
 @using Ams.Application.Features.PolicyCoverages
 @using Ams.Application.Features.PolicyEndorsements
 @using Ams.Application.Features.PolicyLifecycle
+@using Ams.Application.Features.Claims
+@using Ams.Application.Features.PolicyCertificates
+@using Ams.Application.Features.RenewalRetention
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>@(_policy is null ? "Policy" : _policy.PolicyNumber) ? Policy Detail</PageTitle>
@@ -141,6 +145,51 @@ else
             </div>
         </div>
     </div>
+
+    @if (_accounting is not null)
+    {
+        <section class="pd-cockpit" aria-label="Policy financial status">
+            <div class="pd-cockpit-head">
+                <span><i class="bi bi-bank" aria-hidden="true"></i> Policy accounting</span>
+                <strong>@_accounting.StatusCode</strong>
+            </div>
+            <div class="pd-cockpit-grid">
+                @CockpitCard("Invoice", _accounting.InvoiceAmount.ToString("C0"), _accounting.BillingTypeCode, "bi-receipt", "info")
+                @CockpitCard("Outstanding balance", _accounting.OutstandingBalance.ToString("C0"), _accounting.OutstandingBalance > 0 ? "Customer receivable open" : "Account current", "bi-wallet2", _accounting.OutstandingBalance > 0 ? "attention" : "success")
+                @CockpitCard("Commission", _accounting.CommissionAmount.ToString("C0"), $"{_accounting.CommissionRatePct:N2}% expected", "bi-percent", "success")
+                @CockpitCard("Carrier payable", _accounting.CarrierPayableAmount.ToString("C0"), _accounting.BillingTypeCode == "AgencyBill" ? "Pending remittance" : "Carrier bills insured", "bi-building", "neutral")
+                @CockpitCard("Installments", _accounting.InstallmentCount.ToString(), _accounting.InstallmentCount > 0 ? "Scheduled from billing plan" : "Not agency billed", "bi-calendar3", "info")
+                @CockpitCard("Fees and taxes", (_accounting.FeeAmount + _accounting.TaxAmount).ToString("C0"), $"Fees {_accounting.FeeAmount:C0} / Taxes {_accounting.TaxAmount:C0}", "bi-calculator", "neutral")
+            </div>
+            <div class="pd-cockpit-actions" aria-label="Policy accounting actions">
+                <span>Accounting actions</span>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i><strong>Receive payment</strong><small>Record and apply insured funds.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i><strong>View invoice</strong><small>Review invoice and line detail.</small></button>
+                <button type="button" @onclick="PrintInvoiceAsync" disabled="@(!_accounting.Invoices.Any())"><i class="bi bi-printer" aria-hidden="true"></i><strong>Print invoice</strong><small>Print the persisted invoice view.</small></button>
+                <button type="button" @onclick="OpenInvoiceEmail" disabled="@(!_accounting.Invoices.Any())"><i class="bi bi-envelope" aria-hidden="true"></i><strong>Email invoice</strong><small>@InvoiceDeliveryActionText</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing")'><i class="bi bi-calendar3" aria-hidden="true"></i><strong>Payment schedule</strong><small>Review installments and trust activity.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/workbench/accounting")'><i class="bi bi-clipboard-data" aria-hidden="true"></i><strong>View accounting</strong><small>Open the accounting work queue.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i><strong>View ledger</strong><small>Open posted general ledger entries.</small></button>
+            </div>
+        </section>
+    }
+
+    @if (_showInvoiceEmail)
+    {
+        <div class="mt-modal-backdrop" role="presentation" @onclick="CloseInvoiceEmail">
+            <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-email-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header"><i class="bi bi-envelope" aria-hidden="true"></i><span id="invoice-email-title">Email policy invoice</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseInvoiceEmail"><i class="bi bi-x-lg"></i></button></div>
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro"><span class="pd-modal-chip"><i class="bi bi-send"></i> Proposal delivery system</span><p>The invoice will use the tenant email provider, retry policy, and delivery audit queue.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full"><label>Invoice</label><select class="form-select" @bind="_invoiceEmailInvoiceId">@foreach (var invoice in _accounting!.Invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber — @invoice.BalanceAmount.ToString("C2")</option> }</select></div>
+                        <div class="um-field um-field--full"><label>Recipient email <span class="text-danger">*</span></label><input class="form-control" type="email" @bind="_invoiceEmailRecipient" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseInvoiceEmail">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="EmailInvoiceAsync" disabled="@_emailingInvoice"><i class="bi bi-send"></i> @(_emailingInvoice ? "Queueing…" : "Queue email")</button></div>
+            </div>
+        </div>
+    }
 
     @if (_loadError is not null)
     {
@@ -1867,6 +1916,13 @@ else
     private ClaimForm    _claimForm    = new();
     private ActivityForm _actForm      = new();
     private CommForm     _commForm     = new();
+    private PolicyAccountingDashboardDto? _accounting;
+    private PolicyServicingWorkspaceDto? _servicingWorkspace;
+    private bool _showInvoiceEmail;
+    private bool _emailingInvoice;
+    private Guid _invoiceEmailInvoiceId;
+    private string _invoiceEmailRecipient = string.Empty;
+    private string InvoiceDeliveryActionText => _accounting?.Invoices.FirstOrDefault()?.DeliveryStatusCode is { Length: > 0 } status ? $"Latest delivery: {status}" : "Queue through tenant email delivery.";
 
     // -- Dropdown options ----------------------------------------------------
     private IReadOnlyList<PolicyLifecycleOptionDto> _policyLifecycleOptions = [];
@@ -1874,11 +1930,7 @@ else
         .Where(x => x.OptionGroupCode == "PolicyTransactionReason")
         .OrderBy(x => x.SortOrder)
         .Select(x => new PdLv(x.OptionCode, x.DisplayName));
-    private static readonly List<PdLv> _certTypeOpts =
-    [
-        new("acord25","ACORD 25 ? Liability"), new("acord27","ACORD 27 ? Property"),
-        new("acord28","ACORD 28 ? Commercial Property"), new("acord75","ACORD 75 ? Workers Comp"),
-    ];
+    private IEnumerable<PdLv> _certTypeOpts => LifecycleOptions("CertificateType");
     private static readonly List<PdLv> _esignDocOpts =
     [
         new("app","Application"), new("bind","Bind Request"), new("cancel","Notice of Cancellation"),
@@ -1928,6 +1980,10 @@ else
             }
 
             await LoadPolicyRelatedDataAsync();
+            _servicingWorkspace = await Api.GetPolicyServicingWorkspaceAsync(_tenantId, PolicyId);
+            LoadServicingWorkspaceRows();
+            _accounting = await Api.GetPolicyAccountingDashboardAsync(_tenantId, PolicyId);
+            LoadAccountingRows();
             await LoadPolicyCoveragesAsync();
             await LoadCoverageLookupsAsync();
             await LoadEndorsementTypesAsync();
@@ -1965,8 +2021,10 @@ else
         var documentsTask = Api.SearchPolicyDocumentsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
         var enterpriseDocumentsTask = Api.GetDocumentsByEntityAsync(_tenantId, "Policy", PolicyId);
         var submissionsTask = Api.SearchSubmissionsAsync(_tenantId, _policy.SubmissionRef, pageSize: 25);
+        var claimsTask = Api.SearchClaimsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var renewalsTask = Api.GetRenewalRetentionCenterAsync(_tenantId);
 
-        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, enterpriseDocumentsTask, submissionsTask);
+        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, enterpriseDocumentsTask, submissionsTask, claimsTask, renewalsTask);
 
         var endorsements = endorsementsTask.Result?.Endorsements
             .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
@@ -1987,6 +2045,34 @@ else
             .Select(MapCertificateRow)
             .ToList();
 
+        _claims = (claimsTask.Result?.Items ?? [])
+            .Where(x => x.PolicyId == PolicyId)
+            .OrderByDescending(x => x.DateReported)
+            .Select(x => new ClaimRow
+            {
+                ClaimId = x.ClaimId,
+                ClaimNum = x.ClaimNumber,
+                LossDate = x.DateOfLoss,
+                LossType = x.LossType,
+                Description = x.LossDescription ?? string.Empty,
+                Status = x.Status,
+                Reserve = x.TotalReserves,
+                Paid = x.TotalPaid,
+                Adjuster = x.AssignedHandler,
+                ClosedDate = x.ClosedDate
+            }).ToList();
+
+        var renewalCase = (renewalsTask.Result?.Cases ?? []).FirstOrDefault(x => x.PolicyId == PolicyId);
+        _renewal = renewalCase is null ? null : new RenewalPipeline
+        {
+            Status = renewalCase.Stage,
+            QuotedPremium = renewalCase.ProposedPremium,
+            Remarketed = renewalCase.RenewalSubmissionId.HasValue,
+            CarriersQuoted = renewalCase.RenewalSubmissionId.HasValue ? 1 : 0,
+            FollowUpDate = renewalCase.NextActionDueDate,
+            AssignedTo = renewalCase.AssignedToName ?? renewalCase.Csr
+        };
+
         _documents = (documentsTask.Result?.Items ?? [])
             .Where(x => string.Equals(x.PolicyCode, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.CreatedDateUtc)
@@ -2004,6 +2090,76 @@ else
         _activities = BuildActivityRows(cancellations, cancellationActivities, endorsements);
         _auditLog = BuildAuditRows();
         BuildDerivedPolicyRows(cancellations);
+    }
+
+    private IEnumerable<PdLv> LifecycleOptions(string groupCode)
+        => _policyLifecycleOptions
+            .Where(x => string.Equals(x.OptionGroupCode, groupCode, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.SortOrder)
+            .Select(x => new PdLv(x.OptionCode, x.DisplayName));
+
+    private void LoadServicingWorkspaceRows()
+    {
+        if (_servicingWorkspace is null) return;
+
+        _policyLifecycleOptions = _servicingWorkspace.Options;
+        _activities.AddRange(_servicingWorkspace.Activities.Select(x => new ActivityRow
+        {
+            Subject = x.Subject,
+            Category = x.ActivityTypeCode,
+            Channel = x.ChannelCode ?? string.Empty,
+            Outcome = x.OutcomeCode ?? x.StatusCode,
+            ActivityDate = x.ActivityDateUtc.ToLocalTime(),
+            Notes = x.Notes,
+            CreatedBy = x.PerformedByName ?? string.Empty
+        }));
+        _activities = _activities.OrderByDescending(x => x.ActivityDate).ToList();
+
+        _comms = _servicingWorkspace.Communications.Select(x => new CommRow
+        {
+            ThreadId = x.ThreadId.ToString(),
+            SentAt = x.LastActivityDateUtc.ToLocalTime(),
+            Channel = x.ChannelCode,
+            Direction = x.DirectionCode,
+            Subject = x.Subject,
+            From = x.DirectionCode == "Outbound" ? "Agency" : x.Recipient ?? string.Empty,
+            To = x.DirectionCode == "Outbound" ? x.Recipient ?? string.Empty : "Agency",
+            Status = x.StatusCode
+        }).ToList();
+
+        _serviceTasks = _servicingWorkspace.Tasks.Select(x => new ServiceTaskRow
+        {
+            TaskNumber = x.TaskId.ToString(),
+            Title = x.Title,
+            Type = x.TaskTypeCode,
+            Priority = x.PriorityCode,
+            Status = x.StatusCode,
+            DueDate = x.DueDateUtc ?? DateTime.MaxValue,
+            AssignedTo = x.AssignedToName ?? string.Empty,
+            RelatedTo = _servicingWorkspace.Policy.PolicyNumber
+        }).ToList();
+
+        _compliance = _servicingWorkspace.ComplianceDocuments.Select(x => new ComplianceRow
+        {
+            ComplianceDocumentId = x.PolicyDocumentId,
+            Requirement = x.PolicyTitle,
+            Category = x.PolicyTypeCode,
+            Status = x.StatusCode,
+            DueDate = x.EffectiveDateUtc ?? DateTime.MinValue,
+            Owner = string.Empty,
+            Evidence = x.Version
+        }).ToList();
+
+        _auditLog = _servicingWorkspace.Timeline.Select(x => new AuditEntry
+        {
+            Timestamp = x.OccurredDateUtc.ToLocalTime(),
+            Action = x.Title,
+            Field = x.EntryTypeCode,
+            OldValue = string.Empty,
+            NewValue = x.StatusCode ?? string.Empty,
+            ChangedBy = x.ActorName ?? string.Empty,
+            IpAddress = string.Empty
+        }).ToList();
     }
 
     private async Task LoadEndorsementTypesAsync()
@@ -2189,18 +2345,7 @@ else
     {
         if (_policy is null) return;
 
-        var installment = _policy.WrittenPremium <= 0 ? 0 : Math.Round(_policy.WrittenPremium / 12m, 2);
-        _invoices = installment <= 0 ? [] : Enumerable.Range(0, 12).Select(i => new InvoiceRow
-        {
-            InvoiceNum = $"INV-{_policy.PolicyNumber}-{i + 1:00}",
-            DueDate = _policy.EffDate.AddMonths(i),
-            Amount = installment,
-            AmountPaid = 0m,
-            Balance = installment,
-            Status = _policy.EffDate.AddMonths(i) < DateTime.Today ? "Due" : "Scheduled"
-        }).ToList();
-
-        _renewal = new RenewalPipeline
+        _renewal ??= new RenewalPipeline
         {
             Status = DaysLabel(_policy.ExpDate).Contains("Expired", StringComparison.OrdinalIgnoreCase) ? "Expired" : "In Progress",
             QuotedPremium = _policy.AnnualPremium,
@@ -2212,16 +2357,71 @@ else
 
         _renewalHistory = _submissions.Select(s => new RenewalHistRow { PolicyNum = _policy.PolicyNumber, EffDate = _policy.EffDate, ExpDate = _policy.ExpDate, Carrier = _policy.Carrier, Premium = s.QuotedPremium, Change = 0m, Outcome = s.Outcome }).ToList();
         _commissions = [];
-        _compliance = _documents.Select(d => new ComplianceRow { ComplianceDocumentId = d.DocumentId, Requirement = d.Name, Category = d.Category, Status = "On File", DueDate = d.UploadedAt, Owner = d.UploadedBy, Evidence = d.FileSize }).ToList();
-        _serviceTasks = cancellations.Where(c => !string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)).Select(c => new ServiceTaskRow { TaskNumber = c.CancellationNumber, Title = c.CancellationReason, Type = c.RequestType, Priority = c.Priority, Status = c.Status, DueDate = c.DueDate ?? c.EffectiveDate, AssignedTo = c.AssignedToName, RelatedTo = c.PolicyNumber }).ToList();
+        if (_compliance.Count == 0)
+            _compliance = _documents.Select(d => new ComplianceRow { ComplianceDocumentId = d.DocumentId, Requirement = d.Name, Category = d.Category, Status = "On File", DueDate = d.UploadedAt, Owner = d.UploadedBy, Evidence = d.FileSize }).ToList();
+        if (_serviceTasks.Count == 0)
+            _serviceTasks = cancellations.Where(c => !string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)).Select(c => new ServiceTaskRow { TaskNumber = c.CancellationNumber, Title = c.CancellationReason, Type = c.RequestType, Priority = c.Priority, Status = c.Status, DueDate = c.DueDate ?? c.EffectiveDate, AssignedTo = c.AssignedToName, RelatedTo = c.PolicyNumber }).ToList();
         _relationships = [new RelationshipRow { Entity = _policy.Account, Role = "Named Insured", Relationship = "Policy owner", Contact = _policy.PrimaryInsured, Status = _policy.Status, Route = $"/accounts/{_policy.AccountId}" }, new RelationshipRow { Entity = _policy.Carrier, Role = "Carrier", Relationship = "Issuing carrier", Contact = _policy.Underwriter ?? _policy.Carrier, Status = "Active", Route = $"/admin/reference/carriers?carrier={Uri.EscapeDataString(_policy.Carrier)}" }];
         _carrierUw = [new CarrierUwRow { Item = _policy.Carrier, Type = "Carrier", Status = "Active", Owner = _policy.Underwriter ?? _policy.Carrier, LastUpdate = _policy.BindDate ?? _policy.CreatedAt, Notes = _policy.Lob }];
         _riskItems = [];
         _drivers = [];
         _locations = [];
-        _claims = [];
-        _comms = [];
         _reinsurance = [];
+    }
+
+    private void LoadAccountingRows()
+    {
+        _invoices = _accounting?.Invoices.Select(i => new InvoiceRow
+        {
+            InvoiceNum = i.InvoiceNumber,
+            DueDate = i.DueDate.ToDateTime(TimeOnly.MinValue),
+            Amount = i.TotalAmount,
+            AmountPaid = i.TotalAmount - i.BalanceAmount,
+            Balance = i.BalanceAmount,
+            Status = i.StatusCode
+        }).ToList() ?? [];
+    }
+
+    private async Task PrintInvoiceAsync()
+    {
+        if (_accounting?.Invoices.Any() != true) return;
+        await JS.InvokeVoidAsync("print");
+    }
+
+    private void OpenInvoiceEmail()
+    {
+        _invoiceEmailInvoiceId = _accounting?.Invoices.FirstOrDefault()?.InvoiceId ?? Guid.Empty;
+        _invoiceEmailRecipient = _accounting?.Invoices.FirstOrDefault()?.DeliveryRecipient ?? string.Empty;
+        _showInvoiceEmail = _invoiceEmailInvoiceId != Guid.Empty;
+    }
+
+    private void CloseInvoiceEmail() => _showInvoiceEmail = false;
+
+    private async Task EmailInvoiceAsync()
+    {
+        if (_invoiceEmailInvoiceId == Guid.Empty || string.IsNullOrWhiteSpace(_invoiceEmailRecipient))
+        {
+            await ShowErrorToast("Select an invoice and enter a recipient email.");
+            return;
+        }
+
+        _emailingInvoice = true;
+        try
+        {
+            var result = await Api.EmailPolicyInvoiceAsync(PolicyId, _invoiceEmailInvoiceId, new EmailPolicyInvoiceRequest(_tenantId, _invoiceEmailRecipient.Trim(), null));
+            _showInvoiceEmail = false;
+            _accounting = await Api.GetPolicyAccountingDashboardAsync(_tenantId, PolicyId);
+            LoadAccountingRows();
+            await ShowToast($"Invoice email {result?.StatusCode.ToLowerInvariant() ?? "queued"} for {_invoiceEmailRecipient.Trim()}.");
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorToast($"Invoice email could not be queued: {ex.Message}");
+        }
+        finally
+        {
+            _emailingInvoice = false;
+        }
     }
 
     private async Task LoadPolicyCoveragesAsync()
@@ -2527,45 +2727,17 @@ else
                 toastMessage = "Rewrite endorsement request created and synchronized.";
                 break;
             case "remarket":
-                EnsureRenewalPipeline();
-                _renewal!.Status = "Remarketing";
-                _renewal.Remarketed = true;
-                _renewal.CarriersQuoted = Math.Max(_renewal.CarriersQuoted, 3);
-                _renewal.QuotedPremium ??= Math.Round(_policy.WrittenPremium * 1.04m, 2);
-                _renewal.FollowUpDate = DateTime.Today.AddDays(7);
-                _activities.Insert(0, NewActivity("Remarket workflow started", "Renewal", "Portal", "Pending", _actionNote));
-                AddAuditEntry("Remarket Started", "Renewal Status", "In Progress", _renewal.Status);
+                var remarketCase = await EnsureRenewalCaseAsync();
+                await Api.LaunchRenewalPlacementAsync(remarketCase.RetentionCaseId, new LaunchRenewalPlacementRequest(_tenantId, _currentUserId));
+                refreshLifecycleData = true;
+                toastMessage = "Renewal placement launched.";
                 break;
             case "bindRenewal":
-                EnsureRenewalPipeline();
-                var oldPolicy = _policy.PolicyNumber;
-                var oldPremium = _policy.WrittenPremium;
-                var renewedPremium = _renewal!.QuotedPremium ?? Math.Round(_policy.WrittenPremium * 1.04m, 2);
-                _renewalHistory.Insert(0, new RenewalHistRow
-                {
-                    PolicyNum = oldPolicy,
-                    EffDate = _policy.EffDate,
-                    ExpDate = _policy.ExpDate,
-                    Carrier = _policy.Carrier,
-                    Premium = _policy.WrittenPremium,
-                    Change = 0m,
-                    Outcome = "Renewed",
-                });
-                _policy.PolicyNumber = NextPolicyNumber(oldPolicy);
-                _policy.EffDate = _policy.ExpDate;
-                _policy.ExpDate = _policy.EffDate.AddMonths(_policy.TermMonths == 0 ? 12 : _policy.TermMonths);
-                _policy.WrittenPremium = renewedPremium;
-                _policy.AnnualPremium = renewedPremium;
-                _policy.BalanceDue = Math.Round(renewedPremium / 10m, 2);
-                _policy.Status = "Active";
-                _renewal.Status = "Bound";
-                _renewal.QuotedPremium = renewedPremium;
-                _renewal.FollowUpDate = null;
-                _documents.Insert(0, NewDocument($"Renewal Binder ? {_policy.PolicyNumber}", "Bind", "PDF", "156 KB"));
-                await CreateLifecycleTransactionAsync("Renewal", "Completed", "Renewal", $"Renewed from {oldPolicy} at {renewedPremium:C0}.", oldPremium, renewedPremium - oldPremium, renewedPremium);
-                _activities.Insert(0, NewActivity("Renewal bound", "Renewal", "Portal", "Completed", $"Renewed from {oldPolicy} at {renewedPremium:C0}."));
-                AddAuditEntry("Renewal Bound", "Written Premium", oldPremium.ToString("C0"), renewedPremium.ToString("C0"));
-                toastMessage = $"Renewal bound as {_policy.PolicyNumber}.";
+                var renewalCase = await EnsureRenewalCaseAsync();
+                var renewedPremium = renewalCase.ProposedPremium ?? _policy.WrittenPremium;
+                await CreateLifecycleTransactionAsync("Renewal", "PendingReview", "Renewal", _actionNote, _policy.WrittenPremium, renewedPremium - _policy.WrittenPremium, renewedPremium);
+                refreshLifecycleData = true;
+                toastMessage = "Renewal transaction submitted for review.";
                 break;
             case "certificate":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder))
@@ -2573,10 +2745,13 @@ else
                     await ShowErrorToast("Certificate holder name is required.");
                     return;
                 }
-                var certName = $"Certificate of Insurance ? {_actionCertHolder}";
-                _documents.Insert(0, NewDocument(certName, "Certificate", "PDF", "144 KB"));
-                _activities.Insert(0, NewActivity(certName, "Endorsement", "Portal", "Completed", _actionCertAddr));
-                AddAuditEntry("Certificate Issued", "Documents", "?", certName);
+                await Api.CreatePolicyCertificateAsync(new CreatePolicyCertificateRequest(
+                    _tenantId, PolicyId, _policy.PolicyNumber, _policy.Account, _actionCertHolder, _actionCertAddr,
+                    string.IsNullOrWhiteSpace(_actionReason) ? _certTypeOpts.FirstOrDefault()?.Value ?? "ACORD25" : _actionReason,
+                    _actionDate, _policy.ExpDate, _policy.Lob, _policy.Csr, "Issued", false, false,
+                    _actionNote, null, false, null, _currentUserId));
+                refreshLifecycleData = true;
+                toastMessage = "Certificate record issued and synchronized.";
                 break;
             case "esign":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder) || string.IsNullOrWhiteSpace(_actionCertAddr))
@@ -2584,18 +2759,13 @@ else
                     await ShowErrorToast("Signer name and email are required.");
                     return;
                 }
-                _comms.Insert(0, new CommRow
+                await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
                 {
-                    SentAt = DateTime.Now,
-                    Channel = "Email",
-                    Direction = "Outbound",
-                    Subject = "E-signature request",
-                    From = "Agency",
-                    To = _actionCertAddr,
-                    Status = "Sent",
+                    TenantId = _tenantId, PolicyId = PolicyId, ChannelCode = "Email", Recipient = _actionCertAddr,
+                    Subject = "E-signature request", Body = string.IsNullOrWhiteSpace(_actionNote) ? $"Electronic signature requested from {_actionCertHolder}." : _actionNote
                 });
-                _activities.Insert(0, NewActivity($"E-sign request sent to {_actionCertHolder}", "Email", "Email", "Pending", _actionReason));
-                AddAuditEntry("E-Sign Requested", "Communications", "?", _actionCertAddr);
+                refreshLifecycleData = true;
+                toastMessage = "E-signature communication queued.";
                 break;
             case "message":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder))
@@ -2603,18 +2773,16 @@ else
                     await ShowErrorToast("Recipient is required.");
                     return;
                 }
-                _comms.Insert(0, new CommRow
+                await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
                 {
-                    SentAt = DateTime.Now,
-                    Channel = string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason,
-                    Direction = "Outbound",
+                    TenantId = _tenantId, PolicyId = PolicyId,
+                    ChannelCode = string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason,
+                    Recipient = _actionCertHolder,
                     Subject = string.IsNullOrWhiteSpace(_actionCertAddr) ? $"Policy {_policy.PolicyNumber}" : _actionCertAddr,
-                    From = "Agency",
-                    To = _actionCertHolder,
-                    Status = "Sent",
+                    Body = string.IsNullOrWhiteSpace(_actionNote) ? $"Communication regarding policy {_policy.PolicyNumber}." : _actionNote
                 });
-                _activities.Insert(0, NewActivity("Policy message sent", "Email", string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason, "Completed", _actionNote));
-                AddAuditEntry("Message Sent", "Communications", "?", _actionCertHolder);
+                refreshLifecycleData = true;
+                toastMessage = "Policy communication queued.";
                 break;
         }
         _showActionDlg = false;
@@ -2665,6 +2833,27 @@ else
         }
 
         return await Api.CreatePolicyLifecycleTransactionAsync(request);
+    }
+
+    private async Task<RenewalRetentionCaseDto> EnsureRenewalCaseAsync()
+    {
+        if (_policy is null) throw new InvalidOperationException("A policy must be loaded before starting renewal servicing.");
+        var center = await Api.GetRenewalRetentionCenterAsync(_tenantId);
+        var existing = center?.Cases.FirstOrDefault(x => x.PolicyId == PolicyId);
+        if (existing is not null) return existing;
+
+        var retentionCaseId = await Api.CreateRenewalRetentionCaseAsync(new CreateRenewalRetentionCaseRequest
+        {
+            TenantId = _tenantId, PolicyId = PolicyId, AccountId = _policy.AccountId,
+            AccountName = _policy.Account, PolicyNumber = _policy.PolicyNumber, LineOfBusiness = _policy.Lob,
+            Carrier = _policy.Carrier, Producer = _policy.Producer, Csr = _policy.Csr,
+            ExpirationDate = _policy.ExpDate, CurrentPremium = _policy.WrittenPremium,
+            Stage = "Intake", Priority = "Normal", OutreachStatus = "Not Started", Sentiment = "Neutral",
+            AssignedToName = _policy.Csr, CreatedByUserId = _currentUserId
+        });
+        center = await Api.GetRenewalRetentionCenterAsync(_tenantId);
+        return center?.Cases.FirstOrDefault(x => x.RetentionCaseId == retentionCaseId)
+            ?? throw new InvalidOperationException("The renewal case was created but could not be reloaded.");
     }
 
     private async Task<Guid?> GetCurrentUserIdAsync()
@@ -3063,22 +3252,22 @@ else
 
     private async Task SaveRiskItemAsync()
     {
-        var item = new RiskItem
+        if (_policy is null || string.IsNullOrWhiteSpace(_riskForm.Description)) return;
+        var description = $"{_riskForm.ItemType}: {_riskForm.Description.Trim()}";
+        await CreatePolicyEndorsementFromActionAsync(description);
+        await CreateLifecycleTransactionAsync(
+            "Endorsement", "PendingReview", "RiskScheduleChange",
+            $"Requested risk schedule addition. Year: {_riskForm.Year}; Make: {_riskForm.Make}; VIN: {_riskForm.Vin}; Value: {_riskForm.Value}; Location: {_riskForm.Location}.",
+            _policy.WrittenPremium, 0m, _policy.WrittenPremium);
+        await Api.CreatePolicyServicingActivityAsync(new CreatePolicyServicingActivityRequest
         {
-            ItemType = _riskForm.ItemType,
-            Description = _riskForm.Description.Trim(),
-            Year = _riskForm.Year,
-            Make = _riskForm.Make,
-            Vin = _riskForm.Vin,
-            Value = _riskForm.Value,
-            Location = _riskForm.Location,
-            IsActive = true,
-        };
-        _riskItems.Insert(0, item);
-        _activities.Insert(0, NewActivity($"Risk item added: {item.Description}", "Endorsement", "Portal", "Completed", item.Location ?? string.Empty));
-        AddAuditEntry("Risk Item Added", "Risk Schedule", "?", item.Description);
+            TenantId = _tenantId, PolicyId = PolicyId, ActivityTypeCode = "Endorsement",
+            Subject = $"Risk schedule change requested: {description}", ChannelCode = "Portal",
+            OutcomeCode = "Pending", Notes = _riskForm.Location
+        });
         _showRiskForm = false;
-        await ShowToast("Risk item added.");
+        await LoadAsync();
+        await ShowToast("Risk schedule endorsement requested.");
     }
 
     private void OpenDocumentUpload() => _showDocumentUpload = true;
@@ -3122,25 +3311,28 @@ else
     private async Task SaveClaimAsync()
     {
         if (_policy is null) return;
-        var claim = new ClaimRow
+        var claimId = await Api.CreateClaimAsync(new CreateClaimRequest
         {
-            ClaimId = Guid.NewGuid(),
-            ClaimNum = $"CLM-{DateTime.Today:yyyy}-{_claims.Count + 1:0000}",
-            LossDate = _claimForm.LossDate,
+            TenantId = _tenantId,
+            PolicyId = PolicyId,
+            AccountId = _policy.AccountId,
+            PolicyNumber = _policy.PolicyNumber,
+            AccountName = _policy.Account,
+            Lob = _policy.Lob,
+            Carrier = _policy.Carrier,
             LossType = _claimForm.LossType.Trim(),
-            Description = _claimForm.Description.Trim(),
+            PrimaryClaimant = _policy.PrimaryInsured,
+            DateOfLoss = _claimForm.LossDate,
+            DateReported = DateTime.UtcNow,
+            LossDescription = _claimForm.Description.Trim(),
             Status = "Open",
-            Reserve = _claimForm.Reserve,
-            Paid = 0m,
-            Adjuster = string.IsNullOrWhiteSpace(_claimForm.Adjuster) ? "Pending assignment" : _claimForm.Adjuster.Trim(),
-        };
-        _claims.Insert(0, claim);
-        _policy.OpenClaims = _claims.Count(c => c.Status == "Open");
-        _documents.Insert(0, NewDocument($"First Notice of Loss ? {claim.ClaimNum}", "Claims", "PDF", "132 KB"));
-        _activities.Insert(0, NewActivity($"Claim reported: {claim.ClaimNum}", "Claim", "Portal", "Pending", claim.Description));
-        AddAuditEntry("Claim Reported", "Open Claims", (_policy.OpenClaims - 1).ToString(), _policy.OpenClaims.ToString());
+            TotalReserves = _claimForm.Reserve,
+            AssignedHandler = string.IsNullOrWhiteSpace(_claimForm.Adjuster) ? "Unassigned" : _claimForm.Adjuster.Trim(),
+            CreatedByUserId = _currentUserId
+        });
         _showClaimForm = false;
-        await ShowToast($"Claim {claim.ClaimNum} reported.");
+        await LoadAsync();
+        await ShowToast($"Claim {claimId} reported.");
     }
 
     private async Task NotifyValidationAsync(EditContext _)
@@ -3382,26 +3574,28 @@ else
     private async Task SaveActivityAsync()
     {
         if (string.IsNullOrWhiteSpace(_actForm.Subject)) return;
-        _activities.Insert(0, new ActivityRow
+        await Api.CreatePolicyServicingActivityAsync(new CreatePolicyServicingActivityRequest
         {
-            Subject = _actForm.Subject, Category = _actForm.Category,
-            Channel = _actForm.Channel, Outcome = _actForm.Outcome,
-            ActivityDate = _actForm.ActivityDate, Notes = _actForm.Notes, CreatedBy = "Current User",
+            TenantId = _tenantId, PolicyId = PolicyId, Subject = _actForm.Subject,
+            ActivityTypeCode = _actForm.Category, ChannelCode = _actForm.Channel,
+            OutcomeCode = _actForm.Outcome.Replace(" ", string.Empty), ActivityDateUtc = _actForm.ActivityDate.ToUniversalTime(), Notes = _actForm.Notes
         });
         _showActForm = false;
+        await LoadAsync();
         await ShowToast("Activity logged.");
     }
 
     private async Task SendMessageAsync()
     {
         if (string.IsNullOrWhiteSpace(_commForm.To)) return;
-        _comms.Insert(0, new CommRow
+        await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
         {
-            SentAt = DateTime.Now, Channel = _commForm.Channel, Direction = "Outbound",
-            Subject = _commForm.Subject, From = "Agency", To = _commForm.To, Status = "Sent",
+            TenantId = _tenantId, PolicyId = PolicyId, ChannelCode = _commForm.Channel,
+            Recipient = _commForm.To, Subject = _commForm.Subject, Body = _commForm.Body
         });
         _showCommForm = false;
-        await ShowToast("Message sent.");
+        await LoadAsync();
+        await ShowToast("Message queued.");
     }
 
     private void AddAuditEntry(string action, string field, string oldVal, string newVal)

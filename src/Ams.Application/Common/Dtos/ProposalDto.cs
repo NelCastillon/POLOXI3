@@ -3,6 +3,13 @@ namespace Ams.Application.Common.Dtos;
 public sealed class ProposalDto
 {
     public Guid ProposalId { get; set; }
+    public string DeliveryCategoryCode { get; set; } = "Proposal";
+    public string DeliveryTypeCode { get; set; } = "ProposalPackage";
+    public string? EntityName { get; set; }
+    public Guid? EntityId { get; set; }
+    public Guid? AccountId { get; set; }
+    public string? Subject { get; set; }
+    public Guid? DocumentId { get; set; }
     public Guid SubmissionId { get; set; }
     public Guid TenantId { get; set; }
     public string Title { get; set; } = string.Empty;

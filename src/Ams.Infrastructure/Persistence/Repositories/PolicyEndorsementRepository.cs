@@ -65,24 +65,24 @@ ORDER BY OptionGroupCode, SortOrder, DisplayName;";
         return (await cn.QueryAsync<PolicyEndorsementOptionDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken))).AsList();
     }
 
-    public async Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default)
+    public async Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default)
     {
         var sql = $@"
 SELECT {EndorsementColumns}
 FROM Policy.PolicyEndorsement
-WHERE EndorsementId = @EndorsementId AND IsDeleted = 0;
+WHERE TenantId = @TenantId AND EndorsementId = @EndorsementId AND IsDeleted = 0;
 
 SELECT ActivityId, EndorsementId, TenantId, ActivityType, Subject, Notes, CreatedByName, ActivityDateUtc
 FROM Policy.PolicyEndorsementActivity
-WHERE EndorsementId = @EndorsementId AND IsDeleted = 0
+WHERE TenantId = @TenantId AND EndorsementId = @EndorsementId AND IsDeleted = 0
 ORDER BY ActivityDateUtc DESC;
 
 SELECT DeltaId, EndorsementId, TenantId, FieldName, BeforeValue, AfterValue, NumericDelta
 FROM Policy.PolicyEndorsementDelta
-WHERE EndorsementId = @EndorsementId AND IsDeleted = 0
+WHERE TenantId = @TenantId AND EndorsementId = @EndorsementId AND IsDeleted = 0
 ORDER BY CreatedDateUtc;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { EndorsementId = endorsementId }, cancellationToken: cancellationToken));
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, EndorsementId = endorsementId }, cancellationToken: cancellationToken));
         var endorsement = await multi.ReadSingleOrDefaultAsync<PolicyEndorsementDto>();
         if (endorsement is null) return null;
 

@@ -12,7 +12,13 @@ namespace Ams.Api.Controllers;
 public sealed class SubmissionsController : ControllerBase
 {
     private readonly ISubmissionService _service;
-    public SubmissionsController(ISubmissionService service) => _service = service;
+    private readonly IPolicyCreationService _policyCreationService;
+
+    public SubmissionsController(ISubmissionService service, IPolicyCreationService policyCreationService)
+    {
+        _service = service;
+        _policyCreationService = policyCreationService;
+    }
 
     [HttpGet]
     public async Task<IActionResult> Search(
@@ -174,10 +180,12 @@ public sealed class SubmissionsController : ControllerBase
         => Ok(await _service.GetPolicyBindStatusesAsync(tenantId, cancellationToken));
 
     [HttpGet("bind-queue")]
+    [Authorize]
     public async Task<IActionResult> GetBindQueue([FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => TryTenant(tenantId, out var denied) ? Ok(await _service.GetBindQueueAsync(tenantId, cancellationToken)) : denied;
 
     [HttpGet("bind-requests/{bindRequestId:guid}")]
+    [Authorize]
     public async Task<IActionResult> GetBindRequest(Guid bindRequestId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
         if (!TryTenant(tenantId, out var denied)) return denied;
@@ -185,13 +193,56 @@ public sealed class SubmissionsController : ControllerBase
         return detail is null ? NotFound() : Ok(detail);
     }
 
+    [HttpGet("bind-requests/{bindRequestId:guid}/binder-review")]
+    [Authorize]
+    public async Task<IActionResult> GetBinderReview(Guid bindRequestId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(tenantId, "POLICY_VIEW", out var denied)) return denied;
+        var review = await _policyCreationService.GetBinderReviewAsync(bindRequestId, tenantId, cancellationToken);
+        return review is null ? NotFound() : Ok(review);
+    }
+
+    [HttpPut("bind-requests/{bindRequestId:guid}/binder-review")]
+    [Authorize]
+    public async Task<IActionResult> SaveBinderReview(Guid bindRequestId, [FromBody] UpsertBinderReviewRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(request.TenantId, "WORKBENCH_PRODUCER", out var denied)) return denied;
+        var userId = GetUserId();
+        if (!userId.HasValue) return Forbid();
+        request.ReviewedByUserId = userId.Value;
+        return Ok(await _policyCreationService.SaveBinderReviewAsync(bindRequestId, request, cancellationToken));
+    }
+
+    [HttpPost("bind-requests/{bindRequestId:guid}/binder-review/decision")]
+    [Authorize]
+    public async Task<IActionResult> DecideBinderReview(Guid bindRequestId, [FromBody] DecideBinderReviewRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(request.TenantId, "WORKBENCH_PRODUCER", out var denied)) return denied;
+        var userId = GetUserId();
+        if (!userId.HasValue) return Forbid();
+        await _policyCreationService.DecideBinderReviewAsync(bindRequestId, request with { DecidedByUserId = userId.Value }, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("bind-requests/{bindRequestId:guid}/policy-generation")]
+    [Authorize]
+    public async Task<IActionResult> QueuePolicyGeneration(Guid bindRequestId, [FromBody] QueuePolicyGenerationRequest request, CancellationToken cancellationToken)
+    {
+        if (!CanAccess(request.TenantId, "WORKBENCH_PRODUCER", out var denied)) return denied;
+        var userId = GetUserId();
+        if (!userId.HasValue) return Forbid();
+        return Accepted(await _policyCreationService.QueuePolicyGenerationAsync(bindRequestId, request with { RequestedByUserId = userId.Value }, cancellationToken));
+    }
+
     [HttpPost("bind-requests/{bindRequestId:guid}/validate")]
+    [Authorize]
     public async Task<IActionResult> ValidateBindRequest(Guid bindRequestId, [FromBody] ValidateBindRequestRequest request, CancellationToken cancellationToken)
         => TryTenant(request.TenantId, out var denied)
             ? Ok(await _service.ValidateBindRequestAsync(bindRequestId, request with { ValidatedByUserId = GetUserId() }, cancellationToken))
             : denied;
 
     [HttpPatch("bind-requests/{bindRequestId:guid}/status")]
+    [Authorize]
     public async Task<IActionResult> UpdateBindRequestStatus(Guid bindRequestId, [FromBody] UpdateBindRequestStatusRequest request, CancellationToken cancellationToken)
     {
         if (!TryTenant(request.TenantId, out var denied)) return denied;
@@ -205,6 +256,7 @@ public sealed class SubmissionsController : ControllerBase
     }
 
     [HttpPost("bind-requests/{bindRequestId:guid}/approvals")]
+    [Authorize]
     public async Task<IActionResult> RequestBindApproval(Guid bindRequestId, [FromBody] RequestBindApprovalRequest request, CancellationToken cancellationToken)
     {
         if (!TryTenant(request.TenantId, out var denied)) return denied;
@@ -213,6 +265,7 @@ public sealed class SubmissionsController : ControllerBase
     }
 
     [HttpPatch("bind-requests/{bindRequestId:guid}/approvals/{approvalId:guid}")]
+    [Authorize]
     public async Task<IActionResult> DecideBindApproval(Guid bindRequestId, Guid approvalId, [FromBody] DecideBindApprovalRequest request, CancellationToken cancellationToken)
     {
         if (!TryTenant(request.TenantId, out var denied)) return denied;
@@ -223,6 +276,7 @@ public sealed class SubmissionsController : ControllerBase
     }
 
     [HttpPost("bind-requests/{bindRequestId:guid}/carrier-responses")]
+    [Authorize]
     public async Task<IActionResult> RecordBindCarrierResponse(Guid bindRequestId, [FromBody] RecordBindCarrierResponseRequest request, CancellationToken cancellationToken)
     {
         if (!TryTenant(request.TenantId, out var denied)) return denied;
@@ -231,6 +285,7 @@ public sealed class SubmissionsController : ControllerBase
     }
 
     [HttpPost("bind-requests/{bindRequestId:guid}/packages")]
+    [Authorize]
     public async Task<IActionResult> PrepareBindPackage(Guid bindRequestId, [FromBody] PrepareBindPackageRequest request, CancellationToken cancellationToken)
     {
         if (!TryTenant(request.TenantId, out var denied)) return denied;

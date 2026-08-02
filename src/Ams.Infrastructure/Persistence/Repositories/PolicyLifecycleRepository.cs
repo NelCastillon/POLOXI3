@@ -221,6 +221,130 @@ ORDER BY SortOrder, ToStatusCode;";
         };
     }
 
+    public async Task<PolicyServicingWorkspaceDto?> GetWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
+    {
+        var lifecycle = await GetDetailAsync(tenantId, policyId, cancellationToken);
+        if (lifecycle is null)
+        {
+            return null;
+        }
+
+        const string sql = @"
+SELECT PolicyLifecycleOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, SortOrder
+FROM Policy.PolicyLifecycleOption
+WHERE TenantId=@TenantId AND IsActive=1 AND IsDeleted=0
+ORDER BY OptionGroupCode, SortOrder, DisplayName;
+
+SELECT activity.ActivityId, activity.TenantId, activity.PolicyId, activity.PolicyTransactionId,
+       CAST(activity.ActivityDate AS DATETIME2) AS ActivityDateUtc, activity.ActivityTypeCode, activity.Subject, activity.Notes,
+       activity.ChannelCode, activity.OutcomeCode, activity.StatusCode, activity.PerformedByUserId,
+       COALESCE(NULLIF(CONCAT(userRow.FirstName, N' ', userRow.LastName), N' '), userRow.Email) AS PerformedByName
+FROM OPS.OperationalActivityLog activity
+LEFT JOIN IAM.[User] userRow ON userRow.TenantId=activity.TenantId AND userRow.UserId=activity.PerformedByUserId AND userRow.IsDeleted=0
+WHERE activity.TenantId=@TenantId AND activity.PolicyId=@PolicyId AND activity.IsDeleted=0
+ORDER BY activity.ActivityDate DESC, activity.CreatedDateUtc DESC;
+
+SELECT thread.ThreadId, thread.TenantId, thread.PolicyId, thread.PolicyTransactionId, thread.Channel AS ChannelCode,
+       COALESCE(lastMessage.Direction, N'Outbound') AS DirectionCode, thread.Subject, COALESCE(thread.ContactEmail, thread.ContactPhone, thread.ContactName) AS Recipient,
+       thread.Status AS StatusCode, thread.MessageCount, thread.LastActivityAt AS LastActivityDateUtc
+FROM Comms.MessageThread thread
+OUTER APPLY (SELECT TOP 1 message.Direction FROM Comms.ThreadMessage message WHERE message.ThreadId=thread.ThreadId AND message.IsDeleted=0 ORDER BY message.SentAt DESC) lastMessage
+WHERE thread.TenantId=@TenantId AND thread.PolicyId=@PolicyId AND thread.IsDeleted=0
+ORDER BY thread.LastActivityAt DESC;
+
+SELECT task.TaskItemId AS TaskId, task.TenantId, task.RelatedEntityId AS PolicyId, task.TaskTypeCode, task.Title, task.StatusCode, task.PriorityCode,
+       CAST(task.DueDate AS DATETIME2) AS DueDateUtc, task.AssignedToUserId, CAST(NULL AS NVARCHAR(200)) AS AssignedToName
+FROM OPS.TaskItem task
+WHERE task.TenantId=@TenantId AND task.RelatedEntityName=N'Policy' AND task.RelatedEntityId=@PolicyId AND task.IsDeleted=0
+ORDER BY task.DueDate, task.CreatedDateUtc DESC;
+
+SELECT document.PolicyDocumentId, document.TenantId, document.PolicyId, document.PolicyCode, document.PolicyTitle, document.PolicyTypeCode,
+       document.Version, document.StatusCode, document.EffectiveDateUtc, document.IsActive
+FROM Compliance.PolicyDocument document
+WHERE document.TenantId=@TenantId AND document.PolicyId=@PolicyId AND document.IsDeleted=0
+ORDER BY document.CreatedDateUtc DESC;
+
+SELECT auditEvent.PolicyAuditEventId AS EntryId, auditEvent.TenantId, auditEvent.PolicyId, auditEvent.EntityType AS EntryTypeCode,
+       auditEvent.ActionCode, CONCAT(auditEvent.EntityType, N' ', auditEvent.ActionCode) AS Title,
+       COALESCE(auditEvent.AfterJson, auditEvent.BeforeJson) AS Description, auditEvent.ReasonCode AS StatusCode,
+       auditEvent.CreatedDateUtc AS OccurredDateUtc, auditEvent.UserId AS ActorUserId,
+       COALESCE(NULLIF(CONCAT(userRow.FirstName, N' ', userRow.LastName), N' '), userRow.Email) AS ActorName
+FROM Policy.PolicyAuditEvent auditEvent
+LEFT JOIN IAM.[User] userRow ON userRow.TenantId=auditEvent.TenantId AND userRow.UserId=auditEvent.UserId AND userRow.IsDeleted=0
+WHERE auditEvent.TenantId=@TenantId AND auditEvent.PolicyId=@PolicyId AND auditEvent.IsDeleted=0
+ORDER BY auditEvent.CreatedDateUtc DESC;";
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var grid = await connection.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, PolicyId = policyId }, cancellationToken: cancellationToken));
+        return new PolicyServicingWorkspaceDto
+        {
+            TenantId = tenantId,
+            PolicyId = policyId,
+            Policy = lifecycle.Policy,
+            Options = (await grid.ReadAsync<PolicyLifecycleOptionDto>()).AsList(),
+            Transactions = lifecycle.Transactions,
+            Versions = lifecycle.Versions,
+            StatusHistory = lifecycle.StatusHistory,
+            Activities = (await grid.ReadAsync<PolicyServicingActivityDto>()).AsList(),
+            Communications = (await grid.ReadAsync<PolicyServicingCommunicationDto>()).AsList(),
+            Tasks = (await grid.ReadAsync<PolicyServicingTaskDto>()).AsList(),
+            ComplianceDocuments = (await grid.ReadAsync<PolicyServicingComplianceDocumentDto>()).AsList(),
+            Timeline = (await grid.ReadAsync<PolicyServicingTimelineEntryDto>()).AsList()
+        };
+    }
+
+    public async Task<PolicyServicingActionResultDto> CreateActivityAsync(CreatePolicyServicingActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+IF NOT EXISTS (SELECT 1 FROM Submissions.BoundPolicy WHERE TenantId=@TenantId AND PolicyId=@PolicyId AND IsDeleted=0)
+    THROW 52360, 'Policy was not found for the tenant.', 1;
+IF NOT EXISTS (SELECT 1 FROM Policy.PolicyLifecycleOption WHERE TenantId=@TenantId AND OptionGroupCode=N'PolicyActivityType' AND OptionCode=@ActivityTypeCode AND IsActive=1 AND IsDeleted=0)
+    THROW 52361, 'Policy activity type is not configured for the tenant.', 1;
+
+DECLARE @ActivityId UNIQUEIDENTIFIER=NEWID(), @Now DATETIME2=SYSUTCDATETIME();
+INSERT INTO OPS.OperationalActivityLog
+    (ActivityId,TenantId,PolicyId,PolicyTransactionId,ActivityDate,ActivityTypeCode,Subject,Notes,ChannelCode,OutcomeCode,StatusCode,PerformedByUserId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (@ActivityId,@TenantId,@PolicyId,@PolicyTransactionId,CAST(COALESCE(@ActivityDateUtc,@Now) AS DATE),@ActivityTypeCode,@Subject,@Notes,@ChannelCode,@OutcomeCode,N'Completed',@PerformedByUserId,@Now,@PerformedByUserId,0);
+INSERT INTO Policy.PolicyAuditEvent
+    (PolicyAuditEventId,TenantId,EntityType,EntityId,PolicyId,PolicyTransactionId,ActionCode,SourceCode,UserId,AfterJson,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (NEWID(),@TenantId,N'PolicyActivity',@ActivityId,@PolicyId,@PolicyTransactionId,N'Created',N'PolicyWorkspace',@PerformedByUserId,JSON_OBJECT(N'ActivityTypeCode':@ActivityTypeCode,N'Subject':@Subject,N'OutcomeCode':@OutcomeCode),@Now,@PerformedByUserId,0);
+SELECT @PolicyId AS PolicyId,@ActivityId AS RecordId,@PolicyTransactionId AS PolicyTransactionId,N'Activity' AS RecordTypeCode,N'Completed' AS StatusCode,@Now AS CreatedDateUtc;";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleAsync<PolicyServicingActionResultDto>(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+    }
+
+    public async Task<PolicyServicingActionResultDto> SendCommunicationAsync(SendPolicyCommunicationRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+DECLARE @AccountId UNIQUEIDENTIFIER, @AccountName NVARCHAR(200), @Now DATETIME2=SYSUTCDATETIME();
+SELECT @AccountId=policy.AccountId,@AccountName=account.AccountName
+FROM Submissions.BoundPolicy policy
+LEFT JOIN Client.Account account ON account.TenantId=policy.TenantId AND account.AccountId=policy.AccountId AND account.IsDeleted=0
+WHERE policy.TenantId=@TenantId AND policy.PolicyId=@PolicyId AND policy.IsDeleted=0;
+IF @AccountId IS NULL THROW 52362, 'Policy was not found for the tenant.', 1;
+IF NOT EXISTS (SELECT 1 FROM Policy.PolicyLifecycleOption WHERE TenantId=@TenantId AND OptionGroupCode=N'CommunicationChannel' AND OptionCode=@ChannelCode AND IsActive=1 AND IsDeleted=0)
+    THROW 52363, 'Communication channel is not configured for the tenant.', 1;
+
+DECLARE @ThreadId UNIQUEIDENTIFIER=NEWID(), @MessageId UNIQUEIDENTIFIER=NEWID();
+INSERT INTO Comms.MessageThread
+    (ThreadId,TenantId,PolicyId,PolicyTransactionId,AccountName,AccountId,ContactName,ContactEmail,ContactPhone,Channel,Subject,BodyPreview,Status,Priority,IsRead,IsEscalated,OptedOut,MessageCount,LastActivityAt,Sentiment,QueueName,SlaStatus,SlaMinutesRemaining,ComplianceStatus,SourceSystem,LastSyncedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (@ThreadId,@TenantId,@PolicyId,@PolicyTransactionId,COALESCE(@AccountName,N'Policy Account'),CONVERT(NVARCHAR(80),@AccountId),@Recipient,CASE WHEN @ChannelCode=N'Email' THEN @Recipient END,CASE WHEN @ChannelCode=N'SMS' THEN @Recipient END,@ChannelCode,@Subject,LEFT(@Body,1000),N'Queued',N'Normal',1,0,0,1,@Now,N'Neutral',N'Policy Servicing',N'On Track',240,N'Pending',N'AMS',@Now,@Now,@SentByUserId,0);
+INSERT INTO Comms.ThreadMessage
+    (MessageId,ThreadId,SenderName,Channel,Direction,Body,SentAt,DeliveryStatus,IsAutomated,ExternalMessageId,ProviderName,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (@MessageId,@ThreadId,N'Agency',@ChannelCode,N'Outbound',@Body,@Now,N'Queued',0,N'',N'AMS',@Now,@SentByUserId,0);
+INSERT INTO Policy.PolicyAuditEvent
+    (PolicyAuditEventId,TenantId,EntityType,EntityId,PolicyId,PolicyTransactionId,ActionCode,SourceCode,UserId,AfterJson,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES
+    (NEWID(),@TenantId,N'Communication',@ThreadId,@PolicyId,@PolicyTransactionId,N'Queued',N'PolicyWorkspace',@SentByUserId,JSON_OBJECT(N'ChannelCode':@ChannelCode,N'Recipient':@Recipient,N'Subject':@Subject),@Now,@SentByUserId,0);
+SELECT @PolicyId AS PolicyId,@ThreadId AS RecordId,@PolicyTransactionId AS PolicyTransactionId,N'Communication' AS RecordTypeCode,N'Queued' AS StatusCode,@Now AS CreatedDateUtc;";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleAsync<PolicyServicingActionResultDto>(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+    }
+
     public async Task<Guid> CreateTransactionAsync(CreatePolicyLifecycleTransactionRequest request, CancellationToken cancellationToken = default)
     {
         const string insertTransactionSql = @"

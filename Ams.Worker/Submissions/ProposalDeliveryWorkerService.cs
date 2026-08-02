@@ -124,12 +124,13 @@ END;
 COMMIT TRANSACTION;
 
 SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.SubmissionId, dispatch.ProposalId,
+       dispatch.DeliveryCategoryCode,dispatch.DeliveryTypeCode,dispatch.EntityName,dispatch.EntityId,dispatch.AccountId AS DispatchAccountId,dispatch.Subject,dispatch.HtmlContent AS DispatchHtmlContent,dispatch.DocumentId AS DispatchDocumentId,
        dispatch.ProposalVersionNumber, dispatch.DeliveryMethodCode, dispatch.Recipient, dispatch.AttemptCount, dispatch.MaxAttempts,
        provider.ProposalDeliveryProviderId, provider.ProviderCode, provider.HandlerCode, provider.DisplayName AS ProviderName,
        provider.EndpointUri, provider.SenderAddress, provider.SecretReference, provider.ConfigurationJson,
        provider.IsConfigured, provider.RetryDelaySeconds,
-       proposal.Title, proposal.HtmlContent, proposal.PdfUrl, proposal.DocumentId,
-       submission.AccountId, submission.SubmissionNumber, account.AccountName,
+       COALESCE(dispatch.Subject,proposal.Title) Title, COALESCE(dispatch.HtmlContent,proposal.HtmlContent) HtmlContent, proposal.PdfUrl, COALESCE(dispatch.DocumentId,proposal.DocumentId) DocumentId,
+       COALESCE(dispatch.AccountId,submission.AccountId) AccountId, submission.SubmissionNumber, account.AccountName,
        tenant.TenantName AS AgencyName, agency.ContactEmail AS AgencyEmail, agency.ContactPhone AS AgencyPhone,
        COALESCE(NULLIF(assignedUser.DisplayName, N''), NULLIF(assignedUser.FullName, N''), assignedUser.UserName) AS AssignedPersonName,
        assignedUser.Email AS AssignedPersonEmail, assignedUser.PhoneNumber AS AssignedPersonPhone,
@@ -150,14 +151,14 @@ SELECT dispatch.ProposalDeliveryDispatchId, dispatch.TenantId, dispatch.Submissi
 FROM Submissions.ProposalDeliveryDispatch dispatch
 INNER JOIN Submissions.ProposalDeliveryProvider provider
   ON provider.ProposalDeliveryProviderId = dispatch.ProposalDeliveryProviderId
-INNER JOIN Submissions.Proposal proposal
+LEFT JOIN Submissions.Proposal proposal
   ON proposal.ProposalId = dispatch.ProposalId AND proposal.TenantId = dispatch.TenantId AND proposal.IsDeleted = 0
-INNER JOIN Submissions.Submission submission
+LEFT JOIN Submissions.Submission submission
   ON submission.SubmissionId = dispatch.SubmissionId AND submission.TenantId = dispatch.TenantId AND submission.IsDeleted = 0
 INNER JOIN Core.Tenant tenant
   ON tenant.TenantId = dispatch.TenantId AND tenant.IsDeleted = 0
 LEFT JOIN Client.Account account
-  ON account.AccountId = submission.AccountId AND account.TenantId = submission.TenantId AND account.IsDeleted = 0
+  ON account.AccountId = COALESCE(dispatch.AccountId,submission.AccountId) AND account.TenantId = dispatch.TenantId AND account.IsDeleted = 0
 LEFT JOIN Agency.Profile agency
   ON agency.TenantId = dispatch.TenantId AND agency.IsDeleted = 0
 LEFT JOIN IAM.[User] assignedUser
@@ -240,7 +241,9 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
             IsBodyHtml = true
         };
         message.To.Add(new MailAddress(dispatch.Recipient));
-        message.Headers.Add("X-AMS-Proposal-Id", dispatch.ProposalId.ToString());
+        message.Headers.Add("X-AMS-Delivery-Category", dispatch.DeliveryCategoryCode);
+        if (dispatch.ProposalId.HasValue) message.Headers.Add("X-AMS-Proposal-Id", dispatch.ProposalId.Value.ToString());
+        if (dispatch.EntityId.HasValue) message.Headers.Add("X-AMS-Entity-Id", dispatch.EntityId.Value.ToString());
 
         using var client = new SmtpClient(endpoint.Host, endpoint.Port > 0 ? endpoint.Port : 25)
         {
@@ -377,6 +380,8 @@ BEGIN
     RETURN;
 END;
 
+IF @DeliveryCategoryCode=N'Proposal'
+BEGIN
 UPDATE Submissions.Proposal
 SET Status = CASE WHEN PresentedDateUtc IS NULL THEN N'Delivered' ELSE Status END,
     GovernanceStatusCode = CASE WHEN PresentedDateUtc IS NULL THEN N'Delivered' ELSE GovernanceStatusCode END,
@@ -407,6 +412,7 @@ BEGIN
     OUTER APPLY (SELECT TOP 1 RecipientName,RecipientEmail FROM Submissions.ProposalRecipient WHERE ProposalId=@ProposalId AND TenantId=@TenantId AND IsSigner=1 AND IsDeleted=0 ORDER BY SigningOrder) recipient
     WHERE proposal.ProposalId=@ProposalId AND proposal.DocumentId IS NOT NULL AND recipient.RecipientEmail IS NOT NULL;
 END;
+END;
 COMMIT TRANSACTION;
 """;
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -422,6 +428,7 @@ COMMIT TRANSACTION;
             dispatch.ProposalVersionNumber,
             ProviderId = dispatch.ProposalDeliveryProviderId,
             dispatch.ProviderCode,
+            dispatch.DeliveryCategoryCode,
             ExternalDeliveryId = externalDeliveryId,
             ResponseJson = responseJson
         }, cancellationToken: cancellationToken));
@@ -519,6 +526,7 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
     private static string BuildEmailSubject(ProposalDeliveryWorkItem dispatch)
     {
+        if (!string.IsNullOrWhiteSpace(dispatch.Subject)) return dispatch.Subject;
         var accountName = string.IsNullOrWhiteSpace(dispatch.AccountName) ? null : dispatch.AccountName.Trim();
         return accountName is null
             ? $"Insurance Proposal | {dispatch.Title}"
@@ -527,9 +535,11 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
     private static string BuildEmailHtml(ProposalDeliveryWorkItem dispatch)
     {
+        if (!string.Equals(dispatch.DeliveryCategoryCode, "Proposal", StringComparison.OrdinalIgnoreCase))
+            return dispatch.HtmlContent ?? $"<p>{WebUtility.HtmlEncode(dispatch.Title)}</p>";
         var title = WebUtility.HtmlEncode(dispatch.Title);
         var accountName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AccountName) ? "Valued Client" : dispatch.AccountName);
-        var submissionNumber = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.SubmissionNumber) ? dispatch.SubmissionId.ToString("N")[..8].ToUpperInvariant() : dispatch.SubmissionNumber);
+        var submissionNumber = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.SubmissionNumber) ? (dispatch.SubmissionId?.ToString("N")[..8].ToUpperInvariant() ?? "N/A") : dispatch.SubmissionNumber);
         var agencyName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AgencyName) ? "Your Insurance Agency" : dispatch.AgencyName);
         var assignedPersonName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(dispatch.AssignedPersonName) ? "Your Agency Representative" : dispatch.AssignedPersonName);
         var assignedPersonEmail = BuildEmailContactLink(dispatch.AssignedPersonEmail, dispatch.AgencyEmail);
@@ -722,11 +732,16 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
     {
         public Guid ProposalDeliveryDispatchId { get; set; }
         public Guid TenantId { get; set; }
-        public Guid SubmissionId { get; set; }
-        public Guid ProposalId { get; set; }
+        public Guid? SubmissionId { get; set; }
+        public Guid? ProposalId { get; set; }
         public Guid AccountId { get; set; }
         public Guid ProposalDeliveryProviderId { get; set; }
-        public int ProposalVersionNumber { get; set; }
+        public int? ProposalVersionNumber { get; set; }
+        public string DeliveryCategoryCode { get; set; } = "Proposal";
+        public string DeliveryTypeCode { get; set; } = "ProposalPackage";
+        public string? EntityName { get; set; }
+        public Guid? EntityId { get; set; }
+        public string? Subject { get; set; }
         public string DeliveryMethodCode { get; set; } = string.Empty;
         public string Recipient { get; set; } = string.Empty;
         public int AttemptCount { get; set; }

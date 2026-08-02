@@ -44,6 +44,16 @@ public sealed class PolicyLifecycleService : IPolicyLifecycleService
         return _repository.GetDetailAsync(tenantId, policyId, cancellationToken);
     }
 
+    public Task<PolicyServicingWorkspaceDto?> GetWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty || policyId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Policy servicing workspace requires tenant and policy identifiers.");
+        }
+
+        return _repository.GetWorkspaceAsync(tenantId, policyId, cancellationToken);
+    }
+
     public Task<Guid> CreateTransactionAsync(CreatePolicyLifecycleTransactionRequest request, CancellationToken cancellationToken = default)
     {
         ValidateTransaction(request);
@@ -67,6 +77,35 @@ public sealed class PolicyLifecycleService : IPolicyLifecycleService
         request.ReasonCode = string.IsNullOrWhiteSpace(request.ReasonCode) ? null : request.ReasonCode.Trim();
         request.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
         return _repository.TransitionTransactionAsync(policyTransactionId, request, cancellationToken);
+    }
+
+    public Task<PolicyServicingActionResultDto> CreateActivityAsync(CreatePolicyServicingActivityRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.TenantId == Guid.Empty || request.PolicyId == Guid.Empty || string.IsNullOrWhiteSpace(request.ActivityTypeCode) || string.IsNullOrWhiteSpace(request.Subject))
+        {
+            throw new InvalidOperationException("Policy activity requires tenant, policy, type, and subject.");
+        }
+
+        request.ActivityTypeCode = request.ActivityTypeCode.Trim();
+        request.Subject = request.Subject.Trim();
+        request.Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim();
+        request.ChannelCode = string.IsNullOrWhiteSpace(request.ChannelCode) ? null : request.ChannelCode.Trim();
+        request.OutcomeCode = string.IsNullOrWhiteSpace(request.OutcomeCode) ? null : request.OutcomeCode.Trim();
+        return _repository.CreateActivityAsync(request, cancellationToken);
+    }
+
+    public Task<PolicyServicingActionResultDto> SendCommunicationAsync(SendPolicyCommunicationRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.TenantId == Guid.Empty || request.PolicyId == Guid.Empty || string.IsNullOrWhiteSpace(request.ChannelCode) || string.IsNullOrWhiteSpace(request.Recipient) || string.IsNullOrWhiteSpace(request.Subject) || string.IsNullOrWhiteSpace(request.Body))
+        {
+            throw new InvalidOperationException("Policy communication requires tenant, policy, channel, recipient, subject, and body.");
+        }
+
+        request.ChannelCode = request.ChannelCode.Trim();
+        request.Recipient = request.Recipient.Trim();
+        request.Subject = request.Subject.Trim();
+        request.Body = request.Body.Trim();
+        return _repository.SendCommunicationAsync(request, cancellationToken);
     }
 
     private static string? NormalizeMode(string? mode)

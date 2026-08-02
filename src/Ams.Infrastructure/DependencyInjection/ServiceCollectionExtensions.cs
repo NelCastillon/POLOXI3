@@ -261,7 +261,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IServiceManagerWorkbenchRepository, ServiceManagerWorkbenchRepository>();
         services.AddScoped<IServiceManagerWorkbenchService, ServiceManagerWorkbenchService>();
         services.AddScoped<IAccountingWorkbenchRepository, AccountingWorkbenchRepository>();
+        services.AddScoped<IPolicyAccountingRepository, PolicyAccountingRepository>();
         services.AddScoped<IAccountingWorkbenchService, AccountingWorkbenchService>();
+        services.AddScoped<IPolicyAccountingService, PolicyAccountingService>();
         services.AddScoped<IMarketingWorkbenchRepository, MarketingWorkbenchRepository>();
         services.AddScoped<IMarketingWorkbenchService, MarketingWorkbenchService>();
         services.AddScoped<IOperationsWorkbenchRepository, OperationsWorkbenchRepository>();

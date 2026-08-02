@@ -127,11 +127,17 @@ public sealed class SubmissionService : ISubmissionService
     public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
         => _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken);
 
-    public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
-        => _repository.SubmitToMarketAsync(id, request, cancellationToken);
+    public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
+        return await _repository.SubmitToMarketAsync(id, request, cancellationToken);
+    }
 
-    public Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
-        => _repository.RequestQuoteAsync(id, request, cancellationToken);
+    public async Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
+        return await _repository.RequestQuoteAsync(id, request, cancellationToken);
+    }
 
     public Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default)
         => _repository.CopyAsync(id, request, cancellationToken);
@@ -150,15 +156,8 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Submission belongs to a different tenant; a policy cannot be created from it.");
         }
 
-        var result = await _repository.CreatePolicyAsync(id, request, cancellationToken);
-        var bindTransaction = await _repository.GetPolicyBindTransactionAsync(result.Id, cancellationToken);
-        if (bindTransaction is not null && await BindStatusCreatesPolicyAsync(request.TenantId, bindTransaction.BindStatusCode, cancellationToken))
-        {
-            var policyId = await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, result.Id, null), cancellationToken);
-            return new SubmissionActionResult(policyId, "Policy created after carrier confirmation.");
-        }
-
-        return result;
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
+        return await _repository.CreatePolicyAsync(id, request, cancellationToken);
     }
 
     public Task<IReadOnlyList<SubmissionMarketDto>> GetMarketsAsync(Guid submissionId, CancellationToken cancellationToken = default)
@@ -188,8 +187,11 @@ public sealed class SubmissionService : ISubmissionService
     public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteByIdAsync(quoteId, tenantId, cancellationToken);
 
-    public Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
-        => _repository.RecordQuoteResponseAsync(submissionId, request, cancellationToken);
+    public async Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(submissionId, request.TenantId, cancellationToken);
+        return await _repository.RecordQuoteResponseAsync(submissionId, request, cancellationToken);
+    }
 
     public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default)
         => _repository.RecordCarrierInboundResponseAsync(submissionId, request, cancellationToken);
@@ -197,8 +199,11 @@ public sealed class SubmissionService : ISubmissionService
     public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateQuoteAsync(quoteId, request, cancellationToken);
 
-    public Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
-        => _repository.SelectQuoteAsync(submissionId, request, cancellationToken);
+    public async Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(submissionId, request.TenantId, cancellationToken);
+        await _repository.SelectQuoteAsync(submissionId, request, cancellationToken);
+    }
 
     public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetProposalByIdAsync(proposalId, tenantId, cancellationToken);
@@ -300,6 +305,15 @@ public sealed class SubmissionService : ISubmissionService
     {
         var bindTransactionId = await _repository.CreatePolicyRegisterAsync(request, cancellationToken);
         return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.ModifiedByUserId), cancellationToken);
+    }
+
+    private async Task EnsureSubmissionIsOpenAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken)
+    {
+        var submission = await _repository.GetByIdAsync(submissionId, cancellationToken)
+            ?? throw new InvalidOperationException("Submission was not found.");
+        if (submission.TenantId != tenantId) throw new InvalidOperationException("Submission belongs to a different tenant.");
+        if ((await _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken)).Any(x => x.TenantId == tenantId && x.PolicyId.HasValue))
+            throw new InvalidOperationException("This submission is historical because policy generation is complete. Continue in the policy workspace.");
     }
 
     public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
@@ -431,9 +445,7 @@ public sealed class SubmissionService : ISubmissionService
             await _repository.CreateFollowUpTaskAsync(detail.Request.SubmissionId, new CreateSubmissionFollowUpTaskRequest(request.TenantId, "Carrier requested bind information", request.MessageBody, "High", detail.Request.RequestedByUserId, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)), request.RecordedByUserId), cancellationToken);
         }
 
-        return createsPolicy
-            ? await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, policyBindTransactionId, request.RecordedByUserId), cancellationToken)
-            : null;
+        return null;
     }
 
     public async Task<BindPackageDto> PrepareBindPackageAsync(Guid policyBindTransactionId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)

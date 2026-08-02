@@ -13,8 +13,8 @@ public sealed partial class ApiClient
     public Task<IReadOnlyList<PolicyEndorsementOptionDto>?> GetPolicyEndorsementOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PolicyEndorsementOptionDto>>($"api/policy-endorsements/options?tenantId={tenantId}", cancellationToken);
 
-    public Task<PolicyEndorsementDetailDto?> GetPolicyEndorsementDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<PolicyEndorsementDetailDto>($"api/policy-endorsements/{endorsementId}", cancellationToken);
+    public Task<PolicyEndorsementDetailDto?> GetPolicyEndorsementDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PolicyEndorsementDetailDto>($"api/policy-endorsements/{endorsementId}?tenantId={tenantId}", cancellationToken);
 
     public async Task<Guid> CreatePolicyEndorsementAsync(CreatePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
     {
@@ -23,35 +23,36 @@ public sealed partial class ApiClient
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
-    public async Task UpdatePolicyEndorsementAsync(Guid endorsementId, UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
+    public async Task UpdatePolicyEndorsementAsync(Guid tenantId, Guid endorsementId, UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PutAsJsonAsync($"api/policy-endorsements/{endorsementId}", request, cancellationToken);
+        var response = await _httpClient.PutAsJsonAsync($"api/policy-endorsements/{endorsementId}?tenantId={tenantId}", request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task UpdatePolicyEndorsementStatusAsync(Guid endorsementId, UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken = default)
+    public async Task UpdatePolicyEndorsementStatusAsync(Guid tenantId, Guid endorsementId, UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PatchAsJsonAsync($"api/policy-endorsements/{endorsementId}/status", request, cancellationToken);
+        var response = await _httpClient.PatchAsJsonAsync($"api/policy-endorsements/{endorsementId}/status?tenantId={tenantId}", request, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
-    public async Task<Guid> AddPolicyEndorsementActivityAsync(AddPolicyEndorsementActivityRequest request, CancellationToken cancellationToken = default)
+    public async Task<Guid> AddPolicyEndorsementActivityAsync(Guid tenantId, AddPolicyEndorsementActivityRequest request, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync("api/policy-endorsements/activities", request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
-    }
-
-    public async Task<Guid> UpsertPolicyEndorsementDeltaAsync(UpsertPolicyEndorsementDeltaRequest request, CancellationToken cancellationToken = default)
-    {
-        var response = await _httpClient.PostAsJsonAsync("api/policy-endorsements/deltas", request, cancellationToken);
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-endorsements/activities?tenantId={tenantId}", request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 
-    public async Task ArchivePolicyEndorsementAsync(Guid endorsementId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    public async Task<Guid> UpsertPolicyEndorsementDeltaAsync(Guid tenantId, UpsertPolicyEndorsementDeltaRequest request, CancellationToken cancellationToken = default)
     {
-        var query = modifiedByUserId is null ? string.Empty : $"?modifiedByUserId={modifiedByUserId}";
+        var response = await _httpClient.PostAsJsonAsync($"api/policy-endorsements/deltas?tenantId={tenantId}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
+    }
+
+    public async Task ArchivePolicyEndorsementAsync(Guid tenantId, Guid endorsementId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        var query = $"?tenantId={tenantId}";
+        if (modifiedByUserId.HasValue) query += $"&modifiedByUserId={modifiedByUserId.Value}";
         var response = await _httpClient.DeleteAsync($"api/policy-endorsements/{endorsementId}{query}", cancellationToken);
         response.EnsureSuccessStatusCode();
     }

@@ -20,6 +20,10 @@ public sealed class ExceptionHandlingMiddleware
         {
             await _next(context);
         }
+        catch (Exception ex) when (context.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogDebug(ex, "Request was cancelled by the client.");
+        }
         catch (InvalidOperationException ex)
         {
             _logger.LogWarning(ex, "Business rule validation failed.");
