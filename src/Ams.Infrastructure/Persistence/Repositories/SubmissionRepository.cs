@@ -3751,7 +3751,7 @@ ORDER BY IsRecommended DESC, AddedDateUtc DESC;", new { SubmissionId = id }, can
         }
 
         var quoteId = quote?.QuoteId ?? Guid.Empty;
-        var bindStatusCode = source.RequiresQuote ? "Pending" : "Bound";
+        var bindStatusCode = source.RequiresQuote ? "Draft" : "Bound";
         var resultId = await BindPolicyAsync(new BindPolicyRequest(id, quoteId, request.TenantId, submission.AccountId, carrierId.Value, annualPremium.Value, effectiveDate, expirationDate, policyNumber, sourceCode, sourceReason, sourceNotes, BindStatusCode: bindStatusCode, ProposalId: request.ProposalId, CustomerAuthorizationId: request.CustomerAuthorizationId, CustomerAuthorizationMethodCode: request.CustomerAuthorizationMethodCode, CustomerAuthorizationReference: request.CustomerAuthorizationReference, CustomerAuthorizationNotes: request.CustomerAuthorizationNotes, CustomerAuthorizedByName: request.CustomerAuthorizedByName, CustomerAuthorizedDateUtc: request.CustomerAuthorizedDateUtc, CustomerAuthorizationDocumentId: request.CustomerAuthorizationDocumentId), cancellationToken);
         var message = source.RequiresQuote ? "Bind request created from selected quote; policy will be created after carrier confirmation." : $"Policy created using {source.SourceName}.";
         return new SubmissionActionResult(resultId, message);

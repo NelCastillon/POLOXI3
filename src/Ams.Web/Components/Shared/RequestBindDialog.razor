@@ -210,6 +210,8 @@
     {
         _error = ValidateContext();
         if (_error is not null) return;
+        _error = ValidateReviewRequest();
+        if (_error is not null) return;
         _error = ValidateBillingRule();
         if (_error is not null) return;
         _stage = DialogStage.Confirm;
@@ -315,6 +317,29 @@
         if (!string.Equals(Context.Acceptance.StatusCode, "Accepted", StringComparison.OrdinalIgnoreCase) && !string.Equals(Context.Acceptance.StatusCode, "BindRequested", StringComparison.OrdinalIgnoreCase)) return "The persisted client acceptance is not eligible for binding.";
         if (string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizationMethodCode) || string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizedByName)) return "The persisted customer authorization is incomplete.";
         if (string.IsNullOrWhiteSpace(Context.Acceptance.AuthorizationReference) && !Context.Acceptance.AuthorizationDocumentId.HasValue) return "The persisted customer authorization requires a reference or evidence document.";
+        if (!Context.Acceptance.CoverageElections.Any(election => election.ElectionCode is "Accepted" or "OptionalAccepted")) return "The accepted proposal must include at least one accepted coverage election.";
+        return null;
+    }
+
+    string? ValidateReviewRequest()
+    {
+        if (Context is null) return "Bind context is unavailable.";
+        if (SelectedSource is null || !SelectedSource.IsActive || !SelectedSource.RequiresQuote) return "Select an active quote-backed policy source before reviewing the bind request.";
+        if (SelectedStatus is null || !SelectedStatus.IsActive) return "Select an active bind workflow status before reviewing the bind request.";
+        if (SelectedStatus.IsTerminal && !SelectedStatus.CreatesPolicy) return "A terminal bind status cannot be used to create a new bind request.";
+        if (BindingAuthorities.All(option => !string.Equals(option.OptionCode, _form.BindingAuthorityCode, StringComparison.OrdinalIgnoreCase))) return "Select an active binding authority before reviewing the bind request.";
+        if (BindingMethods.All(option => !string.Equals(option.OptionCode, _form.BindingMethodCode, StringComparison.OrdinalIgnoreCase))) return "Select an active binding method before reviewing the bind request.";
+        if (!string.IsNullOrWhiteSpace(_form.ConfirmationSourceCode) && ConfirmationSources.All(option => !string.Equals(option.OptionCode, _form.ConfirmationSourceCode, StringComparison.OrdinalIgnoreCase))) return "Select an active carrier confirmation method or leave it blank until confirmation is received.";
+        if (_form.UnderwriterContactId.HasValue && _underwriterContacts.All(contact => contact.CarrierContactId != _form.UnderwriterContactId.Value)) return "Select an active underwriter contact for this carrier or leave the field blank.";
+        if (_form.AnnualPremium <= 0) return "Annual premium must be greater than zero before requesting bind.";
+        if (_form.ExpirationDate <= _form.EffectiveDate) return "Expiration date must be after effective date.";
+        if (SelectedSource.RequiresReason && string.IsNullOrWhiteSpace(_form.Notes)) return "Bind instructions and audit notes are required for this policy source.";
+        if (_form.PaymentRequired && _form.PaymentVerified && (!_form.DownPaymentAmount.HasValue || _form.DownPaymentAmount.Value <= 0)) return "Verified payment requires a recorded down payment amount.";
+        if (_form.PaymentRequired && CreatesPolicy && !_form.PaymentVerified) return "Required payment must be verified before recording carrier-bound coverage.";
+        if (!CreatesPolicy) return null;
+        if (string.IsNullOrWhiteSpace(_form.ConfirmationSourceCode)) return "Carrier confirmation method is required before creating a policy.";
+        if (!_form.ConfirmationCertified) return "Carrier confirmation certification is required before creating a policy.";
+        if (string.IsNullOrWhiteSpace(_form.CarrierReferenceNumber) && string.IsNullOrWhiteSpace(_form.BinderNumber) && string.IsNullOrWhiteSpace(_form.PolicyNumber)) return "Enter a carrier reference number, binder number, or policy number before creating a policy.";
         return null;
     }
 
@@ -502,6 +527,7 @@
             if (source?.RequiresReason == true && string.IsNullOrWhiteSpace(Notes)) yield return new("Bind instructions and audit notes are required for this policy source.", [nameof(Notes)]);
             if (source?.RequiresPolicyNumber == true && string.IsNullOrWhiteSpace(PolicyNumber)) yield return new("Policy number is required for this policy source.", [nameof(PolicyNumber)]);
             if (DownPaymentAmount > AnnualPremium) yield return new("Down payment cannot exceed the final premium.", [nameof(DownPaymentAmount)]);
+            if (EffectiveDate.Date < DateTime.Today) yield return new("Effective date cannot be in the past for a new bind request.", [nameof(EffectiveDate)]);
             if (ExpirationDate <= EffectiveDate) yield return new("Expiration date must be after effective date.", [nameof(ExpirationDate)]);
             if (!string.IsNullOrWhiteSpace(EffectiveTime) && RequestedEffectiveTime is null) yield return new("Effective time must be valid.", [nameof(EffectiveTime)]);
             if (!CreatesPolicyStatus(BindStatusCode)) yield break;

@@ -588,67 +588,113 @@ public sealed record AppetiteSearchRequest(
 public sealed record BindPolicyRequest(
     Guid? SubmissionId,
     Guid? QuoteId,
-    [property: Required]
+    [Required]
     Guid TenantId,
-    [property: Required]
+    [Required]
     Guid AccountId,
-    [property: Required]
+    [Required]
     Guid CarrierId,
-    [property: Range(typeof(decimal), "0.01", "999999999999")]
+    [Range(typeof(decimal), "0.01", "999999999999")]
     decimal AnnualPremium,
-    [property: Required]
+    [Required]
     DateTime EffectiveDate,
-    [property: Required]
+    [Required]
     DateTime ExpirationDate,
-    [property: StringLength(80)] string? PolicyNumber = null,
-    [property: Required, StringLength(50)] string PolicySourceCode = "QuoteBound",
-    [property: StringLength(500)] string? PolicySourceReason = null,
-    [property: StringLength(1000)] string? PolicySourceNotes = null,
+    [StringLength(80)] string? PolicyNumber = null,
+    [Required, StringLength(50)] string PolicySourceCode = "QuoteBound",
+    [StringLength(500)] string? PolicySourceReason = null,
+    [StringLength(1000)] string? PolicySourceNotes = null,
     Guid? RequestedByUserId = null,
     Guid? ApprovedByUserId = null,
     Guid? BoundByUserId = null,
-    [property: Required, StringLength(50)] string BindStatusCode = "Draft",
+    [Required, StringLength(50)] string BindStatusCode = "Draft",
     Guid? ProposalId = null,
     Guid? CustomerAuthorizationId = null,
-    [property: StringLength(50)] string? CustomerAuthorizationMethodCode = null,
-    [property: StringLength(200)] string? CustomerAuthorizationReference = null,
-    [property: StringLength(1000)] string? CustomerAuthorizationNotes = null,
-    [property: StringLength(200)] string? CustomerAuthorizedByName = null,
+    [StringLength(50)] string? CustomerAuthorizationMethodCode = null,
+    [StringLength(200)] string? CustomerAuthorizationReference = null,
+    [StringLength(1000)] string? CustomerAuthorizationNotes = null,
+    [StringLength(200)] string? CustomerAuthorizedByName = null,
     DateTime? CustomerAuthorizedDateUtc = null,
     Guid? CustomerAuthorizationDocumentId = null,
     TimeSpan? RequestedEffectiveTime = null,
-    [property: StringLength(50)] string? ConfirmationSourceCode = null,
-    [property: StringLength(120)] string? CarrierReferenceNumber = null,
-    [property: StringLength(120)] string? BinderNumber = null,
-    [property: Range(typeof(decimal), "0.01", "999999999999")] decimal? FinalPremium = null,
-    [property: Range(typeof(decimal), "0", "999999999999")] decimal? DownPaymentAmount = null,
-    [property: StringLength(2000)] string? SubjectivitiesOutstanding = null,
-    [property: StringLength(2000)] string? ConfirmationNotes = null,
+    [StringLength(50)] string? ConfirmationSourceCode = null,
+    [StringLength(120)] string? CarrierReferenceNumber = null,
+    [StringLength(120)] string? BinderNumber = null,
+    [Range(typeof(decimal), "0.01", "999999999999")] decimal? FinalPremium = null,
+    [Range(typeof(decimal), "0", "999999999999")] decimal? DownPaymentAmount = null,
+    [StringLength(2000)] string? SubjectivitiesOutstanding = null,
+    [StringLength(2000)] string? ConfirmationNotes = null,
     Guid? ConfirmationDocumentId = null,
-    [property: StringLength(320)] string? ConfirmationReceivedFrom = null,
-    [property: StringLength(200)] string? ConfirmationMessageId = null,
+    [StringLength(320)] string? ConfirmationReceivedFrom = null,
+    [StringLength(200)] string? ConfirmationMessageId = null,
     Guid? UnderwriterContactId = null,
     Guid? CommissionPlanApplicabilityId = null,
     Guid? CommissionPlanVersionId = null,
     Guid? CommissionPayeeId = null,
     Guid? CommissionSplitRuleId = null,
-    [property: StringLength(200)] string? UnderwriterName = null,
-    [property: StringLength(200)] string? UnderwriterCompany = null,
+    [StringLength(200)] string? UnderwriterName = null,
+    [StringLength(200)] string? UnderwriterCompany = null,
     bool FollowUpWrittenConfirmationRequired = false,
-    [property: StringLength(120)] string? IntegrationCorrelationId = null,
-    [property: StringLength(120)] string? ExternalTransactionId = null,
+    [StringLength(120)] string? IntegrationCorrelationId = null,
+    [StringLength(120)] string? ExternalTransactionId = null,
     bool ConfirmedManually = false,
     bool ConfirmationCertified = false,
     Guid? ClientAcceptanceId = null,
-    [property: StringLength(50)] string? BindingAuthorityCode = null,
-    [property: StringLength(50)] string? BindingMethodCode = null,
-    [property: StringLength(2000)] string? ProducerNotes = null,
-    [property: StringLength(2000)] string? CarrierInstructions = null,
-    [property: StringLength(2000)] string? SpecialConditions = null,
+    [StringLength(50)] string? BindingAuthorityCode = null,
+    [StringLength(50)] string? BindingMethodCode = null,
+    [StringLength(2000)] string? ProducerNotes = null,
+    [StringLength(2000)] string? CarrierInstructions = null,
+    [StringLength(2000)] string? SpecialConditions = null,
     bool ApprovalRequired = false,
     bool PaymentRequired = false,
     bool PaymentVerified = false,
-    DateTime? ResponseDueDateUtc = null);
+    DateTime? ResponseDueDateUtc = null) : IValidatableObject
+{
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (TenantId == Guid.Empty)
+            yield return new ValidationResult("Tenant is required.", [nameof(TenantId)]);
+        if (AccountId == Guid.Empty)
+            yield return new ValidationResult("Account is required.", [nameof(AccountId)]);
+        if (CarrierId == Guid.Empty)
+            yield return new ValidationResult("Carrier is required.", [nameof(CarrierId)]);
+        if (AnnualPremium <= 0)
+            yield return new ValidationResult("Annual premium must be greater than zero.", [nameof(AnnualPremium)]);
+        if (ExpirationDate <= EffectiveDate)
+            yield return new ValidationResult("Expiration date must be after effective date.", [nameof(ExpirationDate)]);
+        if (FinalPremium.HasValue && FinalPremium <= 0)
+            yield return new ValidationResult("Final premium must be greater than zero when provided.", [nameof(FinalPremium)]);
+        if (DownPaymentAmount.HasValue && DownPaymentAmount < 0)
+            yield return new ValidationResult("Down payment cannot be negative.", [nameof(DownPaymentAmount)]);
+        if (DownPaymentAmount.HasValue && DownPaymentAmount > (FinalPremium ?? AnnualPremium))
+            yield return new ValidationResult("Down payment cannot exceed the final premium.", [nameof(DownPaymentAmount)]);
+        if (RequestedEffectiveTime.HasValue && (RequestedEffectiveTime.Value < TimeSpan.Zero || RequestedEffectiveTime.Value >= TimeSpan.FromDays(1)))
+            yield return new ValidationResult("Requested effective time must be within a single day.", [nameof(RequestedEffectiveTime)]);
+        if ((!SubmissionId.HasValue || SubmissionId.Value == Guid.Empty) && QuoteId.HasValue && QuoteId.Value != Guid.Empty)
+            yield return new ValidationResult("Quote-bound bind requests require a parent submission.", [nameof(SubmissionId)]);
+        if (QuoteId.HasValue && QuoteId.Value != Guid.Empty && ProposalId.HasValue && ProposalId.Value != Guid.Empty)
+        {
+            var hasAuthorization = CustomerAuthorizationId.HasValue && CustomerAuthorizationId.Value != Guid.Empty;
+            var hasAuthorizationDetails = !string.IsNullOrWhiteSpace(CustomerAuthorizationMethodCode)
+                && !string.IsNullOrWhiteSpace(CustomerAuthorizedByName)
+                && (CustomerAuthorizedDateUtc.HasValue || CustomerAuthorizationDocumentId.HasValue)
+                && (!string.IsNullOrWhiteSpace(CustomerAuthorizationReference) || CustomerAuthorizationDocumentId.HasValue);
+            if (!hasAuthorization && !hasAuthorizationDetails)
+                yield return new ValidationResult("Proposal-based binding requires persisted customer authorization or complete authorization details.", [nameof(CustomerAuthorizationId), nameof(CustomerAuthorizationMethodCode)]);
+        }
+        if (PaymentVerified && (!DownPaymentAmount.HasValue || DownPaymentAmount <= 0))
+            yield return new ValidationResult("Verified payment requires a recorded down payment amount.", [nameof(DownPaymentAmount)]);
+        if (PaymentRequired && ConfirmationCertified && !PaymentVerified)
+            yield return new ValidationResult("Required payment must be verified before certified carrier confirmation can create a policy.", [nameof(PaymentVerified)]);
+        if (ConfirmationCertified)
+        {
+            if (string.IsNullOrWhiteSpace(ConfirmationSourceCode))
+                yield return new ValidationResult("Carrier confirmation source is required when confirmation is certified.", [nameof(ConfirmationSourceCode)]);
+            if (string.IsNullOrWhiteSpace(CarrierReferenceNumber) && string.IsNullOrWhiteSpace(BinderNumber) && string.IsNullOrWhiteSpace(PolicyNumber) && !ConfirmationDocumentId.HasValue)
+                yield return new ValidationResult("Certified carrier confirmation requires a carrier reference, binder number, policy number, or confirmation document.", [nameof(CarrierReferenceNumber)]);
+        }
+    }
+}
 
 public sealed record UpdateBindRequestStatusRequest(
     [property: Required] Guid TenantId,
