@@ -1096,7 +1096,7 @@ END;";
         return resolved ?? new BindCommissionEstimateDto
         {
             IsConfigured = false,
-            UnavailableReason = "No active commission plan is configured for this carrier, line of business, producer, business type, and effective date."
+            UnavailableReason = "No active commission plan is configured for this producer, business type, and effective date."
         };
     }
 
@@ -1113,15 +1113,11 @@ END;";
 DECLARE @ResolvedEffectiveDate DATE;
 DECLARE @ResolvedPremium DECIMAL(18,2);
 DECLARE @ProducerUserId UNIQUEIDENTIFIER;
-DECLARE @CarrierId UNIQUEIDENTIFIER;
-DECLARE @LineOfBusiness NVARCHAR(160);
 DECLARE @BusinessTypeCode NVARCHAR(50);
 
 SELECT @ResolvedEffectiveDate = COALESCE(@EffectiveDate, s.EffectiveDate),
        @ResolvedPremium = COALESCE(@CommissionablePremium, q.AnnualPremium),
        @ProducerUserId = s.AssignedToUserId,
-       @CarrierId = q.CarrierId,
-       @LineOfBusiness = NULLIF(s.LineOfBusiness, N''),
        @BusinessTypeCode = CASE WHEN EXISTS
        (
            SELECT 1 FROM Renewal.RetentionCase rc
@@ -1133,43 +1129,37 @@ WHERE s.SubmissionId = @SubmissionId AND s.TenantId = @TenantId AND s.IsDeleted 
 
 SELECT TOP 1
        CAST(1 AS bit) AS IsConfigured,
-       app.CommissionPlanApplicabilityId,
+       CAST(NULL AS uniqueidentifier) AS CommissionPlanApplicabilityId,
        p.CommissionPlanId,
        p.PlanName AS CommissionPlanName,
-       pv.PlanVersionId AS CommissionPlanVersionId,
-       pv.VersionNumber AS PlanVersionNumber,
-       payee.PayeeId AS CommissionPayeeId,
+       CAST(NULL AS uniqueidentifier) AS CommissionPlanVersionId,
+       CAST(NULL AS int) AS PlanVersionNumber,
+       COALESCE(payee.PayeeId, payee.CommissionPayeeId) AS CommissionPayeeId,
        split.SplitRuleId AS CommissionSplitRuleId,
        @BusinessTypeCode AS BusinessTypeCode,
-       COALESCE(split.OverrideRatePct, pv.BaseRatePct) AS CommissionRatePct,
+       COALESCE(split.OverrideRatePct, CASE WHEN @BusinessTypeCode = N'Renewal' THEN p.RenewalRatePct ELSE p.NewBusinessRatePct END) AS CommissionRatePct,
        COALESCE(split.SplitPct, payee.SplitPercentage) AS CommissionSplitPct,
        @ResolvedPremium AS CommissionablePremium,
-       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, pv.BaseRatePct) / 100.0, 2) AS EstimatedGrossCommission,
-       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, pv.BaseRatePct) / 100.0 * COALESCE(split.SplitPct, payee.SplitPercentage) / 100.0, 2) AS EstimatedProducerCommission
-FROM Commission.CommissionPlanApplicability app
-INNER JOIN Commission.CommissionPlan p
-    ON p.CommissionPlanId = app.CommissionPlanId AND p.TenantId = app.TenantId AND p.StatusCode = N'Active' AND p.IsDeleted = 0
+       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, CASE WHEN @BusinessTypeCode = N'Renewal' THEN p.RenewalRatePct ELSE p.NewBusinessRatePct END) / 100.0, 2) AS EstimatedGrossCommission,
+       ROUND(@ResolvedPremium * COALESCE(split.OverrideRatePct, CASE WHEN @BusinessTypeCode = N'Renewal' THEN p.RenewalRatePct ELSE p.NewBusinessRatePct END) / 100.0 * COALESCE(split.SplitPct, payee.SplitPercentage) / 100.0, 2) AS EstimatedProducerCommission
+FROM Commission.CommissionPlan p
 INNER JOIN Commission.CommissionPayee payee
     ON payee.CommissionPlanId = p.CommissionPlanId AND payee.TenantId = p.TenantId AND payee.UserId = @ProducerUserId
    AND payee.StatusCode = N'Active' AND payee.EffectiveDate <= @ResolvedEffectiveDate AND payee.IsDeleted = 0
-INNER JOIN Commission.CommissionPlanVersion pv
-    ON pv.CommissionPlanId = p.CommissionPlanId AND pv.TenantId = p.TenantId AND pv.StatusCode = N'Active'
-   AND pv.EffectiveStartDate <= @ResolvedEffectiveDate AND (pv.EffectiveEndDate IS NULL OR pv.EffectiveEndDate >= @ResolvedEffectiveDate) AND pv.IsDeleted = 0
 OUTER APPLY
 (
     SELECT TOP 1 sr.SplitRuleId, sr.SplitPct, sr.OverrideRatePct
     FROM Commission.CommissionSplitRule sr
     WHERE sr.TenantId = p.TenantId AND sr.CommissionPlanId = p.CommissionPlanId
-      AND (sr.PayeeId = payee.PayeeId OR sr.PayeeId IS NULL) AND sr.StatusCode = N'Active'
+      AND (sr.PayeeId = COALESCE(payee.PayeeId, payee.CommissionPayeeId) OR sr.PayeeId IS NULL) AND sr.StatusCode = N'Active'
       AND sr.EffectiveStartDate <= @ResolvedEffectiveDate AND (sr.EffectiveEndDate IS NULL OR sr.EffectiveEndDate >= @ResolvedEffectiveDate)
       AND sr.IsDeleted = 0
-    ORDER BY CASE WHEN sr.PayeeId = payee.PayeeId THEN 0 ELSE 1 END, sr.Priority, sr.EffectiveStartDate DESC
+    ORDER BY CASE WHEN sr.PayeeId = COALESCE(payee.PayeeId, payee.CommissionPayeeId) THEN 0 ELSE 1 END, sr.Priority, sr.EffectiveStartDate DESC
 ) split
-WHERE app.TenantId = @TenantId AND app.CarrierId = @CarrierId AND app.BusinessTypeCode = @BusinessTypeCode
-  AND (app.LineOfBusiness = @LineOfBusiness OR app.LineOfBusiness IS NULL)
-  AND app.EffectiveStartDate <= @ResolvedEffectiveDate AND (app.EffectiveEndDate IS NULL OR app.EffectiveEndDate >= @ResolvedEffectiveDate)
-  AND app.IsActive = 1 AND app.IsDeleted = 0 AND @ResolvedPremium > 0 AND @ProducerUserId IS NOT NULL
-ORDER BY CASE WHEN app.LineOfBusiness = @LineOfBusiness THEN 0 ELSE 1 END, app.Priority, app.EffectiveStartDate DESC, pv.VersionNumber DESC;";
+WHERE p.TenantId = @TenantId AND p.StatusCode = N'Active' AND p.IsDeleted = 0
+  AND p.EffectiveStartDate <= @ResolvedEffectiveDate AND (p.EffectiveEndDate IS NULL OR p.EffectiveEndDate >= @ResolvedEffectiveDate)
+  AND @ResolvedPremium > 0 AND @ProducerUserId IS NOT NULL
+ORDER BY p.EffectiveStartDate DESC, p.CreatedDateUtc DESC;";
 
         return await cn.QuerySingleOrDefaultAsync<BindCommissionEstimateDto>(new CommandDefinition(sql, new
         {

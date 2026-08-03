@@ -24,11 +24,22 @@
                             @Summary("Submission", Context.SubmissionNumber)
                             @Summary("Quote", Context.QuoteNumber)
                             @Summary("Carrier", Context.CarrierName)
-                            @Summary("Coverage", Context.LineOfBusiness)
-                            @Summary("Quoted premium", Context.AnnualPremium.ToString("C0"))
+                            @Summary("Coverage", CoverageDisplay)
+                            @Summary("Quoted premium", BindPremiumTotal.ToString("C0"))
                             @Summary("Proposal", $"Version {Context.Acceptance.ProposalVersionNumber}")
                             @Summary("Effective", Context.EffectiveDate.ToString("MMM d, yyyy"))
                         </section>
+                        @if (AcceptedQuoteLines.Count > 1)
+                        {
+                            <div class="rbd-section-heading"><span><i class="bi bi-layers-fill"></i></span><div><strong>Accepted quote lines</strong><small>Multi-line quote premium used for bind and billing calculations</small></div></div>
+                            <section class="rbd-summary" aria-label="Accepted quote lines">
+                                @foreach (var line in AcceptedQuoteLines)
+                                {
+                                    <span><small>@line.LineOfBusiness</small><strong>@line.QuotedPremium.ToString("C0")</strong><small>Limit @FormatOptionalMoney(line.Limit) · Deductible @FormatOptionalMoney(line.Deductible)</small></span>
+                                }
+                                <span><small>Total annual premium</small><strong>@BindPremiumTotal.ToString("C0")</strong><small>Down payment rules calculate from this total.</small></span>
+                            </section>
+                        }
                         <div class="rbd-section-heading"><span><i class="bi bi-lock-fill"></i></span><div><strong>Customer authorization</strong><small>Authoritative values recorded during client acceptance</small></div></div>
                         <div class="um-form-grid rbd-grid">
                             <div class="rbd-field"><label>Authorization Method</label><input class="form-control" value="@AuthorizationMethodDisplay" readonly /></div>
@@ -44,8 +55,8 @@
                             <div class="rbd-field"><label>Bind Status <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindStatusCode">@foreach (var status in BindStatuses){<option value="@status.StatusCode">@status.StatusName</option>}</InputSelect><ValidationMessage For="() => _form.BindStatusCode" class="text-danger" /></div>
                             <div class="rbd-field"><label>Binding Authority <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindingAuthorityCode"><option value="">Select authority</option>@foreach (var option in BindingAuthorities){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><ValidationMessage For="() => _form.BindingAuthorityCode" class="text-danger" /></div>
                             <div class="rbd-field"><label>Binding Method <span class="text-danger">*</span></label><InputSelect class="form-select" @bind-Value="_form.BindingMethodCode"><option value="">Select method</option>@foreach (var option in BindingMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect><ValidationMessage For="() => _form.BindingMethodCode" class="text-danger" /></div>
-                            <div class="rbd-field"><label>Annual / Final Premium <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.AnnualPremium" /><ValidationMessage For="() => _form.AnnualPremium" class="text-danger" /></div>
-                            <div class="rbd-field"><label>Down Payment</label><InputNumber class="form-control" @bind-Value="_form.DownPaymentAmount" /><ValidationMessage For="() => _form.DownPaymentAmount" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Annual / Final Premium <span class="text-danger">*</span></label><InputNumber class="form-control" @bind-Value="_form.AnnualPremium" @bind-Value:after="ApplyBillingRuleDefaults" /><ValidationMessage For="() => _form.AnnualPremium" class="text-danger" /></div>
+                            <div class="rbd-field"><label>Down Payment @if (RequiredDownPaymentMinimum > 0){<span class="text-danger">*</span>}</label><InputNumber class="form-control" @bind-Value="_form.DownPaymentAmount" /><ValidationMessage For="() => _form.DownPaymentAmount" class="text-danger" />@if (!string.IsNullOrWhiteSpace(BillingRuleHint)){<small class="text-muted">@BillingRuleHint</small>}</div>
                             <div class="rbd-field"><label>Effective Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.EffectiveDate" /><ValidationMessage For="() => _form.EffectiveDate" class="text-danger" /></div>
                             <div class="rbd-field"><label>Effective Time <span class="text-danger">*</span></label><InputText type="time" class="form-control" @bind-Value="_form.EffectiveTime" /><ValidationMessage For="() => _form.EffectiveTime" class="text-danger" /></div>
                             <div class="rbd-field"><label>Expiration Date <span class="text-danger">*</span></label><InputDate class="form-control" @bind-Value="_form.ExpirationDate" /><ValidationMessage For="() => _form.ExpirationDate" class="text-danger" /></div>
@@ -55,7 +66,7 @@
                             <div class="rbd-field"><label>Policy Number @if (SelectedSource?.RequiresPolicyNumber == true){<span class="text-danger">*</span>}else if (CreatesPolicy){<span class="text-danger">†</span>}</label><InputText class="form-control" @bind-Value="_form.PolicyNumber" /><ValidationMessage For="() => _form.PolicyNumber" class="text-danger" /></div>
                             <div class="rbd-field"><label>Underwriter</label><InputSelect class="form-select" @bind-Value="_form.UnderwriterContactId" disabled="@_loadingUnderwriters"><option value="">@(_loadingUnderwriters ? "Loading carrier contacts…" : "Select carrier contact")</option>@foreach (var contact in _underwriterContacts){<option value="@contact.CarrierContactId">@UnderwriterDisplay(contact)</option>}</InputSelect><ValidationMessage For="() => _form.UnderwriterContactId" class="text-danger" />@if (!_loadingUnderwriters && _underwriterContacts.Count == 0){<small class="text-muted">No active contacts are configured for this carrier.</small>}</div>
                             <div class="rbd-field"><label>Underwriting Company</label><input class="form-control" value="@Context.CarrierName" readonly /></div>
-                            <div class="rbd-field rbd-field--full"><div class="rbd-section-heading"><span><i class="bi bi-cash-coin"></i></span><div><strong>Commission estimate</strong><small>Read-only estimate resolved from tenant commission configuration</small></div></div>@if (_loadingCommission){<div class="text-muted">Loading commission configuration…</div>}else if (_commissionEstimate?.IsConfigured == true){<section class="rbd-summary" aria-label="Commission estimate">@Summary("Plan", _commissionEstimate.CommissionPlanName ?? string.Empty)@Summary("Business type", _commissionEstimate.BusinessTypeCode)@Summary("Rate", $"{_commissionEstimate.CommissionRatePct:N4}%")@Summary("Producer split", $"{_commissionEstimate.CommissionSplitPct:N4}%")@Summary("Commissionable premium", _commissionEstimate.CommissionablePremium.ToString("C2"))@Summary("Estimated gross", _commissionEstimate.EstimatedGrossCommission.ToString("C2"))@Summary("Estimated producer", _commissionEstimate.EstimatedProducerCommission.ToString("C2"))</section>}else{<div class="alert alert-warning mb-0" role="status"><i class="bi bi-info-circle me-2"></i>@(_commissionEstimate?.UnavailableReason ?? "Commission is not configured for this bind context.")</div>}</div>
+                            <div class="rbd-field rbd-field--full"><div class="rbd-section-heading"><span><i class="bi bi-cash-coin"></i></span><div><strong>Producer Commission Est</strong><small>Read-only estimate resolved from tenant producer commission configuration</small></div></div>@if (_loadingCommission){<div class="text-muted">Loading producer commission configuration…</div>}else if (_commissionEstimate?.IsConfigured == true){<section class="rbd-summary" aria-label="Producer commission estimate">@Summary("Plan", _commissionEstimate.CommissionPlanName ?? string.Empty)@Summary("Business type", _commissionEstimate.BusinessTypeCode)@Summary("Rate", $"{_commissionEstimate.CommissionRatePct:N4}%")@Summary("Producer split", $"{_commissionEstimate.CommissionSplitPct:N4}%")@Summary("Commissionable premium", _commissionEstimate.CommissionablePremium.ToString("C2"))@Summary("Estimated gross", _commissionEstimate.EstimatedGrossCommission.ToString("C2"))@Summary("Estimated producer", _commissionEstimate.EstimatedProducerCommission.ToString("C2"))</section>}else{<div class="alert alert-warning mb-0" role="status"><i class="bi bi-info-circle me-2"></i>@(_commissionEstimate?.UnavailableReason ?? "Producer commission is not configured for this bind context.")</div>}</div>
                             <div class="rbd-field rbd-field--full"><label>Outstanding Requirements</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.SubjectivitiesOutstanding" /><ValidationMessage For="() => _form.SubjectivitiesOutstanding" class="text-danger" /></div>
                             <div class="rbd-field rbd-field--full"><label>Bind Instructions and Audit Notes @if (SelectedSource?.RequiresReason == true){<span class="text-danger">*</span>}</label><InputTextArea class="form-control" rows="4" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></div>
                             <div class="rbd-field rbd-field--full"><label>Carrier Instructions</label><InputTextArea class="form-control" rows="3" @bind-Value="_form.CarrierInstructions" /><ValidationMessage For="() => _form.CarrierInstructions" class="text-danger" /></div>
@@ -67,7 +78,7 @@
                         </div>
                     </div>
                 </EditForm>
-                <div class="um-modal-footer" style="flex:0 0 auto;"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelAsync" disabled="@_busy">Cancel</button><button type="submit" form="request-bind-form" class="um-btn um-btn-success" disabled="@_busy"><i class="bi bi-arrow-right-circle"></i> Review Request</button></div>
+                <div class="um-modal-footer" style="flex:0 0 auto;"><button type="button" class="um-btn um-btn-ghost" @onclick="CancelAsync" disabled="@_busy">Cancel</button><button type="submit" form="request-bind-form" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-arrow-right-circle"></i> Review Request</button></div>
             </div>
         }
         else if (_stage == DialogStage.Confirm)
@@ -96,6 +107,7 @@
     [Parameter] public string ContinueLabel { get; set; } = "Continue to Bind Center";
 
     readonly BindForm _form = new();
+    const decimal DefaultDownPaymentPercent = 25m;
     DialogStage _stage;
     bool _busy;
     bool _loadingUnderwriters;
@@ -104,6 +116,8 @@
     Guid _resultId;
     readonly List<CarrierContactDto> _underwriterContacts = [];
     BindCommissionEstimateDto? _commissionEstimate;
+    CarrierProductRuleDto? _billingRule;
+    decimal? _lastAppliedDownPaymentMinimum;
 
     IEnumerable<PolicyCreationSourceDto> PolicySources => Context?.PolicySources.Where(x => x.IsActive && x.RequiresQuote).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<PolicyCreationSourceDto>();
     IEnumerable<PolicyBindStatusDto> BindStatuses => Context?.BindStatuses.Where(x => x.IsActive && !x.CreatesPolicy).OrderBy(x => x.SortOrder) ?? Enumerable.Empty<PolicyBindStatusDto>();
@@ -120,6 +134,20 @@
     string ConfirmationAction => CreatesPolicy ? "Confirm Bind" : "Create Bind Request";
     string CompletionTitle => CreatesPolicy ? "Carrier bind confirmed" : "Bind request created";
     string CompletionMessage => CreatesPolicy ? $"Transaction {_resultId} recorded carrier confirmation and advanced the policy workflow." : $"Bind request {_resultId} was created for carrier response tracking.";
+    IReadOnlyList<RequestBindQuoteLine> AcceptedQuoteLines => BuildAcceptedQuoteLines(Context);
+    decimal AcceptedQuoteLinePremiumTotal => AcceptedQuoteLines.Sum(line => line.QuotedPremium);
+    decimal BindPremiumTotal => AcceptedQuoteLines.Count > 0 ? AcceptedQuoteLinePremiumTotal : Context?.AnnualPremium ?? 0;
+    string CoverageDisplay => AcceptedQuoteLines.Count > 0
+        ? string.Join(", ", AcceptedQuoteLines.Select(line => line.LineOfBusiness).Where(line => !string.IsNullOrWhiteSpace(line)).Distinct(StringComparer.OrdinalIgnoreCase))
+        : Context?.LineOfBusiness ?? string.Empty;
+    decimal RequiredDownPaymentMinimum => CalculateRequiredDownPayment(_billingRule, _form.AnnualPremium, DefaultDownPaymentPercent);
+    string? BillingRuleHint => _billingRule is null
+        ? $"Default billing setup applies {DefaultDownPaymentPercent:N0}% down: {RequiredDownPaymentMinimum:C2}."
+        : RequiredDownPaymentMinimum > 0
+            ? $"Carrier billing rule requires at least {RequiredDownPaymentMinimum:C2} down."
+            : _billingRule.AllowZeroDown
+                ? "Carrier billing rule allows zero down."
+                : null;
     IReadOnlyList<string> NextSteps => CreatesPolicy
         ? ["Review the created policy record and issuance requirements.", "Complete policy documents, billing, commissions, and servicing setup.", "Resolve any outstanding subjectivities and renewal tasks."]
         : ["Monitor carrier acknowledgement and underwriting review.", "Complete outstanding subjectivities or additional-information requests.", "Record authoritative carrier confirmation before AMS creates the policy."];
@@ -130,8 +158,24 @@
         var source = PolicySources.FirstOrDefault(x => x.IsDefault) ?? PolicySources.FirstOrDefault();
         var status = BindStatuses.FirstOrDefault(x => x.IsDefault) ?? BindStatuses.FirstOrDefault(x => x.StatusCode == "Pending") ?? BindStatuses.FirstOrDefault();
         _form.Reset(Context, source?.SourceCode, status?.StatusCode);
+        _form.AnnualPremium = BindPremiumTotal;
         _error = source is null || status is null ? "No active DB-backed policy source or bind status is configured." : null;
+        _billingRule = null;
+        _lastAppliedDownPaymentMinimum = null;
         _stage = DialogStage.Form;
+        try
+        {
+            var billingRules = await Api.SearchCarrierProductRulesAsync(Context.TenantId, categoryCode: "Billing", isActive: true, pageSize: 100);
+            _billingRule = SelectBillingRule(billingRules?.Items ?? []);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Carrier billing rule could not be loaded: {ex.Message}";
+        }
+
+        ApplyBillingRuleDefaults();
+        StateHasChanged();
+
         _loadingUnderwriters = true;
         try
         {
@@ -165,6 +209,8 @@
     async Task ReviewAsync()
     {
         _error = ValidateContext();
+        if (_error is not null) return;
+        _error = ValidateBillingRule();
         if (_error is not null) return;
         _stage = DialogStage.Confirm;
         await Task.CompletedTask;
@@ -272,12 +318,141 @@
         return null;
     }
 
+    string? ValidateBillingRule()
+    {
+        if (_billingRule is null) return null;
+        var minimum = RequiredDownPaymentMinimum;
+        if (minimum <= 0) return null;
+        if ((_form.DownPaymentAmount ?? 0) < minimum) return $"Carrier billing rule requires a down payment of at least {minimum:C2}.";
+        return null;
+    }
+
+    void ApplyBillingRuleDefaults()
+    {
+        var minimum = RequiredDownPaymentMinimum;
+        if (minimum > 0 && (!_form.DownPaymentAmount.HasValue || _form.DownPaymentAmount.Value < minimum || (_lastAppliedDownPaymentMinimum.HasValue && _form.DownPaymentAmount.Value == _lastAppliedDownPaymentMinimum.Value)))
+        {
+            _form.DownPaymentAmount = minimum;
+            _lastAppliedDownPaymentMinimum = minimum;
+        }
+
+        if (_billingRule?.RequirePaymentBeforeBinding == true || _billingRule?.RequirePayment == true)
+        {
+            _form.PaymentRequired = true;
+        }
+    }
+
+    CarrierProductRuleDto? SelectBillingRule(IEnumerable<CarrierProductRuleDto> rules)
+    {
+        var activeBillingRules = rules
+            .Where(IsActiveBillingRule)
+            .OrderByDescending(GetBillingRuleSpecificity)
+            .ThenBy(rule => rule.Priority)
+            .ThenBy(rule => rule.RuleName)
+            .ToList();
+
+        return activeBillingRules.FirstOrDefault(IsBillingRuleApplicable)
+            ?? activeBillingRules.FirstOrDefault(rule => !rule.CarrierId.HasValue)
+            ?? activeBillingRules.FirstOrDefault();
+    }
+
+    bool IsActiveBillingRule(CarrierProductRuleDto rule)
+    {
+        if (!rule.IsActive || !string.Equals(rule.RuleCategoryCode, "Billing", StringComparison.OrdinalIgnoreCase)) return false;
+        if (rule.EffectiveDate.Date > _form.EffectiveDate.Date) return false;
+        if (rule.ExpirationDate.HasValue && rule.ExpirationDate.Value.Date < _form.EffectiveDate.Date) return false;
+        if (rule.CarrierId.HasValue && Context is not null && rule.CarrierId.Value != Context.CarrierId) return false;
+        return true;
+    }
+
+    bool IsBillingRuleApplicable(CarrierProductRuleDto rule)
+    {
+        if (Context is null) return false;
+        if (!IsActiveBillingRule(rule)) return false;
+        if (!RuleMatchesAnyAcceptedLine(rule)) return false;
+        return true;
+    }
+
+    int GetBillingRuleSpecificity(CarrierProductRuleDto rule)
+    {
+        var score = 0;
+        if (Context is not null && rule.CarrierId == Context.CarrierId) score += 4;
+        if (RuleHasLineFilter(rule) && RuleMatchesAnyAcceptedLine(rule)) score += 2;
+        return score;
+    }
+
+    bool RuleMatchesAnyAcceptedLine(CarrierProductRuleDto rule)
+    {
+        if (!RuleHasLineFilter(rule)) return true;
+        var lines = AcceptedQuoteLines;
+        return lines.Count > 0
+            ? lines.Any(line => RuleMatchesLineOfBusiness(rule, line.LineOfBusiness))
+            : RuleMatchesLineOfBusiness(rule, Context?.LineOfBusiness ?? string.Empty);
+    }
+
+    static bool RuleMatchesLineOfBusiness(CarrierProductRuleDto rule, string contextLineOfBusiness)
+    {
+        if (!RuleHasLineFilter(rule)) return true;
+        return (!string.IsNullOrWhiteSpace(rule.LineOfBusinessCode) && LineOfBusinessMatches(rule.LineOfBusinessCode, contextLineOfBusiness))
+            || (!string.IsNullOrWhiteSpace(rule.CarrierProductName) && LineOfBusinessMatches(rule.CarrierProductName, contextLineOfBusiness));
+    }
+
+    static bool RuleHasLineFilter(CarrierProductRuleDto rule) => !string.IsNullOrWhiteSpace(rule.LineOfBusinessCode) || !string.IsNullOrWhiteSpace(rule.CarrierProductName);
+
+    static bool LineOfBusinessMatches(string ruleLineOfBusiness, string contextLineOfBusiness)
+    {
+        var contextValues = contextLineOfBusiness.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var normalizedRule = NormalizeMatchValue(ruleLineOfBusiness);
+        return contextValues.Any(value => string.Equals(value, ruleLineOfBusiness, StringComparison.OrdinalIgnoreCase) || NormalizeMatchValue(value) == normalizedRule)
+            || contextLineOfBusiness.Contains(ruleLineOfBusiness, StringComparison.OrdinalIgnoreCase)
+            || NormalizeMatchValue(contextLineOfBusiness).Contains(normalizedRule, StringComparison.OrdinalIgnoreCase);
+    }
+
+    static string NormalizeMatchValue(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    static decimal CalculateRequiredDownPayment(CarrierProductRuleDto? rule, decimal annualPremium, decimal defaultDownPaymentPercent)
+    {
+        var percent = rule?.MinimumDownPaymentPercent ?? defaultDownPaymentPercent;
+        var percentMinimum = annualPremium * percent / 100;
+        var amountMinimum = rule?.MinimumDownPaymentAmount ?? 0;
+        return decimal.Round(Math.Max(percentMinimum, amountMinimum), 2, MidpointRounding.AwayFromZero);
+    }
+
     static bool IsManualConfirmationSource(string? code) => code is "Manual" or "Phone" or "Email" or "CarrierPortal" or "BinderDocument";
+    static IReadOnlyList<RequestBindQuoteLine> BuildAcceptedQuoteLines(RequestBindDialogContext? context)
+    {
+        if (context is null) return [];
+        var electedLines = context.Acceptance.CoverageElections
+            .Where(election => election.ElectionCode is "Accepted" or "OptionalAccepted")
+            .OrderBy(election => election.SortOrder)
+            .ThenBy(election => election.LineOfBusiness)
+            .Select(election => new RequestBindQuoteLine(
+                election.QuoteLineId,
+                election.SubmissionLineId,
+                election.LineOfBusiness,
+                election.QuotedPremium,
+                election.Limit,
+                election.Deductible,
+                election.PaymentTerms,
+                election.TriaIncluded,
+                election.SortOrder))
+            .ToList();
+
+        if (electedLines.Count > 0) return electedLines;
+
+        return string.IsNullOrWhiteSpace(context.LineOfBusiness)
+            ? []
+            : [new RequestBindQuoteLine(Guid.Empty, Guid.Empty, context.LineOfBusiness, context.AnnualPremium, null, null, null, null, 0)];
+    }
+
     static string UnderwriterDisplay(CarrierContactDto contact) => string.IsNullOrWhiteSpace(contact.Title) ? contact.ContactName : $"{contact.ContactName} — {contact.Title}";
     static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "Not recorded" : value;
+    static string FormatOptionalMoney(decimal? value) => value.HasValue ? value.Value.ToString("C0") : "Not recorded";
     RenderFragment Summary(string label, string value) => @<span><small>@label</small><strong>@Display(value)</strong></span>;
 
     enum DialogStage { Closed, Form, Confirm, Complete }
+
+    sealed record RequestBindQuoteLine(Guid QuoteLineId, Guid SubmissionLineId, string LineOfBusiness, decimal QuotedPremium, decimal? Limit, decimal? Deductible, string? PaymentTerms, bool? TriaIncluded, int SortOrder);
 
     sealed class BindForm : IValidatableObject
     {

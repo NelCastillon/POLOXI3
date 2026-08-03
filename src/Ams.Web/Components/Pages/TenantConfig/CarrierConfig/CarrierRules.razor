@@ -1,0 +1,738 @@
+@page "/tenant/carriers/rules"
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Models
+@using Ams.Application.Features.CarrierRules
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Carrier Rules - Carrier Configuration</PageTitle>
+
+<div class="cr-page">
+    <section class="cr-hero">
+        <div class="cr-hero-main">
+            <span class="cr-hero-icon"><i class="bi bi-sliders2" aria-hidden="true"></i></span>
+            <div>
+                <span class="cr-eyebrow">Enterprise carrier configuration engine</span>
+                <div class="cr-title-row">
+                    <h1>Carrier Rules Command Center</h1>
+                    <span><i class="bi bi-database-check"></i> Database governed</span>
+                    <span><i class="bi bi-diagram-3"></i> Product scoped</span>
+                </div>
+                <p>Control billing, binding, documents, commissions, validation, downloads, endorsements, cancellations, and renewals by carrier product.</p>
+            </div>
+        </div>
+        <div class="cr-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "cr-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate" disabled="@(_loading || !_categories.Any())"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Carrier Rule</button>
+        </div>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger cr-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i><span>@_loadError</span></div>
+    }
+    @if (_toastMessage is not null)
+    {
+        <div class="cr-toast cr-toast--@_toastKind" role="status"><i class="bi @(_toastKind == "success" ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i><span>@_toastMessage</span><button type="button" @onclick="() => _toastMessage = null" aria-label="Dismiss"><i class="bi bi-x-lg"></i></button></div>
+    }
+
+    <section class="cr-kpi-strip" aria-label="Carrier rule KPIs">
+        @KpiCard("all", "Total rules", _items.Count.ToString(), "All configured rules", "bi-sliders2", "blue")
+        @KpiCard("active", "Active", _items.Count(x => x.IsActive).ToString(), "Rules enabled for workflows", "bi-check-circle", "green")
+        @KpiCard("inactive", "Inactive", _items.Count(x => !x.IsActive).ToString(), "Rules disabled from workflows", "bi-pause-circle", "slate")
+        @KpiCard("effective", "Effective now", _items.Count(IsEffectiveNow).ToString(), "Active rules inside their effective window", "bi-calendar-check", "cyan")
+        @KpiCard("expiring", "Expiring soon", _items.Count(IsExpiringSoon).ToString(), "Rules expiring in the next 60 days", "bi-hourglass-split", "amber")
+        @KpiCard("review", "Needs review", _items.Count(NeedsReview).ToString(), "Incomplete or expired rule definitions", "bi-exclamation-octagon", "red")
+    </section>
+
+    <section class="cr-category-strip" aria-label="Rule category shortcuts">
+        @foreach (var category in _categories)
+        {
+            <button type="button" class="cr-category-card @(Same(_categoryFilter, category.RuleCategoryCode) ? "cr-category-card--active" : null)" title="@category.Description" @onclick="() => SetCategory(category.RuleCategoryCode)">
+                <i class="@(category.IconCssClass ?? "bi bi-tags")" aria-hidden="true"></i>
+                <span><strong>@category.DisplayName</strong><small>@_items.Count(x => Same(x.RuleCategoryCode, category.RuleCategoryCode)) configured</small></span>
+            </button>
+        }
+    </section>
+
+    <section class="cr-filter-panel um-search-filter-row" aria-label="Carrier rules filters">
+        <div class="um-search-box"><i class="bi bi-search" aria-hidden="true"></i><input class="um-search-input" type="search" placeholder="Search rule, product, carrier, NAIC, LOB, or state..." aria-label="Search carrier rules" value="@_searchTerm" @oninput="OnSearchInput" /></div>
+        <label><span>Carrier</span><select class="form-select" @bind="_carrierFilter" @bind:after="ApplyFilter"><option value="">All carriers</option>@foreach (var carrier in _carriers) { <option value="@carrier.CarrierId">@carrier.CarrierName</option> }</select></label>
+        <label><span>Category</span><select class="form-select" @bind="_categoryFilter" @bind:after="ApplyFilter"><option value="">All categories</option>@foreach (var category in _categories) { <option value="@category.RuleCategoryCode">@category.DisplayName</option> }</select></label>
+        <label><span>Status</span><select class="form-select" @bind="_statusFilter" @bind:after="ApplyFilter"><option value="">All statuses</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label>
+        <label><span>Sort</span><select class="form-select" @bind="_sortMode" @bind:after="ApplyFilter"><option value="priority">Priority</option><option value="name">Rule name</option><option value="carrier">Carrier</option><option value="category">Category</option><option value="effective">Effective date</option></select></label>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters" disabled="@(!HasFilters)"><i class="bi bi-x-lg" aria-hidden="true"></i> Reset</button>
+        <div class="um-search-result"><strong>@_filtered.Count</strong><span>rules</span></div>
+    </section>
+
+    <section class="cr-content-layout">
+        <div class="cr-table-card">
+            <div class="cr-table-head"><div><span>Rule inventory</span><strong>@_filtered.Count carrier product rules</strong></div><span class="cr-live-indicator"><i></i> Live configuration</span></div>
+            <div class="cr-table-scroll">
+                <table class="cr-table">
+                    <thead><tr><th>Rule</th><th>Carrier / Product</th><th>Scope</th><th>Effective window</th><th>Operational summary</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+                    <tbody>
+                        @if (_loading)
+                        {
+                            <tr><td colspan="7"><div class="cr-loading"><AppSpinner /><span>Loading carrier rules...</span></div></td></tr>
+                        }
+                        else if (!_filtered.Any())
+                        {
+                            <tr><td colspan="7"><div class="cr-empty"><i class="bi bi-inboxes"></i><strong>No carrier rules found</strong><span>Adjust the filters or create a new database-backed rule.</span><button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate">Add Carrier Rule</button></div></td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var item in _filtered)
+                            {
+                                <tr class="@(_selected?.CarrierProductRuleId == item.CarrierProductRuleId ? "cr-row--selected" : null)" @onclick="() => SelectRule(item)">
+                                    <td><div class="cr-rule-cell"><span class="cr-rule-icon"><i class="@CategoryIcon(item.RuleCategoryCode)"></i></span><span><strong>@item.RuleName</strong><small><code>@item.RuleCode</code> · Priority @item.Priority</small></span></div></td>
+                                    <td><strong>@(item.CarrierName ?? "All carriers")</strong><small>@item.CarrierProductName</small></td>
+                                    <td><strong>@(item.LineOfBusinessCode ?? "All LOB")</strong><small>@(item.StateCode ?? "All states") · @CategoryName(item.RuleCategoryCode)</small></td>
+                                    <td><strong>@item.EffectiveDate.ToString("MMM d, yyyy")</strong><small>@(item.ExpirationDate?.ToString("MMM d, yyyy") ?? "No expiration")</small></td>
+                                    <td><span class="cr-summary">@OperationalSummary(item)</span></td>
+                                    <td><span class="cr-status @(item.IsActive ? "cr-status--active" : "cr-status--inactive")">@(item.IsActive ? "Active" : "Inactive")</span></td>
+                                    <td class="text-end" @onclick:stopPropagation="true"><div class="cr-row-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEdit(item)" title="Edit rule"><i class="bi bi-pencil"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="() => ConfirmDelete(item)" title="Delete rule"><i class="bi bi-trash"></i></button></div></td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <aside class="cr-detail-card">
+            @if (_selected is null)
+            {
+                <div class="cr-detail-empty"><i class="bi bi-sliders"></i><strong>Select a carrier rule</strong><span>Review its scope, dates, operational controls, and configuration payload.</span></div>
+            }
+            else
+            {
+                <div class="cr-detail-head"><span class="cr-detail-icon"><i class="@CategoryIcon(_selected.RuleCategoryCode)"></i></span><div><span>@CategoryName(_selected.RuleCategoryCode)</span><h2>@_selected.RuleName</h2><code>@_selected.RuleCode</code></div><span class="cr-status @(_selected.IsActive ? "cr-status--active" : "cr-status--inactive")">@(_selected.IsActive ? "Active" : "Inactive")</span></div>
+                <div class="cr-detail-body">
+                    <div class="cr-detail-metrics"><div><span>Carrier</span><strong>@(_selected.CarrierName ?? "All carriers")</strong></div><div><span>Product</span><strong>@_selected.CarrierProductName</strong></div><div><span>LOB / State</span><strong>@(_selected.LineOfBusinessCode ?? "All") / @(_selected.StateCode ?? "All")</strong></div><div><span>Priority</span><strong>@_selected.Priority</strong></div></div>
+                    <div class="cr-detail-section"><h3><i class="bi bi-calendar3"></i> Effective window</h3><p>@_selected.EffectiveDate.ToString("MMMM d, yyyy") through @(_selected.ExpirationDate?.ToString("MMMM d, yyyy") ?? "no expiration")</p></div>
+                    <div class="cr-detail-section"><h3><i class="bi bi-activity"></i> Operational controls</h3><div class="cr-chip-list">@foreach (var control in ActiveControls(_selected)) { <span>@control</span> } @if (!ActiveControls(_selected).Any()) { <span>Payload-driven rule</span> }</div></div>
+                    <div class="cr-detail-section"><h3><i class="bi bi-braces"></i> Configuration payload</h3><pre>@_selected.RulePayloadJson</pre></div>
+                    @if (!string.IsNullOrWhiteSpace(_selected.RuleDescription)) { <div class="cr-detail-section"><h3><i class="bi bi-card-text"></i> Description</h3><p>@_selected.RuleDescription</p></div> }
+                    <div class="cr-detail-actions"><button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil"></i> Edit Rule</button><button type="button" class="um-btn um-btn-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash"></i> Delete</button></div>
+                </div>
+            }
+        </aside>
+    </section>
+</div>
+
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseForm">
+        <div class="mt-modal cr-rule-modal" style="height:min(94dvh, calc(100dvh - 2.5rem)); max-height:calc(100dvh - 2.5rem); display:flex; flex-direction:column; overflow:hidden;" role="dialog" aria-modal="true" aria-labelledby="carrierRuleFormTitle" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-sliders2" aria-hidden="true"></i>
+                <span id="carrierRuleFormTitle"><strong>@(_editId.HasValue ? "Edit carrier rule" : "Create carrier rule")</strong><small>Configure product scope and workflow controls from governed database values.</small></span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm id="carrier-rule-form" class="cr-rule-form" style="min-height:0; flex:1 1 0; display:block; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable;" Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmit">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="cr-form-banner"><i class="bi bi-database-check"></i><div><strong>Database-governed rule definition</strong><span>Categories, carriers, products, lines, jurisdictions, billing options, cutoffs, schedules, and payment methods are loaded from tenant configuration.</span></div><span class="cr-source-badge"><i class="bi bi-shield-check"></i> Tenant scoped</span></div>
+                    <section class="cr-form-section"><h3><i class="bi bi-card-heading"></i> Rule identity</h3><div class="um-form-grid">
+                        <label><span>Rule category</span><InputSelect class="form-select" @bind-Value="_form.RuleCategoryCode">@foreach (var category in _categories) { <option value="@category.RuleCategoryCode">@category.DisplayName</option> }</InputSelect><ValidationMessage For="() => _form.RuleCategoryCode" class="text-danger" /></label>
+                        <label><span>Rule code</span><InputText class="form-control" @bind-Value="_form.RuleCode" /><ValidationMessage For="() => _form.RuleCode" class="text-danger" /></label>
+                        <label class="um-form-span-2"><span>Rule name</span><InputText class="form-control" @bind-Value="_form.RuleName" /><ValidationMessage For="() => _form.RuleName" class="text-danger" /></label>
+                        <label class="um-form-span-2"><span>Description</span><InputTextArea class="form-control" @bind-Value="_form.RuleDescription" /><ValidationMessage For="() => _form.RuleDescription" class="text-danger" /></label>
+                    </div></section>
+
+                    <section class="cr-form-section"><h3><i class="bi bi-bullseye"></i> Carrier product scope</h3><div class="um-form-grid">
+                        <label><span>Carrier</span><InputSelect class="form-select" @bind-Value="_form.CarrierId" @bind-Value:after="OnCarrierChanged"><option value="">All carriers</option>@foreach (var carrier in _carriers) { <option value="@carrier.CarrierId">@carrier.CarrierName (@carrier.NaicCode)</option> }</InputSelect><ValidationMessage For="() => _form.CarrierId" class="text-danger" /></label>
+                        <label><span>Carrier NAIC</span><InputText class="form-control" @bind-Value="_form.CarrierNaic" disabled /><ValidationMessage For="() => _form.CarrierNaic" class="text-danger" /></label>
+                        <label><span>Carrier product</span><InputSelect class="form-select" @bind-Value="_form.CarrierProductCatalogId" @bind-Value:after="OnProductChanged"><option value="">Select product</option>@foreach (var product in AvailableProducts) { <option value="@product.CarrierProductCatalogId">@product.ProductName (@product.ProductCode)</option> }</InputSelect><small class="cr-field-hint">Filtered by selected carrier and line of business.</small><ValidationMessage For="() => _form.CarrierProductName" class="text-danger" /></label>
+                        <label><span>Product code</span><InputText class="form-control" @bind-Value="_form.CarrierProductCode" disabled /></label>
+                        <label><span>Line of business</span><InputSelect class="form-select" @bind-Value="_form.LineOfBusinessId" @bind-Value:after="OnLineOfBusinessChanged"><option value="">All lines</option>@foreach (var lob in _linesOfBusiness) { <option value="@lob.LobId">@lob.LobName</option> }</InputSelect><ValidationMessage For="() => _form.LineOfBusinessId" class="text-danger" /></label>
+                        <label><span>Jurisdiction</span><InputSelect class="form-select" @bind-Value="_form.StateCode"><option value="">All jurisdictions</option>@foreach (var option in Options("Jurisdiction")) { <option value="@option.OptionValue">@option.DisplayName (@option.OptionValue)</option> }</InputSelect><ValidationMessage For="() => _form.StateCode" class="text-danger" /></label>
+                    </div></section>
+
+                    <section class="cr-form-section"><h3><i class="bi bi-calendar-range"></i> Effective control</h3><div class="um-form-grid">
+                        <label><span>Effective date</span><InputDate class="form-control" @bind-Value="_form.EffectiveDate" /><ValidationMessage For="() => _form.EffectiveDate" class="text-danger" /></label>
+                        <label><span>Expiration date</span><InputDate class="form-control" @bind-Value="_form.ExpirationDate" /><ValidationMessage For="() => _form.ExpirationDate" class="text-danger" /></label>
+                        <label><span>Priority</span><InputNumber class="form-control" @bind-Value="_form.Priority" /><ValidationMessage For="() => _form.Priority" class="text-danger" /></label>
+                        @if (_editId.HasValue) { <label class="cr-active-toggle"><span>Status</span><span><InputCheckbox class="form-check-input" @bind-Value="_form.IsActive" /> Active for workflows</span><ValidationMessage For="() => _form.IsActive" class="text-danger" /></label> }
+                    </div></section>
+
+                    @if (Same(_form.RuleCategoryCode, "Billing"))
+                    {
+                        <section class="cr-form-section cr-form-section--accent"><h3><i class="bi bi-receipt"></i> Billing controls</h3><div class="um-form-grid">
+                            <label><span>Billing type</span><InputSelect class="form-select" @bind-Value="_form.BillingType"><option value="">Select billing type</option>@foreach (var option in Options("BillingType")) { <option value="@option.OptionValue">@option.DisplayName</option> }</InputSelect><ValidationMessage For="() => _form.BillingType" class="text-danger" /></label>
+                            <label><span>Down payment %</span><InputNumber class="form-control" @bind-Value="_form.MinimumDownPaymentPercent" /><ValidationMessage For="() => _form.MinimumDownPaymentPercent" class="text-danger" /></label>
+                            <label><span>Down payment amount</span><InputNumber class="form-control" @bind-Value="_form.MinimumDownPaymentAmount" /><ValidationMessage For="() => _form.MinimumDownPaymentAmount" class="text-danger" /></label>
+                            <label><span>Maximum installments</span><InputNumber class="form-control" @bind-Value="_form.MaximumInstallments" /><ValidationMessage For="() => _form.MaximumInstallments" class="text-danger" /></label>
+                        </div><div class="cr-flag-grid">
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequirePaymentBeforeBinding" /><span>Require payment before binding</span></label>
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowPremiumFinance" /><span>Allow premium finance</span></label>
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowAgencyBill" /><span>Allow agency bill</span></label>
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowDirectBill" /><span>Allow direct bill</span></label>
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowZeroDown" /><span>Allow zero down</span></label>
+                        </div></section>
+                    }
+                    else if (Same(_form.RuleCategoryCode, "Binding"))
+                    {
+                        <section class="cr-form-section cr-form-section--accent"><h3><i class="bi bi-shield-check"></i> Binding controls</h3><div class="um-form-grid">
+                            <label><span>Advance bind days</span><InputNumber class="form-control" @bind-Value="_form.MaximumAdvanceBindDays" /><ValidationMessage For="() => _form.MaximumAdvanceBindDays" class="text-danger" /></label>
+                            <label><span>Binding cutoff</span><InputSelect class="form-select" @bind-Value="_form.BindingTimeCutoffText"><option value="">No cutoff</option>@foreach (var option in Options("BindingCutoff")) { <option value="@option.OptionValue">@option.DisplayName</option> }</InputSelect><ValidationMessage For="() => _form.BindingTimeCutoffText" class="text-danger" /></label>
+                        </div><div class="cr-flag-grid">
+                            <label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireSignedApplication" /><span>Require signed application</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequirePayment" /><span>Require payment</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireInspection" /><span>Require inspection</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequirePhotos" /><span>Require photos</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireLossRuns" /><span>Require loss runs</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowSameDayBind" /><span>Allow same-day bind</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.AllowWeekendBinding" /><span>Allow weekend binding</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireUnderwriterApproval" /><span>Require underwriter approval</span></label>
+                        </div></section>
+                    }
+                    else if (Same(_form.RuleCategoryCode, "Document"))
+                    {
+                        <section class="cr-form-section cr-form-section--accent"><h3><i class="bi bi-folder-check"></i> Document requirements</h3><div class="cr-flag-grid"><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireACORD125" /><span>Require ACORD 125</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireACORD126" /><span>Require ACORD 126</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireACORD127" /><span>Require ACORD 127</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequirePhotos" /><span>Require photos</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireStatementOfValues" /><span>Require statement of values</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireFinancialStatement" /><span>Require financial statement</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.RequireSupplementalForm" /><span>Require supplemental form</span></label></div></section>
+                    }
+                    else if (Same(_form.RuleCategoryCode, "Commission"))
+                    {
+                        <section class="cr-form-section cr-form-section--accent"><h3><i class="bi bi-percent"></i> Commission controls</h3><div class="um-form-grid"><label><span>New business rate %</span><InputNumber class="form-control" @bind-Value="_form.NewBusinessRate" /><ValidationMessage For="() => _form.NewBusinessRate" class="text-danger" /></label><label><span>Renewal rate %</span><InputNumber class="form-control" @bind-Value="_form.RenewalRate" /><ValidationMessage For="() => _form.RenewalRate" class="text-danger" /></label><label><span>Maximum broker fee</span><InputNumber class="form-control" @bind-Value="_form.MaximumBrokerFee" /><ValidationMessage For="() => _form.MaximumBrokerFee" class="text-danger" /></label><label><span>Commission schedule</span><InputSelect class="form-select" @bind-Value="_form.CommissionSchedule"><option value="">Select schedule</option>@foreach (var schedule in _commissionSchedules) { <option value="@schedule.Code">@schedule.Name</option> }</InputSelect><ValidationMessage For="() => _form.CommissionSchedule" class="text-danger" /></label><label><span>Payment method</span><InputSelect class="form-select" @bind-Value="_form.CommissionPaymentMethod"><option value="">Select payment method</option>@foreach (var option in Options("CommissionPaymentMethod")) { <option value="@option.OptionValue">@option.DisplayName</option> }</InputSelect><ValidationMessage For="() => _form.CommissionPaymentMethod" class="text-danger" /></label></div><div class="cr-flag-grid"><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.BrokerFeeAllowed" /><span>Broker fee allowed</span></label></div></section>
+                    }
+                    else if (Same(_form.RuleCategoryCode, "Validation"))
+                    {
+                        <section class="cr-form-section cr-form-section--accent"><h3><i class="bi bi-patch-check"></i> Validation controls</h3><div class="cr-flag-grid"><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateVIN" /><span>Validate VIN</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateFEIN" /><span>Validate FEIN</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateRoofAge" /><span>Validate roof age</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateDriverAge" /><span>Validate driver age</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidatePayroll" /><span>Validate payroll</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateSquareFootage" /><span>Validate square footage</span></label><label class="cr-flag"><InputCheckbox class="form-check-input" @bind-Value="_form.ValidateClaimsHistory" /><span>Validate claims history</span></label></div></section>
+                    }
+
+                    <section class="cr-form-section"><h3><i class="bi bi-braces"></i> Advanced configuration</h3><div class="um-form-grid"><label class="um-form-span-2"><span>Payload JSON</span><InputTextArea class="form-control cr-json-input" @bind-Value="_form.RulePayloadJson" /><ValidationMessage For="() => _form.RulePayloadJson" class="text-danger" /></label><label class="um-form-span-2"><span>Notes</span><InputTextArea class="form-control" @bind-Value="_form.Notes" /><ValidationMessage For="() => _form.Notes" class="text-danger" /></label></div></section>
+                </div>
+            </EditForm>
+            <div class="um-modal-footer cr-rule-footer" style="flex:0 0 auto;">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_saving">Cancel</button>
+                <button type="submit" form="carrier-rule-form" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm" aria-hidden="true"></span> }<i class="bi bi-check2-circle" aria-hidden="true"></i> @(_saving ? "Saving..." : "Save Carrier Rule")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CancelDelete">
+        <div class="um-confirm-dialog mt-confirm" role="dialog" aria-modal="true" aria-labelledby="deleteCarrierRuleTitle" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash" aria-hidden="true"></i></div>
+            <h2 id="deleteCarrierRuleTitle">Delete carrier rule?</h2>
+            <p>Delete <strong>@_deleteTarget.RuleName</strong>. This will soft-delete the database-backed rule.</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="CancelDelete">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ExecuteDeleteAsync" disabled="@_saving">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private string? _loadError;
+    private string? _toastMessage;
+    private string _toastKind = "success";
+    private string _searchTerm = string.Empty;
+    private string _categoryFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private string _kpiFilter = "all";
+    private string _sortMode = "priority";
+    private Guid? _carrierFilter;
+    private List<CarrierProductRuleDto> _items = [];
+    private List<CarrierProductRuleDto> _filtered = [];
+    private List<CarrierRuleCategoryDto> _categories = [];
+    private List<CarrierDto> _carriers = [];
+    private List<LineOfBusinessDto> _linesOfBusiness = [];
+    private List<CarrierRuleOptionDto> _ruleOptions = [];
+    private List<CarrierProductCatalogDto> _products = [];
+    private List<CommissionConfigItemDto> _commissionSchedules = [];
+    private bool _showForm;
+    private Guid? _editId;
+    private CarrierRuleForm _form = new();
+    private CarrierProductRuleDto? _deleteTarget;
+    private CarrierProductRuleDto? _selected;
+
+    private bool HasFilters => !string.IsNullOrWhiteSpace(_searchTerm) || !string.IsNullOrWhiteSpace(_categoryFilter) || !string.IsNullOrWhiteSpace(_statusFilter) || _carrierFilter.HasValue || _kpiFilter != "all" || _sortMode != "priority";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.RequireAsync();
+        _tenantId = user.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Carriers & Markets", "/tenant/carriers"), new("Market Rules", "/tenant/carriers/access"), new("Carrier Rules", "/tenant/carriers/rules"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var categoriesTask = Api.GetCarrierRuleCategoriesAsync();
+            var rulesTask = Api.SearchCarrierProductRulesAsync(_tenantId, pageSize: 500);
+            await Task.WhenAll(categoriesTask, rulesTask);
+
+            _categories = (await categoriesTask)?.ToList() ?? [];
+            var result = await rulesTask;
+            _items = result?.Items?.ToList() ?? [];
+
+            var lookupErrors = new List<string>();
+            _ruleOptions = [];
+            try
+            {
+                _carriers = (await Api.SearchCarriersAsync(_tenantId, pageSize: 500))?.Items.Where(x => x.IsActive).OrderBy(x => x.CarrierName).ToList() ?? [];
+            }
+            catch (Exception ex)
+            {
+                _carriers = [];
+                lookupErrors.Add($"carriers: {ex.Message}");
+            }
+
+            try
+            {
+                _linesOfBusiness = (await Api.SearchLobsAsync(_tenantId, pageSize: 500))?.Items.Where(x => x.IsActive).OrderBy(x => x.LobName).ToList() ?? [];
+            }
+            catch (Exception ex)
+            {
+                _linesOfBusiness = [];
+                lookupErrors.Add($"lines of business: {ex.Message}");
+            }
+
+            foreach (var optionType in new[] { "Jurisdiction", "BillingType", "CommissionPaymentMethod", "BindingCutoff" })
+            {
+                try
+                {
+                    _ruleOptions.AddRange((await Api.GetCarrierRuleOptionsAsync(_tenantId, optionType)) ?? []);
+                }
+                catch (Exception ex)
+                {
+                    lookupErrors.Add($"{optionType}: {ex.Message}");
+                }
+            }
+
+            try
+            {
+                _products = (await Api.GetCarrierRuleProductsAsync(_tenantId))?.ToList() ?? [];
+            }
+            catch (Exception ex)
+            {
+                _products = [];
+                lookupErrors.Add($"carrier products: {ex.Message}");
+            }
+
+            try
+            {
+                _commissionSchedules = (await Api.SearchCommissionConfigItemsAsync(_tenantId, "CommissionSchedule", pageSize: 500))?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            }
+            catch (Exception ex)
+            {
+                _commissionSchedules = [];
+                lookupErrors.Add($"commission schedules: {ex.Message}");
+            }
+
+            if (lookupErrors.Count > 0)
+            {
+                _loadError = $"Carrier rules loaded, but some scope options are unavailable ({string.Join("; ", lookupErrors)}).";
+            }
+
+            ApplyFilter();
+            _selected = _selected is null
+                ? _filtered.FirstOrDefault()
+                : _filtered.FirstOrDefault(x => x.CarrierProductRuleId == _selected.CarrierProductRuleId) ?? _filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load carrier rules: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        IEnumerable<CarrierProductRuleDto> query = _items;
+        if (!string.IsNullOrWhiteSpace(_searchTerm))
+        {
+            query = query.Where(x => Contains(x.RuleName, _searchTerm) || Contains(x.RuleCode, _searchTerm) || Contains(x.CarrierProductName, _searchTerm) || Contains(x.CarrierName, _searchTerm) || Contains(x.CarrierNaic, _searchTerm) || Contains(x.LineOfBusinessCode, _searchTerm) || Contains(x.StateCode, _searchTerm));
+        }
+        if (!string.IsNullOrWhiteSpace(_categoryFilter))
+        {
+            query = query.Where(x => Same(x.RuleCategoryCode, _categoryFilter));
+        }
+        if (_carrierFilter.HasValue)
+        {
+            query = query.Where(x => x.CarrierId == _carrierFilter);
+        }
+        if (_statusFilter == "Active")
+        {
+            query = query.Where(x => x.IsActive);
+        }
+        else if (_statusFilter == "Inactive")
+        {
+            query = query.Where(x => !x.IsActive);
+        }
+        query = _kpiFilter switch
+        {
+            "effective" => query.Where(IsEffectiveNow),
+            "expiring" => query.Where(IsExpiringSoon),
+            "review" => query.Where(NeedsReview),
+            _ => query
+        };
+        _filtered = (_sortMode switch
+        {
+            "name" => query.OrderBy(x => x.RuleName),
+            "carrier" => query.OrderBy(x => x.CarrierName ?? string.Empty).ThenBy(x => x.CarrierProductName),
+            "category" => query.OrderBy(x => x.RuleCategoryCode).ThenBy(x => x.RuleName),
+            "effective" => query.OrderByDescending(x => x.EffectiveDate).ThenBy(x => x.RuleName),
+            _ => query.OrderBy(x => x.Priority).ThenBy(x => x.RuleCategoryCode).ThenBy(x => x.RuleName)
+        }).ToList();
+        if (_selected is not null && _filtered.All(x => x.CarrierProductRuleId != _selected.CarrierProductRuleId))
+        {
+            _selected = _filtered.FirstOrDefault();
+        }
+    }
+
+    private void OnSearchInput(ChangeEventArgs args)
+    {
+        _searchTerm = args.Value?.ToString() ?? string.Empty;
+        ApplyFilter();
+    }
+
+    private void ClearFilters()
+    {
+        _searchTerm = string.Empty;
+        _categoryFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _carrierFilter = null;
+        _kpiFilter = "all";
+        _sortMode = "priority";
+        ApplyFilter();
+    }
+
+    private void OpenCreate()
+    {
+        _toastMessage = null;
+        _deleteTarget = null;
+        _editId = null;
+        _form = new CarrierRuleForm { RuleCategoryCode = _categories.FirstOrDefault()?.RuleCategoryCode ?? string.Empty, EffectiveDate = DateTime.Today, RulePayloadJson = "{}", Priority = 100, AllowDirectBill = true, AllowSameDayBind = true, IsActive = true };
+        _showForm = true;
+    }
+
+    private void OpenEdit(CarrierProductRuleDto item)
+    {
+        _toastMessage = null;
+        _deleteTarget = null;
+        _selected = item;
+        _editId = item.CarrierProductRuleId;
+        _form = CarrierRuleForm.FromDto(item);
+        _form.CarrierProductCatalogId = _products.FirstOrDefault(x => Same(x.ProductCode, item.CarrierProductCode) && Same(x.ProductName, item.CarrierProductName))?.CarrierProductCatalogId;
+        _showForm = true;
+    }
+
+    private void CloseForm()
+    {
+        if (_saving) return;
+        _showForm = false;
+        _editId = null;
+    }
+
+    private void HandleInvalidSubmit()
+        => ShowToast("Review the highlighted fields before saving the carrier rule.", "danger");
+
+    private void OnCarrierChanged()
+    {
+        var carrier = _carriers.FirstOrDefault(x => x.CarrierId == _form.CarrierId);
+        _form.CarrierName = carrier?.CarrierName;
+        _form.CarrierNaic = carrier?.NaicCode;
+        EnsureSelectedProductIsAvailable();
+    }
+
+    private void OnLineOfBusinessChanged()
+    {
+        var lob = _linesOfBusiness.FirstOrDefault(x => x.LobId == _form.LineOfBusinessId);
+        _form.LineOfBusinessCode = lob?.LobCode;
+        EnsureSelectedProductIsAvailable();
+    }
+
+    private IEnumerable<CarrierRuleOptionDto> Options(string optionType)
+        => _ruleOptions.Where(x => Same(x.OptionType, optionType)).OrderBy(x => x.SortOrder).ThenBy(x => x.DisplayName);
+
+    private IEnumerable<CarrierProductCatalogDto> AvailableProducts
+        => _products.Where(x => (!_form.CarrierId.HasValue || !x.CarrierId.HasValue || x.CarrierId == _form.CarrierId)
+            && (!_form.LineOfBusinessId.HasValue || !x.LineOfBusinessId.HasValue || x.LineOfBusinessId == _form.LineOfBusinessId));
+
+    private void OnProductChanged()
+    {
+        var product = _products.FirstOrDefault(x => x.CarrierProductCatalogId == _form.CarrierProductCatalogId);
+        _form.CarrierProductCode = product?.ProductCode;
+        _form.CarrierProductName = product?.ProductName ?? string.Empty;
+        if (!_form.LineOfBusinessId.HasValue && product?.LineOfBusinessId is { } lineOfBusinessId)
+        {
+            _form.LineOfBusinessId = lineOfBusinessId;
+            OnLineOfBusinessChanged();
+        }
+    }
+
+    private void EnsureSelectedProductIsAvailable()
+    {
+        if (_form.CarrierProductCatalogId.HasValue && AvailableProducts.All(x => x.CarrierProductCatalogId != _form.CarrierProductCatalogId))
+        {
+            _form.CarrierProductCatalogId = null;
+            _form.CarrierProductCode = null;
+            _form.CarrierProductName = string.Empty;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_saving) return;
+        _saving = true;
+        try
+        {
+            if (_editId.HasValue)
+            {
+                await Api.UpdateCarrierProductRuleAsync(_tenantId, _editId.Value, _form.ToUpdateRequest());
+                var savedId = _editId.Value;
+                _showForm = false;
+                await LoadAsync();
+                _selected = _items.FirstOrDefault(x => x.CarrierProductRuleId == savedId) ?? _selected;
+                ShowToast("Carrier rule updated.", "success");
+            }
+            else
+            {
+                var savedId = await Api.CreateCarrierProductRuleAsync(_form.ToCreateRequest(_tenantId));
+                _showForm = false;
+                await LoadAsync();
+                _selected = _items.FirstOrDefault(x => x.CarrierProductRuleId == savedId) ?? _selected;
+                ShowToast("Carrier rule created.", "success");
+            }
+            _editId = null;
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Save failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ConfirmDelete(CarrierProductRuleDto item)
+    {
+        _toastMessage = null;
+        _showForm = false;
+        _deleteTarget = item;
+    }
+
+    private void CancelDelete()
+    {
+        if (_saving) return;
+        _deleteTarget = null;
+    }
+
+    private async Task ExecuteDeleteAsync()
+    {
+        if (_deleteTarget is null || _saving) return;
+        _saving = true;
+        try
+        {
+            var deletedId = _deleteTarget.CarrierProductRuleId;
+            await Api.DeleteCarrierProductRuleAsync(_tenantId, _deleteTarget.CarrierProductRuleId);
+            _deleteTarget = null;
+            if (_selected?.CarrierProductRuleId == deletedId)
+            {
+                _selected = null;
+            }
+            await LoadAsync();
+            ShowToast("Carrier rule deleted.", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Delete failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private RenderFragment KpiCard(string filter, string label, string value, string title, string icon, string tone) => @<button type="button" class="cr-kpi-card cr-kpi--@tone @(_kpiFilter == filter || (filter == "active" && _statusFilter == "Active") || (filter == "inactive" && _statusFilter == "Inactive") ? "cr-kpi-card--active" : null)" title="@title" @onclick="() => SetKpi(filter)"><span class="cr-kpi-icon"><i class="bi @icon" aria-hidden="true"></i></span><span><strong>@value</strong><small>@label</small><em>@title</em></span></button>;
+
+    private void SetKpi(string filter)
+    {
+        _searchTerm = string.Empty;
+        _categoryFilter = string.Empty;
+        _statusFilter = string.Empty;
+        _carrierFilter = null;
+        _kpiFilter = filter;
+        if (filter == "active") _statusFilter = "Active";
+        else if (filter == "inactive") _statusFilter = "Inactive";
+        ApplyFilter();
+    }
+
+    private void SetCategory(string categoryCode)
+    {
+        _categoryFilter = Same(_categoryFilter, categoryCode) ? string.Empty : categoryCode;
+        _kpiFilter = "all";
+        ApplyFilter();
+    }
+
+    private void SelectRule(CarrierProductRuleDto item) => _selected = item;
+
+    private string CategoryName(string code) => _categories.FirstOrDefault(x => Same(x.RuleCategoryCode, code))?.DisplayName ?? code;
+    private string CategoryIcon(string code) => _categories.FirstOrDefault(x => Same(x.RuleCategoryCode, code))?.IconCssClass ?? "bi bi-tags";
+    private static bool Same(string? left, string? right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static bool IsEffectiveNow(CarrierProductRuleDto item) => item.IsActive && item.EffectiveDate.Date <= DateTime.Today && (!item.ExpirationDate.HasValue || item.ExpirationDate.Value.Date >= DateTime.Today);
+    private static bool IsExpiringSoon(CarrierProductRuleDto item) => item.IsActive && item.ExpirationDate is { } expiration && expiration.Date >= DateTime.Today && expiration.Date <= DateTime.Today.AddDays(60);
+    private static bool NeedsReview(CarrierProductRuleDto item) => !item.IsActive || string.IsNullOrWhiteSpace(item.RuleCode) || string.IsNullOrWhiteSpace(item.CarrierProductName) || item.ExpirationDate is { } expiration && expiration.Date < DateTime.Today;
+    private static string OperationalSummary(CarrierProductRuleDto item) => item.RuleCategoryCode switch
+    {
+        "Billing" => BillingSummary(item),
+        "Binding" => BindingSummary(item),
+        "Document" => DocumentSummary(item),
+        "Commission" => CommissionSummary(item),
+        "Validation" => ValidationSummary(item),
+        _ => string.IsNullOrWhiteSpace(item.RuleDescription) ? "Payload configured" : item.RuleDescription
+    };
+
+    private static IEnumerable<string> ActiveControls(CarrierProductRuleDto item)
+    {
+        if (item.RequirePaymentBeforeBinding) yield return "Payment before binding";
+        if (item.AllowPremiumFinance) yield return "Premium finance";
+        if (item.AllowAgencyBill) yield return "Agency bill";
+        if (item.AllowDirectBill) yield return "Direct bill";
+        if (item.RequireSignedApplication) yield return "Signed application";
+        if (item.RequireInspection) yield return "Inspection";
+        if (item.RequirePhotos) yield return "Photos";
+        if (item.RequireLossRuns) yield return "Loss runs";
+        if (item.RequireUnderwriterApproval) yield return "Underwriter approval";
+        if (item.RequireACORD125) yield return "ACORD 125";
+        if (item.RequireACORD126) yield return "ACORD 126";
+        if (item.RequireACORD127) yield return "ACORD 127";
+        if (item.ValidateVIN) yield return "VIN validation";
+        if (item.ValidateFEIN) yield return "FEIN validation";
+        if (item.ValidateClaimsHistory) yield return "Claims history validation";
+    }
+    private static string BillingSummary(CarrierProductRuleDto x) => x.MinimumDownPaymentPercent.HasValue ? $"{x.MinimumDownPaymentPercent:0.##}% down · {x.MaximumInstallments?.ToString() ?? "-"} inst." : x.BillingType ?? "-";
+    private static string BindingSummary(CarrierProductRuleDto x) => string.Join(", ", new[] { x.RequirePayment ? "Payment" : null, x.RequireInspection ? "Inspection" : null, x.RequireUnderwriterApproval ? "UW approval" : null }.Where(v => v is not null)) is { Length: > 0 } text ? text : "-";
+    private static string DocumentSummary(CarrierProductRuleDto x) => string.Join(", ", new[] { x.RequireACORD125 ? "125" : null, x.RequireACORD126 ? "126" : null, x.RequireACORD127 ? "127" : null, x.RequirePhotos ? "Photos" : null, x.RequireSupplementalForm ? "Supp" : null }.Where(v => v is not null)) is { Length: > 0 } text ? text : "-";
+    private static string CommissionSummary(CarrierProductRuleDto x) => x.NewBusinessRate.HasValue || x.RenewalRate.HasValue ? $"NB {x.NewBusinessRate:0.##}% / RN {x.RenewalRate:0.##}%" : "-";
+    private static string ValidationSummary(CarrierProductRuleDto x) => string.Join(", ", new[] { x.ValidateVIN ? "VIN" : null, x.ValidateFEIN ? "FEIN" : null, x.ValidateRoofAge ? "Roof" : null, x.ValidateDriverAge ? "Driver" : null, x.ValidatePayroll ? "Payroll" : null, x.ValidateClaimsHistory ? "Claims" : null }.Where(v => v is not null)) is { Length: > 0 } text ? text : "-";
+
+    private void ShowToast(string message, string kind)
+    {
+        _toastMessage = message;
+        _toastKind = kind;
+    }
+
+    private sealed class CarrierRuleForm : IValidatableObject
+    {
+        public Guid? CarrierProductCatalogId { get; set; }
+        public Guid? CarrierId { get; set; }
+        public Guid? LineOfBusinessId { get; set; }
+        [Required, StringLength(80)] public string RuleCategoryCode { get; set; } = string.Empty;
+        [Required, StringLength(100)] public string RuleCode { get; set; } = string.Empty;
+        [Required, StringLength(240)] public string RuleName { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string CarrierProductName { get; set; } = string.Empty;
+        [StringLength(200)] public string? CarrierName { get; set; }
+        [StringLength(20)] public string? CarrierNaic { get; set; }
+        [StringLength(80)] public string? CarrierProductCode { get; set; }
+        [StringLength(80)] public string? LineOfBusinessCode { get; set; }
+        [StringLength(2, MinimumLength = 2)] public string? StateCode { get; set; }
+        public DateTime EffectiveDate { get; set; } = DateTime.Today;
+        public DateTime? ExpirationDate { get; set; }
+        [Range(0, 9999)] public int Priority { get; set; } = 100;
+        [StringLength(1000)] public string? RuleDescription { get; set; }
+        [StringLength(80)] public string? BillingType { get; set; }
+        [Range(0, 100)] public decimal? MinimumDownPaymentPercent { get; set; }
+        [Range(0, 999999999)] public decimal? MinimumDownPaymentAmount { get; set; }
+        [Range(0, 999)] public int? MaximumInstallments { get; set; }
+        [Range(0, 3660)] public int? MaximumAdvanceBindDays { get; set; }
+        [RegularExpression(@"^$|^\d{1,2}:\d{2}(:\d{2})?$", ErrorMessage = "Use HH:mm or HH:mm:ss.")] public string? BindingTimeCutoffText { get; set; }
+        [Range(0, 100)] public decimal? NewBusinessRate { get; set; }
+        [Range(0, 100)] public decimal? RenewalRate { get; set; }
+        [Range(0, 999999999)] public decimal? MaximumBrokerFee { get; set; }
+        [StringLength(240)] public string? CommissionSchedule { get; set; }
+        [StringLength(120)] public string? CommissionPaymentMethod { get; set; }
+        [Required] public string RulePayloadJson { get; set; } = "{}";
+        [StringLength(1000)] public string? Notes { get; set; }
+        public bool IsActive { get; set; } = true;
+        public bool RequirePaymentBeforeBinding { get; set; }
+        public bool AllowPremiumFinance { get; set; }
+        public bool AllowAgencyBill { get; set; }
+        public bool AllowDirectBill { get; set; }
+        public bool AllowZeroDown { get; set; }
+        public bool RequireSignedApplication { get; set; }
+        public bool RequirePayment { get; set; }
+        public bool RequireInspection { get; set; }
+        public bool RequirePhotos { get; set; }
+        public bool RequireLossRuns { get; set; }
+        public bool AllowSameDayBind { get; set; }
+        public bool AllowWeekendBinding { get; set; }
+        public bool RequireUnderwriterApproval { get; set; }
+        public bool RequireACORD125 { get; set; }
+        public bool RequireACORD126 { get; set; }
+        public bool RequireACORD127 { get; set; }
+        public bool RequireStatementOfValues { get; set; }
+        public bool RequireFinancialStatement { get; set; }
+        public bool RequireSupplementalForm { get; set; }
+        public bool BrokerFeeAllowed { get; set; }
+        public bool ValidateVIN { get; set; }
+        public bool ValidateFEIN { get; set; }
+        public bool ValidateRoofAge { get; set; }
+        public bool ValidateDriverAge { get; set; }
+        public bool ValidatePayroll { get; set; }
+        public bool ValidateSquareFootage { get; set; }
+        public bool ValidateClaimsHistory { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (ExpirationDate.HasValue && ExpirationDate.Value.Date < EffectiveDate.Date)
+            {
+                yield return new ValidationResult("Expiration date must be on or after the effective date.", [nameof(ExpirationDate)]);
+            }
+
+            var hasValidPayload = true;
+            try
+            {
+                using var _ = JsonDocument.Parse(string.IsNullOrWhiteSpace(RulePayloadJson) ? "{}" : RulePayloadJson);
+            }
+            catch (JsonException)
+            {
+                hasValidPayload = false;
+            }
+
+            if (!hasValidPayload)
+            {
+                yield return new ValidationResult("Payload must contain valid JSON.", [nameof(RulePayloadJson)]);
+            }
+        }
+
+        public static CarrierRuleForm FromDto(CarrierProductRuleDto item) => new()
+        {
+            CarrierId = item.CarrierId, LineOfBusinessId = item.LineOfBusinessId,
+            RuleCategoryCode = item.RuleCategoryCode, RuleCode = item.RuleCode, RuleName = item.RuleName, CarrierProductName = item.CarrierProductName,
+            CarrierName = item.CarrierName, CarrierNaic = item.CarrierNaic, CarrierProductCode = item.CarrierProductCode, LineOfBusinessCode = item.LineOfBusinessCode,
+            StateCode = item.StateCode, EffectiveDate = item.EffectiveDate, ExpirationDate = item.ExpirationDate, Priority = item.Priority, RuleDescription = item.RuleDescription,
+            BillingType = item.BillingType, MinimumDownPaymentPercent = item.MinimumDownPaymentPercent, MinimumDownPaymentAmount = item.MinimumDownPaymentAmount,
+            MaximumInstallments = item.MaximumInstallments, MaximumAdvanceBindDays = item.MaximumAdvanceBindDays, BindingTimeCutoffText = item.BindingTimeCutoff?.ToString(@"hh\:mm"),
+            NewBusinessRate = item.NewBusinessRate, RenewalRate = item.RenewalRate, MaximumBrokerFee = item.MaximumBrokerFee, CommissionSchedule = item.CommissionSchedule,
+            CommissionPaymentMethod = item.CommissionPaymentMethod, RulePayloadJson = item.RulePayloadJson, Notes = item.Notes, IsActive = item.IsActive,
+            RequirePaymentBeforeBinding = item.RequirePaymentBeforeBinding, AllowPremiumFinance = item.AllowPremiumFinance, AllowAgencyBill = item.AllowAgencyBill,
+            AllowDirectBill = item.AllowDirectBill, AllowZeroDown = item.AllowZeroDown, RequireSignedApplication = item.RequireSignedApplication, RequirePayment = item.RequirePayment,
+            RequireInspection = item.RequireInspection, RequirePhotos = item.RequirePhotos, RequireLossRuns = item.RequireLossRuns, AllowSameDayBind = item.AllowSameDayBind,
+            AllowWeekendBinding = item.AllowWeekendBinding, RequireUnderwriterApproval = item.RequireUnderwriterApproval, RequireACORD125 = item.RequireACORD125,
+            RequireACORD126 = item.RequireACORD126, RequireACORD127 = item.RequireACORD127, RequireStatementOfValues = item.RequireStatementOfValues,
+            RequireFinancialStatement = item.RequireFinancialStatement, RequireSupplementalForm = item.RequireSupplementalForm, BrokerFeeAllowed = item.BrokerFeeAllowed,
+            ValidateVIN = item.ValidateVIN, ValidateFEIN = item.ValidateFEIN, ValidateRoofAge = item.ValidateRoofAge, ValidateDriverAge = item.ValidateDriverAge,
+            ValidatePayroll = item.ValidatePayroll, ValidateSquareFootage = item.ValidateSquareFootage, ValidateClaimsHistory = item.ValidateClaimsHistory
+        };
+
+        public CreateCarrierProductRuleRequest ToCreateRequest(Guid tenantId) => new(tenantId, CarrierId, CarrierName, CarrierNaic, CarrierProductCode, CarrierProductName, LineOfBusinessId, LineOfBusinessCode, Normalize(StateCode), RuleCategoryCode, RuleCode, RuleName, RuleDescription, EffectiveDate, ExpirationDate, Priority, BillingType, MinimumDownPaymentPercent, MinimumDownPaymentAmount, MaximumInstallments, RequirePaymentBeforeBinding, AllowPremiumFinance, AllowAgencyBill, AllowDirectBill, AllowZeroDown, RequireSignedApplication, RequirePayment, RequireInspection, RequirePhotos, RequireLossRuns, AllowSameDayBind, MaximumAdvanceBindDays, AllowWeekendBinding, ParseTime(), RequireUnderwriterApproval, RequireACORD125, RequireACORD126, RequireACORD127, RequireStatementOfValues, RequireFinancialStatement, RequireSupplementalForm, NewBusinessRate, RenewalRate, BrokerFeeAllowed, MaximumBrokerFee, CommissionSchedule, CommissionPaymentMethod, ValidateVIN, ValidateFEIN, ValidateRoofAge, ValidateDriverAge, ValidatePayroll, ValidateSquareFootage, ValidateClaimsHistory, string.IsNullOrWhiteSpace(RulePayloadJson) ? "{}" : RulePayloadJson, Notes);
+        public UpdateCarrierProductRuleRequest ToUpdateRequest() => new(CarrierId, CarrierName, CarrierNaic, CarrierProductCode, CarrierProductName, LineOfBusinessId, LineOfBusinessCode, Normalize(StateCode), RuleCategoryCode, RuleCode, RuleName, RuleDescription, EffectiveDate, ExpirationDate, Priority, BillingType, MinimumDownPaymentPercent, MinimumDownPaymentAmount, MaximumInstallments, RequirePaymentBeforeBinding, AllowPremiumFinance, AllowAgencyBill, AllowDirectBill, AllowZeroDown, RequireSignedApplication, RequirePayment, RequireInspection, RequirePhotos, RequireLossRuns, AllowSameDayBind, MaximumAdvanceBindDays, AllowWeekendBinding, ParseTime(), RequireUnderwriterApproval, RequireACORD125, RequireACORD126, RequireACORD127, RequireStatementOfValues, RequireFinancialStatement, RequireSupplementalForm, NewBusinessRate, RenewalRate, BrokerFeeAllowed, MaximumBrokerFee, CommissionSchedule, CommissionPaymentMethod, ValidateVIN, ValidateFEIN, ValidateRoofAge, ValidateDriverAge, ValidatePayroll, ValidateSquareFootage, ValidateClaimsHistory, string.IsNullOrWhiteSpace(RulePayloadJson) ? "{}" : RulePayloadJson, Notes, IsActive);
+        private TimeSpan? ParseTime() => TimeSpan.TryParse(BindingTimeCutoffText, out var value) ? value : null;
+        private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToUpperInvariant();
+    }
+}

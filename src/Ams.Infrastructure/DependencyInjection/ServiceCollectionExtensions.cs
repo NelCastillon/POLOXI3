@@ -561,6 +561,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMarketAccessRuleService, MarketAccessRuleService>();
         services.AddScoped<ICarrierDownloadMappingRepository, CarrierDownloadMappingRepository>();
         services.AddScoped<ICarrierDownloadMappingService, CarrierDownloadMappingService>();
+        services.AddScoped<ICarrierRuleCategoryRepository, CarrierRuleCategoryRepository>();
+        services.AddScoped<ICarrierRuleCategoryService, CarrierRuleCategoryService>();
+        services.AddScoped<ICarrierRuleLookupRepository, CarrierRuleLookupRepository>();
+        services.AddScoped<ICarrierRuleLookupService, CarrierRuleLookupService>();
+        services.AddScoped<ICarrierProductRuleRepository, CarrierProductRuleRepository>();
+        services.AddScoped<ICarrierProductRuleService, CarrierProductRuleService>();
         services.AddScoped<IWorkflowConfigRepository, WorkflowConfigRepository>();
         services.AddScoped<IWorkflowConfigService, WorkflowConfigService>();
         services.AddScoped<ICommunicationConfigRepository, CommunicationConfigRepository>();

@@ -116,11 +116,6 @@ builder.Services.AddHttpClient<ApiClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
 }).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
-builder.Services.AddHttpClient<ProducerWorkbenchApiClient>(client =>
-{
-    client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
-}).AddHttpMessageHandler<ActingUserHeaderHandler>();
-
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
