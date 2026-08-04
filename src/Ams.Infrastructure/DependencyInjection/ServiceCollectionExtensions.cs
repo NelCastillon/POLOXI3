@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         {
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
         });
+        services.Configure<DocumentAiOptions>(configuration.GetSection("DocumentAi"));
 
         services.Configure<DocumentStorageOptions>(options =>
         {
@@ -39,6 +40,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
         services.AddScoped<IDocumentStorageService, AzureBlobDocumentStorageService>();
+        services.AddScoped<IDocumentIntakePayloadStore, DocumentIntakePayloadStore>();
+        services.AddHttpClient<IDocumentOcrProvider, AzureDocumentIntelligenceOcrProvider>();
+        services.AddHttpClient<IDocumentInterpretationProvider, AzureOpenAiDocumentInterpretationProvider>();
+        services.AddHttpClient<IDocumentSearchIndexer, AzureDocumentSearchIndexer>();
+        services.AddScoped<DocumentIntakeReadinessHealthCheck>();
+        services.AddScoped<IMalwareStatusProvider, DefenderStorageMalwareStatusProvider>();
 
         // ── Existing repositories ────────────────────────────────────
         services.AddScoped<ILeadRepository, LeadRepository>();
@@ -78,6 +85,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionPayoutRepository, CommissionPayoutRepository>();
         services.AddScoped<IDocumentRepository, DocumentRepository>();
         services.AddScoped<IDocumentWorkflowRepository, DocumentWorkflowRepository>();
+        services.AddScoped<IDocumentIntakeRepository, DocumentIntakeRepository>();
+        services.AddScoped<IDocumentIntakeOperationsRepository, DocumentIntakeOperationsRepository>();
         services.AddScoped<IAcordFormRepository, AcordFormRepository>();
         services.AddScoped<IDocumentExceptionRepository, DocumentExceptionRepository>();
         services.AddScoped<IDocumentPacketRepository, DocumentPacketRepository>();
@@ -448,6 +457,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISubmissionIntakeRepository, SubmissionIntakeRepository>();
         services.AddScoped<IAccountMatchingService, AccountMatchingService>();
         services.AddScoped<ISubmissionIntakeService, SubmissionIntakeService>();
+        services.AddScoped<IDocumentIntakeService, DocumentIntakeService>();
+        services.AddScoped<IDocumentIntakeOperationsService, DocumentIntakeOperationsService>();
 
         // ── Policy Endorsements Workflow ─────────────────────────────
         services.AddScoped<IPolicyEndorsementRepository, PolicyEndorsementRepository>();

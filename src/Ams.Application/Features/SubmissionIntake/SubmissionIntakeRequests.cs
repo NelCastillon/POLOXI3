@@ -67,6 +67,9 @@ public sealed class CreateSubmissionIntakeRequest
     public Guid? AssignedToUserId { get; set; }
 
     public Guid? CreatedByUserId { get; set; }
+
+    [StringLength(240)]
+    public string? SourceIdempotencyKey { get; set; }
 }
 
 public sealed class UpdateSubmissionIntakeRequest

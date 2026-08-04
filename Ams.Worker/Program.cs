@@ -1,3 +1,4 @@
+using Ams.Application.Abstractions.Services;
 using Ams.Infrastructure.DependencyInjection;
 using Ams.Infrastructure.Persistence;
 using Ams.Knowledge.Infrastructure.DependencyInjection;
@@ -13,6 +14,10 @@ using Ams.Worker.Endorsements;
 using Ams.Worker.Payments;
 using Ams.Worker.Renewals;
 using Ams.Worker.Submissions;
+using Ams.Application.Features.DocumentIntake;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -22,6 +27,21 @@ builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: fa
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
+builder.Services.AddScoped<IDocumentKnowledgeNormalizer, KnowledgeDocumentNormalizer>();
+builder.Services.AddScoped<IDocumentIntakeProcessor, DocumentIntakeProcessor>();
+var intakeOtlpEndpoint=builder.Configuration["DocumentIntake:Telemetry:OtlpEndpoint"]??Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource=>resource.AddService("Ams.Worker"))
+    .WithTracing(tracing=>
+    {
+        tracing.AddSource(DocumentIntakeTelemetry.SourceName).AddHttpClientInstrumentation();
+        if(Uri.TryCreate(intakeOtlpEndpoint,UriKind.Absolute,out var endpoint))tracing.AddOtlpExporter(options=>options.Endpoint=endpoint);
+    })
+    .WithMetrics(metrics=>
+    {
+        metrics.AddMeter(DocumentIntakeTelemetry.SourceName).AddHttpClientInstrumentation();
+        if(Uri.TryCreate(intakeOtlpEndpoint,UriKind.Absolute,out var endpoint))metrics.AddOtlpExporter(options=>options.Endpoint=endpoint);
+    });
 
 builder.Services.AddScoped<AutomationJobOrchestrator>();
 builder.Services.AddScoped<IJobStepExecutorRegistry, JobStepExecutorRegistry>();
@@ -49,6 +69,11 @@ builder.Services.AddHostedService<PolicyEndorsementCarrierWorkerService>();
 builder.Services.AddHostedService<PolicyEndorsementAccountingWorkerService>();
 builder.Services.AddHostedService<PolicyEndorsementDocumentWorkerService>();
 builder.Services.AddHostedService<KnowledgeWorkerService>();
+builder.Services.AddHostedService<DocumentIntakeWorkerService>();
+builder.Services.AddHostedService<DocumentIntakeMalwareWorkerService>();
+builder.Services.AddHostedService<DocumentIntakeRetentionWorkerService>();
+builder.Services.AddHostedService<DocumentIntakePromptEvaluationWorkerService>();
+builder.Services.AddHostedService<DocumentIntakeTelemetryWorkerService>();
 
 var host = builder.Build();
 

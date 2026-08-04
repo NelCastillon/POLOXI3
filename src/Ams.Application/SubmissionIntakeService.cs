@@ -68,7 +68,16 @@ public sealed class SubmissionIntakeService : ISubmissionIntakeService
 
         if (intake.AccountId.HasValue && intake.SubmissionId.HasValue)
         {
-            throw new InvalidOperationException($"Submission intake '{intake.IntakeNumber}' has already been promoted.");
+            return new PromoteSubmissionIntakeResult
+            {
+                IntakeId = intakeId,
+                AccountId = intake.AccountId.Value,
+                AccountCreated = false,
+                OpportunityId = intake.OpportunityId ?? Guid.Empty,
+                SubmissionId = intake.SubmissionId.Value,
+                MatchScore = intake.MatchScore,
+                Message = $"Submission intake '{intake.IntakeNumber}' was already promoted; the existing Submission was returned."
+            };
         }
 
         var tenantId = request.TenantId != Guid.Empty ? request.TenantId : intake.TenantId;

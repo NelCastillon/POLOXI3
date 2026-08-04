@@ -1,0 +1,181 @@
+@page "/operations/document-intake/{Id:guid}"
+@attribute [Authorize(Policy = Ams.Web.Security.DocumentIntakePolicies.Read)]
+@using Ams.Application.Features.DocumentIntake
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
+@inject NotificationService Notifications
+@inject ConfirmationDialogService Confirmations
+
+<PageTitle>Document Intake Review</PageTitle>
+
+<EnterpriseDocumentUpload @bind-IsOpen="_uploadOpen"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_userId"
+                          EntityName="DocumentIntake"
+                          EntityId="Id"
+                          Title="Upload Intake Evidence"
+                          IntroText="Upload legal evidence to Azure Blob Storage and attach the persisted DMS document to this governed intake session."
+                          DefaultDocumentTypeCode="General"
+                          DefaultCategoryCode="Other"
+                          DefaultRetentionDate="@DateOnly.FromDateTime(DateTime.Today.AddYears(7))"
+                          OnUploaded="HandleUploadedAsync"
+                          OnUploadFailed="HandleUploadFailed" />
+
+<DocumentIntakeWorkspace>
+    @if (_detail is null)
+    {
+        <div class="intake-state">@(_loading ? "Loading governed intake session..." : _error ?? "Intake session was not found.")</div>
+    }
+    else
+    {
+        <AppPageHeader Title="@_detail.Session.SessionNumber" Subtitle="@SessionSubtitle" Icon="bi-stars" ReturnUrl="/operations/document-intake">
+            <Actions>
+                <div class="intake-actions">
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Draft)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
+                            <button class="um-btn um-btn-ghost" @onclick="OpenUpload"><i class="bi bi-cloud-arrow-up"></i> Manual upload</button>
+                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_detail.Documents.Count == 0)">Queue processing</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode is DocumentIntakeStatuses.Failed or DocumentIntakeStatuses.ReviewRequired or DocumentIntakeStatuses.Ready)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Reprocess">
+                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess">Reprocess</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Ready)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Promote">
+                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync">Create @ModuleLabel</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode is not (DocumentIntakeStatuses.Completed or DocumentIntakeStatuses.Cancelled))
+                    {
+                        <button class="um-btn um-btn-ghost" @onclick="CancelAsync">Cancel</button>
+                    }
+                </div>
+            </Actions>
+        </AppPageHeader>
+
+        <div class="intake-kpis">
+            <div class="intake-kpi"><strong><AppStatusBadge Status="@_detail.Session.StatusCode" /></strong><span>Workflow status</span></div>
+            <div class="intake-kpi"><strong>@FormatConfidence(_detail.Session.OverallConfidence)</strong><span>Overall confidence</span></div>
+            <div class="intake-kpi"><strong>@_detail.Session.WarningCount</strong><span>Warnings</span></div>
+            <div class="intake-kpi"><strong>@_detail.Session.ErrorCount</strong><span>Blocking errors</span></div>
+        </div>
+
+        <section class="intake-panel">
+            <h2 class="h5">Evidence documents</h2>
+            @if (_detail.Documents.Count == 0)
+            {
+                <div class="intake-state">Use Manual upload to persist evidence in Azure Blob Storage and DMS before processing.</div>
+            }
+            else
+            {
+                <AppGrid TValue="DocumentIntakeDocumentDto" DataSource="_detail.Documents">
+                    <GridColumns>
+                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.FileName)" HeaderText="File" />
+                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.DocumentRoleCode)" HeaderText="Role" />
+                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.ContentType)" HeaderText="Content type" />
+                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.ContentHashSha256)" HeaderText="SHA-256" />
+                    </GridColumns>
+                </AppGrid>
+            }
+        </section>
+
+        <section class="intake-panel">
+            <h2 class="h5">Extracted and normalized values</h2>
+            @if (_detail.DraftFields.Count == 0)
+            {
+                <div class="intake-state">No draft values have been extracted yet.</div>
+            }
+            @foreach (var field in _detail.DraftFields)
+            {
+                <article class="intake-field-card">
+                    <header>
+                        <div><strong>@field.FieldPath</strong><div class="intake-source">@field.EntityTypeCode · Source page @(field.SourcePageNumber?.ToString() ?? "—") · Confidence @FormatConfidence(field.Confidence)</div></div>
+                        <AppStatusBadge Status="@field.ReviewStatusCode" />
+                    </header>
+                    <div class="intake-detail-grid mt-2">
+                        <div class="intake-detail"><small>Extracted</small>@(field.ExtractedValue ?? "—")</div>
+                        <div class="intake-detail"><small>Knowledge normalized</small>@(field.NormalizedValue ?? "—")</div>
+                        <div class="intake-detail"><small>Reviewed</small>@(field.ReviewedValue ?? "—")</div>
+                    </div>
+                    @if (field.ReviewStatusCode == DocumentIntakeReviewStatuses.Pending)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
+                            <div class="intake-actions mt-2">
+                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)">Approve</button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)">Correct</button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)">Reject</button>
+                            </div>
+                        </AuthorizeView>
+                    }
+                </article>
+            }
+        </section>
+
+        <section class="intake-panel">
+            <h2 class="h5">Warnings and conflicts</h2>
+            <AppGrid TValue="DocumentIntakeIssueDto" DataSource="_detail.Issues">
+                <GridColumns>
+                    <GridColumn HeaderText="Severity"><Template>@{ var row = (DocumentIntakeIssueDto)context; }<AppStatusBadge Status="@row.SeverityCode" /></Template></GridColumn>
+                    <GridColumn Field="@nameof(DocumentIntakeIssueDto.IssueCode)" HeaderText="Code" />
+                    <GridColumn Field="@nameof(DocumentIntakeIssueDto.Message)" HeaderText="Message" />
+                    <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeIssueDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
+                    <GridColumn HeaderText="Action"><Template>@{ var row = (DocumentIntakeIssueDto)context; }@if (row.StatusCode == "OPEN") { <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ResolveIssueAsync(row)">Resolve</button></AuthorizeView> }</Template></GridColumn>
+                </GridColumns>
+            </AppGrid>
+        </section>
+
+        <section class="intake-panel">
+            <h2 class="h5">Processing pipeline</h2>
+            <AppGrid TValue="DocumentIntakeWorkItemDto" DataSource="_detail.WorkItems">
+                <GridColumns>
+                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.WorkTypeCode)" HeaderText="Stage" />
+                    <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeWorkItemDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
+                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.AttemptCount)" HeaderText="Attempts" />
+                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.LastErrorMessage)" HeaderText="Last error" />
+                </GridColumns>
+            </AppGrid>
+        </section>
+    }
+</DocumentIntakeWorkspace>
+
+<AppCrudDrawer @bind-Visible="_correctionDrawer" Title="Correct extracted value" Icon="bi-pencil" OnConfirm="SaveCorrectionAsync" IsBusy="_saving">
+    <Content><div class="intake-field-card"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionValue" /><label class="mt-3">Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reason" /></div></Content>
+</AppCrudDrawer>
+<AppCrudDrawer @bind-Visible="_reprocessDrawer" Title="Reprocess intake" Icon="bi-arrow-repeat" OnConfirm="ReprocessAsync" IsBusy="_saving">
+    <Content><div class="intake-field-card"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessType"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option></InputSelect><label class="mt-3">Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reason" /></div></Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private DocumentIntakeDetailDto? _detail;
+    private Guid _tenantId, _userId;
+    private bool _loading = true, _saving, _uploadOpen, _correctionDrawer, _reprocessDrawer;
+    private string? _error;
+    private DocumentIntakeDraftFieldDto? _selectedField;
+    private string _correctionValue = "", _reason = "Reviewed document evidence", _reprocessType = "OCR";
+    private string SessionSubtitle => _detail is null ? "" : $"{ModuleLabel} · {_detail.Session.EntryPointCode.Replace('_', ' ')}";
+    private string ModuleLabel => _detail?.Session.ModuleCode.Replace('_', ' ') ?? "record";
+
+    protected override async Task OnInitializedAsync() { var user = await CurrentUser.RequireAsync(); _tenantId = user.TenantId; _userId = user.UserId; Breadcrumbs.SetCrumbs(new("Home", "/"), new("Document Intake", "/operations/document-intake"), new("Review")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; try { _detail = await Api.GetDocumentIntakeAsync(Id); _error = null; } catch (Exception ex) { _error = ex.Message; } finally { _loading = false; } }
+    private void OpenUpload() => _uploadOpen = true;
+    private void OpenReprocess() => _reprocessDrawer = true;
+    private async Task HandleUploadedAsync(Guid documentId) { try { await Api.AttachDocumentToIntakeAsync(Id, new(_tenantId, Id, documentId, "SOURCE", null, (_detail?.Documents.Count ?? 0) + 1, _userId)); _uploadOpen = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private void HandleUploadFailed(string message) => Fail(message);
+    private async Task QueueAsync() { if (_detail is null) return; try { await Api.QueueDocumentIntakeAsync(Id, new(_tenantId, Id, "Queued evidence for governed AI processing", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private void OpenCorrection(DocumentIntakeDraftFieldDto field) { _selectedField = field; _correctionValue = field.NormalizedValue ?? field.ExtractedValue ?? ""; _reason = "Corrected against source evidence"; _correctionDrawer = true; }
+    private async Task SaveCorrectionAsync() { if (_selectedField is not null) await ReviewAsync(_selectedField, DocumentIntakeReviewStatuses.Corrected, _correctionValue); _correctionDrawer = false; }
+    private async Task ReviewAsync(DocumentIntakeDraftFieldDto field, string decision, string? value) { try { await Api.ReviewDocumentIntakeFieldAsync(Id, field.IntakeDraftFieldId, new(_tenantId, Id, field.IntakeDraftFieldId, decision, value, _reason, Guid.NewGuid().ToString("N"), _userId, field.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task ResolveIssueAsync(DocumentIntakeIssueDto issue) { try { await Api.ResolveDocumentIntakeIssueAsync(Id, issue.IntakeIssueId, new(_tenantId, Id, issue.IntakeIssueId, "RESOLVED", "Verified and resolved against source evidence", Guid.NewGuid().ToString("N"), _userId, issue.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task ReprocessAsync() { if (_detail is null) return; try { await Api.ReprocessDocumentIntakeAsync(Id, new(_tenantId, Id, _reprocessType, _reason, Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); _reprocessDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task CancelAsync() { if (_detail is null || !await Confirmations.ConfirmAsync("Cancel intake", "Cancel this intake session and pending work?")) return; try { await Api.CancelDocumentIntakeAsync(Id, new(_tenantId, Id, "Cancelled by reviewer", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task PromoteAsync() { if (_detail is null || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success")); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private void Fail(string message) => Notifications.Add(new(Guid.NewGuid(), "Document intake operation failed", message, "bi-exclamation-triangle", "danger"));
+    private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
+}

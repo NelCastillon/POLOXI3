@@ -651,16 +651,89 @@ else
                     else if (_activeTab == 4)
                     {
                         <section class="sdd-doc-list">
+                            <div class="sdd-filter-row">
+                                <button type="button" class="sdd-btn sdd-btn--primary" @onclick="OpenDocumentUpload" disabled="@_documentIntakeBusy"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Manual Upload</button>
+                                <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
+                                    <button type="button" class="sdd-btn sdd-btn--ghost" @onclick="AnalyzeSubmissionPackageAsync" disabled="@(_documentIntakeBusy || _docs.Count == 0)">
+                                        @if (_documentIntakeBusy) { <span class="um-spin" aria-hidden="true"></span> }
+                                        <i class="bi bi-stars" aria-hidden="true"></i> Analyze Package
+                                    </button>
+                                </AuthorizeView>
+                                <span class="sdd-muted">Documents remain in DMS and Azure Blob Storage; AI creates reviewable draft data only.</span>
+                            </div>
+                            <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Read">
+                                <section class="sdd-intake-panel" aria-label="AI document intake status">
+                                    <div class="sdd-intake-panel__header">
+                                        <div>
+                                            <span class="sdd-intake-panel__eyebrow">AI Document Intake</span>
+                                            <strong>Submission analysis history</strong>
+                                            <small>Live, tenant-scoped processing and review status for this Submission.</small>
+                                        </div>
+                                        <button type="button" class="sdd-icon-btn" title="Refresh AI intake status" aria-label="Refresh AI intake status" @onclick="LoadDocumentIntakeSessionsAsync" disabled="@_documentIntakeLoading"><i class="bi bi-arrow-clockwise @(_documentIntakeLoading ? "sdd-spin" : string.Empty)" aria-hidden="true"></i></button>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(_documentIntakeError))
+                                    {
+                                        <div class="sdd-intake-alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>@_documentIntakeError</span></div>
+                                    }
+                                    else if (_documentIntakeLoading && _documentIntakeSessions.Count == 0)
+                                    {
+                                        <div class="sdd-intake-empty"><span class="um-spin" aria-hidden="true"></span> Loading intake status...</div>
+                                    }
+                                    else if (_documentIntakeSessions.Count == 0)
+                                    {
+                                        <div class="sdd-intake-empty"><i class="bi bi-stars" aria-hidden="true"></i> No AI analysis has been started for this Submission.</div>
+                                    }
+                                    else
+                                    {
+                                        @foreach (var session in _documentIntakeSessions)
+                                        {
+                                            <div class="sdd-intake-row">
+                                                <i class="bi bi-cpu" aria-hidden="true"></i>
+                                                <div class="sdd-intake-row__body">
+                                                    <div class="sdd-intake-row__title"><strong>@session.SessionNumber</strong><AppStatusBadge Status="@IntakeStatusLabel(session.StatusCode)" /></div>
+                                                    <small>@session.EntryPointCode.Replace('_', ' ') · Started @session.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</small>
+                                                    <span>@IntakeSessionSummary(session)</span>
+                                                </div>
+                                                <button type="button" class="sdd-doc-open" @onclick="() => OpenDocumentIntake(session.IntakeSessionId)">@(RequiresIntakeReview(session.StatusCode) ? "Review" : "Open") <i class="bi bi-arrow-right-short" aria-hidden="true"></i></button>
+                                            </div>
+                                        }
+                                    }
+                                </section>
+                            </AuthorizeView>
                              @foreach (var item in _documentChecklist)
                              {
                                  <div class="sdd-doc-row"><i class="bi @(item.IsSatisfied ? "bi-check-circle-fill" : "bi-exclamation-circle")" aria-hidden="true"></i><div><strong>@item.DisplayName</strong><small>@(item.IsRequired ? "Required" : "Optional") - @(item.IsSatisfied ? $"Satisfied by {item.FileName}" : "Missing")</small></div></div>
                              }
                             @foreach (var doc in _docs)
                             {
+                                var intakeStatus = DocumentIntakeStatus(doc.DocumentId);
                                 <div class="sdd-doc-row">
                                     <i class="bi @DocIcon(doc.FileName)" aria-hidden="true"></i>
-                                    <div><strong>@doc.FileName</strong><small>@doc.CategoryCode - @FormatBytes(doc.FileSizeBytes) - @doc.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small></div>
+                                    <div>
+                                        <strong>@doc.FileName</strong>
+                                        <small>@doc.CategoryCode - @FormatBytes(doc.FileSizeBytes) - @doc.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy")</small>
+                                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Read">
+                                            @if (intakeStatus is not null)
+                                            {
+                                                <button type="button" class="sdd-doc-intake" title="Open @intakeStatus.SessionNumber" @onclick="() => OpenDocumentIntake(intakeStatus.IntakeSessionId)" @onclick:stopPropagation="true">
+                                                    <AppStatusBadge Status="@DocumentIntakeStatusLabel(intakeStatus)" />
+                                                    <span>@DocumentIntakeProgress(intakeStatus)</span>
+                                                    @if (!string.IsNullOrWhiteSpace(intakeStatus.LastErrorMessage))
+                                                    {
+                                                        <i class="bi bi-exclamation-triangle-fill" title="@intakeStatus.LastErrorMessage" aria-label="@intakeStatus.LastErrorMessage"></i>
+                                                    }
+                                                </button>
+                                            }
+                                            else
+                                            {
+                                                <span class="sdd-doc-intake-none"><i class="bi bi-stars" aria-hidden="true"></i> Not analyzed</span>
+                                            }
+                                        </AuthorizeView>
+                                    </div>
                                     <div class="sdd-doc-actions" aria-label="Actions for @doc.FileName">
+                                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload" Context="authorizationState">
+                                            <button type="button" class="sdd-icon-btn" title="Analyze with AI" aria-label="Analyze @doc.FileName with AI" @onclick="() => AnalyzeSubmissionDocumentAsync(doc)" @onclick:stopPropagation="true" disabled="@_documentIntakeBusy"><i class="bi bi-stars" aria-hidden="true"></i></button>
+                                        </AuthorizeView>
                                         <button type="button" class="sdd-doc-open" title="Open document details" aria-label="Open details for @doc.FileName" @onclick="() => OpenDocument(doc)" @onclick:stopPropagation="true">Open <i class="bi bi-arrow-right-short" aria-hidden="true"></i></button>
                                         <a class="sdd-icon-btn" href="@Api.GetDocumentDownloadUrl(doc.DocumentId)" title="Download" aria-label="Download @doc.FileName" @onclick:stopPropagation="true"><i class="bi bi-download" aria-hidden="true"></i></a>
                                         <button type="button" class="sdd-icon-btn" title="Preview" aria-label="Preview @doc.FileName" @onclick="() => PreviewDocumentAsync(doc)" @onclick:stopPropagation="true"><i class="bi bi-eye" aria-hidden="true"></i></button>
@@ -1389,6 +1462,9 @@ else
     string? _quoteRequestInstruction;
     string? _quoteRequestError;
     bool _quoteRequestPopupIsError;
+    bool _documentIntakeBusy;
+    bool _documentIntakeLoading;
+    string? _documentIntakeError;
     string? _readinessGateContext;
     string _waiverReason = string.Empty;
     Guid? _selectedQuoteId;
@@ -1415,6 +1491,8 @@ else
     readonly List<SubmissionReferenceOptionDto> _bindingMethodOptions = [];
     readonly List<SubmissionReferenceOptionDto> _bindingAuthorityOptions = [];
     readonly List<DocumentDto> _docs = [];
+    readonly List<Ams.Application.Features.DocumentIntake.DocumentIntakeSessionDto> _documentIntakeSessions = [];
+    readonly Dictionary<Guid, Ams.Application.Features.DocumentIntake.DocumentIntakeDocumentStatusDto> _documentIntakeStatuses = [];
     readonly List<UwQuestion> _questions = [];
     readonly List<SubmissionActivityDto> _activity = [];
     readonly List<SubmissionTaskDto> _tasks = [];
@@ -1590,12 +1668,14 @@ else
             var proposalsTask = Api.GetSubmissionProposalsAsync(SubmissionId, tenantId);
             var acceptancesTask = Api.GetClientAcceptancesAsync(SubmissionId, tenantId);
             var documentsTask = Api.GetSubmissionDocumentsAsync(SubmissionId, tenantId);
+            var documentIntakeTask = Api.SearchDocumentIntakeAsync(moduleCode: Ams.Application.Features.DocumentIntake.DocumentIntakeModules.Submission, targetEntityId: SubmissionId, pageSize: 50);
+            var documentIntakeStatusesTask = Api.GetDocumentIntakeStatusesAsync(Ams.Application.Features.DocumentIntake.DocumentIntakeModules.Submission, SubmissionId);
             var activityTask = Api.GetSubmissionActivitiesAsync(SubmissionId);
             var tasksTask = Api.GetSubmissionTasksAsync(SubmissionId, tenantId);
             var policySourcesTask = Api.GetPolicyCreationSourcesAsync(tenantId);
             var bindStatusesTask = Api.GetPolicyBindStatusesAsync(tenantId);
             var bindTransactionsTask = Api.GetPolicyBindTransactionsAsync(SubmissionId);
-            await Task.WhenAll(usersTask, marketsTask, suggestionsTask, quotesTask, linesTask, checklistTask, templatesTask, proposalsTask, acceptancesTask, documentsTask, activityTask, tasksTask, policySourcesTask, bindStatusesTask, bindTransactionsTask);
+            await Task.WhenAll(usersTask, marketsTask, suggestionsTask, quotesTask, linesTask, checklistTask, templatesTask, proposalsTask, acceptancesTask, documentsTask, documentIntakeTask, documentIntakeStatusesTask, activityTask, tasksTask, policySourcesTask, bindStatusesTask, bindTransactionsTask);
 
             _users.Clear();
             _users.AddRange((await usersTask)?.Items ?? []);
@@ -1632,6 +1712,13 @@ else
 
             _docs.Clear();
             _docs.AddRange(await documentsTask ?? []);
+
+            _documentIntakeSessions.Clear();
+            _documentIntakeSessions.AddRange((await documentIntakeTask)?.Items ?? []);
+
+            _documentIntakeStatuses.Clear();
+            foreach (var status in await documentIntakeStatusesTask)
+                _documentIntakeStatuses[status.DocumentId] = status;
 
             _activity.Clear();
             _activity.AddRange(await activityTask ?? []);
@@ -2158,6 +2245,148 @@ else
         else
         {
             ShowToast("Submission document uploaded successfully.");
+        }
+    }
+
+    Task AnalyzeSubmissionDocumentAsync(DocumentDto document)
+        => OpenSubmissionDocumentIntakeAsync([document], $"SUBMISSION:{SubmissionId:D}:DOCUMENT:{document.DocumentId:D}");
+
+    Task AnalyzeSubmissionPackageAsync()
+        => OpenSubmissionDocumentIntakeAsync(_docs, $"SUBMISSION:{SubmissionId:D}:PACKAGE");
+
+    async Task LoadDocumentIntakeSessionsAsync()
+    {
+        if (_documentIntakeLoading) return;
+        _documentIntakeLoading = true;
+        _documentIntakeError = null;
+        try
+        {
+            var result = await Api.SearchDocumentIntakeAsync(
+                moduleCode: Ams.Application.Features.DocumentIntake.DocumentIntakeModules.Submission,
+                targetEntityId: SubmissionId,
+                pageSize: 50);
+            _documentIntakeSessions.Clear();
+            _documentIntakeSessions.AddRange(result?.Items ?? []);
+            _documentIntakeStatuses.Clear();
+            foreach (var status in await Api.GetDocumentIntakeStatusesAsync(Ams.Application.Features.DocumentIntake.DocumentIntakeModules.Submission, SubmissionId))
+                _documentIntakeStatuses[status.DocumentId] = status;
+        }
+        catch (Exception ex)
+        {
+            _documentIntakeError = $"Unable to load AI intake status: {ex.Message}";
+        }
+        finally
+        {
+            _documentIntakeLoading = false;
+        }
+    }
+
+    void OpenDocumentIntake(Guid intakeSessionId) => Nav.NavigateTo($"/operations/document-intake/{intakeSessionId}");
+
+    static bool RequiresIntakeReview(string status) => status is
+        Ams.Application.Features.DocumentIntake.DocumentIntakeStatuses.ReviewRequired or
+        Ams.Application.Features.DocumentIntake.DocumentIntakeStatuses.Ready;
+
+    static string IntakeStatusLabel(string status) => status switch
+    {
+        Ams.Application.Features.DocumentIntake.DocumentIntakeStatuses.ReviewRequired => "In Review",
+        Ams.Application.Features.DocumentIntake.DocumentIntakeStatuses.Processing => "Active",
+        _ => status.Replace('_', ' ')
+    };
+
+    static string IntakeSessionSummary(Ams.Application.Features.DocumentIntake.DocumentIntakeSessionDto session)
+    {
+        var confidence = session.OverallConfidence.HasValue ? $"{session.OverallConfidence:P0} confidence" : "Confidence pending";
+        return $"{confidence} · {session.ErrorCount} errors · {session.WarningCount} warnings";
+    }
+
+    Ams.Application.Features.DocumentIntake.DocumentIntakeDocumentStatusDto? DocumentIntakeStatus(Guid documentId)
+        => _documentIntakeStatuses.GetValueOrDefault(documentId);
+
+    static string DocumentIntakeStatusLabel(Ams.Application.Features.DocumentIntake.DocumentIntakeDocumentStatusDto status)
+    {
+        if (status.WorkStatusCode is Ams.Application.Features.DocumentIntake.DocumentIntakeWorkStatuses.Failed or Ams.Application.Features.DocumentIntake.DocumentIntakeWorkStatuses.DeadLettered)
+            return "Failed";
+        if (status.WorkStatusCode is Ams.Application.Features.DocumentIntake.DocumentIntakeWorkStatuses.Processing)
+            return "Active";
+        if (status.WorkStatusCode is Ams.Application.Features.DocumentIntake.DocumentIntakeWorkStatuses.Pending or Ams.Application.Features.DocumentIntake.DocumentIntakeWorkStatuses.RetryScheduled)
+            return "Queued";
+        return IntakeStatusLabel(status.SessionStatusCode);
+    }
+
+    static string DocumentIntakeProgress(Ams.Application.Features.DocumentIntake.DocumentIntakeDocumentStatusDto status)
+    {
+        if (!string.IsNullOrWhiteSpace(status.CurrentWorkTypeCode))
+            return $"{status.CurrentWorkTypeCode.Replace('_', ' ')} · {status.CompletedWorkItemCount}/{status.TotalWorkItemCount} steps";
+        if (status.TotalWorkItemCount > 0)
+            return $"{status.CompletedWorkItemCount}/{status.TotalWorkItemCount} steps complete";
+        return status.SessionNumber;
+    }
+
+    async Task OpenSubmissionDocumentIntakeAsync(IEnumerable<DocumentDto> documents, string idempotencyKey)
+    {
+        if (_submission is null || _currentUser is null || _documentIntakeBusy) return;
+        var evidence = documents.DistinctBy(document => document.DocumentId).ToList();
+        if (evidence.Count == 0)
+        {
+            ShowToast("Upload at least one Submission document before starting AI analysis.", true);
+            return;
+        }
+
+        _documentIntakeBusy = true;
+        try
+        {
+            var correlationId = Guid.NewGuid().ToString("N");
+            var intakeId = await Api.CreateDocumentIntakeAsync(new(
+                _submission.TenantId,
+                idempotencyKey,
+                Ams.Application.Features.DocumentIntake.DocumentIntakeModules.Submission,
+                "SUBMISSION_DOCUMENTS",
+                "NORMAL",
+                SubmissionId,
+                _submission.AssignedToUserId,
+                correlationId,
+                _currentUser.UserId));
+
+            var detail = await Api.GetDocumentIntakeAsync(intakeId)
+                ?? throw new InvalidOperationException("The Submission document intake session could not be loaded.");
+
+            if (detail.Session.StatusCode == Ams.Application.Features.DocumentIntake.DocumentIntakeStatuses.Draft)
+            {
+                var sequence = detail.Documents.Count + 1;
+                var attached = detail.Documents.Select(item => item.DocumentId).ToHashSet();
+                foreach (var document in evidence.Where(document => !attached.Contains(document.DocumentId)))
+                {
+                    await Api.AttachDocumentToIntakeAsync(intakeId, new(
+                        _submission.TenantId,
+                        intakeId,
+                        document.DocumentId,
+                        "SOURCE",
+                        null,
+                        sequence++,
+                        _currentUser.UserId));
+                }
+
+                detail = await Api.GetDocumentIntakeAsync(intakeId)
+                    ?? throw new InvalidOperationException("The Submission document intake session could not be refreshed.");
+                await Api.QueueDocumentIntakeAsync(intakeId, new(
+                    _submission.TenantId,
+                    intakeId,
+                    "Queued persisted Submission documents for governed AI analysis.",
+                    correlationId,
+                    _currentUser.UserId,
+                    detail.Session.RowVersion));
+            }
+
+            Nav.NavigateTo($"/operations/document-intake/{intakeId}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Submission document analysis failed: {ex.Message}", true);
+        }
+        finally
+        {
+            _documentIntakeBusy = false;
         }
     }
 
