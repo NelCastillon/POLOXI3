@@ -100,7 +100,13 @@ builder.Services.AddAuthorization(options =>
         KnowledgePolicies.RulesManage,
         KnowledgePolicies.Publish,
         KnowledgePolicies.Import,
-        KnowledgePolicies.AuditRead
+        KnowledgePolicies.AuditRead,
+        DocumentIntakePolicies.Read,
+        DocumentIntakePolicies.Upload,
+        DocumentIntakePolicies.Review,
+        DocumentIntakePolicies.Reprocess,
+        DocumentIntakePolicies.Promote,
+        DocumentIntakePolicies.Admin
     })
     {
         options.AddPolicy(permission, policy => policy.AddRequirements(new PermissionRequirement(permission)));
