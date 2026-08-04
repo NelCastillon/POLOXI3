@@ -46,14 +46,15 @@ public sealed class DocumentIntakeSqlIntegrationTests
         var tenantId=Guid.NewGuid();var sessionId=Guid.NewGuid();var ids=Enumerable.Range(0,count).Select(_=>Guid.NewGuid()).ToArray();await using var connection=new SqlConnection(connectionString);await connection.OpenAsync();await connection.ExecuteAsync("INSERT DMS.IntakeSession(IntakeSessionId,TenantId,SessionNumber,IdempotencyKey,ModuleCode,EntryPointCode,StatusCode,PriorityCode,CorrelationId) VALUES(@SessionId,@TenantId,@Number,@Key,N'SUBMISSION',N'TEST',N'QUEUED',N'NORMAL',@Correlation)",new{SessionId=sessionId,TenantId=tenantId,Number=$"TEST-{sessionId:N}",Key=$"TEST:{sessionId:N}",Correlation=sessionId.ToString("N")});foreach(var id in ids)await connection.ExecuteAsync("INSERT DMS.IntakeWorkItem(IntakeWorkItemId,TenantId,IntakeSessionId,WorkTypeCode,StatusCode,IdempotencyKey,SequenceNumber,CorrelationId) VALUES(@Id,@TenantId,@SessionId,N'VALIDATION',N'PENDING',@Key,1,@Correlation)",new{Id=id,TenantId=tenantId,SessionId=sessionId,Key=$"TEST:{id:N}",Correlation=sessionId.ToString("N")});return new(tenantId,sessionId,ids);
     }
 
+    private static async Task CleanupAsync(string connectionString,Seed seed){await using var connection=new SqlConnection(connectionString);await connection.OpenAsync();await connection.ExecuteAsync("DELETE DMS.IntakeWorkAttempt WHERE TenantId=@TenantId; DELETE DMS.IntakeWorkItem WHERE TenantId=@TenantId; DELETE DMS.IntakeSession WHERE TenantId=@TenantId;",new{seed.TenantId});}
+    private sealed record Seed(Guid TenantId,Guid SessionId,IReadOnlyCollection<Guid> WorkItemIds);
+    private sealed class TestConnectionFactory(string connectionString):ISqlConnectionFactory{public async Task<IDbConnection> CreateOpenConnectionAsync(CancellationToken cancellationToken=default){var connection=new SqlConnection(connectionString);await connection.OpenAsync(cancellationToken);return connection;}}
+}
+
 public sealed class SqlIntegrationFactAttribute:FactAttribute
 {
     public SqlIntegrationFactAttribute()
     {
-        if(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AMS_TEST_SQL_CONNECTION")))Skip="Set AMS_TEST_SQL_CONNECTION to run SQL concurrency integration tests.";
+        if(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AMS_TEST_SQL_CONNECTION")))Skip="Set AMS_TEST_SQL_CONNECTION to run SQL integration tests.";
     }
-}
-    private static async Task CleanupAsync(string connectionString,Seed seed){await using var connection=new SqlConnection(connectionString);await connection.OpenAsync();await connection.ExecuteAsync("DELETE DMS.IntakeWorkAttempt WHERE TenantId=@TenantId; DELETE DMS.IntakeWorkItem WHERE TenantId=@TenantId; DELETE DMS.IntakeSession WHERE TenantId=@TenantId;",new{seed.TenantId});}
-    private sealed record Seed(Guid TenantId,Guid SessionId,IReadOnlyCollection<Guid> WorkItemIds);
-    private sealed class TestConnectionFactory(string connectionString):ISqlConnectionFactory{public async Task<IDbConnection> CreateOpenConnectionAsync(CancellationToken cancellationToken=default){var connection=new SqlConnection(connectionString);await connection.OpenAsync(cancellationToken);return connection;}}
 }

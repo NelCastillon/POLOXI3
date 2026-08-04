@@ -16,11 +16,12 @@ public sealed class KnowledgeMigrationContractTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(4, resources.Length);
+        Assert.Equal(5, resources.Length);
         Assert.Contains("0001_InsuranceSemanticLayerFoundation", resources[0], StringComparison.Ordinal);
         Assert.Contains("0002_InsuranceSemanticLayerMvpCatalog", resources[1], StringComparison.Ordinal);
         Assert.Contains("0003_ImportStagingLifecycle", resources[2], StringComparison.Ordinal);
         Assert.Contains("0004_EnterpriseInsuranceCatalog", resources[3], StringComparison.Ordinal);
+        Assert.Contains("0005_GovernedTerminologyAndSearch", resources[4], StringComparison.Ordinal);
 
         var foundation = Read(assembly, resources[0]);
         Assert.Contains("CREATE SCHEMA knowledge", foundation, StringComparison.OrdinalIgnoreCase);
@@ -32,6 +33,12 @@ public sealed class KnowledgeMigrationContractTests
 
         var importLifecycle = Read(assembly, resources[2]);
         Assert.Contains("'STAGED'", importLifecycle, StringComparison.OrdinalIgnoreCase);
+
+        var terminology = Read(assembly, resources[4]);
+        Assert.Contains("knowledge.TerminologySource", terminology, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("knowledge.CarrierTerminology", terminology, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("knowledge.SemanticSearchProjection", terminology, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LicenseAcknowledgedByUserId", terminology, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

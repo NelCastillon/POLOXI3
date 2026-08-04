@@ -1,4 +1,5 @@
 using Ams.Application;
+using Ams.Application.Abstractions.Intelligence;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Services;
@@ -596,6 +597,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntegrationConfigService, IntegrationConfigService>();
         services.AddScoped<IAiConfigRepository, AiConfigRepository>();
         services.AddScoped<IAiConfigService, AiConfigService>();
+        services.AddScoped<IIntelligenceRepository, IntelligenceRepository>();
+        services.AddScoped<IRecommendationGenerationRepository>(provider => provider.GetRequiredService<IIntelligenceRepository>() as IRecommendationGenerationRepository
+            ?? throw new InvalidOperationException("The intelligence repository must support recommendation generation."));
+        services.AddScoped<IIntelligenceService, IntelligenceService>();
+        services.AddSingleton<ISemanticQueryExpander, NullSemanticQueryExpander>();
+        services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
+        services.AddScoped<IAiProviderRouter, AiProviderRouter>();
+        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>();
         services.AddScoped<IDataConfigRepository, DataConfigRepository>();
         services.AddScoped<IDataConfigService, DataConfigService>();
         services.AddScoped<ISubscriptionConfigRepository, SubscriptionConfigRepository>();

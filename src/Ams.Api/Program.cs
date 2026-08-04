@@ -14,6 +14,8 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Ams.Infrastructure.Services;
+using Ams.Api.Services;
+using Ams.Application.Abstractions.Intelligence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -58,18 +60,22 @@ builder.Services.AddAuthorization(options =>
         DocumentIntakePolicies.Reprocess,
         DocumentIntakePolicies.Promote,
         DocumentIntakePolicies.Admin
-    })
+    }.Concat(IntelligencePolicies.All))
     {
         options.AddPolicy(permission, policy => policy.AddRequirements(
             permission.StartsWith("DMS.INTAKE.", StringComparison.Ordinal)
                 ? new DocumentIntakePermissionRequirement(permission)
-                : new KnowledgePermissionRequirement(permission)));
+                : permission.StartsWith("Intelligence.",StringComparison.Ordinal)
+                    ? new IntelligencePermissionRequirement(permission)
+                    : new KnowledgePermissionRequirement(permission)));
     }
 });
 builder.Services.AddSingleton<IAuthorizationHandler, KnowledgePermissionAuthorizationHandler>();
 builder.Services.AddSingleton<IAuthorizationHandler, DocumentIntakePermissionAuthorizationHandler>();
+builder.Services.AddSingleton<IAuthorizationHandler, IntelligencePermissionAuthorizationHandler>();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
+builder.Services.AddScoped<ISemanticQueryExpander,KnowledgeSemanticQueryExpander>();
 builder.Services.AddApiServices();
 
 var app = builder.Build();

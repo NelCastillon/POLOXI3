@@ -325,6 +325,8 @@ public sealed partial class DatabaseMigrator
         new("0270_Enterprise_AI_Document_Intake", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0078_EnterpriseAiDocumentIntake.sql")),
         new("0271_Submission_Intake_AI_Idempotency", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0079_SubmissionIntakeAiIdempotency.sql")),
         new("0272_Document_Intake_Production_Readiness", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0080_DocumentIntakeProductionReadiness.sql")),
+        new("0273_Enterprise_Intelligence_Platform", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0081_EnterpriseIntelligencePlatform.sql")),
+        new("0274_Intelligence_Search_Intent", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0082_IntelligenceSearchIntent.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

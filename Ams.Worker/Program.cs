@@ -11,6 +11,7 @@ using Ams.Worker.Certificates;
 using Ams.Worker.Compliance;
 using Ams.Worker.Documents;
 using Ams.Worker.Endorsements;
+using Ams.Worker.Intelligence;
 using Ams.Worker.Payments;
 using Ams.Worker.Renewals;
 using Ams.Worker.Submissions;
@@ -29,6 +30,7 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IDocumentKnowledgeNormalizer, KnowledgeDocumentNormalizer>();
 builder.Services.AddScoped<IDocumentIntakeProcessor, DocumentIntakeProcessor>();
+builder.Services.AddScoped<IntelligenceWorkerProcessor>();
 var intakeOtlpEndpoint=builder.Configuration["DocumentIntake:Telemetry:OtlpEndpoint"]??Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource=>resource.AddService("Ams.Worker"))
@@ -74,6 +76,7 @@ builder.Services.AddHostedService<DocumentIntakeMalwareWorkerService>();
 builder.Services.AddHostedService<DocumentIntakeRetentionWorkerService>();
 builder.Services.AddHostedService<DocumentIntakePromptEvaluationWorkerService>();
 builder.Services.AddHostedService<DocumentIntakeTelemetryWorkerService>();
+builder.Services.AddHostedService<IntelligenceWorkerService>();
 
 var host = builder.Build();
 

@@ -13,10 +13,10 @@ public sealed class AiConfigRepository : IAiConfigRepository
 
     private const string Cols = "AiConfigItemId, TenantId, Kind, Code, Name, Category, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc";
 
-    public async Task<AiConfigItemDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    public async Task<AiConfigItemDto?> GetByIdAsync(Guid tenantId, Guid id, CancellationToken ct = default)
     {
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
-        return await cn.QuerySingleOrDefaultAsync<AiConfigItemDto>(new CommandDefinition($"SELECT {Cols} FROM AI.AiConfigItem WHERE AiConfigItemId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+        return await cn.QuerySingleOrDefaultAsync<AiConfigItemDto>(new CommandDefinition($"SELECT {Cols} FROM AI.AiConfigItem WHERE TenantId=@TenantId AND AiConfigItemId=@Id AND IsDeleted=0;", new { TenantId=tenantId, Id = id }, cancellationToken: ct));
     }
 
     public async Task<PagedResult<AiConfigItemDto>> SearchAsync(Guid tenantId, string kind, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
@@ -47,16 +47,16 @@ WHERE TenantId=@TenantId AND Kind=@Kind AND IsDeleted=0
         return id;
     }
 
-    public async Task UpdateAsync(Guid id, UpdateAiConfigItemRequest r, CancellationToken ct = default)
+    public async Task UpdateAsync(Guid tenantId, Guid id, UpdateAiConfigItemRequest r, CancellationToken ct = default)
     {
-        const string sql = @"UPDATE AI.AiConfigItem SET Code=@Code,Name=@Name,Category=@Category,Description=@Description,ConfigurationJson=@ConfigurationJson,IsActive=@IsActive,SortOrder=@SortOrder,ModifiedDateUtc=GETUTCDATE() WHERE AiConfigItemId=@Id AND IsDeleted=0;";
+        const string sql = @"UPDATE AI.AiConfigItem SET Code=@Code,Name=@Name,Category=@Category,Description=@Description,ConfigurationJson=@ConfigurationJson,IsActive=@IsActive,SortOrder=@SortOrder,ModifiedDateUtc=GETUTCDATE() WHERE TenantId=@TenantId AND AiConfigItemId=@Id AND IsDeleted=0;";
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.Code, r.Name, r.Category, r.Description, r.ConfigurationJson, r.IsActive, r.SortOrder }, cancellationToken: ct));
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId=tenantId, Id = id, r.Code, r.Name, r.Category, r.Description, r.ConfigurationJson, r.IsActive, r.SortOrder }, cancellationToken: ct));
     }
 
-    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    public async Task DeleteAsync(Guid tenantId, Guid id, CancellationToken ct = default)
     {
         using var cn = await _cf.CreateOpenConnectionAsync(ct);
-        await cn.ExecuteAsync(new CommandDefinition("UPDATE AI.AiConfigItem SET IsDeleted=1 WHERE AiConfigItemId=@Id;", new { Id = id }, cancellationToken: ct));
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE AI.AiConfigItem SET IsDeleted=1 WHERE TenantId=@TenantId AND AiConfigItemId=@Id;", new { TenantId=tenantId, Id = id }, cancellationToken: ct));
     }
 }

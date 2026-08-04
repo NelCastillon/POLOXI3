@@ -107,7 +107,7 @@ builder.Services.AddAuthorization(options =>
         DocumentIntakePolicies.Reprocess,
         DocumentIntakePolicies.Promote,
         DocumentIntakePolicies.Admin
-    })
+    }.Concat(IntelligencePolicies.All))
     {
         options.AddPolicy(permission, policy => policy.AddRequirements(new PermissionRequirement(permission)));
     }
