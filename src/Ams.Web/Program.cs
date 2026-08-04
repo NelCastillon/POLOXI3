@@ -90,6 +90,21 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("ReportsView", policy => policy.AddRequirements(new PermissionRequirement("REPORT_VIEW")));
     options.AddPolicy("CrmView", policy => policy.AddRequirements(new PermissionRequirement("CRM_VIEW")));
     options.AddPolicy("BillingView", policy => policy.AddRequirements(new PermissionRequirement("BILLING_VIEW")));
+    foreach (var permission in new[]
+    {
+        KnowledgePolicies.ConceptsRead,
+        KnowledgePolicies.ConceptsManage,
+        KnowledgePolicies.MappingsRead,
+        KnowledgePolicies.MappingsManage,
+        KnowledgePolicies.MappingsApprove,
+        KnowledgePolicies.RulesManage,
+        KnowledgePolicies.Publish,
+        KnowledgePolicies.Import,
+        KnowledgePolicies.AuditRead
+    })
+    {
+        options.AddPolicy(permission, policy => policy.AddRequirements(new PermissionRequirement(permission)));
+    }
 });
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 builder.Services.AddCascadingAuthenticationState();

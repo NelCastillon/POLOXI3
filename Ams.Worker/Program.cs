@@ -1,5 +1,8 @@
 using Ams.Infrastructure.DependencyInjection;
 using Ams.Infrastructure.Persistence;
+using Ams.Knowledge.Infrastructure.DependencyInjection;
+using Ams.Knowledge.Infrastructure.Persistence;
+using Ams.Worker.Knowledge;
 using Ams.Worker.Automation;
 using Ams.Worker.Automation.Executors;
 using Ams.Worker.Accounting;
@@ -18,6 +21,7 @@ builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: fa
 
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 
 builder.Services.AddScoped<AutomationJobOrchestrator>();
 builder.Services.AddScoped<IJobStepExecutorRegistry, JobStepExecutorRegistry>();
@@ -44,6 +48,7 @@ builder.Services.AddHostedService<ESignDispatchWorkerService>();
 builder.Services.AddHostedService<PolicyEndorsementCarrierWorkerService>();
 builder.Services.AddHostedService<PolicyEndorsementAccountingWorkerService>();
 builder.Services.AddHostedService<PolicyEndorsementDocumentWorkerService>();
+builder.Services.AddHostedService<KnowledgeWorkerService>();
 
 var host = builder.Build();
 
@@ -51,6 +56,9 @@ using (var scope = host.Services.CreateScope())
 {
     var migrator = scope.ServiceProvider.GetRequiredService<DatabaseMigrator>();
     await migrator.MigrateAsync();
+
+    var knowledgeMigrator = scope.ServiceProvider.GetRequiredService<KnowledgeDatabaseMigrator>();
+    await knowledgeMigrator.MigrateAsync();
 }
 
 await host.RunAsync();
