@@ -65,6 +65,8 @@ WHERE attachment.TenantId=@TenantId AND attachment.NotificationId=@NotificationI
         var item = await multi.ReadSingleOrDefaultAsync<DeliveryRow>();
         var attachments = (await multi.ReadAsync<AttachmentRow>()).AsList();
         if (item is null) return new(notificationId, "NotFound", null, "Notification was not found.", false);
+        if (string.IsNullOrWhiteSpace(item.RecipientAddress))
+            return await FailAsync(connection, item, "Notification recipient address is missing.", cancellationToken, retry: false);
         if (string.IsNullOrWhiteSpace(item.EndpointReference) || string.IsNullOrWhiteSpace(item.SenderAddress))
             return await FailAsync(connection, item, "SMTP provider configuration is incomplete.", cancellationToken);
 
@@ -74,7 +76,7 @@ WHERE attachment.TenantId=@TenantId AND attachment.NotificationId=@NotificationI
             if (!string.Equals(endpoint.Scheme, "smtp", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("SMTP endpoint must use smtp://.");
             var configuration = System.Text.Json.JsonSerializer.Deserialize<SmtpConfiguration>(item.ConfigurationJson, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             using var message = new MailMessage { From = new(item.SenderAddress, item.SenderDisplayName), Subject = item.Subject, Body = item.Body, IsBodyHtml = item.IsBodyHtml };
-            message.To.Add(item.RecipientAddress!);
+            message.To.Add(item.RecipientAddress);
             if (!string.IsNullOrWhiteSpace(item.ReplyToAddress)) message.ReplyToList.Add(item.ReplyToAddress);
             var downloads = new List<DocumentStorageDownloadResult>();
             try
@@ -117,7 +119,8 @@ INSERT Core.NotificationAuditLog(TenantId,NotificationId,ActionName,Details,Crea
 ;WITH candidates AS
 (
     SELECT TOP(@BatchSize) * FROM Core.Notification WITH(UPDLOCK,READPAST,ROWLOCK)
-    WHERE ChannelCode=N'Email' AND IsDeleted=0 AND StatusCode IN(N'Queued',N'Failed') AND AttemptCount<MaxAttempts
+    WHERE ChannelCode=N'Email' AND DeliveryProvider=N'PLATFORM_SMTP' AND NULLIF(LTRIM(RTRIM(RecipientAddress)),N'') IS NOT NULL
+      AND ExternalCorrelationId IS NOT NULL AND IsDeleted=0 AND StatusCode IN(N'Queued',N'Failed') AND AttemptCount<MaxAttempts
       AND COALESCE(NextAttemptDateUtc,CreatedDateUtc)<=SYSUTCDATETIME()
       AND (LeaseExpiresDateUtc IS NULL OR LeaseExpiresDateUtc<SYSUTCDATETIME())
     ORDER BY COALESCE(NextAttemptDateUtc,CreatedDateUtc),CreatedDateUtc
@@ -147,15 +150,15 @@ OUTPUT inserted.TenantId,inserted.NotificationId;
         return secret;
     }
 
-    private static async Task<NotificationDeliveryResult> FailAsync(System.Data.IDbConnection connection, DeliveryRow item, string error, CancellationToken cancellationToken)
+    private static async Task<NotificationDeliveryResult> FailAsync(System.Data.IDbConnection connection, DeliveryRow item, string error, CancellationToken cancellationToken, bool? retry = null)
     {
-        var retry = item.AttemptCount < item.MaxAttempts;
+        var shouldRetry = retry ?? item.AttemptCount < item.MaxAttempts;
         const string sql = """
 UPDATE Core.Notification SET StatusCode=N'Failed',DeliveryStatus=N'Failed',ErrorMessage=@ErrorMessage,NextAttemptDateUtc=CASE WHEN @Retry=1 THEN DATEADD(second,@RetryDelaySeconds,SYSUTCDATETIME()) ELSE NULL END,LeaseOwner=NULL,LeaseExpiresDateUtc=NULL,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND NotificationId=@NotificationId;
 INSERT Core.NotificationDeliveryAttempt(TenantId,NotificationId,ProviderName,ChannelCode,StatusCode,AttemptDateUtc,ErrorMessage,CreatedDateUtc,IsDeleted) VALUES(@TenantId,@NotificationId,COALESCE(@ProviderCode,N'UNCONFIGURED'),N'Email',N'Failed',SYSUTCDATETIME(),@ErrorMessage,SYSUTCDATETIME(),0);
 """;
-        await connection.ExecuteAsync(new CommandDefinition(sql, new { item.TenantId, item.NotificationId, ErrorMessage = error[..Math.Min(error.Length, 1000)], Retry = retry, item.RetryDelaySeconds, item.ProviderCode }, cancellationToken: cancellationToken));
-        return new(item.NotificationId, "Failed", null, error, retry);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { item.TenantId, item.NotificationId, ErrorMessage = error[..Math.Min(error.Length, 1000)], Retry = shouldRetry, item.RetryDelaySeconds, item.ProviderCode }, cancellationToken: cancellationToken));
+        return new(item.NotificationId, "Failed", null, error, shouldRetry);
     }
 
     private sealed record QueueRow(Guid TenantId, Guid NotificationId);
