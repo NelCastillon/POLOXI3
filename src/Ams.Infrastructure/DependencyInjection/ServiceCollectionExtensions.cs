@@ -204,6 +204,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantSettingsWorkflowService, TenantSettingsWorkflowService>();
         services.AddScoped<ISubscriptionSettingsWorkflowService, SubscriptionSettingsWorkflowService>();
         services.AddScoped<INotificationService, NotificationService>();
+        services.AddScoped<INotificationDeliveryService, NotificationDeliveryService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
         services.AddScoped<ISupportedLocaleService, SupportedLocaleService>();
