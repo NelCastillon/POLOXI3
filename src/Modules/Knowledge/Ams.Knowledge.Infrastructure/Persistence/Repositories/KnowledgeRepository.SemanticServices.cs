@@ -11,6 +11,18 @@ namespace Ams.Knowledge.Infrastructure.Persistence.Repositories;
 
 public sealed partial class KnowledgeRepository
 {
+    public async Task<IReadOnlyCollection<DocumentFieldSchemeRoute>> GetRoutesAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        var cacheKey=$"knowledge:document-routes:{tenantId}";
+        if(_cache.TryGetValue(cacheKey,out IReadOnlyCollection<DocumentFieldSchemeRoute>? cached)&&cached is not null)return cached;
+        const string sql="""SELECT TOP(1) ConfigurationValue FROM knowledge.Configuration WHERE ConfigurationCode=N'DOCUMENT_FIELD_SCHEME_ROUTING' AND IsActive=1 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END;""";
+        await using var connection=await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var json=await connection.ExecuteScalarAsync<string?>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        var routes=string.IsNullOrWhiteSpace(json)?[]:JsonSerializer.Deserialize<DocumentFieldSchemeRoute[]>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??[];
+        _cache.Set(cacheKey,routes,TimeSpan.FromMinutes(5));
+        return routes;
+    }
+
     public Task<IReadOnlyCollection<ConceptCandidate>> FindApprovedExternalCandidatesAsync(ConceptResolutionRequest request, CancellationToken cancellationToken = default)
         => FindCandidatesAsync(request, "EXTERNAL", "CONFIDENCE_EXACT_EXTERNAL_CODE", request.Input, cancellationToken);
 

@@ -68,6 +68,12 @@ public interface IConceptResolutionRepository
 }
 
 public sealed record KnowledgeResolutionPolicy(decimal AutoResolveThreshold, decimal ReviewThreshold, int MaximumCandidates);
+public sealed record DocumentFieldSchemeRoute(string? PathContains,string? PathSuffix,string SchemeCode);
+
+public interface IKnowledgeDocumentRoutingProvider
+{
+    Task<IReadOnlyCollection<DocumentFieldSchemeRoute>> GetRoutesAsync(Guid tenantId,CancellationToken cancellationToken=default);
+}
 
 public interface IKnowledgeResolutionPolicyProvider
 {

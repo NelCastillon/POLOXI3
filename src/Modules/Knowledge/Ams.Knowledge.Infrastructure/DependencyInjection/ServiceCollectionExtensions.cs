@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IKnowledgeQueryRepository>(provider => provider.GetRequiredService<KnowledgeRepository>());
         services.AddScoped<IKnowledgeCommandRepository>(provider => provider.GetRequiredService<KnowledgeRepository>());
         services.AddScoped<IConceptResolutionRepository>(provider => provider.GetRequiredService<KnowledgeRepository>());
+        services.AddScoped<IKnowledgeDocumentRoutingProvider>(provider => provider.GetRequiredService<KnowledgeRepository>());
         services.AddScoped<IKnowledgeResolutionPolicyProvider>(provider => provider.GetRequiredService<KnowledgeRepository>());
         services.AddScoped<IKnowledgeHierarchyRepository>(provider => provider.GetRequiredService<KnowledgeRepository>());
         services.AddScoped<IExternalMappingRepository>(provider => provider.GetRequiredService<KnowledgeRepository>());

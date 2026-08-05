@@ -17,6 +17,7 @@ public sealed partial class KnowledgeRepository :
     IKnowledgeQueryRepository,
     IKnowledgeCommandRepository,
     IConceptResolutionRepository,
+    IKnowledgeDocumentRoutingProvider,
     IKnowledgeResolutionPolicyProvider,
     IKnowledgeHierarchyRepository,
     IExternalMappingRepository,

@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text.Json;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Infrastructure.Persistence.Repositories;
 using Dapper;
@@ -19,7 +20,11 @@ public sealed class DocumentIntakeSqlIntegrationTests
             var leases=await Task.WhenAll(Enumerable.Range(0,8).Select(index=>repository.LeaseWorkItemsAsync($"test-worker-{index}",5,TimeSpan.FromMinutes(5))));
             var ids=leases.SelectMany(items=>items).Select(item=>item.IntakeWorkItemId).ToArray();
             Assert.Equal(ids.Length,ids.Distinct().Count());
-            Assert.Equal(seed.WorkItemIds.Count,ids.Length);
+            Assert.All(ids,id=>Assert.Contains(id,seed.WorkItemIds));
+            await using var connection=new SqlConnection(connectionString);await connection.OpenAsync();
+            var attemptCounts=(await connection.QueryAsync<int>("SELECT AttemptCount FROM DMS.IntakeWorkItem WHERE TenantId=@TenantId AND IntakeSessionId=@SessionId",new{seed.TenantId,SessionId=seed.SessionId})).ToArray();
+            Assert.Equal(seed.WorkItemIds.Count,attemptCounts.Length);
+            Assert.All(attemptCounts,count=>Assert.InRange(count,0,1));
         }
         finally{await CleanupAsync(connectionString,seed);}
     }
@@ -40,7 +45,7 @@ public sealed class DocumentIntakeSqlIntegrationTests
         finally{await CleanupAsync(connectionString,seed);}
     }
 
-    private static string RequiredConnectionString()=>Environment.GetEnvironmentVariable("AMS_TEST_SQL_CONNECTION")!;
+    private static string RequiredConnectionString()=>SqlIntegrationConnection.GetRequired();
     private static async Task<Seed> SeedAsync(string connectionString,int count=20)
     {
         var tenantId=Guid.NewGuid();var sessionId=Guid.NewGuid();var ids=Enumerable.Range(0,count).Select(_=>Guid.NewGuid()).ToArray();await using var connection=new SqlConnection(connectionString);await connection.OpenAsync();await connection.ExecuteAsync("INSERT DMS.IntakeSession(IntakeSessionId,TenantId,SessionNumber,IdempotencyKey,ModuleCode,EntryPointCode,StatusCode,PriorityCode,CorrelationId) VALUES(@SessionId,@TenantId,@Number,@Key,N'SUBMISSION',N'TEST',N'QUEUED',N'NORMAL',@Correlation)",new{SessionId=sessionId,TenantId=tenantId,Number=$"TEST-{sessionId:N}",Key=$"TEST:{sessionId:N}",Correlation=sessionId.ToString("N")});foreach(var id in ids)await connection.ExecuteAsync("INSERT DMS.IntakeWorkItem(IntakeWorkItemId,TenantId,IntakeSessionId,WorkTypeCode,StatusCode,IdempotencyKey,SequenceNumber,CorrelationId) VALUES(@Id,@TenantId,@SessionId,N'VALIDATION',N'PENDING',@Key,1,@Correlation)",new{Id=id,TenantId=tenantId,SessionId=sessionId,Key=$"TEST:{id:N}",Correlation=sessionId.ToString("N")});return new(tenantId,sessionId,ids);
@@ -55,6 +60,24 @@ public sealed class SqlIntegrationFactAttribute:FactAttribute
 {
     public SqlIntegrationFactAttribute()
     {
-        if(string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("AMS_TEST_SQL_CONNECTION")))Skip="Set AMS_TEST_SQL_CONNECTION to run SQL integration tests.";
+        if(!SqlIntegrationConnection.TryGet(out _))Skip="Configure ConnectionStrings:DefaultConnection in src/Ams.Api/appsettings.json to run SQL integration tests.";
+    }
+}
+
+internal static class SqlIntegrationConnection
+{
+    public static string GetRequired()=>TryGet(out var connectionString)?connectionString:throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
+
+    public static bool TryGet(out string connectionString)
+    {
+        connectionString=Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")??string.Empty;
+        if(!string.IsNullOrWhiteSpace(connectionString))return true;
+
+        var path=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..","..","src","Ams.Api","appsettings.json"));
+        if(!File.Exists(path))return false;
+        using var document=JsonDocument.Parse(File.ReadAllText(path),new JsonDocumentOptions{CommentHandling=JsonCommentHandling.Skip,AllowTrailingCommas=true});
+        if(!document.RootElement.TryGetProperty("ConnectionStrings",out var connectionStrings)||!connectionStrings.TryGetProperty("DefaultConnection",out var defaultConnection))return false;
+        connectionString=defaultConnection.GetString()??string.Empty;
+        return !string.IsNullOrWhiteSpace(connectionString);
     }
 }

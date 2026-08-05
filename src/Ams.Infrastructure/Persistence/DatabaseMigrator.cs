@@ -327,6 +327,14 @@ public sealed partial class DatabaseMigrator
         new("0272_Document_Intake_Production_Readiness", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0080_DocumentIntakeProductionReadiness.sql")),
         new("0273_Enterprise_Intelligence_Platform", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0081_EnterpriseIntelligencePlatform.sql")),
         new("0274_Intelligence_Search_Intent", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0082_IntelligenceSearchIntent.sql")),
+        new("0275_AgencyBinder_Intelligence_Pillars", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0083_AgencyBinderIntelligencePillars.sql")),
+        new("0276_Intelligence_Scenario_Coverage", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0084_IntelligenceScenarioCoverage.sql")),
+        new("0277_Intelligence_Platform_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0085_IntelligencePlatformCompletion.sql")),
+        new("0278_Intelligence_Discovery_Configuration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0086_IntelligenceDiscoveryConfiguration.sql")),
+        new("0279_Intelligence_Scenario_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0087_IntelligenceScenarioCompletion.sql")),
+        new("0280_Platform_Architecture_Foundation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0088_PlatformArchitectureFoundation.sql")),
+        new("0281_Platform_Runtime_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0089_PlatformRuntimeCompletion.sql")),
+        new("0282_Platform_Gap_Remediation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0090_PlatformGapRemediation.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

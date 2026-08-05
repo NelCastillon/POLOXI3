@@ -16,12 +16,13 @@ public sealed class KnowledgeMigrationContractTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(5, resources.Length);
+        Assert.Equal(6, resources.Length);
         Assert.Contains("0001_InsuranceSemanticLayerFoundation", resources[0], StringComparison.Ordinal);
         Assert.Contains("0002_InsuranceSemanticLayerMvpCatalog", resources[1], StringComparison.Ordinal);
         Assert.Contains("0003_ImportStagingLifecycle", resources[2], StringComparison.Ordinal);
         Assert.Contains("0004_EnterpriseInsuranceCatalog", resources[3], StringComparison.Ordinal);
         Assert.Contains("0005_GovernedTerminologyAndSearch", resources[4], StringComparison.Ordinal);
+        Assert.Contains("0006_IntelligenceOntologyCompletion", resources[5], StringComparison.Ordinal);
 
         var foundation = Read(assembly, resources[0]);
         Assert.Contains("CREATE SCHEMA knowledge", foundation, StringComparison.OrdinalIgnoreCase);
@@ -39,6 +40,12 @@ public sealed class KnowledgeMigrationContractTests
         Assert.Contains("knowledge.CarrierTerminology", terminology, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("knowledge.SemanticSearchProjection", terminology, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LicenseAcknowledgedByUserId", terminology, StringComparison.OrdinalIgnoreCase);
+
+        var ontologyCompletion = Read(assembly, resources[5]);
+        Assert.Contains("EXPOSURE.AUTO_DRIVER", ontologyCompletion, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("EXPOSURE.GARAGING_ADDRESS", ontologyCompletion, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("COVERAGE.PHYSICAL_DAMAGE", ontologyCompletion, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DOCUMENT_FIELD_SCHEME_ROUTING", ontologyCompletion, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

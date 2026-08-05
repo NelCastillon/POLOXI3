@@ -3,39 +3,34 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.DocumentIntake;
-using Ams.Infrastructure.Configuration;
 using Azure.Core;
 using Azure.Identity;
-using Microsoft.Extensions.Options;
 
 namespace Ams.Infrastructure.Services;
 
-public sealed class AzureDocumentIntelligenceOcrProvider : IDocumentOcrProvider
+public sealed class AzureDocumentIntelligenceOcrProvider(HttpClient http, IDocumentOcrRouteRepository routeRepository) : IDocumentOcrProvider
 {
     private static readonly string[] Scope=["https://cognitiveservices.azure.com/.default"];
-    private readonly HttpClient _http;
-    private readonly DocumentAiOptions _options;
     private readonly TokenCredential _credential=new DefaultAzureCredential();
-
-    public AzureDocumentIntelligenceOcrProvider(HttpClient http,IOptions<DocumentAiOptions> options){_http=http;_options=options.Value;_http.Timeout=TimeSpan.FromSeconds(Math.Max(30,_options.RequestTimeoutSeconds));}
 
     public async Task<DocumentOcrResult> AnalyzeAsync(DocumentOcrRequest request,CancellationToken cancellationToken=default)
     {
-        EnsureConfigured();var clock=Stopwatch.StartNew();
-        var endpoint=_options.DocumentIntelligenceEndpoint.TrimEnd('/');
-        var uri=$"{endpoint}/documentintelligence/documentModels/{Uri.EscapeDataString(_options.DocumentIntelligenceModelId)}:analyze?api-version={Uri.EscapeDataString(_options.DocumentIntelligenceApiVersion)}";
+        var route=await routeRepository.GetRouteAsync(request.TenantId,cancellationToken)??throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_NOT_CONFIGURED","No active database-backed Document Intelligence route is configured for this tenant.",true);EnsureConfigured(route);var clock=Stopwatch.StartNew();
+        var endpoint=route.Endpoint.TrimEnd('/');
+        var uri=$"{endpoint}/documentintelligence/documentModels/{Uri.EscapeDataString(route.ModelId)}:analyze?api-version={Uri.EscapeDataString(route.ApiVersion)}";
         using var message=new HttpRequestMessage(HttpMethod.Post,uri){Content=new StreamContent(request.Content)};message.Content.Headers.ContentType=new MediaTypeHeaderValue(request.ContentType);
-        await AuthorizeAsync(message,cancellationToken);
-        using var response=await _http.SendAsync(message,HttpCompletionOption.ResponseHeadersRead,cancellationToken);
+        await AuthorizeAsync(message,route,cancellationToken);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);timeout.CancelAfter(TimeSpan.FromSeconds(route.TimeoutSeconds));
+        using var response=await http.SendAsync(message,HttpCompletionOption.ResponseHeadersRead,timeout.Token);
         if(response.StatusCode!=(System.Net.HttpStatusCode)202)throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_SUBMIT_FAILED",await ErrorAsync(response,cancellationToken),IsRetryable(response.StatusCode));
         var operation=response.Headers.Location?.ToString()??throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_OPERATION_MISSING","Azure Document Intelligence did not return an operation location.",true);
-        string json;while(true){await Task.Delay(TimeSpan.FromSeconds(1),cancellationToken);using var poll=new HttpRequestMessage(HttpMethod.Get,operation);await AuthorizeAsync(poll,cancellationToken);using var result=await _http.SendAsync(poll,cancellationToken);json=await result.Content.ReadAsStringAsync(cancellationToken);if(!result.IsSuccessStatusCode)throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_POLL_FAILED",json,IsRetryable(result.StatusCode));using var root=JsonDocument.Parse(json);var status=root.RootElement.GetProperty("status").GetString();if(string.Equals(status,"succeeded",StringComparison.OrdinalIgnoreCase))break;if(string.Equals(status,"failed",StringComparison.OrdinalIgnoreCase))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_ANALYSIS_FAILED",json,false);}
+        string json;while(true){await Task.Delay(TimeSpan.FromSeconds(1),timeout.Token);using var poll=new HttpRequestMessage(HttpMethod.Get,operation);await AuthorizeAsync(poll,route,timeout.Token);using var result=await http.SendAsync(poll,timeout.Token);json=await result.Content.ReadAsStringAsync(timeout.Token);if(!result.IsSuccessStatusCode)throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_POLL_FAILED",json,IsRetryable(result.StatusCode));using var root=JsonDocument.Parse(json);var status=root.RootElement.GetProperty("status").GetString();if(string.Equals(status,"succeeded",StringComparison.OrdinalIgnoreCase))break;if(string.Equals(status,"failed",StringComparison.OrdinalIgnoreCase))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_ANALYSIS_FAILED",json,false);}
         clock.Stop();using var document=JsonDocument.Parse(json);var analyze=document.RootElement.GetProperty("analyzeResult");var content=analyze.TryGetProperty("content",out var text)?text.GetString()??string.Empty:string.Empty;var pages=new List<DocumentOcrPage>();if(analyze.TryGetProperty("pages",out var pageArray))foreach(var page in pageArray.EnumerateArray()){var number=page.GetProperty("pageNumber").GetInt32();var fields=new List<DocumentOcrField>();if(page.TryGetProperty("words",out var words))foreach(var word in words.EnumerateArray())fields.Add(new("word",word.GetProperty("content").GetString(),word.TryGetProperty("confidence",out var wordConfidence)?wordConfidence.GetDecimal():null,word.TryGetProperty("polygon",out var polygon)?polygon.GetRawText():null));pages.Add(new(number,string.Join(' ',fields.Select(x=>x.Value)),fields,[]));}
-        var confidence=pages.SelectMany(x=>x.Fields).Where(x=>x.Confidence.HasValue).Select(x=>x.Confidence!.Value).DefaultIfEmpty().Average();return new("AZURE_DOCUMENT_INTELLIGENCE",_options.DocumentIntelligenceModelId,content,pages,confidence==0?null:confidence,json,clock.ElapsedMilliseconds);
+        var confidence=pages.SelectMany(x=>x.Fields).Where(x=>x.Confidence.HasValue).Select(x=>x.Confidence!.Value).DefaultIfEmpty().Average();return new("AZURE_DOCUMENT_INTELLIGENCE",route.ModelId,content,pages,confidence==0?null:confidence,json,clock.ElapsedMilliseconds);
     }
 
-    private void EnsureConfigured(){if(string.IsNullOrWhiteSpace(_options.DocumentIntelligenceEndpoint))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_NOT_CONFIGURED","DocumentAi:DocumentIntelligenceEndpoint is required.",true);}
-    private async Task AuthorizeAsync(HttpRequestMessage message,CancellationToken token){if(!string.IsNullOrWhiteSpace(_options.DocumentIntelligenceApiKey))message.Headers.Add("Ocp-Apim-Subscription-Key",_options.DocumentIntelligenceApiKey);else message.Headers.Authorization=new("Bearer",(await _credential.GetTokenAsync(new TokenRequestContext(Scope),token)).Token);}
+    private static void EnsureConfigured(DocumentOcrRoute route){if(!Uri.TryCreate(route.Endpoint,UriKind.Absolute,out _))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_NOT_CONFIGURED","The database-backed Document Intelligence endpoint is invalid.",true);if(!string.IsNullOrWhiteSpace(route.CredentialReference)&&!route.CredentialReference.StartsWith("env://",StringComparison.OrdinalIgnoreCase))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_CREDENTIAL_INVALID","Document Intelligence credentials must use env://VARIABLE_NAME or managed identity.",false);}
+    private async Task AuthorizeAsync(HttpRequestMessage message,DocumentOcrRoute route,CancellationToken token){if(!string.IsNullOrWhiteSpace(route.CredentialReference)){var variable=route.CredentialReference["env://".Length..].Trim();var key=string.IsNullOrWhiteSpace(variable)?null:Environment.GetEnvironmentVariable(variable);if(string.IsNullOrWhiteSpace(key))throw new DocumentAiProviderException("DOCUMENT_INTELLIGENCE_SECRET_MISSING",$"Document Intelligence credential environment variable '{variable}' is not configured.",true);message.Headers.Add("Ocp-Apim-Subscription-Key",key);}else message.Headers.Authorization=new("Bearer",(await _credential.GetTokenAsync(new TokenRequestContext(Scope),token)).Token);}
     private static bool IsRetryable(System.Net.HttpStatusCode status)=>(int)status is 408 or 429 or >=500;
     private static async Task<string> ErrorAsync(HttpResponseMessage response,CancellationToken token)=>$"{(int)response.StatusCode}: {await response.Content.ReadAsStringAsync(token)}";
 }

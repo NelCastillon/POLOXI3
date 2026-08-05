@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Abstractions.Services;
 using Ams.Infrastructure.Configuration;
 using Azure.Identity;
 using Azure.Storage.Blobs;
@@ -9,7 +10,7 @@ using Microsoft.Extensions.Options;
 
 namespace Ams.Infrastructure.Services;
 
-public sealed class DocumentIntakeReadinessHealthCheck(ISqlConnectionFactory connectionFactory,IOptions<DocumentAiOptions> aiOptions,IOptions<DocumentStorageOptions> storageOptions,IConfiguration configuration,IDocumentIntakeOperationsRepository operations):IHealthCheck
+public sealed class DocumentIntakeReadinessHealthCheck(ISqlConnectionFactory connectionFactory,IDocumentOcrRouteRepository ocrRoutes,IOptions<DocumentStorageOptions> storageOptions,IConfiguration configuration,IDocumentIntakeOperationsRepository operations):IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context,CancellationToken cancellationToken=default)
     {
@@ -30,9 +31,7 @@ public sealed class DocumentIntakeReadinessHealthCheck(ISqlConnectionFactory con
         }
         catch(Exception ex){failures.Add($"Blob storage unavailable: {ex.Message}");}
 
-        var ai=aiOptions.Value;
-        if(!Uri.TryCreate(ai.DocumentIntelligenceEndpoint,UriKind.Absolute,out _))failures.Add("Document Intelligence endpoint is not configured.");
-        if(!Uri.TryCreate(ai.AzureOpenAiEndpoint,UriKind.Absolute,out _)||string.IsNullOrWhiteSpace(ai.AzureOpenAiDeployment))failures.Add("Azure OpenAI endpoint or deployment is not configured.");
+        try{var route=await ocrRoutes.GetRouteAsync(null,cancellationToken);if(route is null||!Uri.TryCreate(route.Endpoint,UriKind.Absolute,out _))failures.Add("No valid database-backed Document Intelligence route is configured.");else if(!string.IsNullOrWhiteSpace(route.CredentialReference)&&!route.CredentialReference.StartsWith("env://",StringComparison.OrdinalIgnoreCase))failures.Add("Document Intelligence credential reference must use env:// or managed identity.");}catch(Exception ex){failures.Add($"Document Intelligence route unavailable: {ex.Message}");}
         if(!Uri.TryCreate(configuration["DocumentSearch:Endpoint"],UriKind.Absolute,out _)||string.IsNullOrWhiteSpace(configuration["DocumentSearch:IndexName"]))failures.Add("Azure AI Search endpoint or index is not configured.");
         try
         {

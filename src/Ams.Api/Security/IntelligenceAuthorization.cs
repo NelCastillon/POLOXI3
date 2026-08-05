@@ -11,7 +11,13 @@ public static class IntelligencePolicies
     public const string Configure="Intelligence.Configure";
     public const string Evaluate="Intelligence.Evaluate";
     public const string AuditRead="Intelligence.Audit.Read";
-    public static readonly string[] All=[Read,Search,Recommend,Review,Configure,Evaluate,AuditRead];
+    public const string Analyze="Intelligence.Analyze";
+    public const string Reason="Intelligence.Reason";
+    public const string FindingsRead="Intelligence.Findings.Read";
+    public const string FindingsReview="Intelligence.Findings.Review";
+    public const string RelationshipsRead="Intelligence.Relationships.Read";
+    public const string GovernanceManage="Intelligence.Governance.Manage";
+    public static readonly string[] All=[Read,Search,Recommend,Review,Configure,Evaluate,AuditRead,Analyze,Reason,FindingsRead,FindingsReview,RelationshipsRead,GovernanceManage];
 }
 
 public sealed class IntelligencePermissionRequirement(string permission):IAuthorizationRequirement

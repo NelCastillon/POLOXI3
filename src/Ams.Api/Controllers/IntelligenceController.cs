@@ -17,6 +17,86 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [Authorize(Policy=IntelligencePolicies.Read)]
     public async Task<IActionResult> Dashboard(CancellationToken cancellationToken)=>Ok(await service.GetDashboardAsync(TenantId,cancellationToken));
 
+    [HttpGet("platform")]
+    [Authorize(Policy=IntelligencePolicies.Read)]
+    public async Task<IActionResult> Platform(CancellationToken cancellationToken)=>Ok(await service.GetPlatformSummaryAsync(TenantId,cancellationToken));
+
+    [HttpGet("platform/architecture")]
+    [Authorize(Policy=IntelligencePolicies.Read)]
+    public async Task<IActionResult> PlatformArchitecture(CancellationToken cancellationToken)=>Ok(await service.GetPlatformArchitectureAsync(TenantId,cancellationToken));
+
+    [HttpGet("engine-policies")]
+    [Authorize(Policy=IntelligencePolicies.GovernanceManage)]
+    public async Task<IActionResult> EnginePolicies(CancellationToken cancellationToken)=>Ok(await service.GetEnginePoliciesAsync(TenantId,cancellationToken));
+
+    [HttpPut("engine-policies/{policyCode}/{versionNumber:int}")]
+    [Authorize(Policy=IntelligencePolicies.GovernanceManage)]
+    public async Task<IActionResult> SaveEnginePolicy(string policyCode,int versionNumber,[FromBody]SaveIntelligenceEnginePolicyRequest request,CancellationToken cancellationToken){await service.SaveEnginePolicyAsync(request with{TenantId=TenantId,PolicyCode=policyCode,VersionNumber=versionNumber,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpGet("safety-controls")]
+    [Authorize(Policy=IntelligencePolicies.GovernanceManage)]
+    public async Task<IActionResult> SafetyControls(CancellationToken cancellationToken)=>Ok(await service.GetSafetyControlsAsync(TenantId,cancellationToken));
+
+    [HttpPut("safety-controls/{controlCode}")]
+    [Authorize(Policy=IntelligencePolicies.GovernanceManage)]
+    public async Task<IActionResult> SaveSafetyControl(string controlCode,[FromBody]SaveIntelligenceSafetyControlRequest request,CancellationToken cancellationToken){await service.SaveSafetyControlAsync(request with{TenantId=TenantId,ControlCode=controlCode,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpGet("compliance-requirements")]
+    [Authorize(Policy=IntelligencePolicies.GovernanceManage)]
+    public async Task<IActionResult> ComplianceRequirements(CancellationToken cancellationToken)=>Ok(await service.GetComplianceRequirementsAsync(TenantId,cancellationToken));
+
+    [HttpGet("safety-events")]
+    [Authorize(Policy=IntelligencePolicies.AuditRead)]
+    public async Task<IActionResult> SafetyEvents([FromQuery]int pageSize=100,CancellationToken cancellationToken=default)=>Ok(await service.GetSafetyEventsAsync(TenantId,pageSize,cancellationToken));
+
+    [HttpGet("prompts")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> Prompts(CancellationToken cancellationToken)=>Ok(await service.GetPromptDefinitionsAsync(TenantId,cancellationToken));
+
+    [HttpPut("prompts/{promptCode}/{versionLabel}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SavePrompt(string promptCode,string versionLabel,[FromBody]SaveIntelligencePromptDefinitionRequest request,CancellationToken cancellationToken){await service.SavePromptDefinitionAsync(request with{TenantId=TenantId,PromptCode=promptCode,VersionLabel=versionLabel,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpPost("evaluations/labels")]
+    [Authorize(Policy=IntelligencePolicies.Evaluate)]
+    public async Task<IActionResult> SubmitEvaluationLabel([FromBody]SubmitEvaluationSampleLabelRequest request,CancellationToken cancellationToken){await service.SubmitEvaluationSampleLabelAsync(request with{TenantId=TenantId,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpGet("findings")]
+    [Authorize(Policy=IntelligencePolicies.FindingsRead)]
+    public async Task<IActionResult> Findings([FromQuery]string? searchTerm,[FromQuery]string? capabilityCode,[FromQuery]string? entityTypeCode,[FromQuery]Guid? entityId,[FromQuery]string? severityCode,[FromQuery]string? statusCode,[FromQuery]int pageNumber=1,[FromQuery]int pageSize=50,CancellationToken cancellationToken=default)=>Ok(await service.SearchFindingsAsync(new(TenantId,searchTerm,capabilityCode,entityTypeCode,entityId,severityCode,statusCode,pageNumber,pageSize),cancellationToken));
+
+    [HttpGet("findings/{id:guid}")]
+    [Authorize(Policy=IntelligencePolicies.FindingsRead)]
+    public async Task<IActionResult> Finding(Guid id,CancellationToken cancellationToken)=>await service.GetFindingAsync(TenantId,id,cancellationToken) is{} finding?Ok(finding):NotFound();
+
+    [HttpPost("findings/{id:guid}/decision")]
+    [Authorize(Policy=IntelligencePolicies.FindingsReview)]
+    public async Task<IActionResult> DecideFinding(Guid id,[FromBody]DecideIntelligenceFindingRequest request,CancellationToken cancellationToken){await service.DecideFindingAsync(request with{TenantId=TenantId,IntelligenceFindingId=id,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpGet("relationships/{entityTypeCode}/{entityId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.RelationshipsRead)]
+    public async Task<IActionResult> Relationships(string entityTypeCode,Guid entityId,[FromQuery]int maximumDepth=3,CancellationToken cancellationToken=default)=>Ok(await service.GetRelationshipGraphAsync(new(TenantId,ActorUserId,entityTypeCode,entityId,maximumDepth),cancellationToken));
+
+    [HttpGet("similarity/{entityTypeCode}/{entityId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.RelationshipsRead)]
+    public async Task<IActionResult> Similarity(string entityTypeCode,Guid entityId,[FromQuery]decimal minimumScore=0.7m,[FromQuery]int maximumResults=25,CancellationToken cancellationToken=default)=>Ok(await service.GetSimilarEntitiesAsync(new(TenantId,ActorUserId,entityTypeCode,entityId,minimumScore,maximumResults),cancellationToken));
+
+    [HttpGet("business-signals")]
+    [Authorize(Policy=IntelligencePolicies.FindingsRead)]
+    public async Task<IActionResult> BusinessSignals([FromQuery]string? searchTerm,[FromQuery]string? capabilityCode,[FromQuery]string? entityTypeCode,[FromQuery]Guid? entityId,[FromQuery]string? severityCode,[FromQuery]string? statusCode,[FromQuery]Guid? assignedToUserId,[FromQuery]int pageNumber=1,[FromQuery]int pageSize=50,CancellationToken cancellationToken=default)=>Ok(await service.SearchBusinessSignalsAsync(new(TenantId,searchTerm,capabilityCode,entityTypeCode,entityId,severityCode,statusCode,assignedToUserId,pageNumber,pageSize),cancellationToken));
+
+    [HttpPost("business-signals/{id:guid}/decision")]
+    [Authorize(Policy=IntelligencePolicies.FindingsReview)]
+    public async Task<IActionResult> DecideBusinessSignal(Guid id,[FromBody]DecideBusinessIntelligenceSignalRequest request,CancellationToken cancellationToken){await service.DecideBusinessSignalAsync(request with{TenantId=TenantId,BusinessSignalId=id,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpPost("reasoning")]
+    [Authorize(Policy=IntelligencePolicies.Reason)]
+    public async Task<IActionResult> Reason([FromBody]InsuranceReasoningRequest request,CancellationToken cancellationToken)=>Ok(await service.ExecuteReasoningAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
+
+    [HttpGet("reasoning/{id:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Reason)]
+    public async Task<IActionResult> ReasoningSession(Guid id,CancellationToken cancellationToken)=>await service.GetReasoningSessionAsync(TenantId,ActorUserId,id,cancellationToken) is{} session?Ok(session):NotFound();
+
     [HttpGet("providers")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> Providers(CancellationToken cancellationToken)=>Ok(await service.GetProvidersAsync(TenantId,cancellationToken));

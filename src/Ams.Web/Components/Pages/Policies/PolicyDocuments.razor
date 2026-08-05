@@ -526,8 +526,8 @@
     private VersionForm _versionForm = new();
     private ShareForm _shareForm = new();
 
-    private static readonly string[] Categories = ["Policy", "Endorsement", "Certificate", "Binder", "Declaration"];
-    private static readonly string[] DocumentTypes = ["Declarations", "Policy", "Endorsement", "Certificate", "Binder", "Cancellation Notice", "Reinstatement Notice", "Claims Supplement", "Audit", "Other"];
+    private readonly List<string> Categories = [];
+    private readonly List<string> DocumentTypes = [];
 
     private readonly TabDef[] _tabs =
     [
@@ -570,9 +570,17 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchDocumentsAsync(tenantId: _tenantId, entityName: "Policy", searchTerm: null);
+            var documentsTask = Api.SearchDocumentsAsync(tenantId: _tenantId, entityName: "Policy", searchTerm: null);
+            var categoriesTask = Api.SearchDocumentConfigItemsAsync(_tenantId, "DocumentCategory", pageSize: 500);
+            var groupsTask = Api.SearchDocumentGroupsAsync(_tenantId, pageSize: 500);
+            await Task.WhenAll(documentsTask, categoriesTask, groupsTask);
+            var result = await documentsTask;
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Where(IsPolicyDocument).OrderByDescending(x => x.CreatedDateUtc));
+            Categories.Clear();
+            Categories.AddRange((categoriesTask.Result?.Items ?? []).Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase));
+            DocumentTypes.Clear();
+            DocumentTypes.AddRange((groupsTask.Result?.Items ?? []).Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase));
             _page = 1;
         }
         catch (Exception ex)

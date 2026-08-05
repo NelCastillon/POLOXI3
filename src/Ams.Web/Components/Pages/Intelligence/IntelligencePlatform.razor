@@ -1,0 +1,131 @@
+@page "/intelligence/platform"
+@attribute [Authorize(Policy = Ams.Web.Security.IntelligencePolicies.Read)]
+@using Ams.Application.Features.Intelligence
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+
+<IntelligenceWorkspace>
+    <div class="intel-page">
+        <header class="intel-header">
+            <div>
+                <span>Enterprise capability map</span>
+                <h1>AgencyBinder Platform Architecture</h1>
+                <p>Live database catalog of shared services, verified module adoption, implementation maturity, and governed migration gaps.</p>
+            </div>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </header>
+
+        @if (_loading)
+        {
+            <div class="intel-state">Loading platform capabilities...</div>
+        }
+        else if (_loadError is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+        }
+        else if (_platform is null || _architecture is null)
+        {
+            <div class="intel-state">The platform catalog is unavailable.</div>
+        }
+        else
+        {
+            <section class="intel-kpis" aria-label="Platform filters">
+                <button class='@KpiClass("SERVICES")' @onclick='() => SetView("SERVICES")' title="Show all shared platform services"><span>Platform services</span><strong>@Services.Count</strong><small>Shared capabilities</small></button>
+                <button class='@KpiClass("IMPLEMENTED")' @onclick='() => SetView("IMPLEMENTED")' title="Show fully implemented services"><span>Implemented</span><strong>@Services.Count(x => x.ImplementationStatusCode == "IMPLEMENTED")</strong><small>Executable boundaries</small></button>
+                <button class='@KpiClass("PARTIAL")' @onclick='() => SetView("PARTIAL")' title="Show partially adopted services"><span>Partial</span><strong>@Services.Count(x => x.ImplementationStatusCode == "PARTIAL")</strong><small>Migration required</small></button>
+                <button class='@KpiClass("MODULES")' @onclick='() => SetView("MODULES")' title="Show business-module adoption"><span>Verified adoption</span><strong>@VerifiedDependencyCount</strong><small>@_architecture.BusinessModules.Count active modules</small></button>
+                <button class='@KpiClass("GAPS")' @onclick='() => SetView("GAPS")' title="Show open migration gaps"><span>Open gaps</span><strong>@OpenGaps.Count</strong><small>@OpenGaps.Count(x => x.PriorityCode is "CRITICAL" or "HIGH") critical/high</small></button>
+                <button class='@KpiClass("ENGINES")' @onclick='() => SetView("ENGINES")' title="Show governed Intelligence engines"><span>Active engines</span><strong>@_platform.ActiveCapabilityCount</strong><small>@_platform.ActivePillarCount pillars</small></button>
+            </section>
+
+            @if (_activeView is "SERVICES" or "IMPLEMENTED" or "PARTIAL")
+            {
+                <section class="intel-panel">
+                    <div class="intel-row"><div><strong>Shared Platform Services</strong><span>Catalog status reflects executable runtime truth rather than aspirational capability names.</span></div></div>
+                    @foreach (var service in FilteredServices)
+                    {
+                        <div class="intel-row">
+                            <div>
+                                <strong>@service.DisplayName</strong>
+                                <small>@service.ServiceCode · @service.ServiceKindCode · schema @(service.OwningSchemaCode ?? "cross-cutting")</small>
+                                <span>@service.Description</span>
+                                <small>@(service.ContractReference ?? "No executable contract reference")</small>
+                                @if (!string.IsNullOrWhiteSpace(service.ImplementationNotes)) { <span>@service.ImplementationNotes</span> }
+                            </div>
+                            <div class="architecture-status"><AppStatusBadge Status="@service.ImplementationStatusCode" /><small>@service.MaturityCode</small></div>
+                        </div>
+                    }
+                </section>
+            }
+
+            @if (_activeView == "MODULES")
+            {
+                <section class="intel-panel">
+                    <div class="intel-row"><div><strong>Business Module Consumers</strong><span>Only dependencies with evidence are marked verified; unproven catalog links remain planned.</span></div></div>
+                    @foreach (var module in _architecture.BusinessModules.OrderBy(x => x.SortOrder))
+                    {
+                        <div class="intel-row">
+                            <div>
+                                <strong>@module.DisplayName</strong>
+                                <small>@module.ModuleCode · @module.Dependencies.Count(x => x.AdoptionStatusCode == "VERIFIED") verified · @module.Dependencies.Count(x => x.AdoptionStatusCode == "PLANNED") planned</small>
+                                @foreach (var dependency in module.Dependencies.Where(x => x.AdoptionStatusCode == "VERIFIED" && x.IsActive))
+                                {
+                                    <span><strong>@dependency.ServiceCode</strong> · @dependency.ConsumerReference @if (dependency.LastVerifiedDateUtc.HasValue) { <small>verified @dependency.LastVerifiedDateUtc.Value.ToLocalTime().ToString("g")</small> }</span>
+                                }
+                            </div>
+                            <AppStatusBadge Status="@(module.IsActive ? "ACTIVE" : "INACTIVE")" />
+                        </div>
+                    }
+                </section>
+            }
+
+            @if (_activeView == "GAPS")
+            {
+                <section class="intel-panel">
+                    <div class="intel-row"><div><strong>Platform Migration Gaps</strong><span>Open bypasses and incremental migrations are tracked in the database with source and target boundaries.</span></div></div>
+                    @if (OpenGaps.Count == 0) { <div class="intel-state">No open platform migration gaps.</div> }
+                    @foreach (var gap in OpenGaps)
+                    {
+                        <div class="intel-row">
+                            <div><strong>@gap.GapCode</strong><small>@gap.ServiceCode · @(gap.ModuleCode ?? "cross-module") · @gap.SourceReference</small><span>@gap.Description</span><small>Target: @gap.TargetContractReference</small></div>
+                            <div class="architecture-status"><AppStatusBadge Status="@gap.StatusCode" /><small>@gap.PriorityCode</small></div>
+                        </div>
+                    }
+                </section>
+            }
+
+            @if (_activeView == "ENGINES")
+            {
+                @foreach (var pillar in _platform.Pillars.OrderBy(x => x.SortOrder))
+                {
+                    <section class="intel-panel">
+                        <div class="intel-row"><div><strong>@pillar.DisplayName</strong><small>@pillar.PillarCode</small><span>@pillar.Description</span></div><AppStatusBadge Status="@(pillar.IsActive ? "ACTIVE" : "INACTIVE")" /></div>
+                        @foreach (var capability in pillar.Capabilities.OrderBy(x => x.SortOrder))
+                        {
+                            <div class="intel-row"><div><strong>@capability.DisplayName</strong><small>@capability.CapabilityCode · @capability.EngineKindCode · owner @capability.OwningModuleCode</small><span>@capability.Description</span></div><div class="architecture-status"><AppStatusBadge Status="@(capability.IsActive ? "ACTIVE" : "INACTIVE")" /><small>@(capability.IsAdvisory ? "Advisory" : "Authoritative") · @(capability.RequiresHumanReview ? "review controlled" : "automated")</small></div></div>
+                        }
+                    </section>
+                }
+            }
+            <small>Generated @_architecture.GeneratedDateUtc.ToLocalTime().ToString("g") from the governed platform catalog.</small>
+        }
+    </div>
+</IntelligenceWorkspace>
+
+@code {
+    private IntelligencePlatformSummaryDto? _platform;
+    private PlatformArchitectureDto? _architecture;
+    private bool _loading = true;
+    private string? _loadError;
+    private string _activeView = "SERVICES";
+
+    private IReadOnlyCollection<PlatformServiceCatalogDto> Services => _architecture?.Services.Where(x => x.IsActive && !x.IsInfrastructureOnly).OrderBy(x => x.SortOrder).ToArray() ?? [];
+    private IReadOnlyCollection<PlatformServiceCatalogDto> FilteredServices => _activeView switch { "IMPLEMENTED" => Services.Where(x => x.ImplementationStatusCode == "IMPLEMENTED").ToArray(), "PARTIAL" => Services.Where(x => x.ImplementationStatusCode == "PARTIAL").ToArray(), _ => Services };
+    private IReadOnlyCollection<PlatformMigrationGapDto> OpenGaps => _architecture?.MigrationGaps.Where(x => x.StatusCode is "OPEN" or "IN_PROGRESS").ToArray() ?? [];
+    private int VerifiedDependencyCount => _architecture?.BusinessModules.SelectMany(x => x.Dependencies).Count(x => x.AdoptionStatusCode == "VERIFIED" && x.IsActive) ?? 0;
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Platform", "/intelligence/platform")); await LoadAsync(); }
+    private void SetView(string view) => _activeView = view;
+    private string KpiClass(string view) => $"architecture-kpi{(_activeView == view ? " architecture-kpi--active" : string.Empty)}";
+    private async Task LoadAsync() { _loading = true; _loadError = null; try { var intelligenceTask = Api.GetIntelligencePlatformAsync(); var architectureTask = Api.GetPlatformArchitectureAsync(); await Task.WhenAll(intelligenceTask, architectureTask); _platform = await intelligenceTask; _architecture = await architectureTask; } catch (Exception ex) { _loadError = ex.Message; } finally { _loading = false; } }
+}
