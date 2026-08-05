@@ -77,9 +77,9 @@
                     Type
                     <select class="act-filter-select" @bind="_activeFilter">
                         <option value="">All types</option>
-                        @foreach (var type in ActivityTypes)
+                        @foreach (var type in _activityTypes)
                         {
-                            <option value="@type">@type</option>
+                            <option value="@type.OptionCode">@type.DisplayName</option>
                         }
                     </select>
                 </label>
@@ -374,7 +374,7 @@
                 <div class="um-modal-body">
                     <div class="um-form-grid">
                         <div class="um-field"><label>Date <span class="text-danger">*</span></label><InputDate @bind-Value="_form.ActivityDate" class="um-input" /></div>
-                        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ActivityTypeCode" class="um-input">@foreach (var type in ActivityTypes) { <option value="@type">@type</option> }</InputSelect></div>
+                        <div class="um-field"><label>Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.ActivityTypeCode" class="um-input">@foreach (var type in _activityTypes) { <option value="@type.OptionCode">@type.DisplayName</option> }</InputSelect></div>
                         <div class="um-field um-field--full"><label>Subject <span class="text-danger">*</span></label><InputText @bind-Value="_form.Subject" class="um-input" /></div>
                         <div class="um-field um-field--full"><label>Notes</label><InputTextArea @bind-Value="_form.Notes" class="um-input" rows="4" /></div>
                     </div>
@@ -405,7 +405,6 @@
     private Guid _tenantAdminUserId;
     private Guid TenantId { get; set; }
     private Guid TenantAdminUserId { get; set; }
-    private static readonly string[] ActivityTypes = ["Call", "Email", "Meeting", "Task", "Note", "Workflow"];
     private static readonly string[] DistributionTones = ["act-dist-blue", "act-dist-amber", "act-dist-green", "act-dist-purple", "act-dist-pink"];
 
     private string _search = string.Empty;
@@ -423,6 +422,7 @@
     private OperationalActivityLogDto? _selected;
     private ActivityForm _form = new();
     private readonly List<OperationalActivityLogDto> _rows = [];
+    private readonly List<OperationalOptionDto> _activityTypes = [];
     private readonly TabDef[] _tabs = [new("feed", "Activity Feed", "bi-rss"), new("table", "Table View", "bi-table"), new("analytics", "Analytics", "bi-bar-chart-line")];
     private string _activityBrief = "Generate an activity brief to summarize today's touchpoints, recent follow-through, and activity mix.";
 
@@ -448,7 +448,7 @@
         new("Note", "Notes", _rows.Count(r => r.ActivityTypeCode == "Note").ToString(CultureInfo.CurrentCulture), "Documentation", "bi-sticky", "act-tone-muted", "Note activities"),
     ];
 
-    private IEnumerable<AnalyticsRow> TypeDistribution => ActivityTypes.Select((type, index) => new AnalyticsRow(type, _rows.Count(r => r.ActivityTypeCode == type), type, 0, DistTone(index)));
+    private IEnumerable<AnalyticsRow> TypeDistribution => _activityTypes.Select((type, index) => new AnalyticsRow(type.DisplayName, _rows.Count(r => r.ActivityTypeCode == type.OptionCode), type.OptionCode, 0, DistTone(index)));
     private IEnumerable<AnalyticsRow> DateDistribution => [new("Today", _rows.Count(IsToday), "__today", 0, "act-dist-green"), new("Last 7 days", _rows.Count(IsLastSevenDays), string.Empty, 7, "act-dist-blue"), new("Last 14 days", _rows.Count(r => r.ActivityDate >= DateOnly.FromDateTime(DateTime.Today.AddDays(-14))), string.Empty, 14, "act-dist-amber"), new("Last 30 days", _rows.Count(r => r.ActivityDate >= DateOnly.FromDateTime(DateTime.Today.AddDays(-30))), string.Empty, 30, "act-dist-purple")];
 
     protected override async Task OnInitializedAsync()
@@ -464,6 +464,9 @@
         _loadError = null;
         try
         {
+            var activityTypes = await Api.GetOperationalOptionsAsync(TenantId, "ActivityType");
+            _activityTypes.Clear();
+            _activityTypes.AddRange(activityTypes ?? []);
             var result = await Api.SearchOperationalActivitiesAsync(TenantId, searchTerm: _search, pageSize: 250);
             _rows.Clear();
             _rows.AddRange(result?.Items ?? []);
@@ -484,7 +487,7 @@
     private void SetDateFilter(int days) { _dateFilter = days; _activeFilter = string.Empty; }
     private void ResetFilters() { _search = string.Empty; _activeFilter = string.Empty; _dateFilter = 0; }
     private void SelectActivity(OperationalActivityLogDto item) => _selected = item;
-    private void LogActivity() { _editId = null; _form = new() { ActivityDate = DateOnly.FromDateTime(DateTime.Today), ActivityTypeCode = "Note" }; _showForm = true; }
+    private void LogActivity() { _editId = null; _form = new() { ActivityDate = DateOnly.FromDateTime(DateTime.Today), ActivityTypeCode = _activityTypes.FirstOrDefault(x => x.IsDefault)?.OptionCode ?? string.Empty }; _showForm = true; }
     private void OpenEdit(OperationalActivityLogDto item) { _editId = item.ActivityId; _form = new() { ActivityDate = item.ActivityDate, ActivityTypeCode = item.ActivityTypeCode, Subject = item.Subject, Notes = item.Notes }; _showForm = true; }
     private void ShowDelete(OperationalActivityLogDto item) { _selected = item; _showDelete = true; }
     private void CloseForm() { _showForm = false; ResetForm(); }
@@ -568,5 +571,5 @@
     private sealed record TabDef(string Key, string Label, string Icon);
     private sealed record KpiMetric(string? Filter, string Label, string Value, string Caption, string Icon, string Tone, string Title);
     private sealed record AnalyticsRow(string Label, int Count, string Filter, int DateFilter, string Tone);
-    private sealed class ActivityForm { [Required] public DateOnly ActivityDate { get; set; } = DateOnly.FromDateTime(DateTime.Today); [Required, StringLength(50)] public string ActivityTypeCode { get; set; } = "Note"; [Required, StringLength(200)] public string Subject { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } }
+    private sealed class ActivityForm { [Required] public DateOnly ActivityDate { get; set; } = DateOnly.FromDateTime(DateTime.Today); [Required, StringLength(50)] public string ActivityTypeCode { get; set; } = string.Empty; [Required, StringLength(200)] public string Subject { get; set; } = string.Empty; [StringLength(2000)] public string? Notes { get; set; } }
 }

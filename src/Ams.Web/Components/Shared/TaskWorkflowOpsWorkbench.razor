@@ -1,6 +1,8 @@
 @namespace Ams.Web.Components.Shared
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>@Title - AMS</PageTitle>
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true" />
@@ -55,11 +57,11 @@
 {
     <div class="twf-board-layout">
         <div class="twf-canvas">
-            @foreach (var lane in WorkflowLanes)
+            @foreach (var lane in _workflowLanes)
             {
-                var cards = Filtered.Where(x => x.Status == lane).OrderBy(x => x.DueDate).ToList();
+                var cards = Filtered.Where(x => x.Status == lane.OptionCode).OrderBy(x => x.DueDate).ToList();
                 <section class="twf-lane">
-                    <div class="twf-lane-hdr"><div><span class="twf-chip twf-chip-status">@lane</span><small>@cards.Count items - @cards.Count(IsOverdue) overdue</small></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetStatusFilter(lane)"><i class="bi bi-funnel"></i></button></div>
+                    <div class="twf-lane-hdr"><div><span class="twf-chip twf-chip-status">@lane.DisplayName</span><small>@cards.Count items - @cards.Count(IsOverdue) overdue</small></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetStatusFilter(lane.OptionCode)"><i class="bi bi-funnel"></i></button></div>
                     <div class="twf-card-list">
                         @if (cards.Count == 0) { <div class="twf-empty-mini">No work</div> }
                         @foreach (var row in cards)
@@ -118,7 +120,8 @@ else
     string _activeFilter = string.Empty;
     OpsWorkRow? _selected;
     readonly List<OpsWorkRow> _rows = [];
-    static readonly string[] WorkflowLanes = ["Open", "In Progress", "Review", "Blocked", "Completed"];
+    readonly List<Ams.Application.Features.Operations.OperationalOptionDto> _workflowLanes = [];
+    readonly List<Ams.Application.Features.Operations.OperationalOptionDto> _priorities = [];
 
     string ModeKey => Mode.Trim().ToLowerInvariant();
     IEnumerable<OpsWorkRow> FilteredSource => _rows.Where(x => x.Mode == ModeKey);
@@ -147,6 +150,9 @@ else
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tasks & Workflows", "/tasks"), new(Title, CurrentUrl));
+        var context = await CurrentUser.RequireAsync();
+        _workflowLanes.AddRange(await Api.GetOperationalOptionsAsync(context.TenantId, "WorkflowStatus") ?? []);
+        _priorities.AddRange(await Api.GetOperationalOptionsAsync(context.TenantId, "WorkPriority") ?? []);
         await LoadAsync();
     }
 
@@ -162,7 +168,7 @@ else
     Task PrimaryActionAsync() => ToastAsync($"{PrimaryText} started.");
     Task LogActivityAsync(OpsWorkRow row) => ToastAsync($"Activity logged for {row.Number}.");
     Task AssignAsync(OpsWorkRow row) => ToastAsync($"Assignment queued for {row.Number}.");
-    Task AdvanceAsync(OpsWorkRow row) { var i = Array.IndexOf(WorkflowLanes, row.Status); if (i >= 0 && i < WorkflowLanes.Length - 1) row.Status = WorkflowLanes[i + 1]; return ToastAsync($"Advanced {row.Number} to {row.Status}."); }
+    Task AdvanceAsync(OpsWorkRow row) { var i = _workflowLanes.FindIndex(x => x.OptionCode == row.Status); if (i >= 0 && i < _workflowLanes.Count - 1) row.Status = _workflowLanes[i + 1].OptionCode; return ToastAsync($"Advanced {row.Number} to {row.Status}."); }
     async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "enterprise-toast-success" }); }
 
     static bool IsOverdue(OpsWorkRow row) => row.DueDate.Date < DateTime.Today && row.Status is not "Completed" and not "Cancelled";
@@ -180,7 +186,6 @@ else
         var rng = new Random(117);
         string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "Harbor Fresh Foods"];
         string[] owners = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves"];
-        string[] priorities = ["Low", "Medium", "Medium", "High", "Critical"];
         AddRows("agreements", "AGR", ["Master Service", "Producer", "Carrier", "Client"]);
         AddRows("engagements", "ENG", ["Implementation", "Renewal Review", "Claims Advocacy", "Audit"]);
         AddRows("milestones", "MIL", ["Kickoff", "Data Collection", "Review", "Delivery"]);
@@ -203,8 +208,8 @@ else
                     Account = accounts[rng.Next(accounts.Length)],
                     Owner = owners[rng.Next(owners.Length)],
                     Type = type,
-                    Status = WorkflowLanes[rng.Next(WorkflowLanes.Length)],
-                    Priority = priorities[rng.Next(priorities.Length)],
+                    Status = _workflowLanes[rng.Next(_workflowLanes.Count)].OptionCode,
+                    Priority = _priorities[rng.Next(_priorities.Count)].OptionCode,
                     DueDate = DateTime.Today.AddDays(rng.Next(-14, 45)),
                     ActivityDate = DateTime.Today.AddDays(-rng.Next(0, 30)).AddHours(rng.Next(8, 17)),
                     Value = mode is "activities" or "issues" or "service-requests" ? 0 : rng.Next(1000, 90000),

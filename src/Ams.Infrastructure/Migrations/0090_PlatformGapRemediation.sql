@@ -9,6 +9,8 @@ BEGIN
 	IF COL_LENGTH(N'Core.Notification',N'ExternalCorrelationId') IS NULL ALTER TABLE Core.Notification ADD ExternalCorrelationId NVARCHAR(200) NULL;
 	IF COL_LENGTH(N'Core.Notification',N'NextAttemptDateUtc') IS NULL ALTER TABLE Core.Notification ADD NextAttemptDateUtc DATETIME2 NULL;
 	IF COL_LENGTH(N'Core.Notification',N'MaxAttempts') IS NULL ALTER TABLE Core.Notification ADD MaxAttempts INT NOT NULL CONSTRAINT DF_Core_Notification_MaxAttempts_0282 DEFAULT 5;
+	IF COL_LENGTH(N'Core.Notification',N'LeaseOwner') IS NULL ALTER TABLE Core.Notification ADD LeaseOwner NVARCHAR(200) NULL;
+	IF COL_LENGTH(N'Core.Notification',N'LeaseExpiresDateUtc') IS NULL ALTER TABLE Core.Notification ADD LeaseExpiresDateUtc DATETIME2 NULL;
 END;
 GO
 
@@ -105,7 +107,8 @@ INSERT @Settings VALUES
 (N'Notification.Smtp.SenderDisplayName',N'AgencyBinder',N'String',N'Shared SMTP sender display name.',0),
 (N'Notification.Smtp.CredentialReference',N'env://AMS_PROPOSAL_SMTP_PASSWORD',N'String',N'Shared SMTP credential environment reference.',1),
 (N'Notification.Smtp.Configuration',N'{"username":"ams_admin@agencybinder.com","enableSsl":true}',N'JSON',N'Shared SMTP transport configuration.',0),
-(N'Platform.ContactIntakeNotificationRecipientEmail',N'ams_admin@agencybinder.com',N'String',N'Contact-intake notification recipient.',0);
+(N'Platform.ContactIntakeNotificationRecipientEmail',N'ams_admin@agencybinder.com',N'String',N'Contact-intake notification recipient.',0),
+(N'Platform.ContactIntakeNotificationTenantId',COALESCE((SELECT CONVERT(NVARCHAR(36),MIN(TenantId)) FROM Core.Tenant WHERE IsDeleted=0),N''),N'Guid',N'Tenant that owns platform contact-intake notifications.',0);
 MERGE Core.ConfigurationSetting target USING @Settings source ON target.TenantId IS NULL AND target.ScopeCode=N'Platform' AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
 WHEN MATCHED THEN UPDATE SET ModuleCode=N'Platform',DefaultValue=source.SettingValue,DataTypeCode=source.DataTypeCode,Description=source.Description,IsEncrypted=source.IsEncrypted,ModifiedDateUtc=SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,IsDeleted,CreatedDateUtc) VALUES(NEWID(),NULL,N'Platform',N'Platform',source.SettingKey,source.SettingValue,source.SettingValue,source.DataTypeCode,source.Description,source.IsEncrypted,0,0,SYSUTCDATETIME());
@@ -142,13 +145,74 @@ INSERT @Options VALUES
 (N'NotificationStatus',N'Delivered',N'Delivered',N'Delivery confirmed.',N'{}',40,0),
 (N'NotificationStatus',N'Failed',N'Failed',N'Delivery failed.',N'{}',50,0),
 (N'NotificationStatus',N'Cancelled',N'Cancelled',N'Delivery cancelled.',N'{}',60,0),
+(N'CommunicationStatus',N'Unread',N'Unread',N'Communication has not been reviewed.',N'{}',10,1),
+(N'CommunicationStatus',N'Scheduled',N'Scheduled',N'Communication is scheduled.',N'{}',20,0),
+(N'CommunicationStatus',N'Sent',N'Sent',N'Communication was sent.',N'{}',30,0),
+(N'CommunicationStatus',N'Failed',N'Failed',N'Communication failed.',N'{}',40,0),
+(N'CommunicationStatus',N'Archived',N'Archived',N'Communication was archived.',N'{}',50,0),
 (N'WorkPriority',N'Low',N'Low',N'Low priority.',N'{}',10,0),
 (N'WorkPriority',N'Medium',N'Medium',N'Medium priority.',N'{}',20,1),
 (N'WorkPriority',N'High',N'High',N'High priority.',N'{}',30,0),
-(N'WorkPriority',N'Critical',N'Critical',N'Critical priority.',N'{}',40,0);
+(N'WorkPriority',N'Critical',N'Critical',N'Critical priority.',N'{}',40,0),
+(N'WorkflowStatus',N'Open',N'Open',N'Work is open.',N'{}',10,1),
+(N'WorkflowStatus',N'In Progress',N'In Progress',N'Work is in progress.',N'{}',20,0),
+(N'WorkflowStatus',N'Review',N'Review',N'Work is under review.',N'{}',30,0),
+(N'WorkflowStatus',N'Blocked',N'Blocked',N'Work is blocked.',N'{}',40,0),
+(N'WorkflowStatus',N'Completed',N'Completed',N'Work is completed.',N'{}',50,0),
+(N'RenewalStage',N'Not Started',N'Not Started',N'Renewal work has not started.',N'{}',10,1),
+(N'RenewalStage',N'In Progress',N'In Progress',N'Renewal work is active.',N'{}',20,0),
+(N'RenewalStage',N'Quoted',N'Quoted',N'Renewal quotes are available.',N'{}',30,0),
+(N'RenewalStage',N'Renewed',N'Renewed',N'Policy was renewed.',N'{}',40,0),
+(N'RenewalStage',N'Lost',N'Lost',N'Renewal was lost.',N'{}',50,0),
+(N'RenewalStage',N'Non-Renewed',N'Non-Renewed',N'Policy was not renewed.',N'{}',60,0);
 MERGE Platform.OperationalOption target USING @Options source ON target.TenantId IS NULL AND target.OptionGroupCode=source.OptionGroupCode AND target.OptionCode=source.OptionCode AND target.IsDeleted=0
 WHEN MATCHED THEN UPDATE SET DisplayName=source.DisplayName,Description=source.Description,MetadataJson=source.MetadataJson,SortOrder=source.SortOrder,IsDefault=source.IsDefault,IsActive=1,ModifiedDateUtc=SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT(OperationalOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,MetadataJson,SortOrder,IsDefault,IsActive,CreatedDateUtc,IsDeleted) VALUES(NEWID(),NULL,source.OptionGroupCode,source.OptionCode,source.DisplayName,source.Description,source.MetadataJson,source.SortOrder,source.IsDefault,1,SYSUTCDATETIME(),0);
+
+UPDATE Platform.MigrationGap
+SET StatusCode=N'COMPLETED',
+	CompletedDateUtc=COALESCE(CompletedDateUtc,SYSUTCDATETIME()),
+	TargetContractReference=N'IDocumentOcrRouteRepository; AzureDocumentIntelligenceOcrProvider; DocumentIntakeReadinessHealthCheck',
+	RemediationJson=N'{"evidence":["DocumentOcrRouteRepository tenant-over-platform query","AzureDocumentIntelligenceOcrProvider managed identity or env:// enforcement","DocumentIntakeReadinessHealthCheck database route query"]}',
+	ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND GapCode=N'DOCUMENT_OCR_CONFIGURATION' AND IsDeleted=0;
+
+UPDATE Platform.MigrationGap
+SET StatusCode=N'COMPLETED',
+	CompletedDateUtc=COALESCE(CompletedDateUtc,SYSUTCDATETIME()),
+	TargetContractReference=N'INotificationDeliveryService; NotificationDeliveryWorkerService',
+	RemediationJson=N'{"evidence":["ProposalDeliveryWorkerService queues proposal email and attachment metadata","NotificationDeliveryService lease-fenced delivery","NotificationDeliveryWorkerService BackgroundService processing"]}',
+	ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND GapCode=N'PROPOSAL_SMTP_BYPASS' AND IsDeleted=0;
+
+UPDATE Platform.MigrationGap
+SET StatusCode=N'COMPLETED',
+	CompletedDateUtc=COALESCE(CompletedDateUtc,SYSUTCDATETIME()),
+	SourceReference=N'ContactIntakeNotificationService',
+	TargetContractReference=N'INotificationDeliveryService; Platform.ContactIntakeNotificationTenantId',
+	RemediationJson=N'{"evidence":["ContactIntakeNotificationService database route resolution","CONTACT_INTAKE idempotent queue correlation","shared NotificationDeliveryWorkerService dispatch"]}',
+	ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND GapCode=N'CONTACT_SMTP_BYPASS' AND IsDeleted=0;
+
+UPDATE Platform.MigrationGap
+SET StatusCode=N'IN_PROGRESS',
+	CompletedDateUtc=NULL,
+	TargetContractReference=N'IOperationalOptionRepository; api/ops/options; database-backed module lookup APIs',
+	RemediationJson=N'{"evidence":["Platform.OperationalOption tenant-over-platform catalog","MyActivities ActivityType API consumption","communication channel and status API consumption","workflow status and priority API consumption","renewal stage API consumption","WorkbenchShell caller-supplied branch and team options"],"remaining":["remove generated operational BuildStub datasets","migrate remaining page-local operational arrays"]}',
+	ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND GapCode=N'BUSINESS_OPTIONS_CONFIGURATION' AND IsDeleted=0;
+
+UPDATE Platform.ServiceCatalog
+SET ImplementationStatusCode=N'IMPLEMENTED',ImplementationNotes=N'Document OCR route, model, API version, credential reference, and timeout resolve tenant-over-platform from Core.ConfigurationSetting; credentials accept only managed identity or env:// references.',ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND ServiceCode=N'DOCUMENT' AND IsDeleted=0;
+
+UPDATE Platform.ServiceCatalog
+SET ImplementationStatusCode=N'IMPLEMENTED',ImplementationNotes=N'Notification records, templates, attachments, tenant-over-platform providers, durable queue leasing, retries, proposal delivery, and contact-intake delivery are centralized.',ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND ServiceCode=N'NOTIFICATION' AND IsDeleted=0;
+
+UPDATE Platform.ServiceCatalog
+SET ImplementationStatusCode=N'PARTIAL',ImplementationNotes=N'Core settings, tenant overrides, feature flags, and tenant-over-platform operational options are executable; remaining generated workbench datasets and page-local option arrays are tracked in BUSINESS_OPTIONS_CONFIGURATION.',ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND ServiceCode=N'CONFIGURATION' AND IsDeleted=0;
 
 MERGE Core.NotificationTemplate target USING(VALUES
 (N'PROPOSAL_DELIVERY',N'Proposal Delivery',N'Email',N'{{Subject}}',N'{{Body}}'),

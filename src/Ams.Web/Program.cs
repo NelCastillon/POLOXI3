@@ -115,8 +115,7 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.Configure<ContactIntakeNotificationOptions>(builder.Configuration.GetSection("ContactIntake:Notification"));
-builder.Services.AddScoped<IContactIntakeNotificationService, SmtpContactIntakeNotificationService>();
+builder.Services.AddScoped<IContactIntakeNotificationService, ContactIntakeNotificationService>();
 
 // Scoped: each Blazor Server circuit gets its own shell state
 builder.Services.AddHttpContextAccessor();

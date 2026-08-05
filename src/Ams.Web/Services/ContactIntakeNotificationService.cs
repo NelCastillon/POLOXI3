@@ -1,84 +1,72 @@
-using System.Net;
-using System.Net.Mail;
 using System.Text;
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Communications;
 using Ams.Application.Features.ContactIntake;
-using Microsoft.Extensions.Options;
 
 namespace Ams.Web.Services;
 
-public sealed class SmtpContactIntakeNotificationService : IContactIntakeNotificationService
+public sealed class ContactIntakeNotificationService : IContactIntakeNotificationService
 {
     private const string RecipientSettingKey = "Platform.ContactIntakeNotificationRecipientEmail";
+    private const string TenantSettingKey = "Platform.ContactIntakeNotificationTenantId";
 
-    private readonly ContactIntakeNotificationOptions _options;
     private readonly IConfigurationService _configurationService;
-    private readonly ILogger<SmtpContactIntakeNotificationService> _logger;
+    private readonly INotificationDeliveryService _deliveryService;
+    private readonly ILogger<ContactIntakeNotificationService> _logger;
 
-    public SmtpContactIntakeNotificationService(
-        IOptions<ContactIntakeNotificationOptions> options,
+    public ContactIntakeNotificationService(
         IConfigurationService configurationService,
-        ILogger<SmtpContactIntakeNotificationService> logger)
+        INotificationDeliveryService deliveryService,
+        ILogger<ContactIntakeNotificationService> logger)
     {
-        _options = options.Value;
         _configurationService = configurationService;
+        _deliveryService = deliveryService;
         _logger = logger;
     }
 
     public async Task SendSubmissionNotificationAsync(CreateContactDemoRequest request, ContactDemoSubmissionResult result, ContactDemoRequestContext context, CancellationToken cancellationToken = default)
     {
-        if (!_options.Enabled)
-            return;
-
-        var recipientEmail = await ResolveRecipientEmailAsync(cancellationToken);
-
-        if (string.IsNullOrWhiteSpace(_options.SmtpHost) || string.IsNullOrWhiteSpace(_options.FromEmail) || string.IsNullOrWhiteSpace(recipientEmail))
+        var route = await ResolveRouteAsync(cancellationToken);
+        if (route is null)
         {
-            _logger.LogWarning("Contact intake notification skipped because SMTP notification settings are incomplete.");
+            _logger.LogWarning("Contact intake notification skipped because its database-backed Notification Platform route is incomplete.");
             return;
         }
 
-        using var message = new MailMessage
-        {
-            From = new MailAddress(_options.FromEmail, _options.FromName),
-            Subject = $"AgencyBinder demo request {result.RequestNumber} - {request.AgencyName}",
-            Body = BuildBody(request, result, context),
-            IsBodyHtml = false,
-            BodyEncoding = Encoding.UTF8,
-            SubjectEncoding = Encoding.UTF8
-        };
-
-        message.To.Add(recipientEmail);
-        message.ReplyToList.Add(new MailAddress(request.WorkEmail, $"{request.FirstName} {request.LastName}"));
-
-        using var client = new SmtpClient(_options.SmtpHost, _options.SmtpPort)
-        {
-            EnableSsl = _options.UseSsl,
-            DeliveryMethod = SmtpDeliveryMethod.Network
-        };
-
-        if (!string.IsNullOrWhiteSpace(_options.UserName))
-            client.Credentials = new NetworkCredential(_options.UserName, _options.Password);
-
-        await client.SendMailAsync(message, cancellationToken);
+        await _deliveryService.QueueEmailAsync(new QueueEmailNotificationRequest(
+            route.Value.TenantId,
+            route.Value.RecipientEmail,
+            request.WorkEmail,
+            $"AgencyBinder demo request {result.RequestNumber} - {request.AgencyName}",
+            BuildBody(request, result, context),
+            false,
+            "CONTACT_INTAKE",
+            "Marketing.ContactDemoRequest",
+            result.RequestId,
+            $"contact-intake:{result.RequestId:N}",
+            "High",
+            "ContactIntake",
+            null,
+            []), cancellationToken);
     }
 
-    private async Task<string> ResolveRecipientEmailAsync(CancellationToken cancellationToken)
+    private async Task<(Guid TenantId, string RecipientEmail)?> ResolveRouteAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var setting = await _configurationService.GetByKeyAsync(RecipientSettingKey, "Platform", null, cancellationToken);
-            var configuredEmail = setting?.SettingValue ?? setting?.DefaultValue;
-
-            if (!string.IsNullOrWhiteSpace(configuredEmail))
-                return configuredEmail.Trim();
+            var recipientSetting = await _configurationService.GetByKeyAsync(RecipientSettingKey, "Platform", null, cancellationToken);
+            var tenantSetting = await _configurationService.GetByKeyAsync(TenantSettingKey, "Platform", null, cancellationToken);
+            var recipientEmail = recipientSetting?.SettingValue ?? recipientSetting?.DefaultValue;
+            var tenantValue = tenantSetting?.SettingValue ?? tenantSetting?.DefaultValue;
+            if (Guid.TryParse(tenantValue, out var tenantId) && tenantId != Guid.Empty && !string.IsNullOrWhiteSpace(recipientEmail))
+                return (tenantId, recipientEmail.Trim());
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Unable to resolve contact intake notification recipient from configuration settings. Falling back to application options.");
+            _logger.LogWarning(ex, "Unable to resolve the contact intake Notification Platform route from configuration settings.");
         }
 
-        return _options.ToEmail.Trim();
+        return null;
     }
 
     private static string BuildBody(CreateContactDemoRequest request, ContactDemoSubmissionResult result, ContactDemoRequestContext context)

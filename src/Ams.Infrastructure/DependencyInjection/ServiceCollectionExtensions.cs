@@ -303,6 +303,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
         services.AddScoped<IServiceRequestRepository, ServiceRequestRepository>();
         services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
+        services.AddScoped<IOperationalOptionRepository, OperationalOptionRepository>();
         services.AddScoped<ICalendarEventRepository, CalendarEventRepository>();
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();

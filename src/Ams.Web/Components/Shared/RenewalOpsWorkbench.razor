@@ -1,6 +1,8 @@
 @namespace Ams.Web.Components.Shared
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>@Title - AMS</PageTitle>
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4500" NewestOnTop="true" />
@@ -56,11 +58,11 @@
 {
     <div class="rnw-board-layout">
         <div class="rnw-board-scroll">
-            @foreach (var stage in Stages)
+            @foreach (var stage in _stages)
             {
-                var cards = Filtered.Where(x => x.Stage == stage).OrderBy(x => x.DaysToExpiry).ToList();
+                var cards = Filtered.Where(x => x.Stage == stage.OptionCode).OrderBy(x => x.DaysToExpiry).ToList();
                 <section class="rnw-lane">
-                    <div class="rnw-lane-hdr"><div><span class="rnw-chip rnw-chip-stage">@stage</span><small>@cards.Count renewals - @cards.Sum(x => x.CurrentPremium).ToString("C0")</small></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetStageFilter(stage)"><i class="bi bi-funnel"></i></button></div>
+                    <div class="rnw-lane-hdr"><div><span class="rnw-chip rnw-chip-stage">@stage.DisplayName</span><small>@cards.Count renewals - @cards.Sum(x => x.CurrentPremium).ToString("C0")</small></div><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => SetStageFilter(stage.OptionCode)"><i class="bi bi-funnel"></i></button></div>
                     <div class="rnw-card-list">
                         @if (cards.Count == 0) { <div class="rnw-empty-mini">No renewals</div> }
                         @foreach (var row in cards)
@@ -120,7 +122,8 @@ else
     RenewalWorkRow? _selected;
     readonly List<RenewalWorkRow> _rows = [];
 
-    static readonly string[] Stages = ["Not Started", "In Progress", "Quoted", "Renewed", "Lost", "Non-Renewed"];
+    readonly List<Ams.Application.Features.Operations.OperationalOptionDto> _stages = [];
+    readonly List<Ams.Application.Features.Operations.OperationalOptionDto> _activityTypes = [];
     string ModeKey => Mode.Trim().ToLowerInvariant();
     IEnumerable<RenewalWorkRow> FilterSource => _rows;
     IEnumerable<RenewalWorkRow> Filtered => FilterSource.Where(x => MatchesKpi(x)
@@ -151,6 +154,9 @@ else
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Renewals", "/renewals"), new(Title, CurrentUrl));
+        var context = await CurrentUser.RequireAsync();
+        _stages.AddRange(await Api.GetOperationalOptionsAsync(context.TenantId, "RenewalStage") ?? []);
+        _activityTypes.AddRange(await Api.GetOperationalOptionsAsync(context.TenantId, "ActivityType") ?? []);
         await LoadAsync();
     }
 
@@ -167,7 +173,7 @@ else
     Task NavigateAsync(string url) { Nav.NavigateTo(url); return Task.CompletedTask; }
     Task LogActivityAsync(RenewalWorkRow row) => ToastAsync($"Activity logged for {row.AccountName}.");
     Task QuoteAsync(RenewalWorkRow row) => ToastAsync($"Quote workflow started for {row.PolicyNumber}.");
-    Task MoveNextAsync(RenewalWorkRow row) { var index = Array.IndexOf(Stages, row.Stage); if (index >= 0 && index < Stages.Length - 1) row.Stage = Stages[index + 1]; return ToastAsync($"Moved {row.PolicyNumber} to {row.Stage}."); }
+    Task MoveNextAsync(RenewalWorkRow row) { var index = _stages.FindIndex(x => x.OptionCode == row.Stage); if (index >= 0 && index < _stages.Count - 1) row.Stage = _stages[index + 1].OptionCode; return ToastAsync($"Moved {row.PolicyNumber} to {row.Stage}."); }
     async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "enterprise-toast-success" }); }
 
     bool IsUrgent(RenewalWorkRow row) => row.DaysToExpiry <= 30 && row.Stage is not "Renewed" and not "Lost" and not "Non-Renewed" || ModeKey == "activities" && row.ActivityType == "Task" && !row.IsCompleted && row.ActivityDate.Date < DateTime.Today;
@@ -187,12 +193,11 @@ else
         string[] lobs = ["General Liability", "Commercial Auto", "Commercial Property", "Workers Comp", "Umbrella", "Professional Liability", "Home/Dwelling", "Personal Auto"];
         string[] carriers = ["Travelers", "Chubb", "Zurich", "AIG", "Hartford", "CNA", "Liberty Mutual"];
         string[] producers = ["Maria Santos", "James Park", "Kevin Obi", "Sarah Kim", "Lisa Chen"];
-        string[] activityTypes = ["Call", "Email", "Meeting", "Task", "Note"];
         string[] subjects = ["Renewal questionnaire sent", "Loss runs requested", "Carrier quote follow-up", "Coverage review meeting", "Premium change discussion", "Remarketing strategy call"];
         for (var i = 1; i <= 80; i++)
         {
             var days = rng.Next(-10, 130);
-            var type = activityTypes[rng.Next(activityTypes.Length)];
+            var type = _activityTypes[rng.Next(_activityTypes.Count)].OptionCode;
             _rows.Add(new RenewalWorkRow
             {
                 AccountName = accounts[rng.Next(accounts.Length)],
@@ -201,7 +206,7 @@ else
                 Carrier = carriers[rng.Next(carriers.Length)],
                 ExpiryDate = DateTime.Today.AddDays(days),
                 DaysToExpiry = days,
-                Stage = Stages[rng.Next(Stages.Length)],
+                Stage = _stages[rng.Next(_stages.Count)].OptionCode,
                 RetentionRiskScore = rng.Next(5, 98),
                 CurrentPremium = rng.Next(2500, 115000),
                 ProjectedPremium = rng.Next(2) == 0 ? null : rng.Next(3000, 125000),

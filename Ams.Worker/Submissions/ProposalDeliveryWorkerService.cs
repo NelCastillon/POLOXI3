@@ -1,10 +1,11 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Mail;
 using System.Net.Mime;
 using System.Text;
 using System.Text.Json;
 using Ams.Application.Abstractions.Persistence;
+using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.Communications;
 using Ams.Worker.Automation;
 using Dapper;
 using Microsoft.Extensions.Configuration;
@@ -39,17 +40,13 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("AMS proposal delivery worker started with {PollIntervalSeconds}s polling interval.", _options.ProposalDeliveryPollIntervalSeconds);
-        _logger.LogInformation("Proposal delivery SMTP local configuration: server={SmtpServer}, username={SmtpUsername}, passwordConfigured={PasswordConfigured}.",
-            _configuration["SmtpSettings:Server"] ?? "not configured",
-            _configuration["SmtpSettings:Username"] ?? "not configured",
-            !string.IsNullOrWhiteSpace(_configuration["SmtpSettings:Password"]));
-
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
                 using var scope = _serviceProvider.CreateScope();
                 var connectionFactory = scope.ServiceProvider.GetRequiredService<ISqlConnectionFactory>();
+                var notificationDelivery = scope.ServiceProvider.GetRequiredService<INotificationDeliveryService>();
                 var processed = 0;
 
                 while (processed < Math.Clamp(_options.MaxProposalDeliveriesPerPoll, 1, 100))
@@ -57,7 +54,7 @@ public sealed class ProposalDeliveryWorkerService : BackgroundService
                     var dispatch = await ClaimNextAsync(connectionFactory, _options.ProposalDeliveryClaimLeaseMinutes, stoppingToken);
                     if (dispatch is null) break;
 
-                    await ProcessAsync(connectionFactory, dispatch, stoppingToken);
+                    await ProcessAsync(connectionFactory, notificationDelivery, dispatch, stoppingToken);
                     processed++;
                 }
 
@@ -169,11 +166,11 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         return await cn.QuerySingleOrDefaultAsync<ProposalDeliveryWorkItem>(new CommandDefinition(sql, new { ClaimLeaseMinutes = Math.Clamp(claimLeaseMinutes, 5, 1440) }, cancellationToken: cancellationToken));
     }
 
-    private async Task ProcessAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
+    private async Task ProcessAsync(ISqlConnectionFactory connectionFactory, INotificationDeliveryService notificationDelivery, ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
     {
         try
         {
-            if (!dispatch.IsConfigured)
+            if (!dispatch.IsConfigured && !string.Equals(dispatch.HandlerCode,"Smtp",StringComparison.OrdinalIgnoreCase))
             {
                 await MarkConfigurationRequiredAsync(connectionFactory, dispatch, "PROVIDER_NOT_CONFIGURED", $"{dispatch.ProviderName} requires tenant configuration.", cancellationToken);
                 return;
@@ -181,7 +178,7 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
 
             var result = dispatch.HandlerCode switch
             {
-                "Smtp" => await SendSmtpAsync(dispatch, cancellationToken),
+                "Smtp" => await SendEmailAsync(notificationDelivery,dispatch,cancellationToken),
                 "Portal" => await PublishPortalAsync(connectionFactory, dispatch, cancellationToken),
                 "ESignature" => await SendESignatureAsync(dispatch, cancellationToken),
                 "Manual" => DeliveryResult.Sent($"manual:{dispatch.ProposalDeliveryDispatchId}"),
@@ -216,69 +213,13 @@ WHERE dispatch.ProposalDeliveryDispatchId = @DispatchId;
         }
     }
 
-    private async Task<DeliveryResult> SendSmtpAsync(ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
+    private static async Task<DeliveryResult> SendEmailAsync(INotificationDeliveryService notificationDelivery,ProposalDeliveryWorkItem dispatch,CancellationToken cancellationToken)
     {
-        if (!Uri.TryCreate(dispatch.EndpointUri, UriKind.Absolute, out var endpoint) || !string.Equals(endpoint.Scheme, "smtp", StringComparison.OrdinalIgnoreCase))
-            return DeliveryResult.ConfigurationRequired("SMTP_ENDPOINT_REQUIRED", "SMTP delivery requires an smtp:// endpoint URI.");
-        if (string.IsNullOrWhiteSpace(dispatch.SenderAddress))
-            return DeliveryResult.ConfigurationRequired("SMTP_SENDER_REQUIRED", "SMTP delivery requires a sender address.");
-
-        var settings = ParseConfiguration(dispatch.ConfigurationJson);
-        settings.TryGetValue("username", out var username);
-        var password = ResolveSecret(dispatch.SecretReference);
-        if (string.IsNullOrWhiteSpace(password))
-        {
-            password = _configuration["SmtpSettings:Password"];
-        }
-        if (!string.IsNullOrWhiteSpace(username) && string.IsNullOrWhiteSpace(password))
-            return DeliveryResult.ConfigurationRequired("SMTP_SECRET_REQUIRED", "SMTP authentication requires the configured secret reference.");
-
-        using var message = new MailMessage
-        {
-            From = new MailAddress(dispatch.SenderAddress),
-            Subject = BuildEmailSubject(dispatch),
-            Body = BuildEmailHtml(dispatch),
-            IsBodyHtml = true
-        };
-        message.To.Add(new MailAddress(dispatch.Recipient));
-        message.Headers.Add("X-AMS-Delivery-Category", dispatch.DeliveryCategoryCode);
-        if (dispatch.ProposalId.HasValue) message.Headers.Add("X-AMS-Proposal-Id", dispatch.ProposalId.Value.ToString());
-        if (dispatch.EntityId.HasValue) message.Headers.Add("X-AMS-Entity-Id", dispatch.EntityId.Value.ToString());
-
-        using var client = new SmtpClient(endpoint.Host, endpoint.Port > 0 ? endpoint.Port : 25)
-        {
-            EnableSsl = !settings.TryGetValue("enableSsl", out var enableSsl) || !bool.TryParse(enableSsl, out var parsedSsl) || parsedSsl,
-            DeliveryMethod = SmtpDeliveryMethod.Network
-        };
-        if (!string.IsNullOrWhiteSpace(username)) client.Credentials = new NetworkCredential(username, password);
-
-        _logger.LogInformation("Sending proposal delivery SMTP message. DispatchId={DispatchId}; Host={Host}; Port={Port}; EnableSsl={EnableSsl}; Username={Username}; Sender={Sender}; Recipient={Recipient}",
-            dispatch.ProposalDeliveryDispatchId,
-            endpoint.Host,
-            endpoint.Port > 0 ? endpoint.Port : 25,
-            client.EnableSsl,
-            string.IsNullOrWhiteSpace(username) ? "not configured" : username,
-            dispatch.SenderAddress,
-            dispatch.Recipient);
-
-        try
-        {
-            await client.SendMailAsync(message, cancellationToken);
-        }
-        catch (SmtpException ex)
-        {
-            _logger.LogError(ex,
-                "SMTP send failed. DispatchId={DispatchId}; Host={Host}; Port={Port}; Username={Username}; SmtpStatusCode={SmtpStatusCode}; Message={Message}",
-                dispatch.ProposalDeliveryDispatchId,
-                endpoint.Host,
-                endpoint.Port > 0 ? endpoint.Port : 25,
-                string.IsNullOrWhiteSpace(username) ? "not configured" : username,
-                ex.StatusCode,
-                ex.Message);
-            throw;
-        }
-
-        return DeliveryResult.Sent($"smtp:{dispatch.ProposalDeliveryDispatchId}");
+        var attachments=dispatch.DocumentId.HasValue?new[]{new NotificationAttachmentRequest(dispatch.DocumentId,null,$"Proposal-{dispatch.ProposalVersionNumber}.pdf","application/pdf")}:[];
+        var notificationId=await notificationDelivery.QueueEmailAsync(new(dispatch.TenantId,dispatch.Recipient,null,BuildEmailSubject(dispatch),BuildEmailHtml(dispatch),true,"PROPOSAL_DELIVERY",dispatch.EntityName??"Proposal",dispatch.EntityId??dispatch.ProposalId,$"proposal-delivery:{dispatch.ProposalDeliveryDispatchId}","High",dispatch.DeliveryCategoryCode,null,attachments),cancellationToken);
+        var result=await notificationDelivery.DeliverAsync(dispatch.TenantId,notificationId,cancellationToken);
+        if(!string.Equals(result.StatusCode,"Sent",StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException(result.ErrorMessage??"Notification Platform could not deliver the proposal email.");
+        return DeliveryResult.Sent(result.ExternalDeliveryId??$"notification:{notificationId}");
     }
 
     private static async Task<DeliveryResult> PublishPortalAsync(ISqlConnectionFactory connectionFactory, ProposalDeliveryWorkItem dispatch, CancellationToken cancellationToken)
@@ -487,12 +428,12 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
             return ($"HTTP_{(int)http.StatusCode.Value}", exception.Message);
         }
 
-        if (dispatch.HandlerCode.Equals("Smtp", StringComparison.OrdinalIgnoreCase) || exception is SmtpException)
+        if (dispatch.HandlerCode.Equals("Smtp", StringComparison.OrdinalIgnoreCase))
         {
             var fullMessage = exception.ToString();
             if (ContainsAny(fullMessage, "authentication", "authenticated", "password", "credential", "5.7", "username", "not accepted", "logon", "login"))
             {
-                return ("SMTP_AUTH_FAILED", "SMTP authentication failed. The configured username/password was rejected by the SMTP server. Verify the NetworkSolutions password in Ams.Worker appsettings.Development.json SmtpSettings:Password, user-secrets, or the AMS_PROPOSAL_SMTP_PASSWORD environment variable, then restart Ams.Worker and retry delivery.");
+                return ("SMTP_AUTH_FAILED", "Notification Platform SMTP authentication failed. Verify the database provider credential reference and its env:// environment variable, then retry delivery.");
             }
 
             if (ContainsAny(fullMessage, "RemoteCertificateNameMismatch", "certificate name mismatch", "remote certificate is invalid"))
@@ -696,13 +637,6 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
         return bodyEnd > contentStart ? htmlContent[(contentStart + 1)..bodyEnd] : htmlContent[(contentStart + 1)..];
     }
 
-    private static Dictionary<string, string> ParseConfiguration(string? configurationJson)
-    {
-        if (string.IsNullOrWhiteSpace(configurationJson)) return new(StringComparer.OrdinalIgnoreCase);
-        using var document = JsonDocument.Parse(configurationJson);
-        return document.RootElement.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.ToString(), StringComparer.OrdinalIgnoreCase);
-    }
-
     private string? ResolveSecret(string? secretReference)
     {
         if (string.IsNullOrWhiteSpace(secretReference)) return null;
@@ -719,11 +653,6 @@ WHERE ProposalId = @ProposalId AND TenantId = @TenantId AND IsDeleted = 0;
 
         var proposalDeliverySecretsValue = _configuration[$"ProposalDelivery:Secrets:{secretReference}"];
         if (!string.IsNullOrWhiteSpace(proposalDeliverySecretsValue)) return proposalDeliverySecretsValue;
-
-        if (string.Equals(secretReference, "AMS_PROPOSAL_SMTP_PASSWORD", StringComparison.OrdinalIgnoreCase))
-        {
-            return _configuration["SmtpSettings:Password"];
-        }
 
         return null;
     }

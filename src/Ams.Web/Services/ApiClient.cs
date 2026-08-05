@@ -1981,6 +1981,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<OperationalActivityLogDto>?> SearchOperationalActivitiesAsync(Guid tenantId, Guid? accountId = null, Guid? engagementId = null, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<OperationalActivityLogDto>>($"api/ops/activities?tenantId={tenantId}&accountId={accountId}&engagementId={engagementId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<List<OperationalOptionDto>?> GetOperationalOptionsAsync(Guid tenantId, string optionGroupCode, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<List<OperationalOptionDto>>($"api/ops/options?tenantId={tenantId}&optionGroupCode={Uri.EscapeDataString(optionGroupCode)}", cancellationToken);
+
     public Task<OperationalActivityLogDto?> GetOperationalActivityByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<OperationalActivityLogDto>($"api/ops/activities/{id}", cancellationToken);
 

@@ -96,7 +96,7 @@ WHERE attachment.TenantId=@TenantId AND attachment.NotificationId=@NotificationI
                 foreach (var download in downloads) await download.Content.DisposeAsync();
             }
             const string sentSql = """
-UPDATE Core.Notification SET StatusCode=N'Sent',DeliveryStatus=N'Sent',SentDateUtc=SYSUTCDATETIME(),DeliveredDateUtc=SYSUTCDATETIME(),NextAttemptDateUtc=NULL,ErrorMessage=NULL,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND NotificationId=@NotificationId;
+UPDATE Core.Notification SET StatusCode=N'Sent',DeliveryStatus=N'Sent',SentDateUtc=SYSUTCDATETIME(),DeliveredDateUtc=SYSUTCDATETIME(),NextAttemptDateUtc=NULL,LeaseOwner=NULL,LeaseExpiresDateUtc=NULL,ErrorMessage=NULL,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND NotificationId=@NotificationId;
 INSERT Core.NotificationDeliveryAttempt(TenantId,NotificationId,ProviderName,ChannelCode,StatusCode,AttemptDateUtc,CreatedDateUtc,IsDeleted) VALUES(@TenantId,@NotificationId,@ProviderCode,N'Email',N'Sent',SYSUTCDATETIME(),SYSUTCDATETIME(),0);
 INSERT Core.NotificationAuditLog(TenantId,NotificationId,ActionName,Details,CreatedDateUtc,IsDeleted) VALUES(@TenantId,@NotificationId,N'Sent',N'Email sent through shared Notification Platform.',SYSUTCDATETIME(),0);
 """;
@@ -114,9 +114,16 @@ INSERT Core.NotificationAuditLog(TenantId,NotificationId,ActionName,Details,Crea
     public async Task<int> ProcessQueuedAsync(string leaseOwner, int batchSize, TimeSpan leaseDuration, CancellationToken cancellationToken = default)
     {
         const string sql = """
-SELECT TOP(@BatchSize) TenantId,NotificationId FROM Core.Notification WITH(UPDLOCK,READPAST,ROWLOCK)
-WHERE ChannelCode=N'Email' AND IsDeleted=0 AND StatusCode IN(N'Queued',N'Failed') AND AttemptCount<MaxAttempts AND COALESCE(NextAttemptDateUtc,CreatedDateUtc)<=SYSUTCDATETIME()
-ORDER BY COALESCE(NextAttemptDateUtc,CreatedDateUtc),CreatedDateUtc;
+;WITH candidates AS
+(
+    SELECT TOP(@BatchSize) * FROM Core.Notification WITH(UPDLOCK,READPAST,ROWLOCK)
+    WHERE ChannelCode=N'Email' AND IsDeleted=0 AND StatusCode IN(N'Queued',N'Failed') AND AttemptCount<MaxAttempts
+      AND COALESCE(NextAttemptDateUtc,CreatedDateUtc)<=SYSUTCDATETIME()
+      AND (LeaseExpiresDateUtc IS NULL OR LeaseExpiresDateUtc<SYSUTCDATETIME())
+    ORDER BY COALESCE(NextAttemptDateUtc,CreatedDateUtc),CreatedDateUtc
+)
+UPDATE candidates SET StatusCode=N'Processing',DeliveryStatus=N'Processing',LeaseOwner=@LeaseOwner,LeaseExpiresDateUtc=DATEADD(second,@LeaseSeconds,SYSUTCDATETIME()),ModifiedDateUtc=SYSUTCDATETIME()
+OUTPUT inserted.TenantId,inserted.NotificationId;
 """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var items = (await connection.QueryAsync<QueueRow>(new CommandDefinition(sql, new { BatchSize = Math.Clamp(batchSize, 1, 100), LeaseOwner = leaseOwner, LeaseSeconds = (int)leaseDuration.TotalSeconds }, cancellationToken: cancellationToken))).AsList();
@@ -144,7 +151,7 @@ ORDER BY COALESCE(NextAttemptDateUtc,CreatedDateUtc),CreatedDateUtc;
     {
         var retry = item.AttemptCount < item.MaxAttempts;
         const string sql = """
-UPDATE Core.Notification SET StatusCode=N'Failed',DeliveryStatus=N'Failed',ErrorMessage=@ErrorMessage,NextAttemptDateUtc=CASE WHEN @Retry=1 THEN DATEADD(second,@RetryDelaySeconds,SYSUTCDATETIME()) ELSE NULL END,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND NotificationId=@NotificationId;
+UPDATE Core.Notification SET StatusCode=N'Failed',DeliveryStatus=N'Failed',ErrorMessage=@ErrorMessage,NextAttemptDateUtc=CASE WHEN @Retry=1 THEN DATEADD(second,@RetryDelaySeconds,SYSUTCDATETIME()) ELSE NULL END,LeaseOwner=NULL,LeaseExpiresDateUtc=NULL,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND NotificationId=@NotificationId;
 INSERT Core.NotificationDeliveryAttempt(TenantId,NotificationId,ProviderName,ChannelCode,StatusCode,AttemptDateUtc,ErrorMessage,CreatedDateUtc,IsDeleted) VALUES(@TenantId,@NotificationId,COALESCE(@ProviderCode,N'UNCONFIGURED'),N'Email',N'Failed',SYSUTCDATETIME(),@ErrorMessage,SYSUTCDATETIME(),0);
 """;
         await connection.ExecuteAsync(new CommandDefinition(sql, new { item.TenantId, item.NotificationId, ErrorMessage = error[..Math.Min(error.Length, 1000)], Retry = retry, item.RetryDelaySeconds, item.ProviderCode }, cancellationToken: cancellationToken));
