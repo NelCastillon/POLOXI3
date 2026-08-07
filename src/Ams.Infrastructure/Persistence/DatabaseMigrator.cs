@@ -343,6 +343,7 @@ public sealed partial class DatabaseMigrator
         new("0288_Unified_Search_Explanation_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0096_UnifiedSearchExplanationCompletion.sql")),
         new("0289_Intelligence_Search_Projection_Backfill", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0097_IntelligenceSearchProjectionBackfill.sql")),
         new("0290_Search_Intent_Patterns", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0098_SearchIntentPatterns.sql")),
+        new("0291_Search_Intent_Interpretation_Log", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0099_SearchIntentInterpretationLog.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
