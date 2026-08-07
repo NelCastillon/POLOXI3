@@ -14,4 +14,5 @@ public interface ICommissionAccountingRepository
     Task<IReadOnlyList<Guid>> CreatePayablesAsync(CreateCommissionPayableBatchRequest request, CancellationToken cancellationToken = default);
     Task ApprovePayableAsync(ApproveCommissionPayableRequest request, CancellationToken cancellationToken = default);
     Task<int> SynchronizeExpectedReceivablesAsync(SynchronizeCommissionExpectedReceivablesRequest request, CancellationToken cancellationToken = default);
+    Task<CommissionMatchRunResultDto> SaveSharedMatchesAsync(RunCommissionMatchingRequest request, IReadOnlyCollection<ProposedCommissionMatch> matches, CancellationToken cancellationToken = default);
 }

@@ -15,6 +15,7 @@ using Ams.Worker.Endorsements;
 using Ams.Worker.Intelligence;
 using Ams.Worker.Payments;
 using Ams.Worker.Renewals;
+using Ams.Worker.Search;
 using Ams.Worker.Submissions;
 using Ams.Application.Features.DocumentIntake;
 using OpenTelemetry.Metrics;
@@ -79,6 +80,7 @@ builder.Services.AddHostedService<DocumentIntakeRetentionWorkerService>();
 builder.Services.AddHostedService<DocumentIntakePromptEvaluationWorkerService>();
 builder.Services.AddHostedService<DocumentIntakeTelemetryWorkerService>();
 builder.Services.AddHostedService<IntelligenceWorkerService>();
+builder.Services.AddHostedService<SearchProjectionWorkerService>();
 
 var host = builder.Build();
 

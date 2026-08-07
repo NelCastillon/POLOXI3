@@ -107,155 +107,52 @@ ORDER BY IsPrimary DESC, RecordName;";
     public async Task<int> ScanAsync(DuplicateScanRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-IF OBJECT_ID(N'dbo.AMS_DigitsOnly', N'FN') IS NULL
-BEGIN
-    EXEC(N'CREATE FUNCTION dbo.AMS_DigitsOnly(@value NVARCHAR(4000)) RETURNS NVARCHAR(4000) AS BEGIN RETURN @value END');
-END
-
-DECLARE @Inserted TABLE (GroupId UNIQUEIDENTIFIER);
-
-;WITH AccountCandidates AS (
-    SELECT TenantId,
-           MatchType,
-           MatchValue,
-           ConfidenceScore,
-           MatchReasons,
-           COUNT(1) AS RecordCount,
-           MIN(CreatedDateUtc) AS FirstCreatedDateUtc
-    FROM (
-        SELECT TenantId, 'Email' AS MatchType, LOWER(LTRIM(RTRIM(MainEmail))) AS MatchValue, 96 AS ConfidenceScore, 'Same account email' AS MatchReasons, CreatedDateUtc
-        FROM Client.Account
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(MainEmail)), '') IS NOT NULL
-        UNION ALL
-        SELECT TenantId, 'Phone', dbo.AMS_DigitsOnly(MainPhone), 90, 'Same account phone', CreatedDateUtc
-        FROM Client.Account
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(MainPhone)), '') IS NOT NULL
-        UNION ALL
-        SELECT TenantId, 'Name', LOWER(LTRIM(RTRIM(AccountName))), 82, 'Similar account name', CreatedDateUtc
-        FROM Client.Account
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(AccountName)), '') IS NOT NULL
-    ) x
-    WHERE NULLIF(MatchValue, '') IS NOT NULL
-    GROUP BY TenantId, MatchType, MatchValue, ConfidenceScore, MatchReasons
-    HAVING COUNT(1) > 1
-), NewAccountGroups AS (
-    SELECT NEWID() AS GroupId, TenantId, 'Account' AS EntityType,
-           CONCAT('Account:', MatchType, ':', MatchValue) AS MatchKey,
-           MatchReasons, ConfidenceScore, FirstCreatedDateUtc
-    FROM AccountCandidates c
-    WHERE NOT EXISTS (
-        SELECT 1 FROM CRM.DuplicateGroup g
-        WHERE g.TenantId = c.TenantId AND g.EntityType = 'Account'
-          AND g.MatchKey = CONCAT('Account:', c.MatchType, ':', c.MatchValue)
-          AND g.IsDeleted = 0 AND g.StatusCode IN ('Open', 'Under Review')
-    )
+DECLARE @Inserted TABLE(GroupId UNIQUEIDENTIFIER,MatchExecutionId UNIQUEIDENTIFIER,PrimaryRecordId UNIQUEIDENTIFIER);
+;WITH evidence AS
+(
+    SELECT execution.MatchExecutionId,execution.EntityTypeCode,execution.SourceEntityId,candidate.CandidateEntityId,candidate.DisplayName,candidate.OverallScore,
+           STRING_AGG(reason.Explanation,N'; ') WITHIN GROUP(ORDER BY reason.WeightedScore DESC) MatchReasons,
+           ROW_NUMBER() OVER(PARTITION BY execution.MatchExecutionId ORDER BY candidate.RankOrder) CandidateRank
+    FROM Search.MatchExecution execution
+    JOIN Search.MatchCandidate candidate ON candidate.MatchExecutionId=execution.MatchExecutionId AND candidate.IsDeleted=0
+    JOIN Search.MatchReasonEvidence reason ON reason.MatchCandidateId=candidate.MatchCandidateId AND reason.IsDeleted=0
+    WHERE execution.TenantId=@TenantId AND execution.StatusCode=N'COMPLETED' AND execution.IsDeleted=0
+      AND execution.EntityTypeCode IN(N'Account',N'Contact',N'Lead') AND candidate.ConfidenceBandCode IN(N'EXACT',N'STRONG',N'POSSIBLE')
+    GROUP BY execution.MatchExecutionId,execution.EntityTypeCode,execution.SourceEntityId,candidate.CandidateEntityId,candidate.DisplayName,candidate.OverallScore,candidate.RankOrder
+), newGroups AS
+(
+    SELECT evidence.*,NEWID() GroupId,CONCAT(N'SearchMatch:',CONVERT(NVARCHAR(36),evidence.MatchExecutionId)) MatchKey
+    FROM evidence WHERE CandidateRank=1 AND evidence.SourceEntityId IS NOT NULL AND evidence.SourceEntityId<>evidence.CandidateEntityId
+      AND NOT EXISTS(SELECT 1 FROM CRM.DuplicateGroup existing WHERE existing.TenantId=@TenantId AND existing.MatchKey=CONCAT(N'SearchMatch:',CONVERT(NVARCHAR(36),evidence.MatchExecutionId)) AND existing.IsDeleted=0)
 )
-INSERT INTO CRM.DuplicateGroup (GroupId, TenantId, EntityType, MatchKey, MatchReasons, ConfidenceScore, StatusCode, PrimaryRecordId, PrimaryName, DetectedDateUtc, CreatedByUserId, IsDeleted)
-OUTPUT INSERTED.GroupId INTO @Inserted
-SELECT g.GroupId, g.TenantId, g.EntityType, g.MatchKey, g.MatchReasons, g.ConfidenceScore, 'Open', p.AccountId, p.AccountName, SYSUTCDATETIME(), @ScannedByUserId, 0
-FROM NewAccountGroups g
-CROSS APPLY (
-    SELECT TOP 1 a.AccountId, a.AccountName
-    FROM Client.Account a
-    WHERE a.TenantId = g.TenantId AND a.IsDeleted = 0
-      AND (
-        (g.MatchKey LIKE 'Account:Email:%' AND LOWER(LTRIM(RTRIM(a.MainEmail))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Email:')))
-        OR (g.MatchKey LIKE 'Account:Phone:%' AND dbo.AMS_DigitsOnly(a.MainPhone) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Phone:')))
-        OR (g.MatchKey LIKE 'Account:Name:%' AND LOWER(LTRIM(RTRIM(a.AccountName))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Name:')))
-      )
-    ORDER BY a.CreatedDateUtc
-) p;
+INSERT CRM.DuplicateGroup(GroupId,TenantId,EntityType,MatchKey,MatchReasons,ConfidenceScore,StatusCode,PrimaryRecordId,PrimaryName,DetectedDateUtc,CreatedByUserId,IsDeleted)
+OUTPUT inserted.GroupId,newGroups.MatchExecutionId,newGroups.PrimaryRecordId INTO @Inserted
+SELECT GroupId,@TenantId,EntityTypeCode,MatchKey,LEFT(MatchReasons,500),CONVERT(INT,ROUND(OverallScore,0)),N'Under Review',CandidateEntityId,DisplayName,SYSUTCDATETIME(),@ScannedByUserId,0 FROM newGroups;
 
-INSERT INTO CRM.DuplicateRecord (DuplicateRecordId, GroupId, RecordId, RecordName, IsPrimary, SourceSystem, CreatedDateUtc, FieldValuesJson, IsDeleted)
-SELECT NEWID(), g.GroupId, a.AccountId, a.AccountName, CASE WHEN a.AccountId = g.PrimaryRecordId THEN 1 ELSE 0 END, 'CRM', a.CreatedDateUtc,
-       CONCAT('{""Account Name"":""', STRING_ESCAPE(COALESCE(a.AccountName, ''), 'json'),
-              '"",""Email"":""', STRING_ESCAPE(COALESCE(a.MainEmail, ''), 'json'),
-              '"",""Phone"":""', STRING_ESCAPE(COALESCE(a.MainPhone, ''), 'json'),
-              '"",""Status"":""', STRING_ESCAPE(COALESCE(a.StatusCode, ''), 'json'),
-              '"",""Segment"":""', STRING_ESCAPE(COALESCE(a.SegmentCode, ''), 'json'), '""}') , 0
-FROM CRM.DuplicateGroup g
-JOIN @Inserted i ON i.GroupId = g.GroupId
-JOIN Client.Account a ON a.TenantId = g.TenantId AND a.IsDeleted = 0
-WHERE g.EntityType = 'Account'
-  AND (
-    (g.MatchKey LIKE 'Account:Email:%' AND LOWER(LTRIM(RTRIM(a.MainEmail))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Email:')))
-    OR (g.MatchKey LIKE 'Account:Phone:%' AND dbo.AMS_DigitsOnly(a.MainPhone) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Phone:')))
-    OR (g.MatchKey LIKE 'Account:Name:%' AND LOWER(LTRIM(RTRIM(a.AccountName))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Account:Name:')))
-  );
+INSERT CRM.DuplicateRecord(DuplicateRecordId,GroupId,RecordId,RecordName,IsPrimary,SourceSystem,CreatedDateUtc,FieldValuesJson,IsDeleted)
+SELECT NEWID(),inserted.GroupId,projection.EntityId,projection.DisplayName,CASE WHEN projection.EntityId=inserted.PrimaryRecordId THEN 1 ELSE 0 END,N'SearchMatching',SYSUTCDATETIME(),
+       JSON_QUERY((SELECT projection.EntityTypeCode,projection.SecondaryText,projection.NavigationRoute FOR JSON PATH,WITHOUT_ARRAY_WRAPPER)),0
+FROM @Inserted inserted JOIN Search.MatchExecution execution ON execution.MatchExecutionId=inserted.MatchExecutionId
+JOIN Search.EntityProjection projection ON projection.TenantId=@TenantId AND projection.EntityTypeCode=execution.EntityTypeCode AND projection.EntityId IN(execution.SourceEntityId,inserted.PrimaryRecordId) AND projection.IsDeleted=0;
 
-;WITH ContactCandidates AS (
-    SELECT TenantId,
-           MatchType,
-           MatchValue,
-           ConfidenceScore,
-           MatchReasons,
-           COUNT(1) AS RecordCount,
-           MIN(CreatedDateUtc) AS FirstCreatedDateUtc
-    FROM (
-        SELECT TenantId, 'Email' AS MatchType, LOWER(LTRIM(RTRIM(Email))) AS MatchValue, 97 AS ConfidenceScore, 'Same contact email' AS MatchReasons, CreatedDateUtc
-        FROM Client.Contact
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(Email)), '') IS NOT NULL
-        UNION ALL
-        SELECT TenantId, 'Phone', dbo.AMS_DigitsOnly(Phone), 90, 'Same contact phone', CreatedDateUtc
-        FROM Client.Contact
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(Phone)), '') IS NOT NULL
-        UNION ALL
-        SELECT TenantId, 'NameAccount', LOWER(CONCAT(LTRIM(RTRIM(FirstName)), '|', LTRIM(RTRIM(LastName)), '|', CONVERT(NVARCHAR(36), AccountId))), 84, 'Same contact name and account', CreatedDateUtc
-        FROM Client.Contact
-        WHERE TenantId = @TenantId AND IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(FirstName)), '') IS NOT NULL AND NULLIF(LTRIM(RTRIM(LastName)), '') IS NOT NULL
-    ) x
-    WHERE NULLIF(MatchValue, '') IS NOT NULL
-    GROUP BY TenantId, MatchType, MatchValue, ConfidenceScore, MatchReasons
-    HAVING COUNT(1) > 1
-), NewContactGroups AS (
-    SELECT NEWID() AS GroupId, TenantId, 'Contact' AS EntityType,
-           CONCAT('Contact:', MatchType, ':', MatchValue) AS MatchKey,
-           MatchReasons, ConfidenceScore, FirstCreatedDateUtc
-    FROM ContactCandidates c
-    WHERE NOT EXISTS (
-        SELECT 1 FROM CRM.DuplicateGroup g
-        WHERE g.TenantId = c.TenantId AND g.EntityType = 'Contact'
-          AND g.MatchKey = CONCAT('Contact:', c.MatchType, ':', c.MatchValue)
-          AND g.IsDeleted = 0 AND g.StatusCode IN ('Open', 'Under Review')
-    )
-)
-INSERT INTO CRM.DuplicateGroup (GroupId, TenantId, EntityType, MatchKey, MatchReasons, ConfidenceScore, StatusCode, PrimaryRecordId, PrimaryName, DetectedDateUtc, CreatedByUserId, IsDeleted)
-OUTPUT INSERTED.GroupId INTO @Inserted
-SELECT g.GroupId, g.TenantId, g.EntityType, g.MatchKey, g.MatchReasons, g.ConfidenceScore, 'Open', p.ContactId, p.ContactName, SYSUTCDATETIME(), @ScannedByUserId, 0
-FROM NewContactGroups g
-CROSS APPLY (
-    SELECT TOP 1 c.ContactId, CONCAT(c.FirstName, ' ', c.LastName) AS ContactName
-    FROM Client.Contact c
-    WHERE c.TenantId = g.TenantId AND c.IsDeleted = 0
-      AND (
-        (g.MatchKey LIKE 'Contact:Email:%' AND LOWER(LTRIM(RTRIM(c.Email))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:Email:')))
-        OR (g.MatchKey LIKE 'Contact:Phone:%' AND dbo.AMS_DigitsOnly(c.Phone) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:Phone:')))
-        OR (g.MatchKey LIKE 'Contact:NameAccount:%' AND LOWER(CONCAT(LTRIM(RTRIM(c.FirstName)), '|', LTRIM(RTRIM(c.LastName)), '|', CONVERT(NVARCHAR(36), c.AccountId))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:NameAccount:')))
-      )
-    ORDER BY c.CreatedDateUtc
-) p;
-
-INSERT INTO CRM.DuplicateRecord (DuplicateRecordId, GroupId, RecordId, RecordName, IsPrimary, SourceSystem, CreatedDateUtc, FieldValuesJson, IsDeleted)
-SELECT NEWID(), g.GroupId, c.ContactId, CONCAT(c.FirstName, ' ', c.LastName), CASE WHEN c.ContactId = g.PrimaryRecordId THEN 1 ELSE 0 END, 'CRM', c.CreatedDateUtc,
-       CONCAT('{""First Name"":""', STRING_ESCAPE(COALESCE(c.FirstName, ''), 'json'),
-              '"",""Last Name"":""', STRING_ESCAPE(COALESCE(c.LastName, ''), 'json'),
-              '"",""Email"":""', STRING_ESCAPE(COALESCE(c.Email, ''), 'json'),
-              '"",""Phone"":""', STRING_ESCAPE(COALESCE(c.Phone, ''), 'json'),
-              '"",""Job Title"":""', STRING_ESCAPE(COALESCE(c.JobTitle, ''), 'json'), '""}') , 0
-FROM CRM.DuplicateGroup g
-JOIN @Inserted i ON i.GroupId = g.GroupId
-JOIN Client.Contact c ON c.TenantId = g.TenantId AND c.IsDeleted = 0
-WHERE g.EntityType = 'Contact'
-  AND (
-    (g.MatchKey LIKE 'Contact:Email:%' AND LOWER(LTRIM(RTRIM(c.Email))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:Email:')))
-    OR (g.MatchKey LIKE 'Contact:Phone:%' AND dbo.AMS_DigitsOnly(c.Phone) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:Phone:')))
-    OR (g.MatchKey LIKE 'Contact:NameAccount:%' AND LOWER(CONCAT(LTRIM(RTRIM(c.FirstName)), '|', LTRIM(RTRIM(c.LastName)), '|', CONVERT(NVARCHAR(36), c.AccountId))) = RIGHT(g.MatchKey, LEN(g.MatchKey) - LEN('Contact:NameAccount:')))
-  );
-
-SELECT COUNT(1) FROM @Inserted;";
+SELECT COUNT(1) FROM @Inserted;
+";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await cn.ExecuteScalarAsync<int>(new CommandDefinition(sql, new { request.TenantId, request.ScannedByUserId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyList<DuplicateScanSource>> GetScanSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SELECT EntityId,EntityTypeCode,NormalizedFieldsJson
+FROM Search.EntityProjection
+WHERE TenantId=@TenantId AND EntityTypeCode IN(N'Account',N'Contact',N'Lead') AND IsActive=1 AND IsDeleted=0
+ORDER BY EntityTypeCode,EntityId;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<DuplicateScanSourceRow>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+        return rows.Select(row => new DuplicateScanSource(row.EntityId, row.EntityTypeCode, JsonSerializer.Deserialize<Dictionary<string, string?>>(row.NormalizedFieldsJson, JsonOptions) ?? [])).ToList();
     }
 
     public async Task SetPrimaryAsync(Guid groupId, DuplicateSetPrimaryRequest request, CancellationToken cancellationToken = default)
@@ -369,4 +266,6 @@ WHERE GroupId = @GroupId AND IsDeleted = 0;";
         public DateTime? CreatedDateUtc { get; set; }
         public string? FieldValuesJson { get; set; }
     }
+
+    private sealed record DuplicateScanSourceRow(Guid EntityId, string EntityTypeCode, string NormalizedFieldsJson);
 }

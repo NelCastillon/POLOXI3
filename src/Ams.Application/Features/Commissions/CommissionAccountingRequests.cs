@@ -23,6 +23,14 @@ public sealed record RunCommissionMatchingRequest(
     [Range(0, 365)] int DateToleranceDays,
     Guid? UserId);
 
+public sealed record ProposedCommissionMatch(
+    Guid CarrierCommissionStatementLineId,
+    Guid CommissionExpectedReceivableId,
+    decimal MatchScore,
+    string MatchMethodCode,
+    decimal MatchedAmount,
+    decimal ExpectedAmount);
+
 public sealed record ApproveCommissionMatchRequest(
     [Required] Guid TenantId,
     [Required] Guid CommissionReconciliationMatchId,

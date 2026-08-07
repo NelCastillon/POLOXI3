@@ -49,15 +49,15 @@ public sealed class DocumentIntakeOperationsRepository(ISqlConnectionFactory con
         await connection.ExecuteAsync(new CommandDefinition(sql,new{command.TenantId,command.WorkItemId,command.Reason,command.ActorUserId,command.CorrelationId,command.RowVersion,ReplayMaxAttempts=settings.DeadLetterReplayMaxAttempts},transaction,cancellationToken:cancellationToken));
     },cancellationToken);
 
-    public async Task<IReadOnlyCollection<DocumentIntakeMalwareStatusDto>> GetPendingMalwareScansAsync(int batchSize,CancellationToken cancellationToken=default)
+    public async Task<IReadOnlyCollection<DocumentIntakeMalwareStatusDto>> GetPendingMalwareScansAsync(int batchSize,int errorRetryMinutes=15,CancellationToken cancellationToken=default)
     {
         const string sql="""
             SELECT TOP(@BatchSize) scan.TenantId,scan.DocumentId,document.FileName,scan.StoragePath,scan.StatusCode,scan.ProviderCode,scan.ThreatName,scan.ProviderResult,scan.ScanRequestedDateUtc,scan.ScanCompletedDateUtc,scan.RowVersion
             FROM DMS.IntakeMalwareScan scan JOIN DMS.Document document ON document.TenantId=scan.TenantId AND document.DocumentId=scan.DocumentId AND document.IsDeleted=0
-            WHERE scan.StatusCode IN(N'PENDING',N'ERROR') ORDER BY scan.ScanRequestedDateUtc;
+            WHERE scan.StatusCode=N'PENDING' OR (scan.StatusCode=N'ERROR' AND COALESCE(scan.ModifiedDateUtc,scan.ScanRequestedDateUtc)<=DATEADD(MINUTE,-@ErrorRetryMinutes,SYSUTCDATETIME())) ORDER BY scan.ScanRequestedDateUtc;
             """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return (await connection.QueryAsync<DocumentIntakeMalwareStatusDto>(new CommandDefinition(sql,new{BatchSize=Math.Clamp(batchSize,1,500)},cancellationToken:cancellationToken))).AsList();
+        return (await connection.QueryAsync<DocumentIntakeMalwareStatusDto>(new CommandDefinition(sql,new{BatchSize=Math.Clamp(batchSize,1,500),ErrorRetryMinutes=Math.Clamp(errorRetryMinutes,1,1440)},cancellationToken:cancellationToken))).AsList();
     }
 
     public async Task UpsertMalwareStatusAsync(Guid tenantId,Guid documentId,string storagePath,string statusCode,string providerCode,string? threatName,string? providerResult,CancellationToken cancellationToken=default)

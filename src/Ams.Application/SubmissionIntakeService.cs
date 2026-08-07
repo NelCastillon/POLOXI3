@@ -17,8 +17,6 @@ namespace Ams.Application;
 /// </summary>
 public sealed class SubmissionIntakeService : ISubmissionIntakeService
 {
-    private const int AutoMatchThreshold = 95;
-
     private readonly ISubmissionIntakeRepository _intakeRepository;
     private readonly IAccountMatchingService _matchingService;
     private readonly IAccountRepository _accountRepository;

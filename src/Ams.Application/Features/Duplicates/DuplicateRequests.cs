@@ -28,6 +28,8 @@ public sealed class DuplicateScanRequest
     public Guid? ScannedByUserId { get; set; }
 }
 
+public sealed record DuplicateScanSource(Guid EntityId, string EntityTypeCode, IReadOnlyDictionary<string, string?> Fields);
+
 public sealed class DuplicateSetPrimaryRequest
 {
     [Required]

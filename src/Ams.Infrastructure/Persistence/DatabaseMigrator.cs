@@ -335,6 +335,10 @@ public sealed partial class DatabaseMigrator
         new("0280_Platform_Architecture_Foundation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0088_PlatformArchitectureFoundation.sql")),
         new("0281_Platform_Runtime_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0089_PlatformRuntimeCompletion.sql")),
         new("0282_Platform_Gap_Remediation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0090_PlatformGapRemediation.sql")),
+        new("0283_Search_Matching_Platform", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0091_SearchMatchingPlatform.sql")),
+        new("0284_Search_Matching_Platform_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0092_SearchMatchingPlatformCompletion.sql")),
+        new("0285_Search_Matching_Administration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0093_SearchMatchingAdministration.sql")),
+        new("0286_Search_Matching_Operational_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0094_SearchMatchingOperationalCompletion.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

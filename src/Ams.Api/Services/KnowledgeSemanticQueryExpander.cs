@@ -1,17 +1,20 @@
 using Ams.Application.Abstractions.Intelligence;
 using Ams.Application.Features.Intelligence;
+using Ams.Application.Abstractions.Persistence;
 using Ams.Knowledge.Contracts.Concepts;
 
 namespace Ams.Api.Services;
 
-public sealed class KnowledgeSemanticQueryExpander(IConceptResolver resolver,ILogger<KnowledgeSemanticQueryExpander> logger):ISemanticQueryExpander
+public sealed class KnowledgeSemanticQueryExpander(IConceptResolver resolver,ISearchMatchingRepository searchRepository,ILogger<KnowledgeSemanticQueryExpander> logger):ISemanticQueryExpander
 {
     public async Task<SemanticQueryExpansion> ExpandAsync(Guid tenantId,string query,int maximumConcepts,CancellationToken cancellationToken=default)
     {
-        var tokens=query.Split([' ',',',';','/','-'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(x=>x.Length>2).Take(12).ToArray();var phrases=new HashSet<string>(StringComparer.OrdinalIgnoreCase){query.Trim()};
-        for(var length=Math.Min(3,tokens.Length);length>=1;length--)for(var index=0;index+length<=tokens.Length;index++)phrases.Add(string.Join(' ',tokens.Skip(index).Take(length)));
+        var settings=await searchRepository.GetSemanticPreprocessingSettingsAsync(tenantId,cancellationToken);
+        var maximumTokens=Math.Clamp(settings.MaximumTokens,1,100);var maximumPhraseLength=Math.Clamp(settings.MaximumPhraseLength,1,10);var maximumPhrases=Math.Clamp(settings.MaximumPhrases,1,250);
+        var tokens=query.Split([' ',',',';','/','-'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(x=>x.Length>2).Take(maximumTokens).ToArray();var phrases=new HashSet<string>(StringComparer.OrdinalIgnoreCase){query.Trim()};
+        for(var length=Math.Min(maximumPhraseLength,tokens.Length);length>=1;length--)for(var index=0;index+length<=tokens.Length;index++)phrases.Add(string.Join(' ',tokens.Skip(index).Take(length)));
         var candidates=new Dictionary<Guid,SemanticConceptMatchDto>();
-        foreach(var phrase in phrases.Take(30))
+        foreach(var phrase in phrases.Take(maximumPhrases))
         {
             try
             {

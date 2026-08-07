@@ -304,6 +304,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IServiceRequestRepository, ServiceRequestRepository>();
         services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
         services.AddScoped<IOperationalOptionRepository, OperationalOptionRepository>();
+        services.AddScoped<ISearchMatchingRepository, SearchMatchingRepository>();
         services.AddScoped<ICalendarEventRepository, CalendarEventRepository>();
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
@@ -314,6 +315,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();
         services.AddScoped<IServiceRequestService, ServiceRequestService>();
         services.AddScoped<IOperationalActivityService, OperationalActivityService>();
+        services.AddScoped<IEntityMatchingService, EntityMatchingService>();
         services.AddScoped<ICalendarEventService, CalendarEventService>();
 
         // ── Billing extended engines ─────────────────────────────────

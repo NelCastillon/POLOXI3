@@ -23,6 +23,22 @@ public sealed class DocumentIntakeContractTests
     }
 
     [Fact]
+    public void MalwareWorker_PersistsAuthorizationFailuresAndDefersDatabaseBackedRetries()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var provider = File.ReadAllText(Path.Combine(root, "src", "Ams.Infrastructure", "Services", "DefenderStorageMalwareStatusProvider.cs"));
+        var repository = File.ReadAllText(Path.Combine(root, "src", "Ams.Infrastructure", "Persistence", "Repositories", "DocumentIntakeOperationsRepository.cs"));
+        var worker = File.ReadAllText(Path.Combine(root, "Ams.Worker", "Documents", "DocumentIntakeMalwareWorkerService.cs"));
+
+        Assert.Contains("exception.Status is 401 or 403", provider, StringComparison.Ordinal);
+        Assert.Contains("Storage Blob Data Reader", provider, StringComparison.Ordinal);
+        Assert.Contains("DATEADD(MINUTE,-@ErrorRetryMinutes", repository, StringComparison.Ordinal);
+        Assert.Contains("settings.MalwarePendingTimeoutMinutes", worker, StringComparison.Ordinal);
+        Assert.Contains("UpsertMalwareStatusAsync", worker, StringComparison.Ordinal);
+        Assert.Contains("result.StatusCode==\"ERROR\"", worker, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Validator_RejectsUnsupportedModuleAndInvalidCorrection()
     {
         var unsupported = new CreateDocumentIntakeSessionCommand(Guid.NewGuid(), "source-1", "UNKNOWN", "MANUAL_UPLOAD", "NORMAL", null, null, "correlation", Guid.NewGuid());

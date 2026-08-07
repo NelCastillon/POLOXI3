@@ -10,6 +10,8 @@ public interface IDuplicateRepository
 
     Task<int> ScanAsync(DuplicateScanRequest request, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<DuplicateScanSource>> GetScanSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+
     Task SetPrimaryAsync(Guid groupId, DuplicateSetPrimaryRequest request, CancellationToken cancellationToken = default);
 
     Task MergeAsync(Guid groupId, DuplicateResolveRequest request, CancellationToken cancellationToken = default);

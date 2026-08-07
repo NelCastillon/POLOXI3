@@ -7,7 +7,7 @@ public interface IDocumentIntakeOperationsRepository
     Task<DocumentIntakeRuntimeSettings> GetSettingsAsync(Guid? tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<DocumentIntakeDeadLetterDto>> GetDeadLettersAsync(Guid tenantId,int pageSize=100,CancellationToken cancellationToken=default);
     Task ReplayDeadLetterAsync(ReplayDocumentIntakeWorkCommand command,CancellationToken cancellationToken=default);
-    Task<IReadOnlyCollection<DocumentIntakeMalwareStatusDto>> GetPendingMalwareScansAsync(int batchSize,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<DocumentIntakeMalwareStatusDto>> GetPendingMalwareScansAsync(int batchSize,int errorRetryMinutes=15,CancellationToken cancellationToken=default);
     Task UpsertMalwareStatusAsync(Guid tenantId,Guid documentId,string storagePath,string statusCode,string providerCode,string? threatName,string? providerResult,CancellationToken cancellationToken=default);
     Task EnsureDocumentCleanAsync(Guid tenantId,Guid intakeSessionId,bool failClosed,CancellationToken cancellationToken=default);
     Task RegisterPayloadAsync(Guid tenantId,Guid intakeSessionId,string storageReference,string payloadType,bool containsPii,int retentionDays,string actorId,string? correlationId,CancellationToken cancellationToken=default);
