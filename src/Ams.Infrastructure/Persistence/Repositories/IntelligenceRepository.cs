@@ -16,6 +16,104 @@ public sealed partial class IntelligenceRepository(ISqlConnectionFactory connect
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);return (await connection.QueryAsync<AiProviderDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
     }
 
+    public async Task<IntelligenceSearchConfiguration> GetSearchConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+            SELECT
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.KeywordWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) KeywordWeight,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.SemanticWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.30) SemanticWeight,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.FuzzyWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) FuzzyWeight,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.RelationshipWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) RelationshipWeight,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.RecencyWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) RecencyWeight,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.BusinessPriorityWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) BusinessPriorityWeight,
+              COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.RecencyWindowDays' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),365) RecencyWindowDays,
+              COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.MaximumRelationshipResults' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),20) MaximumRelationshipResults,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.MinimumUnifiedScore' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) MinimumUnifiedScore,
+              CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.EnableRules' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1)) EnableRules,
+              CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.EnableRelationships' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1)) EnableRelationships,
+              CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.EnableAiSummary' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1)) EnableAiSummary,
+              CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.EnableLlmIntentFallback' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1)) EnableLlmIntentFallback,
+              COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.LlmIntentMinimumConfidence' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.70) LlmIntentMinimumConfidence,
+              COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.LlmIntentTimeoutSeconds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),8) LlmIntentTimeoutSeconds;
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleAsync<SearchConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        return new(new(row.KeywordWeight,row.SemanticWeight,row.FuzzyWeight,row.RelationshipWeight,row.RecencyWeight,row.BusinessPriorityWeight),Math.Clamp(row.RecencyWindowDays,1,3650),Math.Clamp(row.MaximumRelationshipResults,0,100),Math.Clamp(row.MinimumUnifiedScore,0,1),row.EnableRules,row.EnableRelationships,row.EnableAiSummary,row.EnableLlmIntentFallback,Math.Clamp(row.LlmIntentMinimumConfidence,0,1),Math.Clamp(row.LlmIntentTimeoutSeconds,1,60));
+    }
+
+    public async Task<IReadOnlyCollection<IntelligenceSearchIntentPatternDto>> GetSearchIntentPatternsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+            ;WITH patterns AS
+            (
+                SELECT pattern.*,ROW_NUMBER() OVER(PARTITION BY pattern.PatternCode ORDER BY CASE WHEN pattern.TenantId=@TenantId THEN 0 ELSE 1 END,pattern.Priority) Choice
+                FROM AI.SearchIntentPattern pattern
+                WHERE pattern.IsActive=1 AND pattern.IsDeleted=0 AND (pattern.TenantId=@TenantId OR pattern.TenantId IS NULL)
+            )
+            SELECT PatternCode,EntityTypeCode,ModuleCode,ExtractionStrategyCode,Priority,IsEntityList
+            FROM patterns WHERE Choice=1 ORDER BY Priority,PatternCode;
+
+            ;WITH patterns AS
+            (
+                SELECT pattern.*,ROW_NUMBER() OVER(PARTITION BY pattern.PatternCode ORDER BY CASE WHEN pattern.TenantId=@TenantId THEN 0 ELSE 1 END,pattern.Priority) Choice
+                FROM AI.SearchIntentPattern pattern
+                WHERE pattern.IsActive=1 AND pattern.IsDeleted=0 AND (pattern.TenantId=@TenantId OR pattern.TenantId IS NULL)
+            )
+            SELECT pattern.PatternCode,phrase.PhraseKindCode,phrase.PhraseText,phrase.SortOrder
+            FROM patterns pattern
+            JOIN AI.SearchIntentPatternPhrase phrase ON phrase.SearchIntentPatternId=pattern.SearchIntentPatternId AND phrase.IsActive=1 AND phrase.IsDeleted=0
+            WHERE pattern.Choice=1
+            ORDER BY pattern.Priority,pattern.PatternCode,phrase.PhraseKindCode,phrase.SortOrder,phrase.PhraseText;
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        var patterns=(await multi.ReadAsync<IntentPatternRow>()).AsList();
+        var phrases=(await multi.ReadAsync<IntentPatternPhraseRow>()).AsList();
+        return patterns.Select(pattern=>new IntelligenceSearchIntentPatternDto(pattern.PatternCode,pattern.EntityTypeCode,pattern.ModuleCode,pattern.ExtractionStrategyCode,phrases.Where(phrase=>phrase.PatternCode==pattern.PatternCode&&phrase.PhraseKindCode.Equals("MATCH",StringComparison.OrdinalIgnoreCase)).OrderBy(phrase=>phrase.SortOrder).Select(phrase=>phrase.PhraseText).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),phrases.Where(phrase=>phrase.PatternCode==pattern.PatternCode&&phrase.PhraseKindCode.Equals("EXTRACT",StringComparison.OrdinalIgnoreCase)).OrderBy(phrase=>phrase.SortOrder).Select(phrase=>phrase.PhraseText).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),pattern.Priority,pattern.IsEntityList)).ToArray();
+    }
+
+    public async Task RecordSearchIntentInterpretationAsync(IntelligenceSearchIntentLogRecord record,CancellationToken cancellationToken=default)
+    {
+        const string sql="""IF OBJECT_ID(N'AI.SearchIntentInterpretationLog',N'U') IS NOT NULL INSERT AI.SearchIntentInterpretationLog(SearchIntentInterpretationLogId,TenantId,UserId,QueryText,EntityTypeCode,ModuleCode,SearchText,SourceEngineCode,Confidence,StatusCode,ErrorMessage,CorrelationId,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@TenantId,@UserId,@QueryText,@EntityTypeCode,@ModuleCode,@SearchText,@SourceEngineCode,@Confidence,@StatusCode,@ErrorMessage,@CorrelationId,SYSUTCDATETIME(),@UserId,0);""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,record,cancellationToken:cancellationToken));
+    }
+
+    public async Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetAuthorizedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> entities,CancellationToken cancellationToken=default)
+    {
+        if(entities.Count==0)return [];
+        const string sql="""
+            SELECT document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,LEFT(document.ContentText,500) Excerpt,document.SourceCreatedDateUtc,projection.NavigationRoute,
+              CONVERT(bit,CASE WHEN document.EntityTypeCode=N'DOCUMENT' AND EXISTS(SELECT 1 FROM DMS.IntakeSessionDocument link JOIN DMS.IntakeDraftField field ON field.TenantId=link.TenantId AND field.IntakeSessionId=link.IntakeSessionId WHERE link.TenantId=document.TenantId AND link.DocumentId=document.EntityId AND (field.ExtractedValue LIKE N'%'+@Query+N'%' OR field.NormalizedValue LIKE N'%'+@Query+N'%' OR field.ReviewedValue LIKE N'%'+@Query+N'%')) THEN 1 ELSE 0 END) ExtractedFieldMatch
+            FROM AI.SearchDocument document
+            JOIN OPENJSON(@EntitiesJson) WITH(EntityTypeCode nvarchar(100) '$.EntityTypeCode',EntityId uniqueidentifier '$.EntityId') entity ON entity.EntityTypeCode=document.EntityTypeCode AND entity.EntityId=document.EntityId
+            LEFT JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0
+            WHERE document.TenantId=@TenantId AND document.IsDeleted=0 AND (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode)
+              AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.PermissionCode=N'READ' AND permission.IsDeleted=0 AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))));
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<AuthorizedSearchRow>(new CommandDefinition(sql,new{request.TenantId,request.UserId,request.ModuleCode,request.EntityTypeCode,request.Query,EntitiesJson=JsonSerializer.Serialize(entities)},cancellationToken:cancellationToken));
+        return rows.Select(row=>WithExtractedFieldExplanation(ToSearchResult(row),row.ExtractedFieldMatch)).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetRelatedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> sources,int maximumResults,CancellationToken cancellationToken=default)
+    {
+        if(sources.Count==0||maximumResults<=0)return [];
+        const string sql="""
+            SELECT TOP(@MaximumResults) document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,LEFT(document.ContentText,500) Excerpt,document.SourceCreatedDateUtc,projection.NavigationRoute,MAX(relationship.Strength) RelationshipScore,MAX(relationship.RelationshipTypeCode) RelationshipTypeCode
+            FROM OPENJSON(@SourcesJson) WITH(EntityTypeCode nvarchar(100) '$.EntityTypeCode',EntityId uniqueidentifier '$.EntityId') source
+            JOIN AI.EntityRelationship relationship ON relationship.TenantId=@TenantId AND relationship.SourceEntityTypeCode=source.EntityTypeCode AND relationship.SourceEntityId=source.EntityId AND relationship.IsDeleted=0 AND (relationship.EffectiveFromUtc IS NULL OR relationship.EffectiveFromUtc<=SYSUTCDATETIME()) AND (relationship.EffectiveToUtc IS NULL OR relationship.EffectiveToUtc>SYSUTCDATETIME())
+            JOIN AI.SearchDocument document ON document.TenantId=@TenantId AND document.EntityTypeCode=relationship.TargetEntityTypeCode AND document.EntityId=relationship.TargetEntityId AND document.IsDeleted=0
+            LEFT JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0
+            WHERE (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode)
+              AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.PermissionCode=N'READ' AND permission.IsDeleted=0 AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))))
+            GROUP BY document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,document.ContentText,document.SourceCreatedDateUtc,projection.NavigationRoute ORDER BY MAX(relationship.Strength) DESC,document.Title;
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<AuthorizedSearchRow>(new CommandDefinition(sql,new{request.TenantId,request.UserId,request.ModuleCode,request.EntityTypeCode,MaximumResults=maximumResults,SourcesJson=JsonSerializer.Serialize(sources)},cancellationToken:cancellationToken));
+        return rows.Select(row=>ToSearchResult(row) with{RelationshipScore=row.RelationshipScore,IsRelatedResult=true,Explanations=[new("RELATED_ENTITY","Related entity",$"Connected through {row.RelationshipTypeCode??"an approved relationship"}.",row.RelationshipScore,"RELATIONSHIP_DISCOVERY")]}).ToArray();
+    }
+
     public async Task<IReadOnlyCollection<AiModelDeploymentDto>> GetModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
         const string sql="""SELECT model.ModelDeploymentId,model.ProviderId,provider.ProviderCode,model.ModelCode,model.DeploymentName,model.ModelFamily,model.CapabilityCode,model.ContextWindowTokens,model.MaximumOutputTokens,model.InputCostPerMillionTokens,model.OutputCostPerMillionTokens,model.CurrencyCode,model.Priority,model.IsFallback,model.IsActive,model.RowVersion FROM AI.ModelDeployment model JOIN AI.Provider provider ON provider.ProviderId=model.ProviderId AND provider.IsDeleted=0 WHERE (model.TenantId IS NULL OR model.TenantId=@TenantId) AND model.IsDeleted=0 ORDER BY model.Priority,model.DeploymentName;""";
@@ -77,18 +175,129 @@ public sealed partial class IntelligenceRepository(ISqlConnectionFactory connect
     public async Task<IntelligenceSearchResponse> SearchAsync(IntelligenceSearchRequest request,IReadOnlyCollection<SemanticConceptMatchDto> concepts,IReadOnlyCollection<string> expandedTerms,CancellationToken cancellationToken=default)
     {
         var timer=Stopwatch.StartNew();
-        var intent=ParseSearchIntent(request.Query);
+        var intentPatterns=await GetSearchIntentPatternsAsync(request.TenantId,cancellationToken);
+        var intent=IntelligenceSearchIntentInterpreter.Interpret(request.Query,intentPatterns);
         var entityTypeCode=Null(request.EntityTypeCode)??intent.EntityTypeCode;
         var moduleCode=Null(request.ModuleCode)??intent.ModuleCode;
-        var terms=expandedTerms.Prepend(request.Query).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToArray();
+        var effectiveQuery=string.IsNullOrWhiteSpace(request.EffectiveSearchText)?(string.IsNullOrWhiteSpace(intent.SearchText)?request.Query:intent.SearchText):request.EffectiveSearchText;
+        if(intent.PatternCode?.Equals("PRIMARY_CONTACT_FOR_ACCOUNT",StringComparison.OrdinalIgnoreCase)==true)
+            return await SearchPrimaryContactForAccountAsync(request,effectiveQuery,moduleCode,entityTypeCode,concepts,timer,cancellationToken);
+        if(intent.PatternCode?.Equals("PRODUCER_FOR_ACCOUNT",StringComparison.OrdinalIgnoreCase)==true)
+            return await SearchProducerForAccountAsync(request,effectiveQuery,moduleCode,entityTypeCode,concepts,timer,cancellationToken);
+        var terms=expandedTerms.Prepend(effectiveQuery).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToArray();
         var conceptIds=concepts.Select(x=>x.ConceptId.ToString()).ToArray();
-        const string sql="""DECLARE @QueryId UNIQUEIDENTIFIER=NEWID();DECLARE @KeywordWeight decimal(9,6)=COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.KeywordWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.45);DECLARE @SemanticWeight decimal(9,6)=COALESCE(TRY_CONVERT(decimal(9,6),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.SemanticWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.55);DECLARE @ConfiguredMaximumResults int=COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.MaximumResults' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),100);DECLARE @EffectiveMaximumResults int=CASE WHEN @MaximumResults<@ConfiguredMaximumResults THEN @MaximumResults ELSE @ConfiguredMaximumResults END;WITH permitted AS(SELECT DISTINCT document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,document.ContentText,document.SourceCreatedDateUtc,CASE WHEN document.Title LIKE '%'+@Query+'%' THEN 1.0 WHEN document.ContentText LIKE '%'+@Query+'%' OR document.Keywords LIKE '%'+@Query+'%' THEN 0.7 ELSE 0.2 END KeywordScore,CASE WHEN @ConceptIdsJson<>N'[]' AND EXISTS(SELECT 1 FROM OPENJSON(@ConceptIdsJson) concept WHERE document.ConceptIdsJson LIKE '%'+CONVERT(nvarchar(36),concept.[value])+'%') THEN 1.0 WHEN @ExpandedTermsJson<>N'[]' AND EXISTS(SELECT 1 FROM OPENJSON(@ExpandedTermsJson) term WHERE document.ContentText LIKE '%'+CONVERT(nvarchar(500),term.[value])+'%' OR document.Keywords LIKE '%'+CONVERT(nvarchar(500),term.[value])+'%') THEN 0.65 ELSE 0 END SemanticScore FROM AI.SearchDocument document WHERE document.TenantId=@TenantId AND document.IsDeleted=0 AND (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode) AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.IsDeleted=0 AND permission.PermissionCode=N'READ' AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))))) SELECT TOP(@EffectiveMaximumResults) SearchDocumentId,EntityTypeCode,EntityId,ModuleCode,Title,LEFT(ContentText,500) Excerpt,KeywordScore,SemanticScore,CONVERT(decimal(18,6),KeywordScore*@KeywordWeight+SemanticScore*@SemanticWeight) CombinedScore FROM permitted WHERE @OrderByRecency=1 OR KeywordScore>0.2 OR SemanticScore>0 ORDER BY CASE WHEN @OrderByRecency=1 THEN SourceCreatedDateUtc END DESC,CombinedScore DESC,Title;INSERT AI.SearchQuery(SearchQueryId,TenantId,UserId,QueryText,NormalizedQuery,SearchModeCode,ExpandedConceptIdsJson,FilterJson,ResultCount,DurationMilliseconds,CorrelationId,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(@QueryId,@TenantId,@UserId,@Query,LOWER(LTRIM(RTRIM(@Query))),CASE WHEN @OrderByRecency=1 THEN N'RECENCY' ELSE N'HYBRID' END,@ConceptIdsJson,@FilterJson,@@ROWCOUNT,@DurationMilliseconds,@CorrelationId,SYSUTCDATETIME(),@UserId,0);SELECT @QueryId;""";
+        const string sql="""DECLARE @QueryId UNIQUEIDENTIFIER=NEWID();DECLARE @ConfiguredMaximumResults int=COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Search.MaximumResults' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),100);DECLARE @EffectiveMaximumResults int=CASE WHEN @MaximumResults<@ConfiguredMaximumResults THEN @MaximumResults ELSE @ConfiguredMaximumResults END;WITH permitted AS(SELECT DISTINCT document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,document.ContentText,document.SourceCreatedDateUtc,projection.NavigationRoute,CASE WHEN @IsEntityList=1 AND @EntityTypeCode IS NOT NULL THEN .70 WHEN document.Title=@Query THEN 1.0 WHEN document.Title LIKE '%'+@Query+'%' THEN .85 WHEN document.ContentText LIKE '%'+@Query+'%' OR document.Keywords LIKE '%'+@Query+'%' THEN .70 ELSE 0 END KeywordScore,CASE WHEN @ConceptIdsJson<>N'[]' AND EXISTS(SELECT 1 FROM OPENJSON(@ConceptIdsJson) concept WHERE document.ConceptIdsJson LIKE '%'+CONVERT(nvarchar(36),concept.[value])+'%') THEN 1.0 WHEN @ExpandedTermsJson<>N'[]' AND EXISTS(SELECT 1 FROM OPENJSON(@ExpandedTermsJson) term WHERE document.ContentText LIKE '%'+CONVERT(nvarchar(500),term.[value])+'%' OR document.Keywords LIKE '%'+CONVERT(nvarchar(500),term.[value])+'%') THEN .65 ELSE 0 END SemanticScore FROM AI.SearchDocument document LEFT JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0 WHERE document.TenantId=@TenantId AND document.IsDeleted=0 AND (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode) AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.IsDeleted=0 AND permission.PermissionCode=N'READ' AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))))) SELECT TOP(@EffectiveMaximumResults) SearchDocumentId,EntityTypeCode,EntityId,ModuleCode,Title,LEFT(ContentText,500) Excerpt,KeywordScore,SemanticScore,SourceCreatedDateUtc,NavigationRoute FROM permitted WHERE @OrderByRecency=1 OR @IsEntityList=1 OR KeywordScore>0 OR SemanticScore>0 ORDER BY CASE WHEN @OrderByRecency=1 THEN SourceCreatedDateUtc END DESC,KeywordScore+SemanticScore DESC,Title;INSERT AI.SearchQuery(SearchQueryId,TenantId,UserId,QueryText,NormalizedQuery,SearchModeCode,ExpandedConceptIdsJson,FilterJson,ResultCount,DurationMilliseconds,CorrelationId,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(@QueryId,@TenantId,@UserId,@Query,LOWER(LTRIM(RTRIM(@Query))),CASE WHEN @OrderByRecency=1 THEN N'RECENCY' ELSE N'UNIFIED' END,@ConceptIdsJson,@FilterJson,@@ROWCOUNT,@DurationMilliseconds,@CorrelationId,SYSUTCDATETIME(),@UserId,0);SELECT @QueryId;""";
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{request.TenantId,request.UserId,request.Query,ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,request.MaximumResults,request.CorrelationId,OrderByRecency=intent.OrderByRecency,ConceptIdsJson=JsonSerializer.Serialize(conceptIds),ExpandedTermsJson=JsonSerializer.Serialize(terms),FilterJson=JsonSerializer.Serialize(new{ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,intent.OrderByRecency}),DurationMilliseconds=timer.ElapsedMilliseconds},cancellationToken:cancellationToken));
+        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{request.TenantId,request.UserId,Query=effectiveQuery,ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,request.MaximumResults,request.CorrelationId,OrderByRecency=intent.OrderByRecency,IsEntityList=intent.IsEntityList,ConceptIdsJson=JsonSerializer.Serialize(conceptIds),ExpandedTermsJson=JsonSerializer.Serialize(terms),FilterJson=JsonSerializer.Serialize(new{ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,intent.OrderByRecency,intent.IsEntityList,SearchText=effectiveQuery}),DurationMilliseconds=timer.ElapsedMilliseconds},cancellationToken:cancellationToken));
         var rows=(await multi.ReadAsync<SearchRow>()).AsList();
         var queryId=await multi.ReadSingleAsync<Guid>();
-        var results=rows.Select(row=>new IntelligenceSearchResultDto(row.SearchDocumentId,row.EntityTypeCode,row.EntityId,row.ModuleCode,row.Title,row.Excerpt,row.KeywordScore,row.SemanticScore,row.CombinedScore,concepts.Where(c=>conceptIds.Any(id=>(row.Excerpt??string.Empty).Contains(c.PreferredLabel,StringComparison.OrdinalIgnoreCase))).ToArray())).ToArray();
+        var results=rows.Select(row=>new IntelligenceSearchResultDto(row.SearchDocumentId,row.EntityTypeCode,row.EntityId,row.ModuleCode,row.Title,row.Excerpt,row.KeywordScore,row.SemanticScore,0,concepts.Where(c=>(row.Excerpt??string.Empty).Contains(c.PreferredLabel,StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            NavigationRoute=row.NavigationRoute,
+            RecencyScore=Recency(row.SourceCreatedDateUtc,365),
+            Explanations=BaseExplanations(row.KeywordScore,row.SemanticScore,row.Title.Equals(request.Query,StringComparison.OrdinalIgnoreCase),concepts)
+        }).ToArray();
         return new(queryId,request.Query,terms,results,timer.ElapsedMilliseconds);
+    }
+
+    private async Task<IntelligenceSearchResponse> SearchPrimaryContactForAccountAsync(IntelligenceSearchRequest request,string effectiveQuery,string? moduleCode,string? entityTypeCode,IReadOnlyCollection<SemanticConceptMatchDto> concepts,Stopwatch timer,CancellationToken cancellationToken)
+    {
+        const string sql="""
+            DECLARE @QueryId UNIQUEIDENTIFIER=NEWID();
+            WITH AccountMatch AS
+            (
+                SELECT TOP(1) account.AccountId
+                FROM Client.Account account
+                LEFT JOIN AI.SearchDocument accountDocument ON accountDocument.TenantId=account.TenantId AND accountDocument.EntityTypeCode=N'Account' AND accountDocument.EntityId=account.AccountId AND accountDocument.IsDeleted=0
+                WHERE account.TenantId=@TenantId AND account.IsDeleted=0
+                  AND (account.AccountName LIKE N'%'+@Query+N'%' OR account.AccountNumber LIKE N'%'+@Query+N'%' OR account.MainEmail LIKE N'%'+@Query+N'%' OR account.MainPhone LIKE N'%'+@Query+N'%' OR accountDocument.Title LIKE N'%'+@Query+N'%' OR accountDocument.ContentText LIKE N'%'+@Query+N'%')
+                ORDER BY CASE WHEN account.AccountName=@Query THEN 0 WHEN account.AccountName LIKE @Query+N'%' THEN 1 WHEN account.AccountName LIKE N'%'+@Query+N'%' THEN 2 ELSE 3 END,account.AccountName
+            ), PrimaryContact AS
+            (
+                SELECT TOP(1) document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,LEFT(document.ContentText,500) Excerpt,CONVERT(decimal(9,6),1.0) KeywordScore,CONVERT(decimal(9,6),0.0) SemanticScore,document.SourceCreatedDateUtc,projection.NavigationRoute
+                FROM AccountMatch accountMatch
+                JOIN Client.Contact contact ON contact.TenantId=@TenantId AND contact.AccountId=accountMatch.AccountId AND contact.IsDeleted=0 AND (contact.StatusCode IS NULL OR contact.StatusCode=N'Active')
+                LEFT JOIN Client.AccountContact accountContact ON accountContact.TenantId=contact.TenantId AND accountContact.AccountId=contact.AccountId AND accountContact.ContactId=contact.ContactId AND accountContact.IsDeleted=0 AND accountContact.IsActive=1 AND accountContact.IsPrimary=1
+                JOIN AI.SearchDocument document ON document.TenantId=contact.TenantId AND document.EntityTypeCode=N'Contact' AND document.EntityId=contact.ContactId AND document.IsDeleted=0
+                LEFT JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0
+                WHERE (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode)
+                  AND (accountContact.AccountContactId IS NOT NULL OR contact.ContactTypeCode=N'Primary')
+                  AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.IsDeleted=0 AND permission.PermissionCode=N'READ' AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))))
+                ORDER BY CASE WHEN accountContact.AccountContactId IS NOT NULL THEN 0 ELSE 1 END,contact.CreatedDateUtc,contact.LastName,contact.FirstName
+            )
+            SELECT SearchDocumentId,EntityTypeCode,EntityId,ModuleCode,Title,Excerpt,KeywordScore,SemanticScore,SourceCreatedDateUtc,NavigationRoute FROM PrimaryContact;
+            DECLARE @ResultCount int=@@ROWCOUNT;
+            INSERT AI.SearchQuery(SearchQueryId,TenantId,UserId,QueryText,NormalizedQuery,SearchModeCode,ExpandedConceptIdsJson,FilterJson,ResultCount,DurationMilliseconds,CorrelationId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+            VALUES(@QueryId,@TenantId,@UserId,@OriginalQuery,LOWER(LTRIM(RTRIM(@OriginalQuery))),N'UNIFIED',N'[]',@FilterJson,@ResultCount,@DurationMilliseconds,@CorrelationId,SYSUTCDATETIME(),@UserId,0);
+            SELECT @QueryId;
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{request.TenantId,request.UserId,Query=effectiveQuery,OriginalQuery=request.Query,ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,request.CorrelationId,FilterJson=JsonSerializer.Serialize(new{ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,PrimaryContactOnly=true,SearchText=effectiveQuery}),DurationMilliseconds=timer.ElapsedMilliseconds},cancellationToken:cancellationToken));
+        var rows=(await multi.ReadAsync<SearchRow>()).AsList();
+        var queryId=await multi.ReadSingleAsync<Guid>();
+        var results=rows.Select(row=>new IntelligenceSearchResultDto(row.SearchDocumentId,row.EntityTypeCode,row.EntityId,row.ModuleCode,row.Title,row.Excerpt,row.KeywordScore,row.SemanticScore,0,concepts.Where(c=>(row.Excerpt??string.Empty).Contains(c.PreferredLabel,StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            NavigationRoute=row.NavigationRoute,
+            RecencyScore=Recency(row.SourceCreatedDateUtc,365),
+            Explanations=[new("PRIMARY_CONTACT","Primary contact","Matched the account's DB-marked primary contact.",1,"DB_PATTERN")]
+        }).ToArray();
+        return new(queryId,request.Query,[effectiveQuery],results,timer.ElapsedMilliseconds);
+    }
+
+    private async Task<IntelligenceSearchResponse> SearchProducerForAccountAsync(IntelligenceSearchRequest request,string effectiveQuery,string? moduleCode,string? entityTypeCode,IReadOnlyCollection<SemanticConceptMatchDto> concepts,Stopwatch timer,CancellationToken cancellationToken)
+    {
+        const string sql="""
+            DECLARE @QueryId UNIQUEIDENTIFIER=NEWID();
+            WITH AccountMatch AS
+            (
+                SELECT TOP(1) account.AccountId,account.AccountOwnerUserId
+                FROM Client.Account account
+                LEFT JOIN AI.SearchDocument accountDocument ON accountDocument.TenantId=account.TenantId AND accountDocument.EntityTypeCode=N'Account' AND accountDocument.EntityId=account.AccountId AND accountDocument.IsDeleted=0
+                WHERE account.TenantId=@TenantId AND account.IsDeleted=0
+                  AND (account.AccountName LIKE N'%'+@Query+N'%' OR account.AccountNumber LIKE N'%'+@Query+N'%' OR account.MainEmail LIKE N'%'+@Query+N'%' OR account.MainPhone LIKE N'%'+@Query+N'%' OR accountDocument.Title LIKE N'%'+@Query+N'%' OR accountDocument.ContentText LIKE N'%'+@Query+N'%')
+                ORDER BY CASE WHEN account.AccountName=@Query THEN 0 WHEN account.AccountName LIKE @Query+N'%' THEN 1 WHEN account.AccountName LIKE N'%'+@Query+N'%' THEN 2 ELSE 3 END,account.AccountName
+            ), ProducerMatch AS
+            (
+                SELECT TOP(1) document.SearchDocumentId,document.EntityTypeCode,document.EntityId,document.ModuleCode,document.Title,LEFT(document.ContentText,500) Excerpt,CONVERT(decimal(9,6),1.0) KeywordScore,CONVERT(decimal(9,6),0.0) SemanticScore,document.SourceCreatedDateUtc,projection.NavigationRoute
+                FROM AccountMatch accountMatch
+                JOIN Agency.Staff staff ON staff.TenantId=@TenantId AND staff.IsDeleted=0 AND staff.IsActive=1 AND staff.Role=N'Producer'
+                LEFT JOIN Client.AccountServiceAssignment assignment ON assignment.TenantId=@TenantId AND assignment.AccountId=accountMatch.AccountId AND assignment.UserId=staff.UserId AND assignment.IsDeleted=0 AND UPPER(assignment.AssignmentRoleCode) IN(N'PRODUCER',N'ACCOUNT_PRODUCER') AND assignment.EffectiveDate<=CONVERT(date,SYSUTCDATETIME()) AND (assignment.ExpirationDate IS NULL OR assignment.ExpirationDate>=CONVERT(date,SYSUTCDATETIME()))
+                JOIN AI.SearchDocument document ON document.TenantId=staff.TenantId AND document.EntityTypeCode=N'Producer' AND document.EntityId=staff.StaffId AND document.IsDeleted=0
+                LEFT JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0
+                WHERE (@ModuleCode IS NULL OR document.ModuleCode=@ModuleCode) AND (@EntityTypeCode IS NULL OR document.EntityTypeCode=@EntityTypeCode)
+                  AND (assignment.AccountServiceAssignmentId IS NOT NULL OR accountMatch.AccountOwnerUserId=staff.UserId)
+                  AND EXISTS(SELECT 1 FROM AI.SearchPermission permission WHERE permission.TenantId=document.TenantId AND permission.SearchDocumentId=document.SearchDocumentId AND permission.IsDeleted=0 AND permission.PermissionCode=N'READ' AND ((permission.PrincipalTypeCode=N'USER' AND permission.PrincipalId=@UserId) OR (permission.PrincipalTypeCode=N'ROLE' AND EXISTS(SELECT 1 FROM IAM.UserRole userRole WHERE userRole.TenantId=@TenantId AND userRole.UserId=@UserId AND userRole.RoleId=permission.PrincipalId AND userRole.IsActive=1 AND userRole.IsDeleted=0))))
+                ORDER BY CASE WHEN assignment.AccountServiceAssignmentId IS NOT NULL THEN 0 ELSE 1 END,CASE WHEN assignment.IsPrimary=1 THEN 0 ELSE 1 END,assignment.EffectiveDate DESC,staff.LastName,staff.FirstName
+            )
+            SELECT SearchDocumentId,EntityTypeCode,EntityId,ModuleCode,Title,Excerpt,KeywordScore,SemanticScore,SourceCreatedDateUtc,NavigationRoute FROM ProducerMatch;
+            DECLARE @ResultCount int=@@ROWCOUNT;
+            INSERT AI.SearchQuery(SearchQueryId,TenantId,UserId,QueryText,NormalizedQuery,SearchModeCode,ExpandedConceptIdsJson,FilterJson,ResultCount,DurationMilliseconds,CorrelationId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+            VALUES(@QueryId,@TenantId,@UserId,@OriginalQuery,LOWER(LTRIM(RTRIM(@OriginalQuery))),N'UNIFIED',N'[]',@FilterJson,@ResultCount,@DurationMilliseconds,@CorrelationId,SYSUTCDATETIME(),@UserId,0);
+            SELECT @QueryId;
+            """;
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{request.TenantId,request.UserId,Query=effectiveQuery,OriginalQuery=request.Query,ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,request.CorrelationId,FilterJson=JsonSerializer.Serialize(new{ModuleCode=moduleCode,EntityTypeCode=entityTypeCode,ProducerForAccount=true,SearchText=effectiveQuery}),DurationMilliseconds=timer.ElapsedMilliseconds},cancellationToken:cancellationToken));
+        var rows=(await multi.ReadAsync<SearchRow>()).AsList();
+        var queryId=await multi.ReadSingleAsync<Guid>();
+        var results=rows.Select(row=>new IntelligenceSearchResultDto(row.SearchDocumentId,row.EntityTypeCode,row.EntityId,row.ModuleCode,row.Title,row.Excerpt,row.KeywordScore,row.SemanticScore,0,concepts.Where(c=>(row.Excerpt??string.Empty).Contains(c.PreferredLabel,StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            NavigationRoute=row.NavigationRoute,
+            RecencyScore=Recency(row.SourceCreatedDateUtc,365),
+            Explanations=[new("ACCOUNT_PRODUCER","Account producer","Matched the account's DB-backed producer assignment.",1,"DB_PATTERN")]
+        }).ToArray();
+        return new(queryId,request.Query,[effectiveQuery],results,timer.ElapsedMilliseconds);
+    }
+
+    public async Task CompleteUnifiedSearchAsync(Guid tenantId,Guid userId,Guid searchQueryId,string normalizedQuery,IntelligenceSearchWeightsDto weights,IReadOnlyCollection<IntelligenceSearchResultDto> results,string summaryStatusCode,Guid? summaryExecutionId,long durationMilliseconds,CancellationToken cancellationToken=default)
+    {
+        const string updateSql="""UPDATE AI.SearchQuery SET NormalizedQuery=@NormalizedQuery,SearchModeCode=N'UNIFIED',ResultCount=@ResultCount,DurationMilliseconds=@DurationMilliseconds,ScoringWeightsJson=@WeightsJson,SummaryStatusCode=@SummaryStatusCode,SummaryExecutionId=@SummaryExecutionId,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE SearchQueryId=@SearchQueryId AND TenantId=@TenantId AND UserId=@UserId AND IsDeleted=0;DELETE AI.SearchResultEvidence WHERE TenantId=@TenantId AND SearchQueryId=@SearchQueryId;""";
+        const string insertSql="""INSERT AI.SearchResultEvidence(SearchResultEvidenceId,TenantId,SearchQueryId,SearchDocumentId,EntityTypeCode,EntityId,RankNumber,KeywordScore,SemanticScore,FuzzyScore,RelationshipScore,RecencyScore,BusinessPriorityScore,UnifiedScore,ExplanationsJson,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@TenantId,@SearchQueryId,@SearchDocumentId,@EntityTypeCode,@EntityId,@RankNumber,@KeywordScore,@SemanticScore,@FuzzyScore,@RelationshipScore,@RecencyScore,@BusinessPriorityScore,@UnifiedScore,@ExplanationsJson,SYSUTCDATETIME(),@UserId,0);""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction=connection.BeginTransaction();
+        await connection.ExecuteAsync(new CommandDefinition(updateSql,new{TenantId=tenantId,UserId=userId,SearchQueryId=searchQueryId,NormalizedQuery=normalizedQuery,ResultCount=results.Count,DurationMilliseconds=durationMilliseconds,WeightsJson=JsonSerializer.Serialize(weights),SummaryStatusCode=summaryStatusCode,SummaryExecutionId=summaryExecutionId},transaction,cancellationToken:cancellationToken));
+        var rank=0;
+        foreach(var result in results)await connection.ExecuteAsync(new CommandDefinition(insertSql,new{TenantId=tenantId,UserId=userId,SearchQueryId=searchQueryId,result.SearchDocumentId,result.EntityTypeCode,result.EntityId,RankNumber=++rank,result.KeywordScore,result.SemanticScore,result.FuzzyScore,result.RelationshipScore,result.RecencyScore,result.BusinessPriorityScore,UnifiedScore=result.CombinedScore,ExplanationsJson=JsonSerializer.Serialize(result.Explanations)},transaction,cancellationToken:cancellationToken));
+        transaction.Commit();
     }
 
     public async Task<PagedResult<AiReviewQueueItemDto>> SearchReviewQueueAsync(SearchAiReviewQueueQuery query,CancellationToken cancellationToken=default)
@@ -111,19 +320,37 @@ public sealed partial class IntelligenceRepository(ISqlConnectionFactory connect
     }
 
     private static string? Null(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
-    private sealed record SearchRow(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,decimal KeywordScore,decimal SemanticScore,decimal CombinedScore);
-    private sealed record DashboardTotals(int ExecutionsToday,int FailedExecutionsToday,decimal EstimatedCostToday,decimal? AverageConfidenceToday,long? AverageDurationMillisecondsToday);
-    private sealed record ModuleMetrics(int KnowledgeChangesToday,int ImportJobsInProgress,int WorkerQueueDepth);
-    private static SearchIntent ParseSearchIntent(string query)
+    private static IntelligenceSearchResultDto ToSearchResult(AuthorizedSearchRow row)=>new(row.SearchDocumentId,row.EntityTypeCode,row.EntityId,row.ModuleCode,row.Title,row.Excerpt,0,0,0,[]){NavigationRoute=row.NavigationRoute,RecencyScore=Recency(row.SourceCreatedDateUtc,365)};
+    private static IntelligenceSearchResultDto WithExtractedFieldExplanation(IntelligenceSearchResultDto result,bool extractedFieldMatch)=>!extractedFieldMatch?result:result with{Explanations=result.Explanations.Append(new("EXTRACTED_DOCUMENT_FIELD","Extracted document field","The query matched a governed field extracted by Document Intelligence.",1,"DOCUMENT_INTELLIGENCE")).ToArray()};
+    private static decimal Recency(DateTime? sourceDateUtc,int windowDays)=>sourceDateUtc is null?0:Math.Clamp(1m-(decimal)(DateTime.UtcNow-sourceDateUtc.Value).TotalDays/Math.Max(1,windowDays),0,1);
+    private static IReadOnlyCollection<IntelligenceSearchMatchExplanationDto> BaseExplanations(decimal keywordScore,decimal semanticScore,bool exactTitle,IReadOnlyCollection<SemanticConceptMatchDto> concepts)
     {
-        var normalized=$" {query.Trim().ToLowerInvariant()} ";
-        var orderByRecency=new[]{" latest "," newest "," most recent "," recently created "," last created "}.Any(normalized.Contains);
-        if(normalized.Contains(" submission ")||normalized.Contains(" submissions "))return new("SUBMISSION","Submissions",orderByRecency);
-        if(normalized.Contains(" account ")||normalized.Contains(" accounts "))return new("ACCOUNT","Accounts",orderByRecency);
-        if(normalized.Contains(" claim ")||normalized.Contains(" claims "))return new("CLAIM","Claims",orderByRecency);
-        if(normalized.Contains(" document ")||normalized.Contains(" documents "))return new("DOCUMENT","Documents",orderByRecency);
-        return new(null,null,orderByRecency);
+        var explanations=new List<IntelligenceSearchMatchExplanationDto>();
+        if(exactTitle)explanations.Add(new("EXACT_TITLE","Exact title match","The normalized query exactly matched the result title.",1,"KEYWORD_RETRIEVAL"));
+        else if(keywordScore>0)explanations.Add(new("KEYWORD_MATCH","Keyword match","The query matched indexed title, keywords, or document text.",keywordScore,"KEYWORD_RETRIEVAL"));
+        if(semanticScore>0)explanations.Add(new("CONCEPT_MATCH","Synonym or concept match","Knowledge concepts or approved expanded terms matched this result.",semanticScore,"KNOWLEDGE_CONCEPT"));
+        foreach(var concept in concepts.Where(concept=>concept.Score>0).Take(3))explanations.Add(new(concept.MatchReasonCode,"Concept evidence",$"Matched knowledge concept {concept.PreferredLabel}.",concept.Score,"KNOWLEDGE_CONCEPT"));
+        return explanations;
     }
 
-    private sealed record SearchIntent(string? EntityTypeCode,string? ModuleCode,bool OrderByRecency);
+    private sealed record SearchRow(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,decimal KeywordScore,decimal SemanticScore,DateTime? SourceCreatedDateUtc,string? NavigationRoute);
+    private sealed class AuthorizedSearchRow
+    {
+        public Guid SearchDocumentId { get; init; }
+        public string EntityTypeCode { get; init; } = string.Empty;
+        public Guid EntityId { get; init; }
+        public string ModuleCode { get; init; } = string.Empty;
+        public string Title { get; init; } = string.Empty;
+        public string? Excerpt { get; init; }
+        public DateTime? SourceCreatedDateUtc { get; init; }
+        public string? NavigationRoute { get; init; }
+        public decimal RelationshipScore { get; init; }
+        public string? RelationshipTypeCode { get; init; }
+        public bool ExtractedFieldMatch { get; init; }
+    }
+    private sealed record SearchConfigurationRow(decimal KeywordWeight,decimal SemanticWeight,decimal FuzzyWeight,decimal RelationshipWeight,decimal RecencyWeight,decimal BusinessPriorityWeight,int RecencyWindowDays,int MaximumRelationshipResults,decimal MinimumUnifiedScore,bool EnableRules,bool EnableRelationships,bool EnableAiSummary,bool EnableLlmIntentFallback,decimal LlmIntentMinimumConfidence,int LlmIntentTimeoutSeconds);
+    private sealed record IntentPatternRow(string PatternCode,string? EntityTypeCode,string? ModuleCode,string ExtractionStrategyCode,int Priority,bool IsEntityList);
+    private sealed record IntentPatternPhraseRow(string PatternCode,string PhraseKindCode,string PhraseText,int SortOrder);
+    private sealed record DashboardTotals(int ExecutionsToday,int FailedExecutionsToday,decimal EstimatedCostToday,decimal? AverageConfidenceToday,long? AverageDurationMillisecondsToday);
+    private sealed record ModuleMetrics(int KnowledgeChangesToday,int ImportJobsInProgress,int WorkerQueueDepth);
 }

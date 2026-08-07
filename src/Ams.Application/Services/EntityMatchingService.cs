@@ -64,7 +64,7 @@ public sealed class EntityMatchingService(ISearchMatchingRepository repository, 
         var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId) ? $"search:{Guid.NewGuid():N}" : request.CorrelationId.Trim();
         await repository.SaveSemanticEvidenceAsync(request.TenantId, request.RequestedByUserId, correlationId, request.Query, expansion.Terms, expansion.Concepts, cancellationToken);
         var retrievalQuery = string.Join(' ', new[] { request.Query }.Concat(expansion.Terms).Distinct(StringComparer.OrdinalIgnoreCase));
-        var projections = await repository.SearchProjectionsAsync(request.TenantId, retrievalQuery, request.EntityTypeCodes, request.GrantedPermissions, Math.Min(request.MaximumResults, policy.MaximumCandidates), cancellationToken);
+        var projections = await repository.SearchProjectionsAsync(request.TenantId, retrievalQuery, request.Query, request.EntityTypeCodes, request.GrantedPermissions, Math.Min(request.MaximumResults, policy.MaximumCandidates), cancellationToken);
         var fields = new Dictionary<string, string?> { ["DisplayName"] = request.Query, ["SearchText"] = request.Query };
         var matchRequest = new EntityMatchRequest { TenantId = request.TenantId, ProfileCode = policy.ProfileCode, EntityTypeCode = policy.EntityTypeCode, CorrelationId = correlationId, RequestedByUserId = request.RequestedByUserId, Fields = fields };
         return projections.Select(projection => Score(matchRequest, projection, policy, expansion.Terms))
@@ -111,7 +111,9 @@ public sealed class EntityMatchingService(ISearchMatchingRepository repository, 
             reasons.Add(new(field.FieldCode, field.AlgorithmCode, similarity, weighted, discrepancy ? "CRITICAL_DISCREPANCY" : qualifies ? "MATCH_SIGNAL" : "BELOW_FIELD_THRESHOLD", field.IsSensitive ? $"{field.DisplayName} comparison was evaluated securely." : $"{field.DisplayName} similarity is {similarity:0.##}%.", similarity == 100, discrepancy));
         }
 
-        var score = criticalDiscrepancy || requiredFieldMissing || consideredWeight == 0 ? 0 : Math.Round(achievedWeight / consideredWeight * 100m, 4);
+        var weightedScore=consideredWeight==0?0:Math.Round(achievedWeight/consideredWeight*100m,4);
+        var strongestSearchSignal=reasons.Where(reason=>reason.ReasonCode=="MATCH_SIGNAL").Select(reason=>reason.SimilarityScore).DefaultIfEmpty(0).Max();
+        var score = criticalDiscrepancy || requiredFieldMissing ? 0 : policy.ProfileCode.Equals(MatchProfileCodes.GlobalEnterpriseSearch,StringComparison.OrdinalIgnoreCase)?Math.Max(weightedScore,strongestSearchSignal):weightedScore;
         var band = score >= policy.ExactThreshold ? "EXACT" : score >= policy.StrongThreshold ? "STRONG" : score >= policy.PossibleThreshold ? "POSSIBLE" : "BELOW_THRESHOLD";
         return new(projection.EntityId, projection.DisplayName, projection.SecondaryText, projection.NavigationRoute, score, band, reasons, band == "EXACT", policy.RequiresReview);
     }

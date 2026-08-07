@@ -165,6 +165,45 @@ public sealed class SearchMatchingServiceTests
     }
 
     [Fact]
+    public async Task SearchAsync_ReturnsSpellingDistanceMatchForTrpleA()
+    {
+        const string query="trple a";
+        const string displayName="Triple A..  ";
+        var entityId=Guid.NewGuid();
+        var repository=new FakeSearchMatchingRepository
+        {
+            Policy=Policy(MatchProfileCodes.GlobalEnterpriseSearch,"Global",
+                new MatchFieldPolicy(Guid.NewGuid(),"DisplayName","Display Name","DAMERAU_LEVENSHTEIN",35,60,true,false,false,false),
+                new MatchFieldPolicy(Guid.NewGuid(),"SearchText","Search Text","TOKEN_JACCARD",65,30,false,false,false,false)),
+            Projections=[new(Guid.NewGuid(),entityId,"Account",displayName,null,"/accounts/1","Intelligence.Search",new Dictionary<string,string?>{{"DisplayName",displayName},{"SearchText",displayName}})]
+        };
+        var service=new EntityMatchingService(repository);
+
+        var result=Assert.Single(await service.SearchAsync(new(){TenantId=Guid.NewGuid(),Query=query,GrantedPermissions=["Intelligence.Search"]}));
+        var editDistanceReason=Assert.Single(result.Reasons,reason=>reason.AlgorithmCode=="DAMERAU_LEVENSHTEIN");
+
+        Assert.Equal(entityId,result.EntityId);
+        Assert.True(result.Score>=60);
+        Assert.Equal(1,SearchMatchingAlgorithms.DamerauLevenshteinDistance(SearchMatchingAlgorithms.Normalize(query,"Global","DisplayName",[]),SearchMatchingAlgorithms.Normalize(displayName,"Global","DisplayName",[])));
+        Assert.Equal(87.5m,editDistanceReason.SimilarityScore);
+        Assert.Equal("MATCH_SIGNAL",editDistanceReason.ReasonCode);
+    }
+
+    [Fact]
+    public async Task SearchAsync_ReturnsSoundexEvidenceForPhoneticGlobalMatch()
+    {
+        var repository=new FakeSearchMatchingRepository
+        {
+            Policy=Policy(MatchProfileCodes.GlobalEnterpriseSearch,"Global",new MatchFieldPolicy(Guid.NewGuid(),"DisplayName","Display Name Phonetic","SOUNDEX",100,100,false,false,false,false)),
+            Projections=[new(Guid.NewGuid(),Guid.NewGuid(),"Account","Rupert",null,"/accounts/1","Intelligence.Search",new Dictionary<string,string?>{{"DisplayName","Rupert"}})]
+        };
+
+        var result=Assert.Single(await new EntityMatchingService(repository).SearchAsync(new(){TenantId=Guid.NewGuid(),Query="Robert",GrantedPermissions=["Intelligence.Search"]}));
+
+        Assert.Contains(result.Reasons,reason=>reason.AlgorithmCode=="SOUNDEX"&&reason.ReasonCode=="MATCH_SIGNAL"&&reason.SimilarityScore==100);
+    }
+
+    [Fact]
     public async Task FindModuleMatchesAsync_ResolvesEntityTypeFromDatabaseProfile()
     {
         var repository = new FakeSearchMatchingRepository { Policy = Policy(MatchProfileCodes.VehicleMatch, "Vehicle") };
@@ -210,7 +249,7 @@ public sealed class SearchMatchingServiceTests
         public Task<IReadOnlyList<MatchProjection>> GetCandidatesAsync(Guid tenantId, string entityTypeCode, IReadOnlyDictionary<string, string?> fields, int maximumCandidates, CancellationToken cancellationToken = default)
             => Task.FromResult(Projections);
 
-        public Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, string originalQuery, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default)
         {
             SearchTenantId = tenantId;
             SearchQuery = query;

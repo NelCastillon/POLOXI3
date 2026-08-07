@@ -6,6 +6,12 @@ public interface IAiProviderRouter
     Task<AiEmbeddingResult> CreateEmbeddingAsync(Guid tenantId,string featureCode,IReadOnlyCollection<string> inputs,string correlationId,CancellationToken cancellationToken=default);
 }
 
+public sealed class AiProviderUnavailableException:Exception
+{
+    public AiProviderUnavailableException(string featureCode,string message,Exception? innerException=null):base(message,innerException)=>FeatureCode=featureCode;
+    public string FeatureCode{get;}
+}
+
 public interface IAiProviderRouteRepository
 {
     Task<IReadOnlyCollection<AiProviderRoute>> GetRoutesAsync(Guid tenantId,string featureCode,string capabilityCode,CancellationToken cancellationToken=default);

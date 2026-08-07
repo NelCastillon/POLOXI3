@@ -121,3 +121,6 @@
 ## Insurance Knowledge Center
 - Implement the Insurance Knowledge Center inside the existing AgencyBinder solution as a bounded modular-monolith module: separate Knowledge Domain/Application/Infrastructure/Contracts projects, a separate knowledge SQL schema and migrations, explicit contracts, existing API/Web/Worker hosts, no direct cross-module table access, and no separate deployment initially.
 - For the Insurance Knowledge Center, implement a SQL Server-backed Insurance Semantic Layer with no mock or hard-coded UI/application data. Create, seed, update, and synchronize database data as needed. Keep the AMS operational database and workflows authoritative; semantic features are optional/advisory initially and must fail without blocking core operations. Use deterministic approved concepts/mappings/rules, human approval for AI suggestions, tenant-aware security/audit/versioning, SKOS-style concepts and hierarchy, relational closure tables, and defer graph/RDF/OWL/SHACL projections until proven use cases require them.
+
+## AgencyBinder Public Website Content
+- For AgencyBinder public website content, give heavy prominence to the Intelligence Platform, explicit AI positioning, and Core Engines. Present workflows only as high-level concepts rather than detailed internal steps, and use the home index page as the primary showcase.

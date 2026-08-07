@@ -7,7 +7,7 @@ public interface ISearchMatchingRepository
 {
     Task<MatchPolicy?> GetPolicyAsync(Guid tenantId, string profileCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<MatchProjection>> GetCandidatesAsync(Guid tenantId, string entityTypeCode, IReadOnlyDictionary<string, string?> fields, int maximumCandidates, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, string originalQuery, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default);
     Task<Guid> BeginExecutionAsync(EntityMatchRequest request, MatchPolicy policy, CancellationToken cancellationToken = default);
     Task CompleteExecutionAsync(Guid matchExecutionId, IReadOnlyList<MatchCandidate> candidates, CancellationToken cancellationToken = default);
     Task FailExecutionAsync(Guid matchExecutionId, string errorMessage, CancellationToken cancellationToken = default);

@@ -143,7 +143,7 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
 
     [HttpPost("search")]
     [Authorize(Policy=IntelligencePolicies.Search)]
-    public async Task<IActionResult> Search([FromBody]IntelligenceSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchAsync(request with{TenantId=TenantId,UserId=ActorUserId},cancellationToken));
+    public async Task<IActionResult> Search([FromBody]IntelligenceSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
 
     [HttpGet("review-queue")]
     [Authorize(Policy=IntelligencePolicies.Review)]

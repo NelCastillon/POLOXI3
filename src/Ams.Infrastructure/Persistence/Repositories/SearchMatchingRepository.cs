@@ -5,6 +5,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Features.SearchMatching;
 using Ams.Application.Features.Intelligence;
 using Dapper;
+using Microsoft.Data.SqlClient;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
 
@@ -16,7 +17,7 @@ public sealed class SearchMatchingRepository(ISqlConnectionFactory connectionFac
     {
         const string sql = """
 ;WITH profiles AS (SELECT profile.*,ROW_NUMBER() OVER(PARTITION BY ProfileCode ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END) Choice FROM Search.MatchProfile profile WHERE IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)) SELECT MatchProfileId,CAST(CASE WHEN TenantId IS NULL THEN 1 ELSE 0 END AS bit) IsInherited,ProfileCode,EntityTypeCode,DisplayName,Description,ExactThreshold,StrongThreshold,PossibleThreshold,MaximumCandidates,SemanticMaximumConcepts,RequiresReview,IsActive,RowVersion FROM profiles WHERE Choice=1 ORDER BY ProfileCode;
-SELECT rule.MatchFieldRuleId,CAST(CASE WHEN rule.TenantId IS NULL THEN 1 ELSE 0 END AS bit) IsInherited,rule.MatchProfileId,rule.FieldCode,rule.DisplayName,rule.MatchAlgorithmId,algorithm.AlgorithmCode,rule.Weight,rule.MinimumSimilarity,rule.IsRequired,rule.IsCriticalIdentifier,rule.ExactMatchOnly,rule.IsSensitive,rule.SortOrder,rule.IsActive,rule.RowVersion FROM Search.MatchFieldRule rule JOIN Search.MatchProfile profile ON profile.MatchProfileId=rule.MatchProfileId JOIN Search.MatchAlgorithm algorithm ON algorithm.MatchAlgorithmId=rule.MatchAlgorithmId WHERE rule.IsDeleted=0 AND profile.IsDeleted=0 AND (rule.TenantId=@TenantId OR rule.TenantId IS NULL) AND (profile.TenantId=@TenantId OR profile.TenantId IS NULL) ORDER BY profile.ProfileCode,rule.SortOrder;
+SELECT fieldRule.MatchFieldRuleId,CAST(CASE WHEN fieldRule.TenantId IS NULL THEN 1 ELSE 0 END AS bit) IsInherited,fieldRule.MatchProfileId,fieldRule.FieldCode,fieldRule.DisplayName,fieldRule.MatchAlgorithmId,algorithm.AlgorithmCode,fieldRule.Weight,fieldRule.MinimumSimilarity,fieldRule.IsRequired,fieldRule.IsCriticalIdentifier,fieldRule.ExactMatchOnly,fieldRule.IsSensitive,fieldRule.SortOrder,fieldRule.IsActive,fieldRule.RowVersion FROM Search.MatchFieldRule fieldRule JOIN Search.MatchProfile profile ON profile.MatchProfileId=fieldRule.MatchProfileId JOIN Search.MatchAlgorithm algorithm ON algorithm.MatchAlgorithmId=fieldRule.MatchAlgorithmId WHERE fieldRule.IsDeleted=0 AND profile.IsDeleted=0 AND (fieldRule.TenantId=@TenantId OR fieldRule.TenantId IS NULL) AND (profile.TenantId=@TenantId OR profile.TenantId IS NULL) ORDER BY profile.ProfileCode,fieldRule.SortOrder;
 ;WITH algorithms AS (SELECT algorithm.*,ROW_NUMBER() OVER(PARTITION BY AlgorithmCode ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END) Choice FROM Search.MatchAlgorithm algorithm WHERE IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)) SELECT MatchAlgorithmId,CAST(CASE WHEN TenantId IS NULL THEN 1 ELSE 0 END AS bit) IsInherited,AlgorithmCode,DisplayName,AlgorithmKindCode,Description,ConfigurationJson,IsActive,RowVersion FROM algorithms WHERE Choice=1 ORDER BY AlgorithmCode;
 SELECT NormalizationTermId,CAST(CASE WHEN TenantId IS NULL THEN 1 ELSE 0 END AS bit) IsInherited,EntityTypeCode,FieldCode,SourceValue,NormalizedValue,TermKindCode,CultureCode,SortOrder,IsActive,RowVersion FROM Search.NormalizationTerm WHERE IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY EntityTypeCode,FieldCode,SortOrder,IsInherited;
 ;WITH capabilities AS (SELECT capability.*,ROW_NUMBER() OVER(PARTITION BY CapabilityCode ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END) Choice FROM Search.SearchCapability capability WHERE IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)) SELECT CapabilityCode,DisplayName,IsAvailable,IsEnabled,ConfigurationJson,LastVerifiedDateUtc,LastError FROM capabilities WHERE Choice=1 ORDER BY CapabilityCode;
@@ -70,8 +71,8 @@ BEGIN
     VALUES(@Id,@TenantId,@ProfileCode,@EntityTypeCode,@DisplayName,@Description,@ExactThreshold,@StrongThreshold,@PossibleThreshold,@MaximumCandidates,@SemanticMaximumConcepts,0,@RequiresReview,@IsActive,SYSUTCDATETIME(),@ActorUserId,0);
     DECLARE @PlatformProfileId UNIQUEIDENTIFIER=(SELECT TOP(1) MatchProfileId FROM Search.MatchProfile WHERE TenantId IS NULL AND ProfileCode=@ProfileCode AND IsDeleted=0);
     INSERT Search.MatchFieldRule(MatchFieldRuleId,TenantId,MatchProfileId,FieldCode,DisplayName,MatchAlgorithmId,Weight,MinimumSimilarity,IsRequired,IsCriticalIdentifier,ExactMatchOnly,IsSensitive,SortOrder,IsActive,CreatedDateUtc,CreatedByUserId,IsDeleted)
-    SELECT NEWID(),@TenantId,@Id,rule.FieldCode,rule.DisplayName,COALESCE(tenantAlgorithm.MatchAlgorithmId,rule.MatchAlgorithmId),rule.Weight,rule.MinimumSimilarity,rule.IsRequired,rule.IsCriticalIdentifier,rule.ExactMatchOnly,rule.IsSensitive,rule.SortOrder,rule.IsActive,SYSUTCDATETIME(),@ActorUserId,0
-    FROM Search.MatchFieldRule rule JOIN Search.MatchAlgorithm platformAlgorithm ON platformAlgorithm.MatchAlgorithmId=rule.MatchAlgorithmId LEFT JOIN Search.MatchAlgorithm tenantAlgorithm ON tenantAlgorithm.TenantId=@TenantId AND tenantAlgorithm.AlgorithmCode=platformAlgorithm.AlgorithmCode AND tenantAlgorithm.IsActive=1 AND tenantAlgorithm.IsDeleted=0 WHERE rule.MatchProfileId=@PlatformProfileId AND rule.TenantId IS NULL AND rule.IsDeleted=0;
+    SELECT NEWID(),@TenantId,@Id,fieldRule.FieldCode,fieldRule.DisplayName,COALESCE(tenantAlgorithm.MatchAlgorithmId,fieldRule.MatchAlgorithmId),fieldRule.Weight,fieldRule.MinimumSimilarity,fieldRule.IsRequired,fieldRule.IsCriticalIdentifier,fieldRule.ExactMatchOnly,fieldRule.IsSensitive,fieldRule.SortOrder,fieldRule.IsActive,SYSUTCDATETIME(),@ActorUserId,0
+    FROM Search.MatchFieldRule fieldRule JOIN Search.MatchAlgorithm platformAlgorithm ON platformAlgorithm.MatchAlgorithmId=fieldRule.MatchAlgorithmId LEFT JOIN Search.MatchAlgorithm tenantAlgorithm ON tenantAlgorithm.TenantId=@TenantId AND tenantAlgorithm.AlgorithmCode=platformAlgorithm.AlgorithmCode AND tenantAlgorithm.IsActive=1 AND tenantAlgorithm.IsDeleted=0 WHERE fieldRule.MatchProfileId=@PlatformProfileId AND fieldRule.TenantId IS NULL AND fieldRule.IsDeleted=0;
 END
 ELSE
 BEGIN
@@ -208,13 +209,13 @@ VALUES(NEWID(),@TenantId,@RequestedByUserId,@CorrelationId,@QueryText,@ExpandedT
 DECLARE @Changed INT=0;
 DECLARE @Source TABLE(TenantId UNIQUEIDENTIFIER,EntityTypeCode NVARCHAR(80),EntityId UNIQUEIDENTIFIER,DisplayName NVARCHAR(500),SecondaryText NVARCHAR(1000),NavigationRoute NVARCHAR(500),SourceSchemaName NVARCHAR(128),SourceTableName NVARCHAR(128),SourceModifiedDateUtc DATETIME2,SearchText NVARCHAR(MAX),NormalizedFieldsJson NVARCHAR(MAX),ExactIdentifiersJson NVARCHAR(MAX),PermissionCode NVARCHAR(150));
 INSERT @Source
-SELECT TenantId,N'Account',AccountId,AccountName,CONCAT(AccountNumber,N' · ',COALESCE(MainEmail,N'')),CONCAT(N'/accounts/',AccountId),N'Client',N'Account',COALESCE(ModifiedDateUtc,CreatedDateUtc),CONCAT_WS(N' ',AccountNumber,AccountName,DbaName,MainEmail,MainPhone,Industry,Website),
-       (SELECT AccountName DisplayName,CONCAT_WS(N' ',AccountNumber,AccountName,DbaName,MainEmail,MainPhone,Industry,Website) SearchText,AccountName BusinessName,MainEmail Email,MainPhone Phone,DbaName,Industry FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT AccountNumber FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
-FROM Client.Account WHERE IsDeleted=0
+SELECT account.TenantId,N'Account',account.AccountId,account.AccountName,CONCAT(account.AccountNumber,N' · ',COALESCE(account.MainEmail,N'')),CONCAT(N'/accounts/',account.AccountId),N'Client',N'Account',COALESCE(account.ModifiedDateUtc,account.CreatedDateUtc,contactEvidence.LastContactModifiedDateUtc),CONCAT_WS(N' ',account.AccountNumber,account.AccountName,account.DbaName,account.MainEmail,account.MainPhone,account.Industry,account.Website,contactEvidence.ContactSearchText),
+       (SELECT account.AccountName DisplayName,CONCAT_WS(N' ',account.AccountNumber,account.AccountName,account.DbaName,account.MainEmail,account.MainPhone,account.Industry,account.Website,contactEvidence.ContactSearchText) SearchText,account.AccountName BusinessName,account.MainEmail Email,account.MainPhone Phone,account.DbaName,account.Industry,contactEvidence.ContactSearchText Contacts FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT account.AccountNumber FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
+FROM Client.Account account OUTER APPLY(SELECT STRING_AGG(CONCAT_WS(N' ',contact.FirstName,contact.LastName,contact.Email,contact.Phone,contact.JobTitle),N' ') WITHIN GROUP(ORDER BY contact.LastName,contact.FirstName) ContactSearchText,MAX(COALESCE(contact.ModifiedDateUtc,contact.CreatedDateUtc)) LastContactModifiedDateUtc FROM Client.Contact contact WHERE contact.TenantId=account.TenantId AND contact.AccountId=account.AccountId AND contact.IsDeleted=0 AND (contact.StatusCode IS NULL OR contact.StatusCode=N'Active')) contactEvidence WHERE account.IsDeleted=0
 UNION ALL
-SELECT contact.TenantId,N'Contact',contact.ContactId,CONCAT(contact.FirstName,N' ',contact.LastName),CONCAT(account.AccountName,N' · ',COALESCE(contact.Email,N'')),CONCAT(N'/contacts/',contact.ContactId),N'Client',N'Contact',COALESCE(contact.ModifiedDateUtc,contact.CreatedDateUtc),CONCAT_WS(N' ',contact.FirstName,contact.LastName,contact.Email,contact.Phone,contact.JobTitle,account.AccountName),
-       (SELECT CONCAT(contact.FirstName,N' ',contact.LastName) DisplayName,CONCAT_WS(N' ',contact.FirstName,contact.LastName,contact.Email,contact.Phone,contact.JobTitle,account.AccountName) SearchText,CONCAT(contact.FirstName,N' ',contact.LastName) FullName,contact.FirstName,contact.LastName,contact.Email,contact.Phone,account.AccountName FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT contact.Email,contact.Phone FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
-FROM Client.Contact contact JOIN Client.Account account ON account.TenantId=contact.TenantId AND account.AccountId=contact.AccountId AND account.IsDeleted=0 WHERE contact.IsDeleted=0
+SELECT contact.TenantId,N'Contact',contact.ContactId,CONCAT(contact.FirstName,N' ',contact.LastName),CONCAT(account.AccountName,N' · ',COALESCE(contact.Email,N'')),CONCAT(N'/client/contacts/',contact.ContactId),N'Client',N'Contact',COALESCE(contact.ModifiedDateUtc,contact.CreatedDateUtc),CONCAT_WS(N' ',contact.FirstName,contact.LastName,contact.Email,contact.Phone,contact.JobTitle,account.AccountName,contact.StatusCode),
+       (SELECT CONCAT(contact.FirstName,N' ',contact.LastName) DisplayName,CONCAT_WS(N' ',contact.FirstName,contact.LastName,contact.Email,contact.Phone,contact.JobTitle,account.AccountName,contact.StatusCode) SearchText,CONCAT(contact.FirstName,N' ',contact.LastName) FullName,contact.FirstName,contact.LastName,contact.Email,contact.Phone,account.AccountName,contact.StatusCode FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT contact.Email,contact.Phone FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
+FROM Client.Contact contact JOIN Client.Account account ON account.TenantId=contact.TenantId AND account.AccountId=contact.AccountId AND account.IsDeleted=0 WHERE contact.IsDeleted=0 AND (contact.StatusCode IS NULL OR contact.StatusCode=N'Active')
 UNION ALL
 SELECT TenantId,N'Lead',LeadId,COALESCE(NULLIF(AccountName,N''),NULLIF(CONCAT(FirstName,N' ',LastName),N' '),LeadNumber),CONCAT(LeadNumber,N' · ',COALESCE(Email,N'')),CONCAT(N'/leads/',LeadId),N'CRM',N'Lead',COALESCE(ModifiedDateUtc,CreatedDateUtc),CONCAT_WS(N' ',LeadNumber,AccountName,FirstName,LastName,Email,Phone,InterestedService),
        (SELECT COALESCE(NULLIF(AccountName,N''),NULLIF(CONCAT(FirstName,N' ',LastName),N' '),LeadNumber) DisplayName,CONCAT_WS(N' ',LeadNumber,AccountName,FirstName,LastName,Email,Phone,InterestedService) SearchText,AccountName CompanyName,CONCAT(FirstName,N' ',LastName) FullName,FirstName,LastName,Email,Phone FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT LeadNumber,Email,Phone FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
@@ -244,6 +245,10 @@ SELECT carrier.TenantId,N'Carrier',carrier.CarrierId,carrier.CarrierName,CONCAT_
        (SELECT carrier.CarrierName DisplayName,CONCAT_WS(N' ',carrier.CarrierName,carrier.NaicCode,carrier.AmBestRating) SearchText,carrier.CarrierName,carrier.NaicCode CarrierCode FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT carrier.NaicCode CarrierCode FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
 FROM Agency.Carrier carrier WHERE carrier.IsDeleted=0 AND carrier.IsActive=1
 UNION ALL
+SELECT staff.TenantId,N'Producer',staff.StaffId,CONCAT(staff.FirstName,N' ',staff.LastName),CONCAT_WS(N' · ',staff.Role,staff.Department,staff.Team,staff.Email),CONCAT(N'/tenant/agency/producers?staffId=',staff.StaffId),N'Agency',N'Staff',COALESCE(staff.ModifiedDateUtc,staff.CreatedDateUtc),CONCAT_WS(N' ',staff.FirstName,staff.LastName,staff.Email,staff.Phone,staff.Title,staff.Role,staff.Department,staff.Team,staff.LicenseNumber,staff.LicenseStates,staff.EmploymentStatus),
+       (SELECT CONCAT(staff.FirstName,N' ',staff.LastName) DisplayName,CONCAT_WS(N' ',staff.FirstName,staff.LastName,staff.Email,staff.Phone,staff.Title,staff.Role,staff.Department,staff.Team,staff.LicenseNumber,staff.LicenseStates,staff.EmploymentStatus) SearchText,CONCAT(staff.FirstName,N' ',staff.LastName) FullName,staff.Email,staff.Phone,staff.Role,staff.Department,staff.Team,staff.LicenseNumber NpnLicense,staff.LicenseStates FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT staff.Email,staff.Phone,staff.LicenseNumber FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
+FROM Agency.Staff staff WHERE staff.IsDeleted=0 AND staff.IsActive=1 AND staff.Role=N'Producer'
+UNION ALL
 SELECT location.TenantId,N'Location',location.AccountLocationId,COALESCE(NULLIF(location.LocationName,N''),location.LocationNumber),CONCAT_WS(N' · ',account.AccountName,location.City,location.StateCode,location.PostalCode),CONCAT(N'/accounts/',location.AccountId),N'Client',N'AccountLocation',COALESCE(location.ModifiedDateUtc,location.CreatedDateUtc),CONCAT_WS(N' ',account.AccountName,location.LocationNumber,location.LocationName,location.AddressLine1,location.AddressLine2,location.City,location.StateCode,location.PostalCode),
        (SELECT COALESCE(NULLIF(location.LocationName,N''),location.LocationNumber) DisplayName,CONCAT_WS(N' ',account.AccountName,location.LocationNumber,location.LocationName,location.AddressLine1,location.AddressLine2,location.City,location.StateCode,location.PostalCode) SearchText,location.LocationName,CONCAT_WS(N' ',location.AddressLine1,location.AddressLine2,location.City,location.StateCode,location.PostalCode) Address,location.PostalCode FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),(SELECT location.LocationNumber FOR JSON PATH,WITHOUT_ARRAY_WRAPPER),N'Intelligence.Search'
 FROM Client.AccountLocation location JOIN Client.Account account ON account.TenantId=location.TenantId AND account.AccountId=location.AccountId AND account.IsDeleted=0 WHERE location.IsDeleted=0
@@ -261,10 +266,32 @@ SELECT receivable.TenantId,N'CommissionLine',receivable.CommissionExpectedReceiv
 FROM Commission.CommissionExpectedReceivable receivable WHERE receivable.IsDeleted=0;
 
 MERGE Search.EntityProjection target USING @Source source ON target.TenantId=source.TenantId AND target.EntityTypeCode=source.EntityTypeCode AND target.EntityId=source.EntityId AND target.IsDeleted=0
-WHEN MATCHED AND (target.SourceModifiedDateUtc<source.SourceModifiedDateUtc OR target.SourceModifiedDateUtc IS NULL OR target.IsActive=0) THEN UPDATE SET DisplayName=source.DisplayName,SecondaryText=source.SecondaryText,NavigationRoute=source.NavigationRoute,SourceModifiedDateUtc=source.SourceModifiedDateUtc,SearchText=source.SearchText,NormalizedFieldsJson=source.NormalizedFieldsJson,ExactIdentifiersJson=source.ExactIdentifiersJson,PermissionCode=source.PermissionCode,IsActive=1,ModifiedDateUtc=SYSUTCDATETIME()
+WHEN MATCHED AND (target.SourceModifiedDateUtc<source.SourceModifiedDateUtc OR target.SourceModifiedDateUtc IS NULL OR target.IsActive=0 OR ISNULL(target.DisplayName,N'')<>ISNULL(source.DisplayName,N'') OR ISNULL(target.SecondaryText,N'')<>ISNULL(source.SecondaryText,N'') OR ISNULL(target.NavigationRoute,N'')<>ISNULL(source.NavigationRoute,N'') OR ISNULL(target.SearchText,N'')<>ISNULL(source.SearchText,N'') OR ISNULL(target.NormalizedFieldsJson,N'')<>ISNULL(source.NormalizedFieldsJson,N'') OR ISNULL(target.ExactIdentifiersJson,N'')<>ISNULL(source.ExactIdentifiersJson,N'') OR ISNULL(target.PermissionCode,N'')<>ISNULL(source.PermissionCode,N'')) THEN UPDATE SET DisplayName=source.DisplayName,SecondaryText=source.SecondaryText,NavigationRoute=source.NavigationRoute,SourceModifiedDateUtc=source.SourceModifiedDateUtc,SearchText=source.SearchText,NormalizedFieldsJson=source.NormalizedFieldsJson,ExactIdentifiersJson=source.ExactIdentifiersJson,PermissionCode=source.PermissionCode,IsActive=1,ModifiedDateUtc=SYSUTCDATETIME()
 WHEN NOT MATCHED THEN INSERT(EntityProjectionId,TenantId,EntityTypeCode,EntityId,DisplayName,SecondaryText,NavigationRoute,SourceSchemaName,SourceTableName,SourceModifiedDateUtc,SearchText,NormalizedFieldsJson,ExactIdentifiersJson,PermissionCode,IsActive,CreatedDateUtc,IsDeleted) VALUES(NEWID(),source.TenantId,source.EntityTypeCode,source.EntityId,source.DisplayName,source.SecondaryText,source.NavigationRoute,source.SourceSchemaName,source.SourceTableName,source.SourceModifiedDateUtc,source.SearchText,source.NormalizedFieldsJson,source.ExactIdentifiersJson,source.PermissionCode,1,SYSUTCDATETIME(),0);
 SET @Changed+=@@ROWCOUNT;
-UPDATE projection SET IsActive=0,ModifiedDateUtc=SYSUTCDATETIME() FROM Search.EntityProjection projection WHERE projection.EntityTypeCode IN(N'Account',N'Contact',N'Lead',N'Submission',N'Policy',N'Claim',N'Document',N'Certificate',N'Carrier',N'Location',N'Vehicle',N'ClaimParty',N'CommissionLine') AND projection.IsActive=1 AND projection.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM @Source source WHERE source.TenantId=projection.TenantId AND source.EntityTypeCode=projection.EntityTypeCode AND source.EntityId=projection.EntityId);
+UPDATE projection SET IsActive=0,ModifiedDateUtc=SYSUTCDATETIME() FROM Search.EntityProjection projection WHERE projection.EntityTypeCode IN(N'Account',N'Contact',N'Lead',N'Submission',N'Policy',N'Claim',N'Document',N'Certificate',N'Carrier',N'Producer',N'Location',N'Vehicle',N'ClaimParty',N'CommissionLine') AND projection.IsActive=1 AND projection.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM @Source source WHERE source.TenantId=projection.TenantId AND source.EntityTypeCode=projection.EntityTypeCode AND source.EntityId=projection.EntityId);
+SET @Changed+=@@ROWCOUNT;
+;WITH SearchSource AS
+(
+    SELECT projection.TenantId,projection.EntityTypeCode,projection.EntityId,projection.SourceSchemaName ModuleCode,projection.DisplayName Title,COALESCE(projection.SearchText,N'') ContentText,CONCAT_WS(N' ',projection.DisplayName,projection.SecondaryText,projection.ExactIdentifiersJson) Keywords,projection.SourceModifiedDateUtc,CONVERT(char(64),HASHBYTES('SHA2_256',CONVERT(varbinary(max),CONCAT_WS(N'|',projection.DisplayName,projection.SecondaryText,projection.SearchText,projection.NormalizedFieldsJson,projection.ExactIdentifiersJson))),2) ContentHash
+    FROM Search.EntityProjection projection
+    WHERE projection.EntityTypeCode IN(N'Account',N'Contact',N'Lead',N'Submission',N'Policy',N'Claim',N'Document',N'Certificate',N'Carrier',N'Producer',N'Location',N'Vehicle',N'ClaimParty',N'CommissionLine') AND projection.IsActive=1 AND projection.IsDeleted=0
+)
+MERGE AI.SearchDocument target USING SearchSource source ON target.TenantId=source.TenantId AND target.EntityTypeCode=source.EntityTypeCode AND target.EntityId=source.EntityId AND target.IsDeleted=0
+WHEN MATCHED AND (target.ContentHash<>source.ContentHash OR target.SourceModifiedDateUtc<>source.SourceModifiedDateUtc OR target.SourceModifiedDateUtc IS NULL) THEN UPDATE SET ModuleCode=source.ModuleCode,Title=source.Title,ContentText=source.ContentText,Keywords=source.Keywords,SecurityScopeJson=N'{"permissionCode":"Intelligence.Search"}',ContentHash=source.ContentHash,SourceModifiedDateUtc=source.SourceModifiedDateUtc,SourceCreatedDateUtc=COALESCE(target.SourceCreatedDateUtc,source.SourceModifiedDateUtc),IndexedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),IsDeleted=0
+WHEN NOT MATCHED THEN INSERT(SearchDocumentId,TenantId,EntityTypeCode,EntityId,ModuleCode,Title,ContentText,Keywords,ConceptIdsJson,SecurityScopeJson,ContentHash,IndexedDateUtc,SourceModifiedDateUtc,SourceCreatedDateUtc,CreatedDateUtc,IsDeleted) VALUES(NEWID(),source.TenantId,source.EntityTypeCode,source.EntityId,source.ModuleCode,source.Title,source.ContentText,source.Keywords,N'[]',N'{"permissionCode":"Intelligence.Search"}',source.ContentHash,SYSUTCDATETIME(),source.SourceModifiedDateUtc,source.SourceModifiedDateUtc,SYSUTCDATETIME(),0);
+SET @Changed+=@@ROWCOUNT;
+MERGE AI.SearchPermission target USING
+(
+    SELECT DISTINCT document.TenantId,document.SearchDocumentId,N'ROLE' PrincipalTypeCode,rolePermission.RoleId PrincipalId,N'READ' PermissionCode
+    FROM AI.SearchDocument document
+    JOIN Search.EntityProjection projection ON projection.TenantId=document.TenantId AND projection.EntityTypeCode=document.EntityTypeCode AND projection.EntityId=document.EntityId AND projection.IsActive=1 AND projection.IsDeleted=0
+    JOIN IAM.RolePermission rolePermission ON rolePermission.TenantId=document.TenantId AND rolePermission.PermissionCode=projection.PermissionCode AND rolePermission.IsDeleted=0
+    JOIN IAM.Role role ON role.TenantId=rolePermission.TenantId AND role.RoleId=rolePermission.RoleId AND role.IsDeleted=0
+    WHERE document.IsDeleted=0 AND projection.EntityTypeCode IN(N'Account',N'Contact',N'Lead',N'Submission',N'Policy',N'Claim',N'Document',N'Certificate',N'Carrier',N'Producer',N'Location',N'Vehicle',N'ClaimParty',N'CommissionLine')
+) source ON target.TenantId=source.TenantId AND target.SearchDocumentId=source.SearchDocumentId AND target.PrincipalTypeCode=source.PrincipalTypeCode AND target.PrincipalId=source.PrincipalId AND target.PermissionCode=source.PermissionCode
+WHEN MATCHED AND target.IsDeleted=1 THEN UPDATE SET IsDeleted=0,ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT(SearchPermissionId,TenantId,SearchDocumentId,PrincipalTypeCode,PrincipalId,PermissionCode,CreatedDateUtc,IsDeleted) VALUES(NEWID(),source.TenantId,source.SearchDocumentId,source.PrincipalTypeCode,source.PrincipalId,source.PermissionCode,SYSUTCDATETIME(),0);
 SET @Changed+=@@ROWCOUNT;
 MERGE Search.ProjectionCheckpoint target USING(SELECT TenantId,EntityTypeCode,MAX(SourceModifiedDateUtc) LastSourceModifiedDateUtc FROM @Source GROUP BY TenantId,EntityTypeCode) source ON target.TenantId=source.TenantId AND target.EntityTypeCode=source.EntityTypeCode AND target.IsDeleted=0
 WHEN MATCHED THEN UPDATE SET LastSourceModifiedDateUtc=source.LastSourceModifiedDateUtc,LastSuccessfulDateUtc=SYSUTCDATETIME(),ErrorMessage=NULL,RetryCount=0,ModifiedDateUtc=SYSUTCDATETIME()
@@ -272,8 +299,29 @@ WHEN NOT MATCHED THEN INSERT(ProjectionCheckpointId,TenantId,EntityTypeCode,Last
 SELECT @Changed;
 """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql, cancellationToken: cancellationToken));
+        for(var attempt=1;;attempt++)
+        {
+            try
+            {
+                var lockResult=await connection.ExecuteScalarAsync<int>(new CommandDefinition("DECLARE @Result int;EXEC @Result=sys.sp_getapplock @Resource=N'Ams.SearchProjection.Refresh',@LockMode=N'Exclusive',@LockOwner=N'Session',@LockTimeout=10000;SELECT @Result;",commandTimeout:15,cancellationToken:cancellationToken));
+                if(lockResult<0)return 0;
+                try
+                {
+                    return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,commandTimeout:180,cancellationToken:cancellationToken));
+                }
+                finally
+                {
+                    await connection.ExecuteAsync(new CommandDefinition("EXEC sys.sp_releaseapplock @Resource=N'Ams.SearchProjection.Refresh',@LockOwner=N'Session';",commandTimeout:15,cancellationToken:cancellationToken));
+                }
+            }
+            catch(SqlException exception) when(IsDeadlockVictim(exception)&&attempt<3)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(250*attempt),cancellationToken);
+            }
+        }
     }
+
+    private static bool IsDeadlockVictim(SqlException exception)=>exception.Errors.Cast<SqlError>().Any(error=>error.Number==1205);
 
     private async Task EnsureFullTextSearchAsync(CancellationToken cancellationToken)
     {
@@ -310,7 +358,7 @@ FROM Search.EntityProjection projection
 WHERE projection.TenantId=@TenantId AND projection.EntityTypeCode=@EntityTypeCode AND projection.IsActive=1 AND projection.IsDeleted=0
   AND EXISTS(SELECT 1 FROM OPENJSON(@ValuesJson) WITH(Value NVARCHAR(500) '$') valuesToMatch WHERE projection.DisplayName LIKE N'%' + valuesToMatch.Value + N'%' OR projection.SearchText LIKE N'%' + valuesToMatch.Value + N'%' OR projection.NormalizedFieldsJson LIKE N'%' + STRING_ESCAPE(valuesToMatch.Value,'json') + N'%')
   AND NOT EXISTS(SELECT 1 FROM #Ranked ranked WHERE ranked.EntityProjectionId=projection.EntityProjectionId);
-SELECT TOP(@MaximumCandidates) projection.EntityProjectionId,projection.EntityId,projection.EntityTypeCode,projection.DisplayName,projection.SecondaryText,projection.NavigationRoute,projection.PermissionCode,projection.NormalizedFieldsJson
+SELECT TOP(@MaximumCandidates) projection.EntityProjectionId,projection.EntityId,projection.EntityTypeCode,projection.DisplayName,projection.SecondaryText,projection.NavigationRoute,projection.PermissionCode,projection.SearchText,projection.NormalizedFieldsJson
 FROM #Ranked ranked JOIN Search.EntityProjection projection ON projection.EntityProjectionId=ranked.EntityProjectionId ORDER BY ranked.SearchRank DESC,projection.DisplayName;
 """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -318,31 +366,43 @@ FROM #Ranked ranked JOIN Search.EntityProjection projection ON projection.Entity
         return rows.Select(ToProjection).ToList();
     }
 
-    public async Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<MatchProjection>> SearchProjectionsAsync(Guid tenantId, string query, string originalQuery, IReadOnlyCollection<string> entityTypeCodes, IReadOnlyCollection<string> grantedPermissions, int maximumResults, CancellationToken cancellationToken = default)
     {
         const string sql = """
 CREATE TABLE #Ranked(EntityProjectionId UNIQUEIDENTIFIER PRIMARY KEY,SearchRank INT NOT NULL);
 IF EXISTS(SELECT 1 FROM Search.SearchCapability WHERE CapabilityCode=N'FULL_TEXT' AND IsAvailable=1 AND IsEnabled=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL))
    AND EXISTS(SELECT 1 FROM sys.fulltext_indexes WHERE object_id=OBJECT_ID(N'Search.EntityProjection'))
 BEGIN
-    DECLARE @FullTextSql NVARCHAR(MAX)=N'INSERT #Ranked(EntityProjectionId,SearchRank) SELECT projection.EntityProjectionId,fullText.[RANK] FROM Search.EntityProjection projection JOIN CONTAINSTABLE(Search.EntityProjection,(DisplayName,SecondaryText,SearchText),@FullTextQuery,@MaximumResults) fullText ON fullText.[KEY]=projection.EntityProjectionId WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0;';
-    EXEC sp_executesql @FullTextSql,N'@TenantId UNIQUEIDENTIFIER,@FullTextQuery NVARCHAR(4000),@MaximumResults INT',@TenantId,@FullTextQuery,@MaximumResults;
+    DECLARE @FullTextSql NVARCHAR(MAX)=N'INSERT #Ranked(EntityProjectionId,SearchRank) SELECT projection.EntityProjectionId,fullText.[RANK] FROM Search.EntityProjection projection JOIN CONTAINSTABLE(Search.EntityProjection,(DisplayName,SecondaryText,SearchText),@FullTextQuery,@MaximumResults) fullText ON fullText.[KEY]=projection.EntityProjectionId WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0 AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson))) AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)));';
+    EXEC sp_executesql @FullTextSql,N'@TenantId UNIQUEIDENTIFIER,@FullTextQuery NVARCHAR(4000),@MaximumResults INT,@AllTypes BIT,@EntityTypeCodesJson NVARCHAR(MAX),@CanNavigateAll BIT,@GrantedPermissionsJson NVARCHAR(MAX)',@TenantId,@FullTextQuery,@MaximumResults,@AllTypes,@EntityTypeCodesJson,@CanNavigateAll,@GrantedPermissionsJson;
 END;
 INSERT #Ranked(EntityProjectionId,SearchRank)
 SELECT TOP(@MaximumResults) projection.EntityProjectionId,CASE WHEN projection.DisplayName=@Query THEN 1200 WHEN projection.DisplayName LIKE @Query+N'%' THEN 900 ELSE 100 END
 FROM Search.EntityProjection projection
 WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0
+  AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson)))
+  AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)))
   AND (projection.DisplayName LIKE N'%' + @Query + N'%' OR projection.SearchText LIKE N'%' + @Query + N'%' OR projection.NormalizedFieldsJson LIKE N'%' + STRING_ESCAPE(@Query,'json') + N'%')
   AND NOT EXISTS(SELECT 1 FROM #Ranked ranked WHERE ranked.EntityProjectionId=projection.EntityProjectionId);
-SELECT TOP(@MaximumResults) projection.EntityProjectionId,projection.EntityId,projection.EntityTypeCode,projection.DisplayName,projection.SecondaryText,projection.NavigationRoute,projection.PermissionCode,projection.NormalizedFieldsJson
+INSERT #Ranked(EntityProjectionId,SearchRank)
+SELECT TOP(@MaximumResults) projection.EntityProjectionId,500+DIFFERENCE(projection.DisplayName,@OriginalQuery)*50
+FROM Search.EntityProjection projection
+WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0
+  AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson)))
+  AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)))
+  AND DIFFERENCE(projection.DisplayName,@OriginalQuery)>=3
+  AND NOT EXISTS(SELECT 1 FROM #Ranked ranked WHERE ranked.EntityProjectionId=projection.EntityProjectionId)
+ORDER BY DIFFERENCE(projection.DisplayName,@OriginalQuery) DESC,ABS(LEN(projection.DisplayName)-LEN(@OriginalQuery)),projection.DisplayName;
+SELECT TOP(@MaximumResults) projection.EntityProjectionId,projection.EntityId,projection.EntityTypeCode,projection.DisplayName,projection.SecondaryText,projection.NavigationRoute,projection.PermissionCode,projection.SearchText,projection.NormalizedFieldsJson
 FROM #Ranked ranked JOIN Search.EntityProjection projection ON projection.EntityProjectionId=ranked.EntityProjectionId
-WHERE (@AllTypes=1 OR projection.EntityTypeCode IN @EntityTypeCodes) AND (@CanNavigateAll=1 OR projection.PermissionCode IN @GrantedPermissions)
+WHERE (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson))) AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)))
 ORDER BY ranked.SearchRank DESC,projection.DisplayName;
 """;
         var types = entityTypeCodes.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var permissions = grantedPermissions.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var rows = await connection.QueryAsync<ProjectionRow>(new CommandDefinition(sql, new { TenantId = tenantId, Query = query.Trim(), FullTextQuery = BuildFullTextQuery([query]), MaximumResults = Math.Clamp(maximumResults * 4, 1, 400), AllTypes = types.Length == 0, EntityTypeCodes = types.Length == 0 ? [""] : types, CanNavigateAll = permissions.Contains("NAV_ALL", StringComparer.OrdinalIgnoreCase), GrantedPermissions = permissions.Length == 0 ? [""] : permissions }, cancellationToken: cancellationToken));
+        var normalizedQuery=query.Trim();
+        var rows = await connection.QueryAsync<ProjectionRow>(new CommandDefinition(sql, new { TenantId = tenantId, Query = normalizedQuery, OriginalQuery = originalQuery.Trim(), FullTextQuery = BuildFullTextQuery([query]), MaximumResults = Math.Clamp(maximumResults * 4, 1, 400), AllTypes = types.Length == 0, EntityTypeCodesJson = JsonSerializer.Serialize(types, JsonOptions), CanNavigateAll = permissions.Contains("NAV_ALL", StringComparer.OrdinalIgnoreCase), GrantedPermissionsJson = JsonSerializer.Serialize(permissions, JsonOptions) }, cancellationToken: cancellationToken));
         return rows.Select(ToProjection).ToList();
     }
 
@@ -411,8 +471,14 @@ FROM Search.MatchExecution execution JOIN Search.MatchFieldRule field ON field.M
         await connection.ExecuteAsync(new CommandDefinition(sql, new { MatchExecutionId = matchExecutionId, ErrorMessage = errorMessage[..Math.Min(errorMessage.Length, 2000)] }, cancellationToken: cancellationToken));
     }
 
-    private static MatchProjection ToProjection(ProjectionRow row) => new(row.EntityProjectionId, row.EntityId, row.EntityTypeCode, row.DisplayName, row.SecondaryText, row.NavigationRoute, row.PermissionCode, JsonSerializer.Deserialize<Dictionary<string, string?>>(row.NormalizedFieldsJson, JsonOptions) ?? []);
+    private static MatchProjection ToProjection(ProjectionRow row)
+    {
+        var fields=JsonSerializer.Deserialize<Dictionary<string,string?>>(row.NormalizedFieldsJson,JsonOptions)??[];
+        fields["DisplayName"]=row.DisplayName;
+        fields["SearchText"]=row.SearchText;
+        return new(row.EntityProjectionId,row.EntityId,row.EntityTypeCode,row.DisplayName,row.SecondaryText,row.NavigationRoute,row.PermissionCode,fields);
+    }
     private sealed record ProfileRow(Guid MatchProfileId, string ProfileCode, string EntityTypeCode, decimal ExactThreshold, decimal StrongThreshold, decimal PossibleThreshold, int MaximumCandidates, int SemanticMaximumConcepts, bool RequiresReview);
     private sealed record ProfileSettingRow(Guid MatchProfileId, bool IsInherited, string ProfileCode, string EntityTypeCode, string DisplayName, string? Description, decimal ExactThreshold, decimal StrongThreshold, decimal PossibleThreshold, int MaximumCandidates, int SemanticMaximumConcepts, bool RequiresReview, bool IsActive, byte[] RowVersion);
-    private sealed record ProjectionRow(Guid EntityProjectionId, Guid EntityId, string EntityTypeCode, string DisplayName, string? SecondaryText, string? NavigationRoute, string PermissionCode, string NormalizedFieldsJson);
+    private sealed record ProjectionRow(Guid EntityProjectionId,Guid EntityId,string EntityTypeCode,string DisplayName,string? SecondaryText,string? NavigationRoute,string PermissionCode,string? SearchText,string NormalizedFieldsJson);
 }

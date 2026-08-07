@@ -27,6 +27,69 @@ public sealed class IntelligencePlatformContractTests
     }
 
     [Fact]
+    public void UnifiedSearchExplanationMigration_ActivatesSoundexAndDocumentFieldEvidence()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0096_UnifiedSearchExplanationCompletion.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        Assert.Contains("GLOBAL_ENTERPRISE_SEARCH",sql,StringComparison.Ordinal);
+        Assert.Contains("SOUNDEX",sql,StringComparison.Ordinal);
+        Assert.Contains("Display Name Phonetic",sql,StringComparison.Ordinal);
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.cs"));
+        Assert.Contains("DMS.IntakeDraftField",repository,StringComparison.Ordinal);
+        Assert.Contains("EXTRACTED_DOCUMENT_FIELD",repository,StringComparison.Ordinal);
+        Assert.Contains("DOCUMENT_INTELLIGENCE",repository,StringComparison.Ordinal);
+        Assert.Contains("private sealed class AuthorizedSearchRow",repository,StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnifiedSearchMigration_DefinesTenantEffectiveWeightsEvidenceAndGovernedRules()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0095_UnifiedIntelligenceSearch.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        foreach(var setting in new[]{"KeywordWeight","SemanticWeight","FuzzyWeight","RelationshipWeight","RecencyWeight","BusinessPriorityWeight"})Assert.Contains($"Intelligence.Search.{setting}",sql,StringComparison.Ordinal);
+        Assert.Contains("AI.SearchResultEvidence",sql,StringComparison.Ordinal);
+        Assert.Contains("ScoringWeightsJson",sql,StringComparison.Ordinal);
+        Assert.Contains("SummaryStatusCode",sql,StringComparison.Ordinal);
+        Assert.Contains("INTELLIGENCE_SEARCH.OPEN_WORK_PRIORITY",sql,StringComparison.Ordinal);
+        Assert.Contains("businessPriorityScore",sql,StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnifiedSearchOrchestration_UsesSharedEnginesAuthorizationScoringAndExplanations()
+    {
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","IntelligenceService.cs"));
+        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.cs"));
+        Assert.Contains("queryExpander.ExpandAsync",service,StringComparison.Ordinal);
+        Assert.Contains("entityMatchingService.SearchAsync",service,StringComparison.Ordinal);
+        Assert.DoesNotContain("catch(InvalidOperationException)\n        {\n            fuzzy=[]",service,StringComparison.Ordinal);
+        Assert.Contains("rulesPlatformService.EvaluateAsync",service,StringComparison.Ordinal);
+        Assert.Contains("aiProviderRouter.GenerateAsync",service,StringComparison.Ordinal);
+        Assert.Contains("AiProviderUnavailableException or TimeoutException",service,StringComparison.Ordinal);
+        Assert.Contains("GetRelatedSearchDocumentsAsync",service,StringComparison.Ordinal);
+        Assert.Contains("weights.FuzzyWeight",service,StringComparison.Ordinal);
+        Assert.Contains("EntityKey(result.EntityTypeCode,result.EntityId)",service,StringComparison.Ordinal);
+        Assert.Contains("ToUpperInvariant()",service,StringComparison.Ordinal);
+        Assert.Contains("BUSINESS_RULE_BOOST",service,StringComparison.Ordinal);
+        Assert.Contains("SEARCH_MATCHING",service,StringComparison.Ordinal);
+        Assert.Contains("permission.PrincipalTypeCode=N'USER'",repository,StringComparison.Ordinal);
+        Assert.Contains("AI.SearchResultEvidence",repository,StringComparison.Ordinal);
+        Assert.Contains("CONVERT(bit,COALESCE(TRY_CONVERT(bit",repository,StringComparison.Ordinal);
+        Assert.Contains("'$.EntityTypeCode'",repository,StringComparison.Ordinal);
+        Assert.Contains("'$.EntityId'",repository,StringComparison.Ordinal);
+        var controller=File.ReadAllText(Path.Combine(root,"src","Ams.Api","Controllers","IntelligenceController.cs"));
+        Assert.Contains("GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)",controller,StringComparison.Ordinal);
+        var matchingRepository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","SearchMatchingRepository.cs"));
+        Assert.Contains("projection.SearchText,projection.NormalizedFieldsJson",matchingRepository,StringComparison.Ordinal);
+        Assert.Contains("fields[\"DisplayName\"]=row.DisplayName",matchingRepository,StringComparison.Ordinal);
+        Assert.Contains("fields[\"SearchText\"]=row.SearchText",matchingRepository,StringComparison.Ordinal);
+        Assert.DoesNotContain("fuzzy=[]",service,StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PlatformRuntimeCompletion_TracksTruthfulMaturityVerifiedAdoptionAndRemainingGaps()
     {
         var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0089_PlatformRuntimeCompletion.sql",StringComparison.Ordinal));var sql=Read(assembly,resource);

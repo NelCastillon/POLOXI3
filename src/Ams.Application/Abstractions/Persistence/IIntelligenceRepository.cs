@@ -15,7 +15,13 @@ public interface IIntelligenceRepository
     Task<IReadOnlyCollection<RecommendationTypeDto>> GetRecommendationTypesAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<PagedResult<RecommendationDto>> SearchRecommendationsAsync(SearchRecommendationsQuery query,CancellationToken cancellationToken=default);
     Task DecideRecommendationAsync(DecideRecommendationRequest request,CancellationToken cancellationToken=default);
+    Task<IntelligenceSearchConfiguration> GetSearchConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<IntelligenceSearchIntentPatternDto>> GetSearchIntentPatternsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task RecordSearchIntentInterpretationAsync(IntelligenceSearchIntentLogRecord record,CancellationToken cancellationToken=default);
     Task<IntelligenceSearchResponse> SearchAsync(IntelligenceSearchRequest request,IReadOnlyCollection<SemanticConceptMatchDto> concepts,IReadOnlyCollection<string> expandedTerms,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetAuthorizedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> entities,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetRelatedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> sources,int maximumResults,CancellationToken cancellationToken=default);
+    Task CompleteUnifiedSearchAsync(Guid tenantId,Guid userId,Guid searchQueryId,string normalizedQuery,IntelligenceSearchWeightsDto weights,IReadOnlyCollection<IntelligenceSearchResultDto> results,string summaryStatusCode,Guid? summaryExecutionId,long durationMilliseconds,CancellationToken cancellationToken=default);
     Task<PagedResult<AiReviewQueueItemDto>> SearchReviewQueueAsync(SearchAiReviewQueueQuery query,CancellationToken cancellationToken=default);
     Task DecideReviewAsync(DecideAiReviewRequest request,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<AiEvaluationDefinitionDto>> GetEvaluationDefinitionsAsync(Guid tenantId,CancellationToken cancellationToken=default);

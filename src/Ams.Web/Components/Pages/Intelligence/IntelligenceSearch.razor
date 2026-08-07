@@ -3,6 +3,218 @@
 @using Ams.Application.Features.Intelligence
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
-<IntelligenceWorkspace><div class="intel-page"><header class="intel-header"><div><span>Permission-aware discovery</span><h1>Search Intelligence</h1><p>Natural-language and hybrid keyword/concept search across only the records the current user may read.</p></div></header><section class="intel-panel"><div class="intel-toolbar"><input style="flex:1" placeholder="Example: commercial vehicle fleet submissions missing loss runs" @bind="_query" @bind:event="oninput" @onkeydown="KeyDown" /><select @bind="_module"><option value="">All modules</option><option>Accounts</option><option>Submissions</option><option>Policies</option><option>Claims</option><option>Documents</option><option>Knowledge</option></select><button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@_loading"><i class="bi bi-search"></i> Search</button></div></section>@if(_loading){<div class="intel-state">Expanding concepts and searching authorized records...</div>}else if(_error is not null){<div class="intel-error">@_error</div>}else if(_response is not null){<section class="intel-kpis"><article><span>Results</span><strong>@_response.Results.Count</strong></article><article><span>Duration</span><strong>@_response.DurationMilliseconds ms</strong></article><article><span>Expanded terms</span><strong>@_response.ExpandedTerms.Count</strong></article></section>@if(_response.ExpandedTerms.Count>0){<section class="intel-panel"><h2>Query expansion</h2><div class="intel-toolbar">@foreach(var term in _response.ExpandedTerms){<span class="um-badge um-badge-neutral">@term</span>}</div></section>}<section class="intel-panel">@if(_response.Results.Count==0){<div class="intel-state">No authorized indexed records matched this query.</div>}@foreach(var result in _response.Results){<div class="intel-row"><div><strong>@result.Title</strong><small>@result.ModuleCode · @result.EntityTypeCode</small><span>@result.Excerpt</span>@if(result.Concepts.Count>0){<small>@string.Join(" · ",result.Concepts.Select(x=>x.PreferredLabel))</small>}</div><div><strong>@result.CombinedScore.ToString("P0")</strong><small>keyword @result.KeywordScore.ToString("P0") · semantic @result.SemanticScore.ToString("P0")</small></div></div>}</section>}</div></IntelligenceWorkspace>
-@code{private string _query="",_module="";private bool _loading;private string? _error;private IntelligenceSearchResponse? _response;protected override Task OnInitializedAsync(){Breadcrumbs.SetCrumbs(new("Home","/"),new("Intelligence","/intelligence"),new("Search","/intelligence/search"));return Task.CompletedTask;}private async Task SearchAsync(){if(string.IsNullOrWhiteSpace(_query)||_query.Trim().Length<2)return;_loading=true;_error=null;try{_response=await Api.IntelligenceSearchAsync(new(Guid.Empty,Guid.Empty,_query,_module,null,50,Guid.NewGuid().ToString("N")));}catch(Exception ex){_error=ex.Message;}finally{_loading=false;}}private async Task KeyDown(KeyboardEventArgs args){if(args.Key=="Enter")await SearchAsync();}
+@inject NavigationManager Navigation
+
+<IntelligenceWorkspace>
+    <div class="intel-page">
+        <header class="intel-header">
+            <div>
+                <span>Unified, permission-aware discovery</span>
+                <h1>Search Intelligence</h1>
+                <p>Search authorized records with keyword, Knowledge concepts, shared fuzzy matching, relationships, tenant rules, and optional grounded AI.</p>
+            </div>
+        </header>
+
+        <section class="intel-panel intel-search-panel">
+            <div class="intel-search-bar">
+                <input placeholder="Example: commercial vehicle fleet submissions missing loss runs" @bind="_query" @bind:event="oninput" @onkeydown="KeyDown" />
+                <select @bind="_module">
+                    <option value="">All modules</option>
+                    <option>Accounts</option>
+                    <option>Submissions</option>
+                    <option>Policies</option>
+                    <option>Claims</option>
+                    <option>Documents</option>
+                    <option>Knowledge</option>
+                </select>
+                <button class="um-btn um-btn-primary intel-search-button" @onclick="SearchAsync" disabled="@_loading"><i class="bi bi-search"></i> Search</button>
+            </div>
+            <div class="intel-search-options">
+                <label class="intel-toggle">
+                    <input type="checkbox" @bind="_quickMode" />
+                    <span aria-hidden="true"></span>
+                    <strong>Fast mode</strong>
+                </label>
+                <label class="intel-toggle">
+                    <input type="checkbox" @bind="_includeRelated" disabled="@_quickMode" />
+                    <span aria-hidden="true"></span>
+                    <strong>Include related records</strong>
+                </label>
+                <label class="intel-toggle">
+                    <input type="checkbox" @bind="_includeSummary" disabled="@_quickMode" />
+                    <span aria-hidden="true"></span>
+                    <strong>Generate grounded AI summary</strong>
+                </label>
+                @if (_quickMode)
+                {
+                    <small class="intel-fast-mode-note">Fast mode returns navigable records first and skips relationship/rule/AI summary expansion.</small>
+                }
+            </div>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="intel-loader" role="status" aria-live="polite">
+                <div class="intel-loader-orbit" aria-hidden="true"><i class="bi bi-stars"></i></div>
+                <div>
+                    <span>Enterprise intelligence search</span>
+                    <strong>Resolving authorized evidence</strong>
+                    <p>Checking keyword signals, fuzzy matches, relationships, tenant rules, and Knowledge concepts.</p>
+                </div>
+            </section>
+        }
+        else if (_error is not null)
+        {
+            <div class="intel-error">@_error</div>
+        }
+        else if (_response is not null)
+        {
+            <section class="intel-kpis">
+                <article><span>Results</span><strong>@_response.Results.Count</strong></article>
+                <article><span>Duration</span><strong>@_response.DurationMilliseconds ms</strong></article>
+                <article><span>Expanded terms</span><strong>@_response.ExpandedTerms.Count</strong></article>
+            </section>
+
+            @if (_response.GroundedSummary is not null)
+            {
+                <section class="intel-panel"><h2>Grounded AI summary</h2><p>@_response.GroundedSummary</p><small>Generated only from the authorized results below.</small></section>
+            }
+
+            @if (_response.ExpandedTerms.Count > 0)
+            {
+                <section class="intel-panel"><h2>Approved query expansion</h2><div class="intel-toolbar">@foreach (var term in _response.ExpandedTerms) { <span class="um-badge um-badge-neutral">@term</span> }</div></section>
+            }
+
+            <section class="intel-panel">
+                @if (_response.Results.Count == 0)
+                {
+                    <div class="intel-state">No authorized indexed records matched this query.</div>
+                }
+                @foreach (var result in _response.Results)
+                {
+                    var canNavigate = !string.IsNullOrWhiteSpace(result.NavigationRoute);
+                    <article class="intel-row intel-result-card @(canNavigate ? "intel-result-card-clickable" : null)" @ondblclick="() => OpenResult(result)" tabindex="@(canNavigate ? "0" : null)" title="@(canNavigate ? "Double-click to open the associated record." : null)">
+                        <div class="intel-result-main">
+                            <div class="intel-result-heading">
+                                <span class="intel-result-icon" aria-hidden="true"><i class="@IconFor(result.EntityTypeCode)"></i></span>
+                                <div>
+                                    <strong>@result.Title</strong>
+                                    <small>@result.ModuleCode · @result.EntityTypeCode</small>
+                                </div>
+                            </div>
+                            @if (result.IsRelatedResult)
+                            {
+                                <span class="um-badge um-badge-neutral">Related</span>
+                            }
+                            <p>@result.Excerpt</p>
+                            @if (result.Concepts.Count > 0)
+                            {
+                                <small class="intel-result-concepts">@string.Join(" · ", result.Concepts.Select(x => x.PreferredLabel))</small>
+                            }
+                            @if (result.Explanations.Count > 0)
+                            {
+                                <div class="intel-result-evidence">@foreach (var explanation in result.Explanations.Take(4)) { <span title="@explanation.Explanation">@explanation.DisplayName</span> }</div>
+                            }
+                        </div>
+                        <div class="intel-result-score">
+                            <strong>@result.CombinedScore.ToString("P0")</strong>
+                            <small>keyword @result.KeywordScore.ToString("P0") · semantic @result.SemanticScore.ToString("P0")</small>
+                            <small>fuzzy @result.FuzzyScore.ToString("P0") · relationship @result.RelationshipScore.ToString("P0")</small>
+                            <small>recency @result.RecencyScore.ToString("P0") · priority @result.BusinessPriorityScore.ToString("P0")</small>
+                            @if (canNavigate)
+                            {
+                                <span class="intel-open-hint"><i class="bi bi-box-arrow-up-right"></i> Double-click to open</span>
+                            }
+                        </div>
+                    </article>
+                }
+            </section>
+        }
+    </div>
+</IntelligenceWorkspace>
+
+@code {
+    private string _query = "", _module = "";
+    private bool _loading, _includeRelated = true, _includeSummary, _quickMode = true;
+    private string? _error;
+    private IntelligenceSearchResponse? _response;
+    private readonly Dictionary<string, SearchCacheEntry> _searchCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record SearchCacheEntry(DateTimeOffset ExpiresUtc, IntelligenceSearchResponse Response);
+
+    protected override Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Search", "/intelligence/search"));
+        return Task.CompletedTask;
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
+        var normalizedQuery = _query.Trim();
+        var cacheKey = $"{normalizedQuery}|{_module}|{_quickMode}|{_includeRelated}|{_includeSummary}";
+        if (_quickMode && _searchCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresUtc > DateTimeOffset.UtcNow)
+        {
+            _response = cached.Response;
+            _error = null;
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        try
+        {
+            _response = await Api.IntelligenceSearchAsync(new(Guid.Empty, Guid.Empty, normalizedQuery, _module, null, _quickMode ? 12 : 50, Guid.NewGuid().ToString("N")) { IncludeRelatedResults = !_quickMode && _includeRelated, IncludeAiSummary = !_quickMode && _includeSummary, IsQuickSearch = _quickMode });
+            if (_quickMode && _response is not null)
+            {
+                _searchCache[cacheKey] = new(DateTimeOffset.UtcNow.AddSeconds(45), _response);
+                TrimSearchCache();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void TrimSearchCache()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var key in _searchCache.Where(pair => pair.Value.ExpiresUtc <= now).Select(pair => pair.Key).ToArray())
+            _searchCache.Remove(key);
+
+        foreach (var key in _searchCache.OrderByDescending(pair => pair.Value.ExpiresUtc).Skip(20).Select(pair => pair.Key).ToArray())
+            _searchCache.Remove(key);
+    }
+
+    private async Task KeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await SearchAsync();
+    }
+
+    private void OpenResult(IntelligenceSearchResultDto result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.NavigationRoute)) Navigation.NavigateTo(result.NavigationRoute);
+    }
+
+    private static string IconFor(string entityTypeCode) => entityTypeCode.ToUpperInvariant() switch
+    {
+        "ACCOUNT" => "bi bi-building",
+        "LEAD" => "bi bi-person-lines-fill",
+        "SUBMISSION" => "bi bi-inbox",
+        "POLICY" => "bi bi-file-earmark-check",
+        "CLAIM" => "bi bi-life-preserver",
+        "DOCUMENT" => "bi bi-file-earmark-text",
+        "CERTIFICATE" => "bi bi-award",
+        "CARRIER" => "bi bi-bank",
+        "LOCATION" => "bi bi-geo-alt",
+        "VEHICLE" => "bi bi-truck-front",
+        "CLAIMPARTY" => "bi bi-people",
+        "COMMISSIONLINE" => "bi bi-cash-stack",
+        _ => "bi bi-record-circle"
+    };
 }

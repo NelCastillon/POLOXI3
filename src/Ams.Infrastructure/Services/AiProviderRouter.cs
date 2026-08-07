@@ -91,10 +91,4 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
     private static AiExecutionRecord Execution(Guid executionId,Guid tenantId,string featureCode,string correlationId,AiExecutionContext? context,string status,long duration,AiGenerationResult? result,string? errorCode,string? errorMessage)=>new(executionId,tenantId,featureCode,context?.ModuleCode??Module(featureCode),context?.EntityTypeCode,context?.EntityId,status,correlationId,result?.ProviderCode,result?.ModelCode,duration,result?.InputTokenCount,result?.OutputTokenCount,result?.Confidence,context?.InputReference,context?.GroundingSourceTypeCode,context?.GroundingSourceEntityId,context?.GroundingSourceReference,context?.GroundingTitle,errorCode,errorMessage);
 }
 
-public sealed class AiProviderUnavailableException:Exception
-{
-    public AiProviderUnavailableException(string featureCode,string message,Exception? innerException=null):base(message,innerException)=>FeatureCode=featureCode;
-    public string FeatureCode{get;}
-}
-
 public sealed class AiSafetyViolationException(string message):Exception(message);

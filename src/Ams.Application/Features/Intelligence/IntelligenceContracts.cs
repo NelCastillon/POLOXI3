@@ -20,10 +20,42 @@ public sealed record SearchRecommendationsQuery(Guid TenantId,string? SearchTerm
 public sealed record GenerateRecommendationsRequest(Guid TenantId,[Required,StringLength(100)]string EntityTypeCode,Guid EntityId,[Required,StringLength(120)]string CorrelationId,Guid ActorUserId);
 public sealed record DecideRecommendationRequest(Guid TenantId,Guid RecommendationId,[Required,StringLength(30)]string DecisionCode,[Required,StringLength(1000)]string Reason,Guid ActorUserId,byte[] RowVersion);
 
-public sealed record IntelligenceSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[StringLength(100)]string? ModuleCode,[StringLength(100)]string? EntityTypeCode,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="");
-public sealed record IntelligenceSearchResultDto(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,decimal KeywordScore,decimal SemanticScore,decimal CombinedScore,IReadOnlyCollection<SemanticConceptMatchDto> Concepts);
+public sealed record IntelligenceSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[StringLength(100)]string? ModuleCode,[StringLength(100)]string? EntityTypeCode,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
+{
+    public bool IncludeAiSummary { get; init; }
+    public bool IncludeRelatedResults { get; init; } = true;
+    public bool IsQuickSearch { get; init; }
+    public string? EffectiveSearchText { get; init; }
+    public IReadOnlyCollection<string> GrantedPermissions { get; init; } = [];
+}
+public sealed record IntelligenceSearchResultDto(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,decimal KeywordScore,decimal SemanticScore,decimal CombinedScore,IReadOnlyCollection<SemanticConceptMatchDto> Concepts)
+{
+    public decimal FuzzyScore { get; init; }
+    public decimal RelationshipScore { get; init; }
+    public decimal RecencyScore { get; init; }
+    public decimal BusinessPriorityScore { get; init; }
+    public bool IsRelatedResult { get; init; }
+    public string? NavigationRoute { get; init; }
+    public IReadOnlyCollection<IntelligenceSearchMatchExplanationDto> Explanations { get; init; } = [];
+}
+public sealed record IntelligenceSearchIntentPatternDto(string PatternCode,string? EntityTypeCode,string? ModuleCode,string ExtractionStrategyCode,IReadOnlyCollection<string> MatchPhrases,IReadOnlyCollection<string> ExtractionPhrases,int Priority,bool IsEntityList);
+public sealed record IntelligenceSearchIntentLogRecord(Guid TenantId,Guid UserId,string QueryText,string? EntityTypeCode,string? ModuleCode,string? SearchText,string SourceEngineCode,decimal Confidence,string StatusCode,string? ErrorMessage,string CorrelationId);
 public sealed record SemanticConceptMatchDto(Guid ConceptId,string ConceptCode,string PreferredLabel,int VersionNumber,decimal Score,string MatchReasonCode);
-public sealed record IntelligenceSearchResponse(Guid SearchQueryId,string Query,IReadOnlyCollection<string> ExpandedTerms,IReadOnlyCollection<IntelligenceSearchResultDto> Results,long DurationMilliseconds);
+public sealed record IntelligenceSearchMatchExplanationDto(string ReasonCode,string DisplayName,string Explanation,decimal Score,string SourceEngineCode);
+public sealed record IntelligenceSearchWeightsDto(decimal KeywordWeight,decimal SemanticWeight,decimal FuzzyWeight,decimal RelationshipWeight,decimal RecencyWeight,decimal BusinessPriorityWeight)
+{
+    public decimal TotalWeight => KeywordWeight+SemanticWeight+FuzzyWeight+RelationshipWeight+RecencyWeight+BusinessPriorityWeight;
+}
+public sealed record IntelligenceSearchResponse(Guid SearchQueryId,string Query,IReadOnlyCollection<string> ExpandedTerms,IReadOnlyCollection<IntelligenceSearchResultDto> Results,long DurationMilliseconds)
+{
+    public string NormalizedQuery { get; init; } = string.Empty;
+    public IntelligenceSearchWeightsDto EffectiveWeights { get; init; } = new(.25m,.30m,.25m,.10m,.05m,.05m);
+    public string? GroundedSummary { get; init; }
+    public string SummaryStatusCode { get; init; } = "NOT_REQUESTED";
+    public Guid? SummaryExecutionId { get; init; }
+}
+public sealed record IntelligenceSearchConfiguration(IntelligenceSearchWeightsDto Weights,int RecencyWindowDays,int MaximumRelationshipResults,decimal MinimumUnifiedScore,bool EnableRules,bool EnableRelationships,bool EnableAiSummary,bool EnableLlmIntentFallback,decimal LlmIntentMinimumConfidence,int LlmIntentTimeoutSeconds);
+public sealed record IntelligenceSearchEntityKey(string EntityTypeCode,Guid EntityId);
 
 public sealed record AiReviewQueueItemDto(Guid ReviewQueueItemId,string ReviewTypeCode,string SourceEntityTypeCode,Guid SourceEntityId,Guid? ExecutionId,string Title,string? Summary,string PriorityCode,string StatusCode,decimal? Confidence,Guid? AssignedToUserId,DateTime? DueDateUtc,DateTime CreatedDateUtc,byte[] RowVersion);
 public sealed record SearchAiReviewQueueQuery(Guid TenantId,string? SearchTerm,string? ReviewTypeCode,string? StatusCode,string? PriorityCode,Guid? AssignedToUserId,int PageNumber=1,int PageSize=50);

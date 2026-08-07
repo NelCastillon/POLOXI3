@@ -12,18 +12,26 @@
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 @implements IAsyncDisposable
+@using Ams.Application.Features.Intelligence
 
 @if (Shell.QuickSearchOpen)
 {
     <div class="aqs-overlay" @onclick="Close" aria-hidden="true"></div>
 
     <div class="aqs-modal" role="dialog" aria-label="Quick search" aria-modal="true">
+        <div class="aqs-header">
+            <div>
+                <span>Enterprise Search</span>
+                <strong>Find pages, actions, and authorized records</strong>
+            </div>
+            <span class="aqs-fast-badge"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Fast mode</span>
+        </div>
 
         @* -- Search input ---------------------------------- *@
         <div class="aqs-search-row">
             <i class="bi bi-search aqs-icon" aria-hidden="true"></i>
             <input id="aqs-input"
-                   type="search"
+                   type="text"
                    class="aqs-input"
                    placeholder="Search pages, actions, records..."
                    autocomplete="off"
@@ -77,8 +85,8 @@
         else if (!string.IsNullOrWhiteSpace(_query))
         {
             <div class="aqs-empty">
-                <i class="bi bi-search" aria-hidden="true"></i>
-                <span>No results for "<strong>@_query</strong>"</span>
+                <i class="bi @(string.IsNullOrWhiteSpace(_searchError) ? "bi-search" : "bi-exclamation-triangle")" aria-hidden="true"></i>
+                <span>@(!string.IsNullOrWhiteSpace(_searchError) ? _searchError : _hasSearched ? (MarkupString)$"No results for \"<strong>{_query}</strong>\"" : (MarkupString)"Press <strong>Enter</strong> to search records")</span>
             </div>
         }
         else
@@ -119,11 +127,16 @@
     private int    _selectedIdx = 0;
     private bool   _prevOpen;
     private bool   _isSearching;
+    private bool   _hasSearched;
+    private string? _searchError;
     private List<SearchItem> _recordResults = [];
     private CancellationTokenSource? _searchCancellation;
+    private readonly Dictionary<string, QuickSearchCacheEntry> _quickSearchCache = new(StringComparer.OrdinalIgnoreCase);
 
     private DotNetObjectReference<AppQuickSearch>? _dotnetRef;
     private IJSObjectReference? _module;
+
+    private sealed record QuickSearchCacheEntry(DateTimeOffset ExpiresUtc,IReadOnlyList<SearchItem> Results);
 
     // -- Hint groups (shown when query is empty) ---------------
     private static readonly HintGroup[] _hintGroups =
@@ -183,38 +196,66 @@
             .ToList();
     }
 
-    private async Task OnSearchInput(ChangeEventArgs args)
+    private void OnSearchInput(ChangeEventArgs args)
     {
         _query = args.Value?.ToString() ?? string.Empty;
         _selectedIdx = 0;
         _recordResults = [];
+        _hasSearched = false;
+        _searchError = null;
+        _searchCancellation?.Cancel();
+        _searchCancellation?.Dispose();
+        _searchCancellation = null;
+        _isSearching = false;
+    }
+
+    private async Task SearchRecordsAsync()
+    {
+        var normalizedQuery = _query.Trim();
+        if (normalizedQuery.Length < 3)
+        {
+            _isSearching = false;
+            _hasSearched = true;
+            _searchError = null;
+            return;
+        }
+
+        if (_quickSearchCache.TryGetValue(normalizedQuery, out var cached) && cached.ExpiresUtc > DateTimeOffset.UtcNow)
+        {
+            _recordResults = cached.Results.ToList();
+            _isSearching = false;
+            _hasSearched = true;
+            _searchError = null;
+            return;
+        }
+
         _searchCancellation?.Cancel();
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
         var token = _searchCancellation.Token;
-        if (_query.Trim().Length < 2)
-        {
-            _isSearching = false;
-            return;
-        }
-
         _isSearching = true;
+        _hasSearched = true;
+        _searchError = null;
+        await InvokeAsync(StateHasChanged);
         try
         {
-            await Task.Delay(250, token);
-            var results = await Api.SearchMatchingAsync(new()
+            var response = await Api.IntelligenceSearchAsync(new(Guid.Empty, Guid.Empty, normalizedQuery, null, null, 8, Guid.NewGuid().ToString("N"))
             {
-                Query = _query.Trim(),
-                MaximumResults = 8
+                IncludeRelatedResults = false,
+                IncludeAiSummary = false,
+                IsQuickSearch = true
             }, token);
-            _recordResults = results
+            if (token.IsCancellationRequested || !string.Equals(normalizedQuery, _query.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+            _recordResults = (response?.Results ?? [])
                 .Where(result => !string.IsNullOrWhiteSpace(result.NavigationRoute))
                 .Select(result => new SearchItem(
-                    result.DisplayName,
+                    result.Title,
                     result.NavigationRoute!,
                     IconFor(result.EntityTypeCode),
-                    string.IsNullOrWhiteSpace(result.SecondaryText) ? result.EntityTypeCode : $"{result.EntityTypeCode} · {result.SecondaryText}"))
+                    $"Unified Intelligence · {result.ModuleCode} · {result.EntityTypeCode} · {result.CombinedScore:P0}"))
                 .ToList();
+            _quickSearchCache[normalizedQuery] = new(DateTimeOffset.UtcNow.AddSeconds(45), _recordResults.ToArray());
+            TrimQuickSearchCache();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -222,27 +263,48 @@
         catch (HttpRequestException)
         {
             _recordResults = [];
+            _searchError = "Search is temporarily unavailable.";
         }
         finally
         {
-            if (!token.IsCancellationRequested) _isSearching = false;
+            if (!token.IsCancellationRequested)
+            {
+                _isSearching = false;
+                await InvokeAsync(StateHasChanged);
+            }
         }
     }
 
-    private static string IconFor(string entityTypeCode) => entityTypeCode switch
+    private void TrimQuickSearchCache()
     {
-        "Account" => "bi-building",
-        "Contact" => "bi-person-badge",
-        "Lead" => "bi-person-plus",
-        "Submission" => "bi-folder2-open",
-        "Policy" => "bi-file-earmark-check",
-        "Claim" => "bi-shield-exclamation",
-        "Document" => "bi-file-earmark-text",
+        var now = DateTimeOffset.UtcNow;
+        foreach (var key in _quickSearchCache.Where(pair => pair.Value.ExpiresUtc <= now).Select(pair => pair.Key).ToArray())
+            _quickSearchCache.Remove(key);
+
+        foreach (var key in _quickSearchCache.OrderByDescending(pair => pair.Value.ExpiresUtc).Skip(20).Select(pair => pair.Key).ToArray())
+            _quickSearchCache.Remove(key);
+    }
+
+    private static string IconFor(string entityTypeCode) => entityTypeCode.ToUpperInvariant() switch
+    {
+        "ACCOUNT" => "bi-building",
+        "CONTACT" => "bi-person-badge",
+        "LEAD" => "bi-person-plus",
+        "SUBMISSION" => "bi-folder2-open",
+        "POLICY" => "bi-file-earmark-check",
+        "CLAIM" => "bi-shield-exclamation",
+        "DOCUMENT" => "bi-file-earmark-text",
+        "CERTIFICATE" => "bi-award",
+        "CARRIER" => "bi-bank",
+        "LOCATION" => "bi-geo-alt",
+        "VEHICLE" => "bi-truck-front",
+        "CLAIMPARTY" => "bi-people",
+        "COMMISSIONLINE" => "bi-cash-stack",
         _ => "bi-search"
     };
 
     // -- Keyboard navigation -----------------------------------
-    private void OnKeyDown(KeyboardEventArgs e)
+    private async Task OnKeyDown(KeyboardEventArgs e)
     {
         var results = GetResults();
         switch (e.Key)
@@ -257,6 +319,9 @@
                 Nav.NavigateTo(results[_selectedIdx].Url);
                 Close();
                 break;
+            case "Enter":
+                await SearchRecordsAsync();
+                break;
             case "Escape":
                 Close();
                 break;
@@ -270,6 +335,8 @@
         _query       = string.Empty;
         _selectedIdx = 0;
         _recordResults = [];
+        _hasSearched = false;
+        _searchError = null;
         _isSearching = false;
     }
 
