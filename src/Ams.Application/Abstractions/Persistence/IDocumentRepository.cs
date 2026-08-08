@@ -13,6 +13,7 @@ public interface IDocumentRepository
     Task<IReadOnlyList<DocumentDto>> GetByEntityAsync(Guid tenantId, string entityName, Guid entityId, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default);
     Task UpdateMetadataAsync(UpdateDocumentMetadataRequest request, CancellationToken cancellationToken = default);
+    Task LinkToEntityAsync(Guid tenantId, Guid documentId, string entityName, Guid entityId, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task RenameAsync(RenameDocumentRequest request, CancellationToken cancellationToken = default);
     Task ArchiveAsync(Guid documentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default);
     Task DeleteAsync(DeleteDocumentRequest request, CancellationToken cancellationToken = default);

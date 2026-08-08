@@ -196,8 +196,60 @@ UPDATE DMS.IntakeWorkItem SET StatusCode=N'CANCELLED',LeaseOwner=NULL,LeaseExpir
         return new(Get("submission.source")??"DocumentIntake",Get("submission.applicantName"),Get("submission.businessName")??throw new InvalidOperationException("Reviewed business name is required."),Get("submission.fein"),Get("submission.email"),Get("submission.phone"),Get("submission.addressLine"),Get("submission.city"),Get("submission.state"),Get("submission.postalCode"),Get("submission.existingPolicyNumber"),Get("submission.producerCode"),Get("submission.lineOfBusiness")??throw new InvalidOperationException("Reviewed line of business is required."),Date("submission.requestedEffectiveDate"),Decimal("submission.estimatedPremium"),Get("submission.notes"));
     }
 
-    public async Task<DocumentIntakePromotionRecord?> GetPromotionAsync(Guid tenantId,string idempotencyKey,CancellationToken cancellationToken=default){const string sql=@"SELECT IntakePromotionId,StatusCode,TargetEntityId,ResultJson FROM DMS.IntakePromotion WHERE TenantId=@TenantId AND IdempotencyKey=@IdempotencyKey;";using var c=await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);return await c.QuerySingleOrDefaultAsync<DocumentIntakePromotionRecord>(new CommandDefinition(sql,new{TenantId=tenantId,IdempotencyKey=idempotencyKey},cancellationToken:cancellationToken));}
+    public async Task<DocumentIntakePromotionConfigurationDto?> GetPromotionConfigurationAsync(Guid tenantId, string moduleCode, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT IntakePromotionConfigurationId, TenantId, ModuleCode, RequireReadyStatus, RequireCanonicalLob,
+       LinkSourceDocuments, CreateFollowUpTask, FollowUpTaskTitle, FollowUpTaskDescription, FollowUpDueDays,
+       FollowUpTaskPriorityCode, OpportunityLinePriorityCode, OpportunityLineStatusCode,
+       OpportunityCloseDays, OpportunityWinProbability, SubmissionTermMonths
+FROM DMS.IntakePromotionConfiguration
+WHERE TenantId = @TenantId AND ModuleCode = @ModuleCode AND IsActive = 1 AND IsDeleted = 0;";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<DocumentIntakePromotionConfigurationDto>(new CommandDefinition(sql, new { TenantId = tenantId, ModuleCode = moduleCode }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<DocumentIntakePromotionRecord?> GetPromotionAsync(Guid tenantId,string idempotencyKey,CancellationToken cancellationToken=default){const string sql=@"SELECT IntakePromotionId,StatusCode,TargetEntityId,ResultJson,SubmissionIntakeId,AccountId,OpportunityId,LobId,LastErrorMessage FROM DMS.IntakePromotion WHERE TenantId=@TenantId AND IdempotencyKey=@IdempotencyKey;";using var c=await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);return await c.QuerySingleOrDefaultAsync<DocumentIntakePromotionRecord>(new CommandDefinition(sql,new{TenantId=tenantId,IdempotencyKey=idempotencyKey},cancellationToken:cancellationToken));}
     public async Task<Guid> BeginPromotionAsync(PromoteDocumentIntakeCommand command,string requestJson,CancellationToken cancellationToken=default){const string sql=@"DECLARE @Id UNIQUEIDENTIFIER=NEWID(); IF EXISTS(SELECT 1 FROM DMS.IntakePromotion WHERE TenantId=@TenantId AND IdempotencyKey=@IdempotencyKey) SELECT IntakePromotionId FROM DMS.IntakePromotion WHERE TenantId=@TenantId AND IdempotencyKey=@IdempotencyKey; ELSE BEGIN INSERT DMS.IntakePromotion(IntakePromotionId,TenantId,IntakeSessionId,ModuleCode,IdempotencyKey,StatusCode,RequestJson,PromotedByUserId) SELECT @Id,@TenantId,@IntakeSessionId,ModuleCode,@IdempotencyKey,N'PROCESSING',@RequestJson,@ActorUserId FROM DMS.IntakeSession WHERE TenantId=@TenantId AND IntakeSessionId=@IntakeSessionId; SELECT @Id; END";using var c=await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);return await c.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{command.TenantId,command.IntakeSessionId,command.IdempotencyKey,command.ActorUserId,RequestJson=requestJson},cancellationToken:cancellationToken));}
+    public async Task UpdatePromotionProgressAsync(Guid tenantId, Guid promotionId, Guid? submissionIntakeId, Guid? accountId, Guid? opportunityId, Guid? lobId, string? errorMessage, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE DMS.IntakePromotion
+SET SubmissionIntakeId = COALESCE(@SubmissionIntakeId, SubmissionIntakeId),
+    AccountId = COALESCE(@AccountId, AccountId),
+    OpportunityId = COALESCE(@OpportunityId, OpportunityId),
+    LobId = COALESCE(@LobId, LobId),
+    LastErrorMessage = @ErrorMessage,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE TenantId = @TenantId AND IntakePromotionId = @PromotionId;";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, PromotionId = promotionId, SubmissionIntakeId = submissionIntakeId, AccountId = accountId, OpportunityId = opportunityId, LobId = lobId, ErrorMessage = errorMessage }, cancellationToken: cancellationToken));
+    }
+
+    public Task LinkDocumentsToSubmissionAsync(Guid tenantId, Guid intakeSessionId, Guid promotionId, Guid submissionId, Guid actorUserId, CancellationToken cancellationToken = default)
+        => ExecuteTransactionAsync(async (connection, transaction) =>
+        {
+            const string sql = @"
+INSERT INTO DMS.IntakePromotedDocument
+    (IntakePromotedDocumentId, TenantId, IntakeSessionId, IntakePromotionId, DocumentId, SubmissionId, OriginalEntityName, OriginalEntityId, DocumentRoleCode, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), link.TenantId, link.IntakeSessionId, @PromotionId, link.DocumentId, @SubmissionId, document.EntityName, document.EntityId, link.DocumentRoleCode, SYSUTCDATETIME(), @ActorUserId, 0
+FROM DMS.IntakeSessionDocument link
+INNER JOIN DMS.Document document ON document.TenantId = link.TenantId AND document.DocumentId = link.DocumentId AND document.IsDeleted = 0
+WHERE link.TenantId = @TenantId AND link.IntakeSessionId = @IntakeSessionId
+  AND NOT EXISTS
+  (
+      SELECT 1 FROM DMS.IntakePromotedDocument existing
+      WHERE existing.TenantId = link.TenantId AND existing.IntakeSessionId = link.IntakeSessionId
+        AND existing.DocumentId = link.DocumentId AND existing.SubmissionId = @SubmissionId AND existing.IsDeleted = 0
+  );
+
+UPDATE document
+SET EntityName = N'Submission', EntityId = @SubmissionId, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+FROM DMS.Document document
+INNER JOIN DMS.IntakeSessionDocument link ON link.TenantId = document.TenantId AND link.DocumentId = document.DocumentId
+WHERE link.TenantId = @TenantId AND link.IntakeSessionId = @IntakeSessionId AND document.IsDeleted = 0;";
+            await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, IntakeSessionId = intakeSessionId, PromotionId = promotionId, SubmissionId = submissionId, ActorUserId = actorUserId }, transaction, cancellationToken: cancellationToken));
+        }, cancellationToken);
     public Task CompletePromotionAsync(Guid tenantId,Guid intakeSessionId,Guid promotionId,Guid targetEntityId,string resultJson,Guid actorUserId,byte[] expectedSessionRowVersion,CancellationToken cancellationToken=default)=>ExecuteTransactionAsync(async(c,t)=>{const string sql=@"UPDATE DMS.IntakePromotion SET StatusCode=N'COMPLETED',TargetEntityId=@TargetEntityId,ResultJson=@ResultJson,CompletedDateUtc=SYSUTCDATETIME() WHERE TenantId=@TenantId AND IntakeSessionId=@SessionId AND IntakePromotionId=@PromotionId AND StatusCode=N'PROCESSING'; UPDATE DMS.IntakeSession SET StatusCode=N'COMPLETED',PromotedEntityId=@TargetEntityId,PromotedDateUtc=SYSUTCDATETIME(),CompletedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE TenantId=@TenantId AND IntakeSessionId=@SessionId AND RowVersion=@RowVersion AND StatusCode=N'READY'; IF @@ROWCOUNT=0 THROW 51000,'Session changed before promotion completed.',1;";await c.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,SessionId=intakeSessionId,PromotionId=promotionId,TargetEntityId=targetEntityId,ResultJson=resultJson,ActorUserId=actorUserId,RowVersion=expectedSessionRowVersion},t,cancellationToken:cancellationToken));},cancellationToken);
 
     public async Task<IReadOnlyCollection<DocumentIntakeWorkItemDto>> LeaseWorkItemsAsync(string leaseOwner,int batchSize,TimeSpan leaseDuration,CancellationToken cancellationToken=default)

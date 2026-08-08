@@ -1,0 +1,3 @@
+window.AgencyBinderConfig = {
+  apiBaseUrl: ""
+};

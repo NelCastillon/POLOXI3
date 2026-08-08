@@ -33,8 +33,10 @@ builder.Services.AddCors(options =>
         if (contactAllowedOrigins.Length > 0)
         {
             policy.WithOrigins(contactAllowedOrigins)
-                .WithMethods("POST", "OPTIONS")
+                .SetIsOriginAllowedToAllowWildcardSubdomains()
+                .WithMethods("GET", "POST", "OPTIONS")
                 .WithHeaders(
+                    "accept",
                     "content-type",
                     "x-requested-with",
                     "x-contact-rendered-at",

@@ -754,7 +754,7 @@ SELECT TOP 10
     bp.PolicyId,
     bp.PolicyNumber,
     COALESCE(bp.NormalizedPolicyNumber, @NormalizedPolicyNumber) AS NormalizedPolicyNumber,
-    COALESCE(c.CarrierName, c.Name, N'') AS CarrierName,
+    COALESCE(c.CarrierName, N'') AS CarrierName,
     COALESCE(bp.LineOfBusiness, @LineOfBusiness) AS LineOfBusiness,
     bp.EffectiveDate,
     bp.ExpirationDate,

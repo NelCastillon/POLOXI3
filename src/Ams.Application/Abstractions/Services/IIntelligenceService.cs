@@ -17,6 +17,8 @@ public interface IIntelligenceService
     Task QueueRecommendationsAsync(GenerateRecommendationsRequest request,CancellationToken cancellationToken=default);
     Task DecideRecommendationAsync(DecideRecommendationRequest request,CancellationToken cancellationToken=default);
     Task<IntelligenceSearchResponse> SearchAsync(IntelligenceSearchRequest request,CancellationToken cancellationToken=default);
+    Task<QuickSearchFastPathResponse> QuickSearchFastPathAsync(QuickSearchRequest request,CancellationToken cancellationToken=default);
+    Task<QuickSearchResponse> QuickSearchIntelligentFallbackAsync(QuickSearchRequest request,CancellationToken cancellationToken=default);
     Task<PagedResult<AiReviewQueueItemDto>> SearchReviewQueueAsync(SearchAiReviewQueueQuery query,CancellationToken cancellationToken=default);
     Task DecideReviewAsync(DecideAiReviewRequest request,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<AiEvaluationDefinitionDto>> GetEvaluationDefinitionsAsync(Guid tenantId,CancellationToken cancellationToken=default);

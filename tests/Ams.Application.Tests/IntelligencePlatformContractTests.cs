@@ -90,6 +90,58 @@ public sealed class IntelligencePlatformContractTests
     }
 
     [Fact]
+    public void QuickSearch_UsesDedicatedFastFirstTieredPipelineOnlyFromTopBar()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0100_TieredQuickSearch.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        foreach(var setting in new[]{"Intelligence.QuickSearch.EnableIntelligentFallback","Intelligence.QuickSearch.FastPathMinimumResults","Intelligence.QuickSearch.FastPathMinimumScore"})Assert.Contains(setting,sql,StringComparison.Ordinal);
+
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","IntelligenceService.cs"));
+        var fastStart=service.IndexOf("QuickSearchFastPathAsync(QuickSearchRequest",StringComparison.Ordinal);
+        var fallbackStart=service.IndexOf("QuickSearchIntelligentFallbackAsync(QuickSearchRequest",StringComparison.Ordinal);
+        var fallbackEnd=service.IndexOf("SearchReviewQueueAsync",fallbackStart,StringComparison.Ordinal);
+        Assert.True(fastStart>=0&&fallbackStart>fastStart&&fallbackEnd>fallbackStart);
+        var fastPath=service[fastStart..fallbackStart];
+        var fallback=service[fallbackStart..fallbackEnd];
+        Assert.Contains("SearchFastAsync",fastPath,StringComparison.Ordinal);
+        Assert.Contains("Task.WhenAll(baseSearchTask,fastMatchesTask)",fastPath,StringComparison.Ordinal);
+        Assert.Contains("ToQuickSearchResponse",fastPath,StringComparison.Ordinal);
+        Assert.Contains("EnableQuickSearchIntelligentFallback&&poorFastPath",fastPath,StringComparison.Ordinal);
+        Assert.DoesNotContain("entityMatchingService.SearchAsync",fastPath,StringComparison.Ordinal);
+        Assert.DoesNotContain("queryExpander.ExpandAsync",fastPath,StringComparison.Ordinal);
+        Assert.DoesNotContain("GetRelatedSearchDocumentsAsync",fastPath,StringComparison.Ordinal);
+        Assert.DoesNotContain("TryInterpretIntentWithLlmAsync",fastPath,StringComparison.Ordinal);
+        var semanticIndex=fallback.IndexOf("entityMatchingService.SearchAsync",StringComparison.Ordinal);
+        var ontologyIndex=fallback.IndexOf("queryExpander.ExpandAsync",StringComparison.Ordinal);
+        var relationshipIndex=fallback.IndexOf("GetRelatedSearchDocumentsAsync",StringComparison.Ordinal);
+        var llmIndex=fallback.IndexOf("TryInterpretIntentWithLlmAsync",StringComparison.Ordinal);
+        Assert.True(semanticIndex>=0&&semanticIndex<ontologyIndex&&ontologyIndex<relationshipIndex&&relationshipIndex<llmIndex);
+
+        var controller=File.ReadAllText(Path.Combine(root,"src","Ams.Api","Controllers","IntelligenceController.cs"));
+        Assert.Contains("HttpPost(\"quick-search/fast\")",controller,StringComparison.Ordinal);
+        Assert.Contains("HttpPost(\"quick-search/intelligent-fallback\")",controller,StringComparison.Ordinal);
+        var topBar=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Layout","AppQuickSearch.razor"));
+        Assert.Contains("Api.QuickSearchFastPathAsync",topBar,StringComparison.Ordinal);
+        Assert.Contains("if (_usedIntelligentFallback)",topBar,StringComparison.Ordinal);
+        Assert.Contains("Api.QuickSearchIntelligentFallbackAsync",topBar,StringComparison.Ordinal);
+        Assert.Contains("await Task.Delay(150, debounceCancellation.Token)",topBar,StringComparison.Ordinal);
+        Assert.Contains("class=\"aqs-search-row um-search-box\"",topBar,StringComparison.Ordinal);
+        Assert.Contains("class=\"um-search-input\"",topBar,StringComparison.Ordinal);
+        Assert.DoesNotContain("class=\"aqs-input\"",topBar,StringComparison.Ordinal);
+        Assert.DoesNotContain("await SearchRecordsAsync();\n                break;",topBar,StringComparison.Ordinal);
+        Assert.DoesNotContain("Press <strong>Enter</strong> to search records",topBar,StringComparison.Ordinal);
+        Assert.DoesNotContain("Api.IntelligenceSearchAsync",topBar,StringComparison.Ordinal);
+        var contracts=File.ReadAllText(Path.Combine(root,"src","Ams.Application","Features","Intelligence","IntelligenceContracts.cs"));
+        Assert.Contains("record QuickSearchResultDto",contracts,StringComparison.Ordinal);
+        Assert.Contains("record QuickSearchResponse",contracts,StringComparison.Ordinal);
+        Assert.Contains("QuickSearchFastPathResponse(QuickSearchResponse Search",contracts,StringComparison.Ordinal);
+        var intelligencePage=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Pages","Intelligence","IntelligenceSearch.razor"));
+        Assert.Contains("Api.IntelligenceSearchAsync",intelligencePage,StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PlatformRuntimeCompletion_TracksTruthfulMaturityVerifiedAdoptionAndRemainingGaps()
     {
         var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0089_PlatformRuntimeCompletion.sql",StringComparison.Ordinal));var sql=Read(assembly,resource);

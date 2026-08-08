@@ -49,7 +49,7 @@ public sealed class IntelligenceService(IIntelligenceRepository repository,IReco
 
         var strongBaseResults=baseResponse.Results.Count(result=>result.KeywordScore>=.85m||result.SemanticScore>=.90m);
         var shouldRunFuzzy=ShouldRunFuzzy(request,intent,quickMode,baseResponse.Results.Count,strongBaseResults);
-        IReadOnlyList<SearchMatchResult> fuzzy=[];
+        IReadOnlyList<SearchMatchResult> fuzzy=Array.Empty<SearchMatchResult>();
         IReadOnlyCollection<IntelligenceSearchResultDto> fuzzyDocuments=[];
         if(shouldRunFuzzy)
         {
@@ -88,6 +88,90 @@ public sealed class IntelligenceService(IIntelligenceRepository repository,IReco
         timer.Stop();
         await repository.CompleteUnifiedSearchAsync(request.TenantId,request.UserId,baseResponse.SearchQueryId,request.Query.ToLowerInvariant(),configuration.Weights,candidates,summaryStatus,summaryExecutionId,timer.ElapsedMilliseconds,cancellationToken);
         return baseResponse with{Results=candidates,DurationMilliseconds=timer.ElapsedMilliseconds,NormalizedQuery=request.Query.ToLowerInvariant(),EffectiveWeights=configuration.Weights,GroundedSummary=summary,SummaryStatusCode=summaryStatus,SummaryExecutionId=summaryExecutionId};
+    }
+    public async Task<QuickSearchFastPathResponse> QuickSearchFastPathAsync(QuickSearchRequest request,CancellationToken cancellationToken=default)
+    {
+        Validate(request);
+        if(request.UserId==Guid.Empty)throw new UnauthorizedAccessException("An authenticated user is required for Quick Search.");
+        var timer=Stopwatch.StartNew();
+        var query=NormalizeQuery(request.Query);
+        var maximumResults=Math.Clamp(request.MaximumResults,1,12);
+        var correlationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"quick-search:{Guid.NewGuid():N}":request.CorrelationId.Trim();
+        var searchRequest=new IntelligenceSearchRequest(request.TenantId,request.UserId,query,null,null,maximumResults,correlationId)
+        {
+            IncludeAiSummary=false,
+            IncludeRelatedResults=true,
+            IsQuickSearch=true,
+            GrantedPermissions=request.GrantedPermissions
+        };
+        var configuration=await repository.GetSearchConfigurationAsync(request.TenantId,cancellationToken);
+        ValidateWeights(configuration.Weights);
+
+        var retrievalMaximum=Math.Min(24,maximumResults*3);
+        var baseSearchTask=repository.SearchAsync(searchRequest with{MaximumResults=retrievalMaximum},[],[],cancellationToken);
+        var fastMatchesTask=entityMatchingService.SearchFastAsync(new(){TenantId=request.TenantId,Query=query,GrantedPermissions=request.GrantedPermissions,MaximumResults=retrievalMaximum,RequestedByUserId=request.UserId,CorrelationId=correlationId},cancellationToken);
+        await Task.WhenAll(baseSearchTask,fastMatchesTask);
+        var baseResponse=await baseSearchTask;
+        var fastMatches=await fastMatchesTask;
+        var fastDocuments=await repository.GetAuthorizedSearchDocumentsAsync(searchRequest,fastMatches.Select(match=>new IntelligenceSearchEntityKey(match.EntityTypeCode,match.EntityId)).ToArray(),cancellationToken);
+        var candidates=Merge(baseResponse.Results,fastDocuments,fastMatches);
+        var fastQuality=candidates.Count==0?0:candidates.Max(candidate=>Math.Max(candidate.KeywordScore,candidate.FuzzyScore));
+        var poorFastPath=candidates.Count<configuration.QuickSearchFastPathMinimumResults||fastQuality<configuration.QuickSearchFastPathMinimumScore;
+        candidates=candidates.Where(candidate=>!string.IsNullOrWhiteSpace(candidate.NavigationRoute)).Select(candidate=>Score(candidate,configuration)).Where(candidate=>candidate.CombinedScore>=configuration.MinimumUnifiedScore).OrderByDescending(candidate=>candidate.CombinedScore).ThenBy(candidate=>candidate.Title).Take(maximumResults).ToList();
+        timer.Stop();
+        await repository.CompleteUnifiedSearchAsync(request.TenantId,request.UserId,baseResponse.SearchQueryId,query.ToLowerInvariant(),configuration.Weights,candidates,"NOT_REQUESTED",null,timer.ElapsedMilliseconds,cancellationToken);
+        return new(ToQuickSearchResponse(baseResponse.SearchQueryId,query,candidates,timer.ElapsedMilliseconds),configuration.EnableQuickSearchIntelligentFallback&&poorFastPath);
+    }
+    public async Task<QuickSearchResponse> QuickSearchIntelligentFallbackAsync(QuickSearchRequest request,CancellationToken cancellationToken=default)
+    {
+        Validate(request);
+        if(request.UserId==Guid.Empty)throw new UnauthorizedAccessException("An authenticated user is required for Quick Search.");
+        var timer=Stopwatch.StartNew();
+        var query=NormalizeQuery(request.Query);
+        var maximumResults=Math.Clamp(request.MaximumResults,1,12);
+        var correlationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"quick-search-fallback:{Guid.NewGuid():N}":request.CorrelationId.Trim();
+        var searchRequest=new IntelligenceSearchRequest(request.TenantId,request.UserId,query,null,null,maximumResults,correlationId)
+        {
+            IncludeAiSummary=false,
+            IncludeRelatedResults=true,
+            IsQuickSearch=true,
+            GrantedPermissions=request.GrantedPermissions
+        };
+        var configuration=await repository.GetSearchConfigurationAsync(request.TenantId,cancellationToken);
+        ValidateWeights(configuration.Weights);
+        var retrievalMaximum=Math.Min(24,maximumResults*3);
+
+        var semanticMatches=await entityMatchingService.SearchAsync(new(){TenantId=request.TenantId,Query=query,GrantedPermissions=request.GrantedPermissions,MaximumResults=retrievalMaximum,RequestedByUserId=request.UserId,CorrelationId=$"{correlationId}:semantic"},cancellationToken);
+        var semanticDocuments=await repository.GetAuthorizedSearchDocumentsAsync(searchRequest,semanticMatches.Select(match=>new IntelligenceSearchEntityKey(match.EntityTypeCode,match.EntityId)).ToArray(),cancellationToken);
+        var candidates=Merge([],semanticDocuments,semanticMatches);
+
+        var ontology=await queryExpander.ExpandAsync(request.TenantId,query,12,cancellationToken);
+        var ontologyResponse=await repository.SearchAsync(searchRequest with{MaximumResults=retrievalMaximum},ontology.Concepts,ontology.Terms,cancellationToken);
+        candidates=Merge(candidates,ontologyResponse.Results,[]);
+
+        if(configuration.EnableRelationships&&candidates.Count>0)
+        {
+            var sources=candidates.OrderByDescending(candidate=>candidate.KeywordScore+candidate.SemanticScore+candidate.FuzzyScore).Take(8).Select(candidate=>new IntelligenceSearchEntityKey(candidate.EntityTypeCode,candidate.EntityId)).ToArray();
+            candidates=Merge(candidates,await repository.GetRelatedSearchDocumentsAsync(searchRequest,sources,configuration.MaximumRelationshipResults,cancellationToken),[]);
+        }
+
+        var intentPatterns=await repository.GetSearchIntentPatternsAsync(request.TenantId,cancellationToken);
+        var intent=IntelligenceSearchIntentInterpreter.Interpret(query,intentPatterns);
+        if(configuration.EnableLlmIntentFallback&&intent.SourceEngineCode.Equals("NONE",StringComparison.OrdinalIgnoreCase))
+        {
+            intent=await TryInterpretIntentWithLlmAsync(searchRequest,configuration,intent,cancellationToken);
+            if(!string.Equals(intent.SearchText,query,StringComparison.OrdinalIgnoreCase))
+            {
+                var interpretedRequest=searchRequest with{EffectiveSearchText=intent.SearchText,EntityTypeCode=intent.EntityTypeCode,ModuleCode=intent.ModuleCode,MaximumResults=retrievalMaximum};
+                var interpretedResponse=await repository.SearchAsync(interpretedRequest,[],[],cancellationToken);
+                candidates=Merge(candidates,interpretedResponse.Results,[]);
+            }
+        }
+
+        candidates=candidates.Where(candidate=>!string.IsNullOrWhiteSpace(candidate.NavigationRoute)).Select(candidate=>Score(candidate,configuration)).Where(candidate=>candidate.CombinedScore>=configuration.MinimumUnifiedScore).OrderByDescending(candidate=>candidate.CombinedScore).ThenBy(candidate=>candidate.Title).Take(maximumResults).ToList();
+        timer.Stop();
+        await repository.CompleteUnifiedSearchAsync(request.TenantId,request.UserId,ontologyResponse.SearchQueryId,query.ToLowerInvariant(),configuration.Weights,candidates,"NOT_REQUESTED",null,timer.ElapsedMilliseconds,cancellationToken);
+        return ToQuickSearchResponse(ontologyResponse.SearchQueryId,query,candidates,timer.ElapsedMilliseconds);
     }
     public Task<PagedResult<AiReviewQueueItemDto>> SearchReviewQueueAsync(SearchAiReviewQueueQuery query,CancellationToken cancellationToken=default){ValidatePage(query.TenantId,query.PageNumber,query.PageSize);return repository.SearchReviewQueueAsync(query with{PageSize=Math.Clamp(query.PageSize,1,200)},cancellationToken);}
     public Task DecideReviewAsync(DecideAiReviewRequest request,CancellationToken cancellationToken=default){Validate(request);return repository.DecideReviewAsync(request,cancellationToken);}
@@ -201,6 +285,8 @@ public sealed class IntelligenceService(IIntelligenceRepository repository,IReco
     }
 
     private static IReadOnlyCollection<IntelligenceSearchMatchExplanationDto> DistinctExplanations(IEnumerable<IntelligenceSearchMatchExplanationDto> explanations)=>explanations.GroupBy(explanation=>(explanation.ReasonCode,explanation.SourceEngineCode,explanation.Explanation)).Select(group=>group.OrderByDescending(explanation=>explanation.Score).First()).ToArray();
+    private static QuickSearchResponse ToQuickSearchResponse(Guid searchQueryId,string query,IReadOnlyCollection<IntelligenceSearchResultDto> results,long durationMilliseconds)
+        =>new(searchQueryId,query,results.Select(result=>new QuickSearchResultDto(result.SearchDocumentId,result.EntityTypeCode,result.EntityId,result.ModuleCode,result.Title,result.NavigationRoute!,result.CombinedScore)).ToArray(),durationMilliseconds);
     private static string NormalizeQuery(string query)=>string.Join(' ',query.Trim().Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries));
     private static string? OptionalFilter(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
     private static bool ShouldRunSemanticExpansion(IntelligenceSearchRequest request,IntelligenceSearchIntent intent,bool quickMode)

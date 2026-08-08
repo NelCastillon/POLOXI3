@@ -97,6 +97,7 @@ public sealed class UpsertOpportunityLineRequest
     public Guid? OpportunityLineId { get; set; }
     public Guid TenantId { get; set; }
     public Guid OpportunityId { get; set; }
+    public Guid LobId { get; set; }
 
     [Required, StringLength(100)]
     public string LineOfBusiness { get; set; } = string.Empty;

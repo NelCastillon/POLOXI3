@@ -120,15 +120,3 @@ if (metricGrid) {
   metricsObserver.observe(metricGrid);
 }
 
-// Demo form handling
-const demoForm = document.querySelector('#demoForm');
-if (demoForm) {
-  demoForm.addEventListener('submit', e => {
-    e.preventDefault();
-    const message = document.querySelector('#formMessage');
-    if (message) {
-      message.textContent = 'Enterprise consultation request captured. Connect this form to your Azure Function, CRM, or Service Bus workflow.';
-      message.style.display = 'block';
-    }
-  });
-}

@@ -6,15 +6,24 @@ public sealed record CreateSubmissionRequest(
     Guid TenantId,
     Guid AccountId,
     Guid OpportunityId,
-    [property: Required, StringLength(100)]
-    string LineOfBusiness,
     [property: Required, StringLength(50)]
     string Priority,
     DateTime EffectiveDate,
     DateTime ExpirationDate,
     [property: Range(0, 999999999999)]
     decimal? TargetPremium,
-    Guid? AssignedToUserId);
+    Guid? AssignedToUserId,
+    [property: Required, StringLength(2, MinimumLength = 2)]
+    string RiskState,
+    [property: StringLength(200)]
+    string? NamedInsured,
+    Guid? CsrUserId,
+    [property: StringLength(2000)]
+    string? Description,
+    [property: StringLength(4000)]
+    string? InternalNotes,
+    bool IsRush,
+    Guid? CreatedByUserId = null);
 
 public sealed record UpdateSubmissionRequest(
     [property: Required, StringLength(100)]

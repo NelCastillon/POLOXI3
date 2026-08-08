@@ -6,6 +6,172 @@
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject NotificationService Notifications
-<PageTitle>AI Document Intake</PageTitle><DocumentIntakeWorkspace><AppPageHeader Title="AI Document Intake Center" Subtitle="Transform legal evidence into reviewed, validated business drafts" Icon="bi-stars"><Actions><AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload"><button class="um-btn um-btn-primary" @onclick="()=>_drawer=true"><i class="bi bi-plus-lg"></i> New intake</button></AuthorizeView></Actions></AppPageHeader><div class="intake-kpis"><div class="intake-kpi"><strong>@_review</strong><span>Awaiting review</span></div><div class="intake-kpi"><strong>@_processing</strong><span>Processing</span></div><div class="intake-kpi"><strong>@_failed</strong><span>Exceptions</span></div><div class="intake-kpi"><strong>@_ready</strong><span>Ready to promote</span></div></div><DocumentIntakeQueue @ref="_queue"/></DocumentIntakeWorkspace>
-<AppCrudDrawer @bind-Visible="_drawer" Title="Create document intake" Icon="bi-stars" IsBusy="_saving"><Content><EditForm Model="_form" OnValidSubmit="CreateAsync"><DataAnnotationsValidator/><ValidationSummary/><div class="knowledge-form-grid"><div class="knowledge-field"><label>Module</label><InputSelect class="knowledge-input" @bind-Value="_form.ModuleCode">@foreach(var module in DocumentIntakeModules.All.Order()){<option value="@module">@module.Replace('_',' ')</option>}</InputSelect></div><div class="knowledge-field"><label>Entry point</label><InputSelect class="knowledge-input" @bind-Value="_form.EntryPointCode"><option>MANUAL_UPLOAD</option><option>EMAIL</option><option>ZIP_PACKAGE</option><option>CARRIER_DOWNLOAD</option><option>CLIENT_PORTAL</option><option>API</option></InputSelect></div><div class="knowledge-field"><label>Priority</label><InputSelect class="knowledge-input" @bind-Value="_form.PriorityCode"><option>NORMAL</option><option>HIGH</option><option>LOW</option></InputSelect></div><div class="knowledge-field knowledge-field-wide"><label>Idempotency key</label><InputText class="knowledge-input" @bind-Value="_form.IdempotencyKey"/><small>Use the source message, package, or transaction identifier to prevent duplicates.</small></div></div></EditForm></Content></AppCrudDrawer>
-@code{private DocumentIntakeQueue?_queue;private bool _drawer,_saving;private int _review,_processing,_failed,_ready;private FormModel _form=new();protected override async Task OnInitializedAsync(){Breadcrumbs.SetCrumbs(new("Home","/"),new("Documents","/documents"),new("Document Intake","/operations/document-intake"));await LoadKpisAsync();}private async Task LoadKpisAsync(){var rows=(await Api.SearchDocumentIntakeAsync(pageSize:500))?.Items??[];_review=rows.Count(x=>x.StatusCode==DocumentIntakeStatuses.ReviewRequired);_processing=rows.Count(x=>x.StatusCode is DocumentIntakeStatuses.Processing or DocumentIntakeStatuses.Queued);_failed=rows.Count(x=>x.StatusCode==DocumentIntakeStatuses.Failed);_ready=rows.Count(x=>x.StatusCode==DocumentIntakeStatuses.Ready);}private async Task CreateAsync(){_saving=true;try{var user=await CurrentUser.RequireAsync();var id=await Api.CreateDocumentIntakeAsync(new(user.TenantId,_form.IdempotencyKey,_form.ModuleCode,_form.EntryPointCode,_form.PriorityCode,null,null,Guid.NewGuid().ToString("N"),user.UserId));_drawer=false;Nav.NavigateTo($"/operations/document-intake/{id}");}catch(Exception ex){Notifications.Add(new(Guid.NewGuid(),"Intake creation failed",ex.Message,"bi-exclamation-triangle","danger"));}finally{_saving=false;}}private sealed class FormModel{[Required]public string ModuleCode{get;set;}=DocumentIntakeModules.Submission;[Required]public string EntryPointCode{get;set;}="MANUAL_UPLOAD";[Required]public string PriorityCode{get;set;}="NORMAL";[Required,StringLength(200)]public string IdempotencyKey{get;set;}=$"manual-{Guid.NewGuid():N}";}}
+
+<PageTitle>AI Document Intake</PageTitle>
+
+<DocumentIntakeWorkspace>
+    <section class="di-center-hero" aria-labelledby="di-center-title">
+        <div class="di-center-hero__content">
+            <div class="di-center-eyebrow"><i class="bi bi-stars"></i> AI document operations</div>
+            <h1 id="di-center-title">AI Document Intake Center</h1>
+            <p>Transform submission forms, evidence packages, and inbound documents into reviewed, validated business drafts.</p>
+            <div class="di-center-steps" aria-label="Document intake workflow">
+                <span><i class="bi bi-cloud-arrow-up"></i> Capture</span>
+                <span><i class="bi bi-cpu"></i> Process</span>
+                <span><i class="bi bi-ui-checks-grid"></i> Review</span>
+                <span><i class="bi bi-box-arrow-up-right"></i> Promote</span>
+            </div>
+        </div>
+        <div class="di-center-hero__actions">
+            <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
+                <button class="um-btn um-btn-primary di-center-primary-action" @onclick="() => _drawer = true">
+                    <i class="bi bi-plus-lg"></i> New intake
+                </button>
+            </AuthorizeView>
+        </div>
+    </section>
+
+    <div class="di-center-kpis" aria-label="Document intake summary">
+        <article class="di-center-kpi di-center-kpi--review">
+            <span class="di-center-kpi__icon"><i class="bi bi-person-check"></i></span>
+            <div>
+                <strong>@_review</strong>
+                <span>Awaiting review</span>
+            </div>
+        </article>
+        <article class="di-center-kpi di-center-kpi--processing">
+            <span class="di-center-kpi__icon"><i class="bi bi-arrow-repeat"></i></span>
+            <div>
+                <strong>@_processing</strong>
+                <span>Processing</span>
+            </div>
+        </article>
+        <article class="di-center-kpi di-center-kpi--failed">
+            <span class="di-center-kpi__icon"><i class="bi bi-exclamation-triangle"></i></span>
+            <div>
+                <strong>@_failed</strong>
+                <span>Exceptions</span>
+            </div>
+        </article>
+        <article class="di-center-kpi di-center-kpi--ready">
+            <span class="di-center-kpi__icon"><i class="bi bi-check2-circle"></i></span>
+            <div>
+                <strong>@_ready</strong>
+                <span>Ready to promote</span>
+            </div>
+        </article>
+    </div>
+
+    <section class="di-center-command-panel" aria-label="Document intake queue">
+        <div class="di-center-panel-header">
+            <div>
+                <span class="di-center-panel-kicker">Governed review queue</span>
+                <h2>Intake workbench</h2>
+                <p>Review extracted data, resolve blockers, and promote ready records through the approved workflow.</p>
+            </div>
+            <span class="di-center-panel-badge"><i class="bi bi-shield-check"></i> Tenant scoped</span>
+        </div>
+        <DocumentIntakeQueue @ref="_queue" />
+    </section>
+</DocumentIntakeWorkspace>
+
+<AppCrudDrawer @bind-Visible="_drawer" Title="Create document intake" Icon="bi-stars" IsBusy="_saving">
+    <Content>
+        <EditForm Model="_form" OnValidSubmit="CreateAsync">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <div class="di-create-intro">
+                <span><i class="bi bi-shield-check"></i></span>
+                <div>
+                    <strong>Governed intake setup</strong>
+                    <small>Create an intake session with a stable source key so duplicate packages are prevented.</small>
+                </div>
+            </div>
+            <div class="di-create-form-grid">
+                <div class="di-create-field">
+                    <label>Module</label>
+                    <InputSelect class="intake-input" @bind-Value="_form.ModuleCode">
+                        @foreach (var module in DocumentIntakeModules.All.Order())
+                        {
+                            <option value="@module">@module.Replace('_', ' ')</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="di-create-field">
+                    <label>Entry point</label>
+                    <InputSelect class="intake-input" @bind-Value="_form.EntryPointCode">
+                        <option>MANUAL_UPLOAD</option>
+                        <option>EMAIL</option>
+                        <option>ZIP_PACKAGE</option>
+                        <option>CARRIER_DOWNLOAD</option>
+                        <option>CLIENT_PORTAL</option>
+                        <option>API</option>
+                    </InputSelect>
+                </div>
+                <div class="di-create-field">
+                    <label>Priority</label>
+                    <InputSelect class="intake-input" @bind-Value="_form.PriorityCode">
+                        <option>NORMAL</option>
+                        <option>HIGH</option>
+                        <option>LOW</option>
+                    </InputSelect>
+                </div>
+                <div class="di-create-field di-create-field--wide">
+                    <label>Idempotency key</label>
+                    <InputText class="intake-input" @bind-Value="_form.IdempotencyKey" />
+                    <small>Use the source message, package, or transaction identifier to prevent duplicates.</small>
+                </div>
+            </div>
+        </EditForm>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    private DocumentIntakeQueue? _queue;
+    private bool _drawer, _saving;
+    private int _review, _processing, _failed, _ready;
+    private FormModel _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"), new("Document Intake", "/operations/document-intake"));
+        await LoadKpisAsync();
+    }
+
+    private async Task LoadKpisAsync()
+    {
+        var rows = (await Api.SearchDocumentIntakeAsync(pageSize: 500))?.Items ?? [];
+        _review = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.ReviewRequired);
+        _processing = rows.Count(x => x.StatusCode is DocumentIntakeStatuses.Processing or DocumentIntakeStatuses.Queued);
+        _failed = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.Failed);
+        _ready = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.Ready);
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        try
+        {
+            var user = await CurrentUser.RequireAsync();
+            var id = await Api.CreateDocumentIntakeAsync(new(user.TenantId, _form.IdempotencyKey, _form.ModuleCode, _form.EntryPointCode, _form.PriorityCode, null, null, Guid.NewGuid().ToString("N"), user.UserId));
+            _drawer = false;
+            Nav.NavigateTo($"/operations/document-intake/{id}");
+        }
+        catch (Exception ex)
+        {
+            Notifications.Add(new(Guid.NewGuid(), "Intake creation failed", ex.Message, "bi-exclamation-triangle", "danger"));
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class FormModel
+    {
+        [Required] public string ModuleCode { get; set; } = DocumentIntakeModules.Submission;
+        [Required] public string EntryPointCode { get; set; } = "MANUAL_UPLOAD";
+        [Required] public string PriorityCode { get; set; } = "NORMAL";
+        [Required, StringLength(200)] public string IdempotencyKey { get; set; } = $"manual-{Guid.NewGuid():N}";
+    }
+}

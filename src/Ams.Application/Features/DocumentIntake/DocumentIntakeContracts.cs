@@ -178,7 +178,33 @@ public sealed record DocumentIntakeDetailDto(
     IReadOnlyCollection<DocumentIntakeDraftFieldDto> DraftFields,
     IReadOnlyCollection<DocumentIntakeIssueDto> Issues,
     IReadOnlyCollection<DocumentIntakeWorkItemDto> WorkItems,
-    IReadOnlyCollection<DocumentIntakeReviewHistoryDto> ReviewHistory);
+    IReadOnlyCollection<DocumentIntakeReviewHistoryDto> ReviewHistory,
+    DocumentIntakePromotionReadinessDto? PromotionReadiness = null);
+
+public sealed record DocumentIntakePromotionReadinessDto(
+    bool CanPromote,
+    Guid? LobId,
+    string? LobCode,
+    string? LobName,
+    IReadOnlyCollection<string> Blockers);
+
+public sealed record DocumentIntakePromotionConfigurationDto(
+    Guid IntakePromotionConfigurationId,
+    Guid TenantId,
+    string ModuleCode,
+    bool RequireReadyStatus,
+    bool RequireCanonicalLob,
+    bool LinkSourceDocuments,
+    bool CreateFollowUpTask,
+    string? FollowUpTaskTitle,
+    string? FollowUpTaskDescription,
+    int? FollowUpDueDays,
+    string FollowUpTaskPriorityCode,
+    string OpportunityLinePriorityCode,
+    string OpportunityLineStatusCode,
+    int OpportunityCloseDays,
+    decimal OpportunityWinProbability,
+    int SubmissionTermMonths);
 
 public sealed record CreateDocumentIntakeSessionCommand(
     [Required] Guid TenantId,

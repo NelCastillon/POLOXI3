@@ -92,6 +92,22 @@ WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { request.DocumentId, request.Description, request.Tags, request.RetentionDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 
+    public async Task LinkToEntityAsync(Guid tenantId, Guid documentId, string entityName, Guid entityId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE DMS.Document
+SET EntityName = @EntityName,
+    EntityId = @EntityId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE TenantId = @TenantId
+  AND DocumentId = @DocumentId
+  AND IsDeleted = 0;
+IF @@ROWCOUNT = 0 THROW 51000, N'Document was not found for the current tenant.', 1;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, DocumentId = documentId, EntityName = entityName, EntityId = entityId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
     public async Task ArchiveAsync(Guid documentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = "UPDATE DMS.Document SET StatusCode = 'Archived', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ModifiedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";

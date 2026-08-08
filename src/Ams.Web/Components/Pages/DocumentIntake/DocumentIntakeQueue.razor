@@ -1,10 +1,107 @@
 @using Ams.Application.Features.DocumentIntake
 @inject ApiClient Api
 @inject NavigationManager Nav
-<div class="intake-panel">
-    <div class="intake-toolbar"><input class="intake-input intake-grow" placeholder="Search session or correlation" @bind="_search"/><select class="intake-input" @bind="_module"><option value="">All modules</option>@foreach(var module in DocumentIntakeModules.All.Order()){<option value="@module">@module.Replace('_',' ')</option>}</select>@if(!LockStatus){<select class="intake-input" @bind="_status"><option value="">All statuses</option>@foreach(var status in Statuses){<option value="@status">@status.Replace('_',' ')</option>}</select>}<button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search"></i> Apply filters</button></div>
-    @if(_error is not null){<div class="intake-error">@_error</div>}else if(_loading){<div class="intake-state">Loading document intake sessions...</div>}else if(_items.Count==0){<div class="intake-state"><i class="bi bi-inbox"></i><p>No intake sessions match the current filters.</p></div>}else{<AppGrid TValue="DocumentIntakeSessionDto" DataSource="_items" AllowPaging="true"><GridColumns><GridColumn Field="@nameof(DocumentIntakeSessionDto.SessionNumber)" HeaderText="Session"/><GridColumn Field="@nameof(DocumentIntakeSessionDto.ModuleCode)" HeaderText="Module"/><GridColumn HeaderText="Status"><Template>@{var row=(DocumentIntakeSessionDto)context;}<AppStatusBadge Status="@row.StatusCode"/></Template></GridColumn><GridColumn HeaderText="Confidence"><Template>@{var row=(DocumentIntakeSessionDto)context;}@FormatConfidence(row.OverallConfidence)</Template></GridColumn><GridColumn Field="@nameof(DocumentIntakeSessionDto.WarningCount)" HeaderText="Warnings"/><GridColumn Field="@nameof(DocumentIntakeSessionDto.ErrorCount)" HeaderText="Errors"/><GridColumn Field="@nameof(DocumentIntakeSessionDto.CreatedDateUtc)" HeaderText="Created UTC"/><GridColumn HeaderText="Action" Width="90"><Template>@{var row=(DocumentIntakeSessionDto)context;}<button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row.IntakeSessionId)">Open</button></Template></GridColumn></GridColumns></AppGrid>}
+<div class="intake-panel intake-queue-panel">
+    <div class="es-search-panel intake-search-panel">
+        <div class="es-search-wrap">
+            <span class="es-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="es-search-body">
+                <label for="intake-search">Document intake search</label>
+                <input id="intake-search" class="es-search-input" placeholder="Search session or correlation" aria-label="Search document intake sessions" @bind="_search" />
+                <span class="es-search-hint">Filters governed intake sessions by session number or correlation.</span>
+            </div>
+        </div>
+        <select class="es-filter-select" @bind="_module" aria-label="Module filter">
+            <option value="">All modules</option>
+            @foreach (var module in DocumentIntakeModules.All.Order())
+            {
+                <option value="@module">@module.Replace('_', ' ')</option>
+            }
+        </select>
+        @if (!LockStatus)
+        {
+            <select class="es-filter-select" @bind="_status" aria-label="Status filter">
+                <option value="">All statuses</option>
+                @foreach (var status in Statuses)
+                {
+                    <option value="@status">@status.Replace('_', ' ')</option>
+                }
+            </select>
+        }
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-funnel"></i> Apply filters</button>
+    </div>
+    @if (_error is not null)
+    {
+        <div class="intake-error">@_error</div>
+    }
+    else if (_loading)
+    {
+        <div class="intake-state"><i class="bi bi-arrow-repeat"></i><p>Loading document intake sessions...</p></div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="intake-state"><i class="bi bi-inbox"></i><p>No intake sessions match the current filters.</p></div>
+    }
+    else
+    {
+        <div class="intake-grid-shell">
+        <AppGrid TValue="DocumentIntakeSessionDto" DataSource="_items" AllowPaging="true">
+            <GridColumns>
+                <GridColumn Field="@nameof(DocumentIntakeSessionDto.SessionNumber)" HeaderText="Session" />
+                <GridColumn Field="@nameof(DocumentIntakeSessionDto.ModuleCode)" HeaderText="Module" />
+                <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeSessionDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
+                <GridColumn HeaderText="Confidence"><Template>@{ var row = (DocumentIntakeSessionDto)context; }@FormatConfidence(row.OverallConfidence)</Template></GridColumn>
+                <GridColumn Field="@nameof(DocumentIntakeSessionDto.WarningCount)" HeaderText="Warnings" />
+                <GridColumn Field="@nameof(DocumentIntakeSessionDto.ErrorCount)" HeaderText="Errors" />
+                <GridColumn Field="@nameof(DocumentIntakeSessionDto.CreatedDateUtc)" HeaderText="Created UTC" />
+                <GridColumn HeaderText="Action" Width="90"><Template>@{ var row = (DocumentIntakeSessionDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row.IntakeSessionId)">Open</button></Template></GridColumn>
+            </GridColumns>
+        </AppGrid>
+        </div>
+    }
 </div>
-@code{
-[Parameter]public string? Status{get;set;}[Parameter]public bool LockStatus{get;set;}private List<DocumentIntakeSessionDto>_items=[];private string _search="",_module="",_status="";private bool _loading;private string?_error;private static readonly string[] Statuses=[DocumentIntakeStatuses.Draft,DocumentIntakeStatuses.Queued,DocumentIntakeStatuses.Processing,DocumentIntakeStatuses.ReviewRequired,DocumentIntakeStatuses.Ready,DocumentIntakeStatuses.Completed,DocumentIntakeStatuses.Failed,DocumentIntakeStatuses.Cancelled];protected override async Task OnParametersSetAsync(){_status=Status??_status;await LoadAsync();}private async Task LoadAsync(){_loading=true;_error=null;try{_items=(await Api.SearchDocumentIntakeAsync(_search,_module,_status,pageSize:500))?.Items.ToList()??[];}catch(Exception ex){_error=ex.Message;}finally{_loading=false;}}private void Open(Guid id)=>Nav.NavigateTo($"/operations/document-intake/{id}");private static string FormatConfidence(decimal? value)=>value.HasValue?value.Value.ToString("P0"):"—";
+
+@code {
+    [Parameter] public string? Status { get; set; }
+    [Parameter] public bool LockStatus { get; set; }
+
+    private List<DocumentIntakeSessionDto> _items = [];
+    private string _search = "", _module = "", _status = "";
+    private string? _loadedSearch, _loadedModule, _loadedStatus;
+    private bool _loading;
+    private string? _error;
+    private static readonly string[] Statuses = [DocumentIntakeStatuses.Draft, DocumentIntakeStatuses.Queued, DocumentIntakeStatuses.Processing, DocumentIntakeStatuses.ReviewRequired, DocumentIntakeStatuses.Ready, DocumentIntakeStatuses.Completed, DocumentIntakeStatuses.Failed, DocumentIntakeStatuses.Cancelled];
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _status = Status ?? _status;
+        if (_loadedSearch != _search || _loadedModule != _module || _loadedStatus != _status)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _items = (await Api.SearchDocumentIntakeAsync(_search, _module, _status, pageSize: 500))?.Items.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loadedSearch = _search;
+            _loadedModule = _module;
+            _loadedStatus = _status;
+            _loading = false;
+        }
+    }
+
+    private void Open(Guid id) => Nav.NavigateTo($"/operations/document-intake/{id}");
+    private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
 }

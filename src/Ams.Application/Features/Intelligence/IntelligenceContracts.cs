@@ -28,6 +28,13 @@ public sealed record IntelligenceSearchRequest(Guid TenantId,Guid UserId,[Requir
     public string? EffectiveSearchText { get; init; }
     public IReadOnlyCollection<string> GrantedPermissions { get; init; } = [];
 }
+public sealed record QuickSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[Range(1,12)]int MaximumResults=8,[Required,StringLength(120)]string CorrelationId="")
+{
+    public IReadOnlyCollection<string> GrantedPermissions { get; init; } = [];
+}
+public sealed record QuickSearchResultDto(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string NavigationRoute,decimal CombinedScore);
+public sealed record QuickSearchResponse(Guid SearchQueryId,string Query,IReadOnlyCollection<QuickSearchResultDto> Results,long DurationMilliseconds);
+public sealed record QuickSearchFastPathResponse(QuickSearchResponse Search,bool IntelligentFallbackRecommended);
 public sealed record IntelligenceSearchResultDto(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,decimal KeywordScore,decimal SemanticScore,decimal CombinedScore,IReadOnlyCollection<SemanticConceptMatchDto> Concepts)
 {
     public decimal FuzzyScore { get; init; }
@@ -54,7 +61,7 @@ public sealed record IntelligenceSearchResponse(Guid SearchQueryId,string Query,
     public string SummaryStatusCode { get; init; } = "NOT_REQUESTED";
     public Guid? SummaryExecutionId { get; init; }
 }
-public sealed record IntelligenceSearchConfiguration(IntelligenceSearchWeightsDto Weights,int RecencyWindowDays,int MaximumRelationshipResults,decimal MinimumUnifiedScore,bool EnableRules,bool EnableRelationships,bool EnableAiSummary,bool EnableLlmIntentFallback,decimal LlmIntentMinimumConfidence,int LlmIntentTimeoutSeconds);
+public sealed record IntelligenceSearchConfiguration(IntelligenceSearchWeightsDto Weights,int RecencyWindowDays,int MaximumRelationshipResults,decimal MinimumUnifiedScore,bool EnableRules,bool EnableRelationships,bool EnableAiSummary,bool EnableLlmIntentFallback,decimal LlmIntentMinimumConfidence,int LlmIntentTimeoutSeconds,bool EnableQuickSearchIntelligentFallback,int QuickSearchFastPathMinimumResults,decimal QuickSearchFastPathMinimumScore);
 public sealed record IntelligenceSearchEntityKey(string EntityTypeCode,Guid EntityId);
 
 public sealed record AiReviewQueueItemDto(Guid ReviewQueueItemId,string ReviewTypeCode,string SourceEntityTypeCode,Guid SourceEntityId,Guid? ExecutionId,string Title,string? Summary,string PriorityCode,string StatusCode,decimal? Confidence,Guid? AssignedToUserId,DateTime? DueDateUtc,DateTime CreatedDateUtc,byte[] RowVersion);

@@ -20,19 +20,27 @@
 
     <div class="aqs-modal" role="dialog" aria-label="Quick search" aria-modal="true">
         <div class="aqs-header">
-            <div>
-                <span>Enterprise Search</span>
-                <strong>Find pages, actions, and authorized records</strong>
+            <div class="aqs-title-lockup">
+                <span class="aqs-brand-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+                <div class="aqs-title-copy">
+                    <span class="aqs-eyebrow">Enterprise Search</span>
+                    <strong>Find pages, actions, and authorized records</strong>
+                </div>
             </div>
-            <span class="aqs-fast-badge"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Fast mode</span>
+            <div class="aqs-header-actions">
+                <span class="aqs-fast-badge"><i class="bi @(_usedIntelligentFallback ? "bi-stars" : "bi-lightning-charge-fill")" aria-hidden="true"></i> @(_usedIntelligentFallback ? "Intelligent fallback" : "Fast mode")</span>
+                <button type="button" class="aqs-close" aria-label="Close quick search" title="Close" @onclick="Close">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
         </div>
 
         @* -- Search input ---------------------------------- *@
-        <div class="aqs-search-row">
-            <i class="bi bi-search aqs-icon" aria-hidden="true"></i>
+        <div class="aqs-search-row um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
             <input id="aqs-input"
                    type="text"
-                   class="aqs-input"
+                   class="um-search-input"
                    placeholder="Search pages, actions, records..."
                    autocomplete="off"
                    value="@_query"
@@ -86,7 +94,7 @@
         {
             <div class="aqs-empty">
                 <i class="bi @(string.IsNullOrWhiteSpace(_searchError) ? "bi-search" : "bi-exclamation-triangle")" aria-hidden="true"></i>
-                <span>@(!string.IsNullOrWhiteSpace(_searchError) ? _searchError : _hasSearched ? (MarkupString)$"No results for \"<strong>{_query}</strong>\"" : (MarkupString)"Press <strong>Enter</strong> to search records")</span>
+                <span>@(!string.IsNullOrWhiteSpace(_searchError) ? _searchError : _hasSearched ? (MarkupString)$"No results for \"<strong>{_query}</strong>\"" : (MarkupString)"Type at least <strong>3 characters</strong> to search records")</span>
             </div>
         }
         else
@@ -128,15 +136,17 @@
     private bool   _prevOpen;
     private bool   _isSearching;
     private bool   _hasSearched;
+    private bool   _usedIntelligentFallback;
     private string? _searchError;
     private List<SearchItem> _recordResults = [];
     private CancellationTokenSource? _searchCancellation;
+    private CancellationTokenSource? _debounceCancellation;
     private readonly Dictionary<string, QuickSearchCacheEntry> _quickSearchCache = new(StringComparer.OrdinalIgnoreCase);
 
     private DotNetObjectReference<AppQuickSearch>? _dotnetRef;
     private IJSObjectReference? _module;
 
-    private sealed record QuickSearchCacheEntry(DateTimeOffset ExpiresUtc,IReadOnlyList<SearchItem> Results);
+    private sealed record QuickSearchCacheEntry(DateTimeOffset ExpiresUtc,IReadOnlyList<SearchItem> Results,bool UsedIntelligentFallback);
 
     // -- Hint groups (shown when query is empty) ---------------
     private static readonly HintGroup[] _hintGroups =
@@ -196,17 +206,33 @@
             .ToList();
     }
 
-    private void OnSearchInput(ChangeEventArgs args)
+    private async Task OnSearchInput(ChangeEventArgs args)
     {
         _query = args.Value?.ToString() ?? string.Empty;
         _selectedIdx = 0;
         _recordResults = [];
         _hasSearched = false;
+        _usedIntelligentFallback = false;
         _searchError = null;
         _searchCancellation?.Cancel();
         _searchCancellation?.Dispose();
         _searchCancellation = null;
-        _isSearching = false;
+        _debounceCancellation?.Cancel();
+        _debounceCancellation?.Dispose();
+        _debounceCancellation = null;
+        _isSearching = _query.Trim().Length >= 3;
+        if (!_isSearching) return;
+
+        var debounceCancellation = new CancellationTokenSource();
+        _debounceCancellation = debounceCancellation;
+        try
+        {
+            await Task.Delay(150, debounceCancellation.Token);
+            await SearchRecordsAsync();
+        }
+        catch (OperationCanceledException) when (debounceCancellation.IsCancellationRequested)
+        {
+        }
     }
 
     private async Task SearchRecordsAsync()
@@ -225,6 +251,7 @@
             _recordResults = cached.Results.ToList();
             _isSearching = false;
             _hasSearched = true;
+            _usedIntelligentFallback = cached.UsedIntelligentFallback;
             _searchError = null;
             return;
         }
@@ -239,22 +266,31 @@
         await InvokeAsync(StateHasChanged);
         try
         {
-            var response = await Api.IntelligenceSearchAsync(new(Guid.Empty, Guid.Empty, normalizedQuery, null, null, 8, Guid.NewGuid().ToString("N"))
-            {
-                IncludeRelatedResults = false,
-                IncludeAiSummary = false,
-                IsQuickSearch = true
-            }, token);
+            var request = new QuickSearchRequest(Guid.Empty, Guid.Empty, normalizedQuery, 8, Guid.NewGuid().ToString("N"));
+            var fastPath = await Api.QuickSearchFastPathAsync(request, token);
             if (token.IsCancellationRequested || !string.Equals(normalizedQuery, _query.Trim(), StringComparison.OrdinalIgnoreCase)) return;
-            _recordResults = (response?.Results ?? [])
+            var results = fastPath?.Search.Results ?? [];
+            _usedIntelligentFallback = fastPath?.IntelligentFallbackRecommended == true;
+            if (_usedIntelligentFallback)
+            {
+                var fallback = await Api.QuickSearchIntelligentFallbackAsync(request, token);
+                if (token.IsCancellationRequested || !string.Equals(normalizedQuery, _query.Trim(), StringComparison.OrdinalIgnoreCase)) return;
+                results = results
+                    .Concat(fallback?.Results ?? [])
+                    .DistinctBy(result => (result.EntityTypeCode, result.EntityId))
+                    .OrderByDescending(result => result.CombinedScore)
+                    .Take(8)
+                    .ToArray();
+            }
+            _recordResults = results
                 .Where(result => !string.IsNullOrWhiteSpace(result.NavigationRoute))
                 .Select(result => new SearchItem(
                     result.Title,
-                    result.NavigationRoute!,
+                    result.NavigationRoute,
                     IconFor(result.EntityTypeCode),
-                    $"Unified Intelligence · {result.ModuleCode} · {result.EntityTypeCode} · {result.CombinedScore:P0}"))
+                    $"Quick Search · {result.ModuleCode} · {result.EntityTypeCode} · {result.CombinedScore:P0}"))
                 .ToList();
-            _quickSearchCache[normalizedQuery] = new(DateTimeOffset.UtcNow.AddSeconds(45), _recordResults.ToArray());
+            _quickSearchCache[normalizedQuery] = new(DateTimeOffset.UtcNow.AddSeconds(45), _recordResults.ToArray(), _usedIntelligentFallback);
             TrimQuickSearchCache();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -304,7 +340,7 @@
     };
 
     // -- Keyboard navigation -----------------------------------
-    private async Task OnKeyDown(KeyboardEventArgs e)
+    private Task OnKeyDown(KeyboardEventArgs e)
     {
         var results = GetResults();
         switch (e.Key)
@@ -319,23 +355,23 @@
                 Nav.NavigateTo(results[_selectedIdx].Url);
                 Close();
                 break;
-            case "Enter":
-                await SearchRecordsAsync();
-                break;
             case "Escape":
                 Close();
                 break;
         }
+        return Task.CompletedTask;
     }
 
     private void Close()
     {
+        _debounceCancellation?.Cancel();
         _searchCancellation?.Cancel();
         Shell.CloseQuickSearch();
         _query       = string.Empty;
         _selectedIdx = 0;
         _recordResults = [];
         _hasSearched = false;
+        _usedIntelligentFallback = false;
         _searchError = null;
         _isSearching = false;
     }
@@ -370,6 +406,8 @@
     public async ValueTask DisposeAsync()
     {
         Shell.OnChange -= OnShellChange;
+        _debounceCancellation?.Cancel();
+        _debounceCancellation?.Dispose();
         _searchCancellation?.Cancel();
         _searchCancellation?.Dispose();
         _dotnetRef?.Dispose();

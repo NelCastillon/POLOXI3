@@ -372,20 +372,21 @@ FROM #Ranked ranked JOIN Search.EntityProjection projection ON projection.Entity
     {
         const string sql = """
 CREATE TABLE #Ranked(EntityProjectionId UNIQUEIDENTIFIER PRIMARY KEY,SearchRank INT NOT NULL);
-IF EXISTS(SELECT 1 FROM Search.SearchCapability WHERE CapabilityCode=N'FULL_TEXT' AND IsAvailable=1 AND IsEnabled=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL))
-   AND EXISTS(SELECT 1 FROM sys.fulltext_indexes WHERE object_id=OBJECT_ID(N'Search.EntityProjection'))
-BEGIN
-    DECLARE @FullTextSql NVARCHAR(MAX)=N'INSERT #Ranked(EntityProjectionId,SearchRank) SELECT projection.EntityProjectionId,fullText.[RANK] FROM Search.EntityProjection projection JOIN CONTAINSTABLE(Search.EntityProjection,(DisplayName,SecondaryText,SearchText),@FullTextQuery,@MaximumResults) fullText ON fullText.[KEY]=projection.EntityProjectionId WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0 AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson))) AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)));';
-    EXEC sp_executesql @FullTextSql,N'@TenantId UNIQUEIDENTIFIER,@FullTextQuery NVARCHAR(4000),@MaximumResults INT,@AllTypes BIT,@EntityTypeCodesJson NVARCHAR(MAX),@CanNavigateAll BIT,@GrantedPermissionsJson NVARCHAR(MAX)',@TenantId,@FullTextQuery,@MaximumResults,@AllTypes,@EntityTypeCodesJson,@CanNavigateAll,@GrantedPermissionsJson;
-END;
 INSERT #Ranked(EntityProjectionId,SearchRank)
-SELECT TOP(@MaximumResults) projection.EntityProjectionId,CASE WHEN projection.DisplayName=@Query THEN 1200 WHEN projection.DisplayName LIKE @Query+N'%' THEN 900 ELSE 100 END
+SELECT TOP(@MaximumResults) projection.EntityProjectionId,
+    CASE WHEN projection.DisplayName=@OriginalQuery THEN 1400 WHEN projection.DisplayName=@Query THEN 1200 WHEN projection.DisplayName LIKE @OriginalQuery+N'%' THEN 1000 WHEN projection.DisplayName LIKE @Query+N'%' THEN 900 ELSE 100 END
 FROM Search.EntityProjection projection
 WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0
   AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson)))
   AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson)))
-  AND (projection.DisplayName LIKE N'%' + @Query + N'%' OR projection.SearchText LIKE N'%' + @Query + N'%' OR projection.NormalizedFieldsJson LIKE N'%' + STRING_ESCAPE(@Query,'json') + N'%')
-  AND NOT EXISTS(SELECT 1 FROM #Ranked ranked WHERE ranked.EntityProjectionId=projection.EntityProjectionId);
+  AND (projection.DisplayName LIKE N'%' + @OriginalQuery + N'%' OR projection.SearchText LIKE N'%' + @OriginalQuery + N'%' OR projection.NormalizedFieldsJson LIKE N'%' + STRING_ESCAPE(@OriginalQuery,'json') + N'%'
+       OR projection.DisplayName LIKE N'%' + @Query + N'%' OR projection.SearchText LIKE N'%' + @Query + N'%' OR projection.NormalizedFieldsJson LIKE N'%' + STRING_ESCAPE(@Query,'json') + N'%');
+IF EXISTS(SELECT 1 FROM Search.SearchCapability WHERE CapabilityCode=N'FULL_TEXT' AND IsAvailable=1 AND IsEnabled=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL))
+   AND EXISTS(SELECT 1 FROM sys.fulltext_indexes WHERE object_id=OBJECT_ID(N'Search.EntityProjection'))
+BEGIN
+    DECLARE @FullTextSql NVARCHAR(MAX)=N'INSERT #Ranked(EntityProjectionId,SearchRank) SELECT projection.EntityProjectionId,fullText.[RANK] FROM Search.EntityProjection projection JOIN CONTAINSTABLE(Search.EntityProjection,(DisplayName,SecondaryText,SearchText),@FullTextQuery,@MaximumResults) fullText ON fullText.[KEY]=projection.EntityProjectionId WHERE projection.TenantId=@TenantId AND projection.IsActive=1 AND projection.IsDeleted=0 AND (@AllTypes=1 OR projection.EntityTypeCode IN(SELECT [value] FROM OPENJSON(@EntityTypeCodesJson))) AND (@CanNavigateAll=1 OR projection.PermissionCode IN(SELECT [value] FROM OPENJSON(@GrantedPermissionsJson))) AND NOT EXISTS(SELECT 1 FROM #Ranked ranked WHERE ranked.EntityProjectionId=projection.EntityProjectionId);';
+    EXEC sp_executesql @FullTextSql,N'@TenantId UNIQUEIDENTIFIER,@FullTextQuery NVARCHAR(4000),@MaximumResults INT,@AllTypes BIT,@EntityTypeCodesJson NVARCHAR(MAX),@CanNavigateAll BIT,@GrantedPermissionsJson NVARCHAR(MAX)',@TenantId,@FullTextQuery,@MaximumResults,@AllTypes,@EntityTypeCodesJson,@CanNavigateAll,@GrantedPermissionsJson;
+END;
 INSERT #Ranked(EntityProjectionId,SearchRank)
 SELECT TOP(@MaximumResults) projection.EntityProjectionId,500+DIFFERENCE(projection.DisplayName,@OriginalQuery)*50
 FROM Search.EntityProjection projection

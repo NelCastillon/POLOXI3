@@ -2,7 +2,9 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.Accounts;
+using Ams.Application.Features.Iam;
 using Ams.Application.Features.Opportunities;
+using Ams.Application.Features.Security;
 using Ams.Application.Features.Submissions;
 using Xunit;
 
@@ -349,8 +351,38 @@ public sealed class SubmissionProposalWorkflowTests
         => new(Guid.NewGuid(), lineOfBusiness, "Quoted", premium, 2500m, 1000000m, 15m,
             null, null, null, "Annual", null, null, null, true, true, null, sortOrder);
 
+    [Fact]
+    public async Task CreateAsync_Uses_Canonical_Opportunity_Lob_And_Configured_Options()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = CreateSubmissionRequest();
+
+        var result = await service.CreateAsync(request);
+
+        Assert.NotEqual(Guid.Empty, result);
+        Assert.Same(request, repository.LastCreateRequest);
+    }
+
+    [Fact]
+    public async Task CreateAsync_Rejects_Unconfigured_Risk_State()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = CreateSubmissionRequest() with { RiskState = "ZZ" };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateAsync(request));
+
+        Assert.Contains("risk state", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(repository.LastCreateRequest);
+    }
+
+    private static CreateSubmissionRequest CreateSubmissionRequest()
+        => new(TenantId, AccountId, OpportunityId, "Standard", DateTime.UtcNow.Date.AddDays(30), DateTime.UtcNow.Date.AddYears(1),
+            25000m, UserId, "TX", "Test Insured", UserId, "Risk description", "Internal notes", false, UserId);
+
     private static SubmissionService CreateService(FakeSubmissionRepository repository, FakePolicyCreationService? policyCreationService = null)
-        => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository(), policyCreationService ?? new FakePolicyCreationService());
+        => new(repository, new FakeAccountRepository(), new FakeOpportunityRepository(), policyCreationService ?? new FakePolicyCreationService(), new FakeUserRepository(), new FakeReferenceOptionRepository());
 
     private sealed class FakeSubmissionRepository : ISubmissionRepository
     {
@@ -386,6 +418,7 @@ public sealed class SubmissionProposalWorkflowTests
         public UpdateBindRequestStatusRequest? LastBindStatusRequest { get; private set; }
         public IReadOnlyList<PolicyBindTransactionDto> BindTransactions { get; set; } = [];
         public int RequestQuoteCallCount { get; private set; }
+        public CreateSubmissionRequest? LastCreateRequest { get; private set; }
 
         public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         {
@@ -426,7 +459,11 @@ public sealed class SubmissionProposalWorkflowTests
 
         public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<SubmissionDto>());
         public Task<SubmissionDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<SubmissionDto?>(new SubmissionDto { SubmissionId = id, TenantId = TenantId, AccountId = AccountId, OpportunityId = Guid.NewGuid() });
-        public Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default)
+        {
+            LastCreateRequest = request;
+            return Task.FromResult(Guid.NewGuid());
+        }
         public Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SubmissionActivityDto>> GetActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SubmissionActivityDto>>([]);
@@ -603,8 +640,12 @@ public sealed class SubmissionProposalWorkflowTests
     private sealed class FakeOpportunityRepository : IOpportunityRepository
     {
         public Task<PagedResult<OpportunityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<OpportunityDto>());
-        public Task<OpportunityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDto?>(new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = Guid.NewGuid() });
-        public Task<OpportunityDetailDto?> GetDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDetailDto?>(new OpportunityDetailDto { Opportunity = new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = Guid.NewGuid() } });
+        public Task<OpportunityDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDto?>(new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = AccountId });
+        public Task<OpportunityDetailDto?> GetDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityDetailDto?>(new OpportunityDetailDto
+        {
+            Opportunity = new OpportunityDto { OpportunityId = id, TenantId = TenantId, AccountId = AccountId },
+            Lines = [new OpportunityLineDto { OpportunityLineId = Guid.NewGuid(), LobId = Guid.NewGuid(), LineOfBusiness = "General Liability", IsPrimary = true }]
+        });
         public Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<OpportunityConversionLaunchDto?>(null);
         public Task<PagedResult<OpportunityCompetitorLookupDto>> SearchCompetitorLookupsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<OpportunityCompetitorLookupDto>());
         public Task<Guid> CreateAsync(CreateOpportunityRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
@@ -619,6 +660,40 @@ public sealed class SubmissionProposalWorkflowTests
         public Task DeleteSubmissionAsync(Guid submissionId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<Guid> UpsertCompetitorAsync(UpsertOpportunityCompetitorRequest request, CancellationToken cancellationToken = default) => Task.FromResult(request.CompetitorId ?? Guid.NewGuid());
         public Task DeleteCompetitorAsync(Guid competitorId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakeUserRepository : IUserRepository
+    {
+        public Task<UserDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<UserDto?>(new UserDto
+        {
+            UserId = id,
+            TenantId = TenantId,
+            StatusCode = "Active",
+            AssignedRoleCodes = "Producer,CSR"
+        });
+        public Task<PagedResult<UserDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<UserDto>());
+        public Task<Guid> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task UpdateAsync(UpdateUserRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetActiveAsync(Guid userId, bool isActive, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task LockAsync(Guid userId, DateTime? lockoutEnd, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task UnlockAsync(Guid userId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SetMfaAsync(Guid userId, bool enabled, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AssignBranchAsync(Guid userId, Guid? branchId, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ChangeStatusAsync(ChangeUserStatusRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IEnumerable<UserPermissionDto>> GetDirectPermissionsAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<IEnumerable<UserPermissionDto>>([]);
+        public Task<IEnumerable<UserPermissionDto>> GetDirectUsersByPermissionAsync(Guid permissionId, CancellationToken cancellationToken = default) => Task.FromResult<IEnumerable<UserPermissionDto>>([]);
+        public Task<Guid> GrantPermissionAsync(GrantUserPermissionRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task RevokePermissionAsync(Guid userPermissionId, Guid? revokedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakeReferenceOptionRepository : ISubmissionReferenceOptionRepository
+    {
+        public Task<List<SubmissionReferenceOptionDto>> GetAllAsync(Guid tenantId, string? optionGroup = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new List<SubmissionReferenceOptionDto>
+            {
+                new() { TenantId = tenantId, OptionGroup = "SubmissionPriority", OptionCode = "Standard", OptionName = "Standard", IsDefault = true, IsActive = true },
+                new() { TenantId = tenantId, OptionGroup = "RiskState", OptionCode = "TX", OptionName = "Texas", IsDefault = true, IsActive = true }
+            }.Where(option => optionGroup is null || option.OptionGroup == optionGroup).ToList());
     }
 
     private sealed class FakePolicyCreationService : Ams.Application.Abstractions.Services.IPolicyCreationService

@@ -239,6 +239,29 @@ public sealed class DocumentIntakeContractTests
         Assert.Contains("AddHostedService<DocumentIntakeTelemetryWorkerService>",worker,StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SubmissionPromotion_IsTenantConfiguredResumableAndLinksSourceEvidence()
+    {
+        var assembly = typeof(DatabaseMigrator).Assembly;
+        var resource = assembly.GetManifestResourceNames().Single(name => name.EndsWith("0102_DocumentIntakeSubmissionPromotion.sql", StringComparison.Ordinal));
+        var sql = Read(assembly, resource);
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var service = File.ReadAllText(Path.Combine(root, "src", "Ams.Application", "DocumentIntakeService.cs"));
+        var repository = File.ReadAllText(Path.Combine(root, "src", "Ams.Infrastructure", "Persistence", "Repositories", "DocumentIntakeRepository.cs"));
+
+        Assert.Contains("DMS.IntakePromotionConfiguration", sql, StringComparison.Ordinal);
+        Assert.Contains("DMS.IntakePromotedDocument", sql, StringComparison.Ordinal);
+        Assert.Contains("SubmissionIntakeId", sql, StringComparison.Ordinal);
+        Assert.Contains("OpportunityLinePriorityCode", sql, StringComparison.Ordinal);
+        Assert.Contains("OpportunityLineStatusCode", sql, StringComparison.Ordinal);
+        Assert.Contains("GetPromotionReadinessAsync", service, StringComparison.Ordinal);
+        Assert.Contains("FindExactAsync", service, StringComparison.Ordinal);
+        Assert.Contains("UpdatePromotionProgressAsync", service, StringComparison.Ordinal);
+        Assert.Contains("LinkDocumentsToSubmissionAsync", service, StringComparison.Ordinal);
+        Assert.Contains("INSERT INTO DMS.IntakePromotedDocument", repository, StringComparison.Ordinal);
+        Assert.Contains("EntityName = N'Submission'", repository, StringComparison.Ordinal);
+    }
+
     private static string Read(System.Reflection.Assembly assembly, string resource)
     {
         using var stream = assembly.GetManifestResourceStream(resource)!;

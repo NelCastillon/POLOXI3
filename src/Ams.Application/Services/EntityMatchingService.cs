@@ -55,15 +55,26 @@ public sealed class EntityMatchingService(ISearchMatchingRepository repository, 
         }
     }
 
-    public async Task<IReadOnlyList<SearchMatchResult>> SearchAsync(EnterpriseFuzzySearchRequest request, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<SearchMatchResult>> SearchAsync(EnterpriseFuzzySearchRequest request, CancellationToken cancellationToken = default)
+        => SearchAsync(request, true, cancellationToken);
+
+    public Task<IReadOnlyList<SearchMatchResult>> SearchFastAsync(EnterpriseFuzzySearchRequest request, CancellationToken cancellationToken = default)
+        => SearchAsync(request, false, cancellationToken);
+
+    private async Task<IReadOnlyList<SearchMatchResult>> SearchAsync(EnterpriseFuzzySearchRequest request, bool includeSemanticExpansion, CancellationToken cancellationToken)
     {
         Validator.ValidateObject(request, new ValidationContext(request), true);
         var policy = await repository.GetPolicyAsync(request.TenantId, MatchProfileCodes.GlobalEnterpriseSearch, cancellationToken)
             ?? throw new InvalidOperationException("The global enterprise search profile is not configured.");
-        var expansion = await _semanticQueryExpander.ExpandAsync(request.TenantId, request.Query, policy.SemanticMaximumConcepts, cancellationToken);
+        var normalizedQuery = SearchMatchingAlgorithms.Normalize(request.Query, policy.EntityTypeCode, "Global", policy.NormalizationTerms);
+        if (string.IsNullOrWhiteSpace(normalizedQuery)) normalizedQuery = request.Query.Trim();
+        var expansion = includeSemanticExpansion
+            ? await _semanticQueryExpander.ExpandAsync(request.TenantId, request.Query, policy.SemanticMaximumConcepts, cancellationToken)
+            : new SemanticQueryExpansion([], []);
         var correlationId = string.IsNullOrWhiteSpace(request.CorrelationId) ? $"search:{Guid.NewGuid():N}" : request.CorrelationId.Trim();
-        await repository.SaveSemanticEvidenceAsync(request.TenantId, request.RequestedByUserId, correlationId, request.Query, expansion.Terms, expansion.Concepts, cancellationToken);
-        var retrievalQuery = string.Join(' ', new[] { request.Query }.Concat(expansion.Terms).Distinct(StringComparer.OrdinalIgnoreCase));
+        if (includeSemanticExpansion)
+            await repository.SaveSemanticEvidenceAsync(request.TenantId, request.RequestedByUserId, correlationId, request.Query, expansion.Terms, expansion.Concepts, cancellationToken);
+        var retrievalQuery = string.Join(' ', new[] { normalizedQuery }.Concat(expansion.Terms).Distinct(StringComparer.OrdinalIgnoreCase));
         var projections = await repository.SearchProjectionsAsync(request.TenantId, retrievalQuery, request.Query, request.EntityTypeCodes, request.GrantedPermissions, Math.Min(request.MaximumResults, policy.MaximumCandidates), cancellationToken);
         var fields = new Dictionary<string, string?> { ["DisplayName"] = request.Query, ["SearchText"] = request.Query };
         var matchRequest = new EntityMatchRequest { TenantId = request.TenantId, ProfileCode = policy.ProfileCode, EntityTypeCode = policy.EntityTypeCode, CorrelationId = correlationId, RequestedByUserId = request.RequestedByUserId, Fields = fields };

@@ -6,6 +6,7 @@
 @inject CurrentUserContext CurrentUser
 @inject NotificationService Notifications
 @inject ConfirmationDialogService Confirmations
+@inject NavigationManager Nav
 
 <PageTitle>Document Intake Review</PageTitle>
 
@@ -29,6 +30,7 @@
     }
     else
     {
+        <div class="di-detail-shell">
         <AppPageHeader Title="@_detail.Session.SessionNumber" Subtitle="@SessionSubtitle" Icon="bi-stars" ReturnUrl="/operations/document-intake">
             <Actions>
                 <div class="intake-actions">
@@ -48,8 +50,12 @@
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Ready)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Promote">
-                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync">Create @ModuleLabel</button>
+                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync" disabled="@(_detail.PromotionReadiness?.CanPromote != true)">Create @ModuleLabel</button>
                         </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Completed && _detail.Session.PromotedEntityId.HasValue)
+                    {
+                        <button class="um-btn um-btn-primary" @onclick="OpenPromotedRecord"><i class="bi bi-box-arrow-up-right"></i> Open Submission</button>
                     }
                     @if (_detail.Session.StatusCode is not (DocumentIntakeStatuses.Completed or DocumentIntakeStatuses.Cancelled))
                     {
@@ -58,6 +64,38 @@
                 </div>
             </Actions>
         </AppPageHeader>
+
+        @if (_detail.Session.ModuleCode == DocumentIntakeModules.Submission)
+        {
+            <section class="intake-panel di-readiness-panel">
+                <div class="di-readiness-heading">
+                    <span><i class="bi bi-shield-check"></i></span>
+                    <div>
+                        <h2 class="h5">Submission promotion readiness</h2>
+                        <p>Readiness is validated from reviewed intake data, tenant configuration, source documents, and canonical Line of Business records.</p>
+                    </div>
+                </div>
+                @if (_detail.PromotionReadiness is { CanPromote: true } readiness)
+                {
+                    <div class="alert alert-success di-readiness-alert" role="status">
+                        <i class="bi bi-check-circle-fill me-2"></i>
+                        Ready to create the Account, Opportunity, canonical @readiness.LobName line, Submission, linked documents, and configured follow-up records.
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-danger di-readiness-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                        <strong>Promotion is blocked.</strong>
+                        <ul class="mb-0 mt-2">
+                            @foreach (var blocker in _detail.PromotionReadiness?.Blockers ?? [])
+                            {
+                                <li>@blocker</li>
+                            }
+                        </ul>
+                    </div>
+                }
+            </section>
+        }
 
         <div class="intake-kpis">
             <div class="intake-kpi"><strong><AppStatusBadge Status="@_detail.Session.StatusCode" /></strong><span>Workflow status</span></div>
@@ -141,6 +179,7 @@
                 </GridColumns>
             </AppGrid>
         </section>
+        </div>
     }
 </DocumentIntakeWorkspace>
 
@@ -175,7 +214,8 @@
     private async Task ResolveIssueAsync(DocumentIntakeIssueDto issue) { try { await Api.ResolveDocumentIntakeIssueAsync(Id, issue.IntakeIssueId, new(_tenantId, Id, issue.IntakeIssueId, "RESOLVED", "Verified and resolved against source evidence", Guid.NewGuid().ToString("N"), _userId, issue.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
     private async Task ReprocessAsync() { if (_detail is null) return; try { await Api.ReprocessDocumentIntakeAsync(Id, new(_tenantId, Id, _reprocessType, _reason, Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); _reprocessDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
     private async Task CancelAsync() { if (_detail is null || !await Confirmations.ConfirmAsync("Cancel intake", "Cancel this intake session and pending work?")) return; try { await Api.CancelDocumentIntakeAsync(Id, new(_tenantId, Id, "Cancelled by reviewer", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private async Task PromoteAsync() { if (_detail is null || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success")); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task PromoteAsync() { if (_detail?.PromotionReadiness?.CanPromote != true || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success", result is null ? null : $"/submissions/{result.TargetEntityId}")); if (result is not null) Nav.NavigateTo($"/submissions/{result.TargetEntityId}"); else await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private void OpenPromotedRecord() { if (_detail?.Session.PromotedEntityId is Guid submissionId) Nav.NavigateTo($"/submissions/{submissionId}"); }
     private void Fail(string message) => Notifications.Add(new(Guid.NewGuid(), "Document intake operation failed", message, "bi-exclamation-triangle", "danger"));
     private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
 }

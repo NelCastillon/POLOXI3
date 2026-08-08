@@ -13,17 +13,23 @@ public sealed class SubmissionService : ISubmissionService
     private readonly IAccountRepository _accountRepository;
     private readonly IOpportunityRepository _opportunityRepository;
     private readonly IPolicyCreationService _policyCreationService;
+    private readonly IUserRepository _userRepository;
+    private readonly ISubmissionReferenceOptionRepository _referenceOptionRepository;
 
     public SubmissionService(
         ISubmissionRepository repository,
         IAccountRepository accountRepository,
         IOpportunityRepository opportunityRepository,
-        IPolicyCreationService policyCreationService)
+        IPolicyCreationService policyCreationService,
+        IUserRepository userRepository,
+        ISubmissionReferenceOptionRepository referenceOptionRepository)
     {
         _repository = repository;
         _accountRepository = accountRepository;
         _opportunityRepository = opportunityRepository;
         _policyCreationService = policyCreationService;
+        _userRepository = userRepository;
+        _referenceOptionRepository = referenceOptionRepository;
     }
 
     public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
@@ -46,7 +52,49 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent opportunity is not linked to the supplied account; the submission chain is inconsistent.");
         }
 
+        var opportunityDetail = await _opportunityRepository.GetDetailAsync(request.OpportunityId, cancellationToken);
+        if (opportunityDetail is null || opportunityDetail.Lines.Count == 0)
+        {
+            throw new InvalidOperationException("The selected opportunity must have at least one database-backed line of business before a submission can be created.");
+        }
+
+        if (opportunityDetail.Lines.Any(line => line.LobId is null))
+        {
+            throw new InvalidOperationException("Every opportunity line must reference an active Line of Business configuration record before a submission can be created.");
+        }
+
+        var referenceOptions = await _referenceOptionRepository.GetAllAsync(request.TenantId, cancellationToken: cancellationToken);
+        if (!referenceOptions.Any(option => option.OptionGroup == "SubmissionPriority" && option.OptionCode == request.Priority && option.IsActive))
+        {
+            throw new InvalidOperationException("The selected submission priority is not active for this tenant.");
+        }
+
+        if (!referenceOptions.Any(option => option.OptionGroup == "RiskState" && option.OptionCode == request.RiskState && option.IsActive))
+        {
+            throw new InvalidOperationException("The selected risk state is not active for this tenant.");
+        }
+
+        await EnsureActiveTenantUserAsync(request.AssignedToUserId, request.TenantId, "Producer", cancellationToken);
+        await EnsureActiveTenantUserAsync(request.CsrUserId, request.TenantId, "CSR", cancellationToken);
+
         return await _repository.CreateAsync(request, cancellationToken);
+    }
+
+    private async Task EnsureActiveTenantUserAsync(Guid? userId, Guid tenantId, string roleName, CancellationToken cancellationToken)
+    {
+        if (!userId.HasValue)
+        {
+            return;
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId.Value, cancellationToken);
+        var roleCodes = user?.AssignedRoleCodes?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        var roleNames = user?.AssignedRoleNames?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        if (user is null || user.TenantId != tenantId || !string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)
+            || (!roleCodes.Contains(roleName, StringComparer.OrdinalIgnoreCase) && !roleNames.Contains(roleName, StringComparer.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"The selected {roleName} is not an active tenant user with the required role.");
+        }
     }
 
     public Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default)

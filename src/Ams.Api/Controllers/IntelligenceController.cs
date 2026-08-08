@@ -145,6 +145,14 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> Search([FromBody]IntelligenceSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
 
+    [HttpPost("quick-search/fast")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> QuickSearchFastPath([FromBody]QuickSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.QuickSearchFastPathAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
+
+    [HttpPost("quick-search/intelligent-fallback")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> QuickSearchIntelligentFallback([FromBody]QuickSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.QuickSearchIntelligentFallbackAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
+
     [HttpGet("review-queue")]
     [Authorize(Policy=IntelligencePolicies.Review)]
     public async Task<IActionResult> ReviewQueue([FromQuery]string? searchTerm,[FromQuery]string? reviewTypeCode,[FromQuery]string? statusCode,[FromQuery]string? priorityCode,[FromQuery]Guid? assignedToUserId,[FromQuery]int pageNumber=1,[FromQuery]int pageSize=50,CancellationToken cancellationToken=default)=>Ok(await service.SearchReviewQueueAsync(new(TenantId,searchTerm,reviewTypeCode,statusCode,priorityCode,assignedToUserId,pageNumber,pageSize),cancellationToken));

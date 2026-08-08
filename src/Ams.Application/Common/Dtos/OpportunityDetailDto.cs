@@ -49,6 +49,7 @@ public sealed class OpportunityLineDto
     public Guid OpportunityLineId { get; set; }
     public Guid TenantId { get; set; }
     public Guid OpportunityId { get; set; }
+    public Guid? LobId { get; set; }
     public string LineOfBusiness { get; set; } = string.Empty;
     public string? Carrier { get; set; }
     public decimal EstPremium { get; set; }

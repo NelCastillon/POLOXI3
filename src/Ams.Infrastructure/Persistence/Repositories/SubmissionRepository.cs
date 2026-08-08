@@ -1555,31 +1555,100 @@ WHERE  s.SubmissionId = @Id AND s.IsDeleted = 0;";
     public async Task<Guid> CreateAsync(CreateSubmissionRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+DECLARE @PrimaryOpportunityLineId UNIQUEIDENTIFIER;
+DECLARE @PrimaryLobId UNIQUEIDENTIFIER;
+DECLARE @PrimaryLineOfBusiness NVARCHAR(100);
+
+SELECT TOP 1
+    @PrimaryOpportunityLineId = line.OpportunityLineId,
+    @PrimaryLobId = line.LobId,
+    @PrimaryLineOfBusiness = lob.LobName
+FROM CRM.Opportunity opportunity
+INNER JOIN CRM.OpportunityLine line
+    ON line.TenantId = opportunity.TenantId
+   AND line.OpportunityId = opportunity.OpportunityId
+   AND line.IsDeleted = 0
+INNER JOIN Agency.LineOfBusiness lob
+    ON lob.TenantId = line.TenantId
+   AND lob.LobId = line.LobId
+   AND lob.IsActive = 1
+   AND lob.IsDeleted = 0
+WHERE opportunity.TenantId = @TenantId
+  AND opportunity.OpportunityId = @OpportunityId
+  AND opportunity.AccountId = @AccountId
+  AND opportunity.IsDeleted = 0
+ORDER BY CASE WHEN line.OpportunityLineId = opportunity.PrimaryOpportunityLineId OR line.IsPrimary = 1 THEN 0 ELSE 1 END,
+         line.EstPremium DESC,
+         line.CreatedDateUtc;
+
+IF @PrimaryOpportunityLineId IS NULL
+    THROW 52420, N'The selected opportunity does not have an active database-backed line of business.', 1;
+
 INSERT INTO Submissions.Submission
-    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority,
-     AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount,
-     CreatedDateUtc, IsDeleted)
+    (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LobId, LineOfBusiness, Status, Priority,
+     AssignedToUserId, CsrUserId, EffectiveDate, ExpirationDate, TargetPremium, RiskState, NamedInsured, Description, InternalNotes, IsRush, MarketCount, QuoteCount,
+     CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
     (@SubmissionId, @TenantId, @AccountId, @OpportunityId,
      'SUB-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('0000' + CAST(NEXT VALUE FOR Submissions.SubmissionSeq AS VARCHAR), 4),
-     @LineOfBusiness, 'Draft', @Priority,
-     @AssignedToUserId, @EffectiveDate, @ExpirationDate, @TargetPremium, 0, 0,
-     GETUTCDATE(), 0);";
+     @PrimaryLobId, @PrimaryLineOfBusiness, 'Draft', @Priority,
+      @AssignedToUserId, @CsrUserId, @EffectiveDate, @ExpirationDate, @TargetPremium, @RiskState, @NamedInsured, @Description, @InternalNotes, @IsRush, 0, 0,
+     GETUTCDATE(), @CreatedByUserId, 0);
+
+INSERT INTO Submissions.SubmissionLine
+    (SubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LobId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), line.TenantId, @SubmissionId, line.OpportunityId, line.OpportunityLineId, line.LobId, lob.LobName,
+       CASE WHEN line.OpportunityLineId = @PrimaryOpportunityLineId THEN COALESCE(@TargetPremium, line.EstPremium, 0) ELSE COALESCE(line.EstPremium, 0) END,
+       SYSUTCDATETIME(), @CreatedByUserId, 0
+FROM CRM.OpportunityLine line
+INNER JOIN Agency.LineOfBusiness lob
+    ON lob.TenantId = line.TenantId
+   AND lob.LobId = line.LobId
+   AND lob.IsActive = 1
+   AND lob.IsDeleted = 0
+WHERE line.TenantId = @TenantId
+  AND line.OpportunityId = @OpportunityId
+  AND line.IsDeleted = 0;
+
+INSERT INTO CRM.OpportunitySubmissionLine
+    (OpportunitySubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), submissionLine.TenantId, submissionLine.SubmissionId, submissionLine.OpportunityId, submissionLine.OpportunityLineId,
+       submissionLine.LineOfBusiness, submissionLine.TargetPremium, SYSUTCDATETIME(), @CreatedByUserId, 0
+FROM Submissions.SubmissionLine submissionLine
+WHERE submissionLine.TenantId = @TenantId
+  AND submissionLine.SubmissionId = @SubmissionId
+  AND submissionLine.IsDeleted = 0;";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        using var transaction = cn.BeginTransaction();
+        try
         {
-            SubmissionId     = id,
-            request.TenantId,
-            request.AccountId,
-            request.OpportunityId,
-            request.LineOfBusiness,
-            request.Priority,
-            request.AssignedToUserId,
-            request.EffectiveDate,
-            request.ExpirationDate,
-            request.TargetPremium,
-        }, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition(sql, new
+            {
+                SubmissionId = id,
+                request.TenantId,
+                request.AccountId,
+                request.OpportunityId,
+                request.Priority,
+                request.AssignedToUserId,
+                request.CsrUserId,
+                request.EffectiveDate,
+                request.ExpirationDate,
+                request.TargetPremium,
+                request.RiskState,
+                request.NamedInsured,
+                request.Description,
+                request.InternalNotes,
+                request.IsRush,
+                request.CreatedByUserId,
+            }, transaction, cancellationToken: cancellationToken));
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
         return id;
     }
 
@@ -5558,39 +5627,43 @@ IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityI
     SELECT s.SubmissionId,
            s.ModifiedDateUtc,
            s.CreatedDateUtc,
-           COUNT(CASE WHEN q.Status = N'Approved for Presentation'
-                            AND q.ExpiresDateUtc > SYSUTCDATETIME()
-                            AND q.AnnualPremium > 0
-                            AND q.CarrierId IS NOT NULL
-                            AND q.Deductible IS NOT NULL
-                            AND q.[Limit] IS NOT NULL
-                            AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
-                            AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
-                             AND q.QuoteDocumentId IS NOT NULL
-                             AND q.IsBindable = 1
-                             AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0)
-                             AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
-                             AND NOT EXISTS
-                             (
-                                 SELECT 1
-                                 FROM Submissions.SubmissionLine sl
-                                 WHERE sl.SubmissionId = s.SubmissionId
-                                   AND sl.TenantId = @TenantId
-                                   AND sl.IsDeleted = 0
-                                   AND NOT EXISTS
-                                   (
-                                       SELECT 1
-                                       FROM Submissions.QuoteLine ql
-                                       WHERE ql.QuoteId = q.QuoteId
-                                         AND ql.TenantId = @TenantId
-                                         AND ql.SubmissionLineId = sl.SubmissionLineId
-                                         AND ql.IsDeleted = 0
-                                         AND ql.IsBindable = 1
-                                   )
-                             )
-                      THEN 1 END) AS ProposalReadyQuoteCount
+           COALESCE(SUM(readiness.IsProposalReady), 0) AS ProposalReadyQuoteCount
     FROM Submissions.Submission s
-    LEFT JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0
+    LEFT JOIN Submissions.Quote q ON q.SubmissionId = s.SubmissionId AND q.TenantId = s.TenantId AND q.IsDeleted = 0
+    OUTER APPLY
+    (
+        SELECT CASE WHEN q.Status = N'Approved for Presentation'
+                          AND q.ExpiresDateUtc > SYSUTCDATETIME()
+                          AND q.AnnualPremium > 0
+                          AND q.CarrierId IS NOT NULL
+                          AND q.Deductible IS NOT NULL
+                          AND q.[Limit] IS NOT NULL
+                          AND COALESCE(NULLIF(q.CoverageForms, N''), NULLIF(q.CoverageNotes, N'')) IS NOT NULL
+                          AND (q.ReviewedDateUtc IS NOT NULL OR q.ReviewedByUserId IS NOT NULL)
+                          AND q.QuoteDocumentId IS NOT NULL
+                          AND q.IsBindable = 1
+                          AND EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0)
+                          AND NOT EXISTS (SELECT 1 FROM Submissions.QuoteLine ql WHERE ql.QuoteId = q.QuoteId AND ql.TenantId = @TenantId AND ql.IsDeleted = 0 AND ql.IsBindable = 0)
+                          AND NOT EXISTS
+                          (
+                              SELECT 1
+                              FROM Submissions.SubmissionLine sl
+                              WHERE sl.SubmissionId = s.SubmissionId
+                                AND sl.TenantId = @TenantId
+                                AND sl.IsDeleted = 0
+                                AND NOT EXISTS
+                                (
+                                    SELECT 1
+                                    FROM Submissions.QuoteLine ql
+                                    WHERE ql.QuoteId = q.QuoteId
+                                      AND ql.TenantId = @TenantId
+                                      AND ql.SubmissionLineId = sl.SubmissionLineId
+                                      AND ql.IsDeleted = 0
+                                      AND ql.IsBindable = 1
+                                )
+                          )
+                    THEN 1 ELSE 0 END AS IsProposalReady
+    ) readiness
     WHERE s.OpportunityId = @OpportunityId AND s.TenantId = @TenantId AND s.IsDeleted = 0
     GROUP BY s.SubmissionId, s.ModifiedDateUtc, s.CreatedDateUtc
 ), SelectedSubmission AS

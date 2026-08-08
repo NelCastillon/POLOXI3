@@ -142,7 +142,7 @@ END;";
         var sql = OpportunitySelect + @"
 WHERE o.OpportunityId = @Id AND o.IsDeleted = 0;
 
-SELECT OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority,
+SELECT OpportunityLineId, TenantId, OpportunityId, LobId, LineOfBusiness, Carrier, EstPremium, Priority,
        COALESCE(Status, N'Draft') AS Status, COALESCE(IsPrimary, CONVERT(bit, 0)) AS IsPrimary,
        TargetEffectiveDate, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc
 FROM CRM.OpportunityLine
@@ -980,6 +980,9 @@ IF NOT EXISTS (SELECT 1 FROM CRM.Opportunity WHERE OpportunityId = @OpportunityI
 IF @OpportunityLineId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine WHERE OpportunityLineId = @OpportunityLineId AND OpportunityId = @OpportunityId AND IsDeleted = 0)
     THROW 51001, 'Opportunity line does not belong to this opportunity.', 1;
 
+IF NOT EXISTS (SELECT 1 FROM Agency.LineOfBusiness WHERE LobId = @LobId AND TenantId = @TenantId AND IsActive = 1 AND IsDeleted = 0)
+    THROW 51002, 'Line of Business is not active for the selected tenant.', 1;
+
 IF @OpportunityLineId IS NULL
 BEGIN
     SET @OpportunityLineId = NEWID();
@@ -992,9 +995,9 @@ BEGIN
     END;
 
     INSERT INTO CRM.OpportunityLine
-        (OpportunityLineId, TenantId, OpportunityId, LineOfBusiness, Carrier, EstPremium, Priority, Status, IsPrimary, TargetEffectiveDate, AssignedToUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+        (OpportunityLineId, TenantId, OpportunityId, LobId, LineOfBusiness, Carrier, EstPremium, Priority, Status, IsPrimary, TargetEffectiveDate, AssignedToUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
     VALUES
-        (@OpportunityLineId, @TenantId, @OpportunityId, @LineOfBusiness, @Carrier, @EstPremium, @Priority, @Status, @IsPrimary, @TargetEffectiveDate, @AssignedToUserId, SYSUTCDATETIME(), @UserId, 0);
+        (@OpportunityLineId, @TenantId, @OpportunityId, @LobId, (SELECT LobName FROM Agency.LineOfBusiness WHERE LobId = @LobId), @Carrier, @EstPremium, @Priority, @Status, @IsPrimary, @TargetEffectiveDate, @AssignedToUserId, SYSUTCDATETIME(), @UserId, 0);
 END
 ELSE
 BEGIN
@@ -1006,7 +1009,8 @@ BEGIN
     END;
 
     UPDATE CRM.OpportunityLine
-    SET LineOfBusiness = @LineOfBusiness,
+    SET LobId = @LobId,
+        LineOfBusiness = (SELECT LobName FROM Agency.LineOfBusiness WHERE LobId = @LobId),
         Carrier = @Carrier,
         EstPremium = @EstPremium,
         Priority = @Priority,
@@ -1040,7 +1044,7 @@ SELECT @OpportunityLineId;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var isNew = request.OpportunityLineId is null;
-        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.OpportunityLineId, request.TenantId, request.OpportunityId, request.LineOfBusiness, request.Carrier, request.EstPremium, request.Priority, request.Status, request.IsPrimary, request.TargetEffectiveDate, request.AssignedToUserId, request.UserId }, cancellationToken: cancellationToken));
+        var id = await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new { request.OpportunityLineId, request.TenantId, request.OpportunityId, request.LobId, request.Carrier, request.EstPremium, request.Priority, request.Status, request.IsPrimary, request.TargetEffectiveDate, request.AssignedToUserId, request.UserId }, cancellationToken: cancellationToken));
         await RecordWorkflowEventAsync(cn, request.OpportunityId, request.TenantId, isNew ? "LineAdded" : "LineUpdated", isNew ? "Coverage line added" : "Coverage line updated", $"{request.LineOfBusiness} line is {request.Status} with estimated premium {request.EstPremium:C0}.", "OpportunityLine", id, request.UserId, cancellationToken);
         return id;
     }
