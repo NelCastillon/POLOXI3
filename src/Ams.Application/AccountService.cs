@@ -36,6 +36,9 @@ public sealed class AccountService : IAccountService
     public Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default)
         => _repository.GetAccount360Async(tenantId, accountId, cancellationToken);
 
+    public Task ReplaceServiceAssignmentsAsync(ReplaceAccountServiceAssignmentsRequest request, CancellationToken cancellationToken = default)
+        => _repository.ReplaceServiceAssignmentsAsync(request, cancellationToken);
+
     public Task<Guid> UpsertNamedInsuredAsync(UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => _repository.UpsertNamedInsuredAsync(request, cancellationToken);
     public Task<Guid> UpsertLocationAsync(UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => _repository.UpsertLocationAsync(request, cancellationToken);
     public Task<Guid> UpsertVehicleAsync(UpsertAccountVehicleRequest request, CancellationToken cancellationToken = default) => _repository.UpsertVehicleAsync(request, cancellationToken);

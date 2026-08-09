@@ -195,7 +195,7 @@ else
                                 else { @AEmpty("bi-chat-square-heart", "No communication preferences", "Record consent and channel preferences for service, billing, claims, marketing, and renewals.") }
                             </div>
                             <div class="a360-info-card">
-                                <h3 class="a360-section-hdr">Service Assignments</h3>
+                                <div class="d-flex align-items-center justify-content-between gap-2 mb-2"><h3 class="a360-section-hdr mb-0">Service Assignments</h3><button type="button" class="a360-btn a360-btn-ghost a360-btn-sm" @onclick="OpenServiceAssignmentsAsync"><i class="bi bi-person-gear" aria-hidden="true"></i> Manage</button></div>
                                 @if (_account360?.ServiceAssignments.Count > 0)
                                 {
                                     @foreach (var assignment in _account360.ServiceAssignments)
@@ -800,6 +800,30 @@ else
 </div>
 }
 
+@if (_showServiceAssignments)
+{
+<div class="a360-modal-backdrop" role="presentation" @onclick="CloseServiceAssignments">
+    <div class="a360-modal" role="dialog" aria-modal="true" aria-labelledby="service-assignment-title" @onclick:stopPropagation="true">
+        <div class="a360-modal-header">
+            <i class="bi bi-people-fill" aria-hidden="true"></i>
+            <span id="service-assignment-title">Manage Service Assignments</span>
+            <button type="button" class="a360-btn a360-btn-ghost a360-btn-sm a360-ms-auto" @onclick="CloseServiceAssignments" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+        </div>
+        <EditForm Model="_serviceAssignmentForm" OnValidSubmit="SaveServiceAssignmentsAsync">
+            <div class="a360-modal-body">
+                <p class="text-muted">These database-backed assignments drive account servicing and endorsement fallback routing.</p>
+                <div class="a360-form-grid">
+                    <div class="a360-field"><label>Primary Account Manager</label><InputSelect @bind-Value="_serviceAssignmentForm.AccountManagerUserId" class="a360-input"><option value="">Unassigned</option>@foreach(var user in AccountManagerUsers){<option value="@user.UserId">@UserDisplay(user)</option>}</InputSelect></div>
+                    <div class="a360-field"><label>Primary Producer</label><InputSelect @bind-Value="_serviceAssignmentForm.ProducerUserId" class="a360-input"><option value="">Unassigned</option>@foreach(var user in ProducerUsers){<option value="@user.UserId">@UserDisplay(user)</option>}</InputSelect></div>
+                    <div class="a360-field"><label>CSR</label><InputSelect @bind-Value="_serviceAssignmentForm.CsrUserId" class="a360-input"><option value="">Unassigned</option>@foreach(var user in CsrUsers){<option value="@user.UserId">@UserDisplay(user)</option>}</InputSelect></div>
+                </div>
+            </div>
+            <div class="a360-modal-footer"><button type="button" class="a360-btn a360-btn-ghost" @onclick="CloseServiceAssignments">Cancel</button><button type="submit" class="a360-btn a360-btn-primary" disabled="@_saving"><i class="bi bi-check-lg" aria-hidden="true"></i> Save Assignments</button></div>
+        </EditForm>
+    </div>
+</div>
+}
+
 <!-- Add/Edit Contact -->
 @if (_showAddContact)
 {
@@ -1096,6 +1120,7 @@ else
 
     // Dialog state
     private bool          _showEdit          = false;
+    private bool          _showServiceAssignments;
     private bool          _showDeleteConfirm = false;
     private bool          _showAddContact    = false;
     private bool          _showLogActivity   = false;
@@ -1109,6 +1134,8 @@ else
     private bool          _showAddExistingPolicy = false;
 
     private AccountEditForm _editForm    = new();
+    private ServiceAssignmentForm _serviceAssignmentForm = new();
+    private List<UserDto> _tenantUsers = [];
     private ContactForm   _contactForm   = new();
     private ActivityForm  _activityForm  = new();
     private CommunicationForm _communicationForm = new();
@@ -1157,6 +1184,57 @@ else
             _loadedAccountId = AccountId;
             await LoadAsync();
         }
+    }
+
+    private IEnumerable<UserDto> AccountManagerUsers => UsersInRoles("ACCOUNT_MANAGER", "ACCOUNTMANAGER", "SERVICE_MANAGER", "SERVICEMANAGER");
+    private IEnumerable<UserDto> ProducerUsers => UsersInRoles("PRODUCER", "ACCOUNT_PRODUCER", "ACCOUNTPRODUCER");
+    private IEnumerable<UserDto> CsrUsers => UsersInRoles("CSR", "SENIOR_CSR", "SENIORCSR");
+    private IEnumerable<UserDto> UsersInRoles(params string[] allowedRoles)
+    {
+        var allowed = allowedRoles.Select(NormalizeUserRole).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _tenantUsers.Where(user => !user.IsLockedOut && string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) && UserRoles(user).Any(allowed.Contains)).OrderBy(UserDisplay);
+    }
+    private static IEnumerable<string> UserRoles(UserDto user) => (user.AssignedRoleCodes ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(NormalizeUserRole);
+    private static string NormalizeUserRole(string role) => role.Replace("_", "").Replace("-", "").Replace(" ", "");
+    private static string UserDisplay(UserDto user) => string.IsNullOrWhiteSpace(user.DisplayName) ? (string.IsNullOrWhiteSpace(user.FullName) ? user.Email : user.FullName) : user.DisplayName;
+    private static bool IsAssignmentRole(AccountServiceAssignmentDto assignment, string role) => string.Equals(assignment.AssignmentRoleCode.Replace("_", "").Replace("-", "").Replace(" ", ""), role.Replace("_", ""), StringComparison.OrdinalIgnoreCase);
+
+    private async Task OpenServiceAssignmentsAsync()
+    {
+        if (_account360 is null || _userContext is null) return;
+        var users = await Api.SearchUsersAsync(_userContext.TenantId, pageSize: 1000);
+        _tenantUsers = users?.Items.ToList() ?? [];
+        _serviceAssignmentForm = new()
+        {
+            AccountManagerUserId = _account360.ServiceAssignments.FirstOrDefault(x => x.IsPrimary && IsAssignmentRole(x, "ACCOUNT_MANAGER"))?.UserId,
+            ProducerUserId = _account360.ServiceAssignments.FirstOrDefault(x => x.IsPrimary && IsAssignmentRole(x, "PRODUCER"))?.UserId,
+            CsrUserId = _account360.ServiceAssignments.FirstOrDefault(x => x.IsPrimary && IsAssignmentRole(x, "CSR"))?.UserId
+        };
+        _showServiceAssignments = true;
+    }
+
+    private void CloseServiceAssignments() { if (!_saving) _showServiceAssignments = false; }
+
+    private async Task SaveServiceAssignmentsAsync()
+    {
+        if (_userContext is null) return;
+        _saving = true;
+        try
+        {
+            await Api.ReplaceAccountServiceAssignmentsAsync(AccountId, new()
+            {
+                TenantId = _userContext.TenantId,
+                AccountId = AccountId,
+                AccountManagerUserId = _serviceAssignmentForm.AccountManagerUserId,
+                ProducerUserId = _serviceAssignmentForm.ProducerUserId,
+                CsrUserId = _serviceAssignmentForm.CsrUserId
+            });
+            _showServiceAssignments = false;
+            await LoadAsync();
+            await ShowToast("Service assignments updated.");
+        }
+        catch (Exception ex) { await ShowToast($"Assignment save failed: {ex.Message}", "a360-toast-danger"); }
+        finally { _saving = false; }
     }
 
     private async Task CommitExistingPolicyAsync()
@@ -1965,6 +2043,12 @@ else
 
         [Range(0, 999999999999, ErrorMessage = "Annual revenue must be 0 or greater.")]
         public decimal? AnnualRevenue { get; set; }
+    }
+    private sealed class ServiceAssignmentForm
+    {
+        public Guid? AccountManagerUserId { get; set; }
+        public Guid? ProducerUserId { get; set; }
+        public Guid? CsrUserId { get; set; }
     }
     private sealed class ContactForm
     {

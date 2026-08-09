@@ -648,6 +648,9 @@ public sealed partial class ApiClient
     public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<UserDto>>($"api/users?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
+    public Task<IReadOnlyList<JobTitleDto>?> GetJobTitlesAsync(Guid tenantId, Guid? departmentId = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<JobTitleDto>>($"api/users/job-titles?tenantId={tenantId}{(departmentId.HasValue ? $"&departmentId={departmentId}" : string.Empty)}", cancellationToken);
+
     public Task<PagedResult<UserDto>?> SearchUsersAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken)
         => SearchUsersAsync(tenantId, searchTerm, 1, 25, cancellationToken);
 
@@ -1677,6 +1680,12 @@ public sealed partial class ApiClient
 
     public Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<Account360Dto>($"api/accounts/{accountId}/360?tenantId={tenantId}", cancellationToken);
+
+    public async Task ReplaceAccountServiceAssignmentsAsync(Guid accountId, ReplaceAccountServiceAssignmentsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/accounts/{accountId}/360/service-assignments", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
 
     public Task<Guid> UpsertAccountNamedInsuredAsync(Guid accountId, UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "named-insureds", request, cancellationToken);
     public Task<Guid> UpsertAccountLocationAsync(Guid accountId, UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => PostAccount360Async(accountId, "locations", request, cancellationToken);

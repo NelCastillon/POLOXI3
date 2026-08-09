@@ -2,6 +2,16 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Ams.Application.Features.Accounts;
 
+public sealed class ReplaceAccountServiceAssignmentsRequest
+{
+    public Guid TenantId { get; set; }
+    public Guid AccountId { get; set; }
+    public Guid? AccountManagerUserId { get; set; }
+    public Guid? ProducerUserId { get; set; }
+    public Guid? CsrUserId { get; set; }
+    public Guid? ModifiedByUserId { get; set; }
+}
+
 public sealed class UpsertAccountNamedInsuredRequest
 {
     public Guid? AccountNamedInsuredId { get; set; }

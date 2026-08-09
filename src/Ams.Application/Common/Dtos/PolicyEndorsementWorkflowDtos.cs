@@ -6,6 +6,7 @@ public sealed class PolicyEndorsementWorkflowDetailDto
     public PolicyEndorsementFinancialImpactDto FinancialImpact { get; set; } = new();
     public IReadOnlyList<PolicyEndorsementChangeDto> Changes { get; set; } = [];
     public IReadOnlyList<PolicyEndorsementApprovalDto> Approvals { get; set; } = [];
+    public IReadOnlyList<PolicyEndorsementInformationRequestDto> InformationRequests { get; set; } = [];
     public IReadOnlyList<PolicyEndorsementEventDto> Timeline { get; set; } = [];
     public IReadOnlyList<PolicyEndorsementTransitionDto> AvailableTransitions { get; set; } = [];
     public IReadOnlyList<PolicyEndorsementCarrierDispatchDto> CarrierDispatches { get; set; } = [];
@@ -13,6 +14,22 @@ public sealed class PolicyEndorsementWorkflowDetailDto
     public IReadOnlyList<PolicyEndorsementDocumentWorkDto> DocumentWork { get; set; } = [];
     public IReadOnlyList<PolicyVersionDto> Versions { get; set; } = [];
     public IReadOnlyList<PolicyEndorsementActivityDto> Activities { get; set; } = [];
+}
+
+public sealed class PolicyEndorsementRoutePreviewDto
+{
+    public bool IsResolved { get; set; } = true;
+    public string? ResolutionMessage { get; set; }
+    public string RoutePurposeCode { get; set; } = string.Empty;
+    public string AssignmentStrategyCode { get; set; } = string.Empty;
+    public string? ApprovalLevelCode { get; set; }
+    public string RequiredPermissionCode { get; set; } = string.Empty;
+    public string? AssignedRoleCode { get; set; }
+    public Guid AssignedToUserId { get; set; }
+    public string AssignedToName { get; set; } = string.Empty;
+    public string? AssignedToEmail { get; set; }
+    public string? DestinationStatusCode { get; set; }
+    public string NotificationCategory { get; set; } = string.Empty;
 }
 
 public sealed class PolicyEndorsementPolicyWorkspaceDto
@@ -209,9 +226,57 @@ public sealed class PolicyEndorsementApprovalDto
     public DateTime RequestedDateUtc { get; set; }
     public Guid? RequestedByUserId { get; set; }
     public Guid? AssignedToUserId { get; set; }
+    public string? AssignedToName { get; set; }
     public DateTime? DecidedDateUtc { get; set; }
     public Guid? DecidedByUserId { get; set; }
     public string? DecisionNotes { get; set; }
+    public byte[] RowVersion { get; set; } = [];
+}
+
+public sealed class PolicyEndorsementApprovalInboxItemDto
+{
+    public Guid ApprovalId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid EndorsementId { get; set; }
+    public Guid PolicyId { get; set; }
+    public string EndorsementNumber { get; set; } = string.Empty;
+    public string PolicyNumber { get; set; } = string.Empty;
+    public string AccountName { get; set; } = string.Empty;
+    public string EndorsementType { get; set; } = string.Empty;
+    public string ApprovalLevelCode { get; set; } = string.Empty;
+    public string StatusCode { get; set; } = string.Empty;
+    public string Priority { get; set; } = string.Empty;
+    public DateTime RequestedDateUtc { get; set; }
+    public Guid? RequestedByUserId { get; set; }
+    public string? RequestedByName { get; set; }
+    public Guid? AssignedToUserId { get; set; }
+    public string? AssignedToName { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public byte[] EndorsementRowVersion { get; set; } = [];
+    public byte[] ApprovalRowVersion { get; set; } = [];
+}
+
+public sealed class PolicyEndorsementInformationRequestDto
+{
+    public Guid InformationRequestId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid EndorsementId { get; set; }
+    public int RequestNumber { get; set; }
+    public string StatusCode { get; set; } = string.Empty;
+    public string RequestDetails { get; set; } = string.Empty;
+    public DateTime RequestedDateUtc { get; set; }
+    public Guid RequestedByUserId { get; set; }
+    public string? RequestedByName { get; set; }
+    public Guid AssignedToUserId { get; set; }
+    public string? AssignedToName { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public string? ResponseDetails { get; set; }
+    public DateTime? RespondedDateUtc { get; set; }
+    public Guid? RespondedByUserId { get; set; }
+    public string? RespondedByName { get; set; }
+    public DateTime? ResubmittedDateUtc { get; set; }
+    public Guid? ResubmittedByUserId { get; set; }
+    public DateTime? ClosedDateUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
 }
 
@@ -242,6 +307,13 @@ public sealed class PolicyEndorsementTransitionDto
     public bool CreatesPolicyVersion { get; set; }
     public bool CreatesAccountingWork { get; set; }
     public bool CreatesDocumentWork { get; set; }
+    public string ActionLabel { get; set; } = string.Empty;
+    public string Instruction { get; set; } = string.Empty;
+    public string ConfirmationTitle { get; set; } = string.Empty;
+    public string ConfirmationMessage { get; set; } = string.Empty;
+    public bool RequiresNotes { get; set; }
+    public string NotesLabel { get; set; } = string.Empty;
+    public string NotesPlaceholder { get; set; } = string.Empty;
 }
 
 public sealed class PolicyEndorsementCarrierDispatchDto

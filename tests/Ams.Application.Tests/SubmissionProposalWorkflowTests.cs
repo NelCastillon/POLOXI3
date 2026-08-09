@@ -627,6 +627,7 @@ public sealed class SubmissionProposalWorkflowTests
         public Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ContactDto>>([]);
         public Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default) => Task.FromResult<Account360Dto?>(null);
+        public Task ReplaceServiceAssignmentsAsync(ReplaceAccountServiceAssignmentsRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<Guid> UpsertNamedInsuredAsync(UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task<Guid> UpsertLocationAsync(UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task<Guid> UpsertVehicleAsync(UpsertAccountVehicleRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
@@ -672,6 +673,7 @@ public sealed class SubmissionProposalWorkflowTests
             AssignedRoleCodes = "Producer,CSR"
         });
         public Task<PagedResult<UserDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => Task.FromResult(new PagedResult<UserDto>());
+        public Task<IReadOnlyList<JobTitleDto>> GetJobTitlesAsync(Guid tenantId, Guid? departmentId = null, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<JobTitleDto>>([]);
         public Task<Guid> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
         public Task UpdateAsync(UpdateUserRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task SetActiveAsync(Guid userId, bool isActive, Guid? modifiedByUserId, CancellationToken cancellationToken = default) => Task.CompletedTask;

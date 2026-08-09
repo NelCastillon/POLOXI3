@@ -53,11 +53,9 @@ public sealed class PolicyEndorsementCarrierWorkerService : BackgroundService
     {
         try
         {
-            if (!string.Equals(item.ChannelCode, "Api", StringComparison.OrdinalIgnoreCase))
-            {
-                await repository.CompleteCarrierDispatchAsync(item.CarrierDispatchId, _workerId, new("Submitted", item.IdempotencyKey, "Carrier submission recorded for the configured non-API channel.", null), cancellationToken);
-                return;
-            }
+            if (!string.Equals(item.ChannelCode, "Api", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(item.ChannelCode, "CarrierApi", StringComparison.OrdinalIgnoreCase))
+                throw new CarrierDispatchException("UNSUPPORTED_AUTOMATION_CHANNEL", "The configured carrier channel requires tracked manual, portal, email, or download handling and cannot be marked as automatically submitted.", false);
 
             if (!Uri.TryCreate(item.EndpointUri, UriKind.Absolute, out var endpoint))
                 throw new CarrierDispatchException("CONFIGURATION_ERROR", "A valid carrier endpoint is required.", false);

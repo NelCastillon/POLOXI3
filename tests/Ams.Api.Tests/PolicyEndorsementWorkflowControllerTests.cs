@@ -228,10 +228,20 @@ public sealed class PolicyEndorsementWorkflowControllerTests
 
         public Task<PolicyEndorsementCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<PolicyEndorsementOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<PolicyEndorsementCatalogDto> GetCatalogAsync(Guid tenantId, string? lineOfBusinessCode = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<PolicyEndorsementTypeCatalogDto?> GetTypeCatalogAsync(Guid tenantId, string typeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<PolicyEndorsementRoutePreviewDto?> GetRoutePreviewAsync(Guid tenantId, Guid endorsementId, string routePurposeCode, Guid actorUserId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<PolicyEndorsementApprovalInboxItemDto>> GetApprovalInboxAsync(Guid tenantId, Guid assignedToUserId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task UpdateTypeProfileAsync(Guid endorsementTypeId, UpdatePolicyEndorsementTypeProfileRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task ReplaceTypeConfigurationAsync(Guid endorsementTypeId, ReplacePolicyEndorsementTypeConfigurationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<PolicyEndorsementPolicyWorkspaceDto?> GetPolicyWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Guid> CreateAsync(CreatePolicyEndorsementRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task SaveDraftAsync(Guid endorsementId, SavePolicyEndorsementDraftRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task AssignApprovalAsync(Guid endorsementId, Guid approvalId, AssignPolicyEndorsementApprovalRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Guid> RequestInformationAsync(Guid endorsementId, RequestPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task RespondToInformationRequestAsync(Guid endorsementId, Guid informationRequestId, RespondPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task ResubmitInformationRequestAsync(Guid endorsementId, Guid informationRequestId, ResubmitPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task UpdateAsync(Guid endorsementId, UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task UpdateStatusAsync(Guid endorsementId, UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Guid> AddActivityAsync(AddPolicyEndorsementActivityRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();

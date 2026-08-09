@@ -147,6 +147,63 @@ public sealed class TransitionPolicyEndorsementRequest
     public IReadOnlyCollection<string> GrantedPermissions { get; set; } = [];
 }
 
+public sealed class AssignPolicyEndorsementApprovalRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+    [Required]
+    public Guid AssignedToUserId { get; set; }
+    [Required, MinLength(1)]
+    public byte[] ApprovalRowVersion { get; set; } = [];
+    [Required]
+    public Guid CorrelationId { get; set; } = Guid.NewGuid();
+    public Guid? ActorUserId { get; set; }
+}
+
+public sealed class RequestPolicyEndorsementInformationRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+    [Required, StringLength(2000, MinimumLength = 1)]
+    public string RequestDetails { get; set; } = string.Empty;
+    public DateTime? DueDateUtc { get; set; }
+    [Required, MinLength(1)]
+    public byte[] EndorsementRowVersion { get; set; } = [];
+    [Required]
+    public Guid CorrelationId { get; set; } = Guid.NewGuid();
+    public Guid? ActorUserId { get; set; }
+}
+
+public sealed class RespondPolicyEndorsementInformationRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+    [Required, StringLength(2000, MinimumLength = 1)]
+    public string ResponseDetails { get; set; } = string.Empty;
+    [Required, MinLength(1)]
+    public byte[] EndorsementRowVersion { get; set; } = [];
+    [Required, MinLength(1)]
+    public byte[] InformationRequestRowVersion { get; set; } = [];
+    [Required]
+    public Guid CorrelationId { get; set; } = Guid.NewGuid();
+    public Guid? ActorUserId { get; set; }
+}
+
+public sealed class ResubmitPolicyEndorsementInformationRequest
+{
+    [Required]
+    public Guid TenantId { get; set; }
+    [StringLength(2000)]
+    public string? Notes { get; set; }
+    [Required, MinLength(1)]
+    public byte[] EndorsementRowVersion { get; set; } = [];
+    [Required, MinLength(1)]
+    public byte[] InformationRequestRowVersion { get; set; } = [];
+    [Required]
+    public Guid CorrelationId { get; set; } = Guid.NewGuid();
+    public Guid? ActorUserId { get; set; }
+}
+
 public sealed class DecidePolicyEndorsementApprovalRequest
 {
     [Required]

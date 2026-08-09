@@ -12,6 +12,10 @@ public static class AuthenticatedRequestContext
         => HasTenantAccess(user, tenantId)
             && HasAnyPermission(user, "POLICY_MANAGE", "POLICY_EDIT");
 
+    public static bool CanManageAccounts(ClaimsPrincipal user, Guid tenantId)
+        => HasTenantAccess(user, tenantId)
+            && HasAnyPermission(user, "ACCOUNT_MANAGE", "ACCOUNT_EDIT", "ACCOUNT_CONFIG_MANAGE");
+
     public static bool HasPolicyEndorsementPermission(ClaimsPrincipal user, Guid tenantId, params string[] permissions)
         => HasTenantAccess(user, tenantId)
             && HasAnyPermission(user, [.. permissions, "ENDORSEMENT_MANAGE"]);
@@ -53,7 +57,7 @@ public static class AuthenticatedRequestContext
         return Guid.TryParse(claim, out var tenantId) ? tenantId : null;
     }
 
-    private static bool HasTenantAccess(ClaimsPrincipal user, Guid tenantId)
+    public static bool HasTenantAccess(ClaimsPrincipal user, Guid tenantId)
     {
         var claim = user.FindFirstValue("tenant_id")
             ?? user.FindFirstValue("tenantId")

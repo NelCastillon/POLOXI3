@@ -10,13 +10,15 @@ public sealed partial class PolicyEndorsementRepository : IPolicyEndorsementRepo
 {
     private const string EndorsementColumns = @"EndorsementId, TenantId, PolicyId, PolicyVersionBeforeId, PolicyVersionAfterId, AccountId, EndorsementNumber, PolicyNumber, AccountName, LineOfBusiness,
         Carrier, EndorsementType, ReasonCode, CarrierMethodCode, RequestSourceCode, ChangeCategoryCode, Description, EffectiveDate, ExpirationDate, RetroactiveDate,
-        DiscoveryDate, RequestedDateUtc, PremiumDelta, AgencyFeeDelta, TaxDelta, TaxFeeDelta, TotalCostDelta, ProratedPremiumDelta, CurrencyCode, Status, Priority,
+        DiscoveryDate, RequestedDateUtc, PremiumDelta, AgencyFeeDelta, TaxDelta, TaxFeeDelta, TotalCostDelta, ProratedPremiumDelta, CurrencyCode,
+        CASE WHEN Status IN (N'PendingReview', N'Pending Review', N'In Review') THEN N'InReview' ELSE Status END Status, Priority,
         RequestedByName, RequestedByEmail, RequestedByPhone, ClientContactName, ClientContactEmail, ClientContactPhone,
         AssignedToName, UnderwriterName, UnderwriterEmail, CarrierSubmissionDateUtc, CarrierResponseDueDate, CarrierReferenceNumber,
         BrokerOfRecordRequired, AgentAuthorityCode, ApprovalLevelCode, ApprovedByName, IssuedByName, BillingImpactCode,
         CommissionImpactCode, BillingInstruction, DocumentDeliveryCode, CertificateRequired, FormsRequired, AcordFormNumbers,
         ExternalReferenceNumber, ComplianceReviewRequired, EoExposureNotes, InternalNotes, ClientFacingNotes, Reason,
-        RequiredDocuments, WorkflowStage, DueDate, ApprovedDateUtc, IssuedDateUtc, SubmittedDateUtc, CompletedDateUtc, RejectedDateUtc, CancelledDateUtc,
+        RequiredDocuments, CASE WHEN WorkflowStage IN (N'PendingReview', N'Pending Review', N'In Review') THEN N'InReview' ELSE WorkflowStage END WorkflowStage,
+        DueDate, ApprovedDateUtc, IssuedDateUtc, SubmittedDateUtc, CompletedDateUtc, RejectedDateUtc, CancelledDateUtc,
         ReversalOfEndorsementId, ReversedByEndorsementId, RowVersion, IsUrgent, IsArchived";
 
     private readonly ISqlConnectionFactory _connectionFactory;
@@ -69,9 +71,36 @@ SELECT typed.* FROM Policy.PolicyEndorsementPropertyChange typed JOIN Policy.Pol
 SELECT typed.* FROM Policy.PolicyEndorsementCommercialChange typed JOIN Policy.PolicyEndorsementChange change ON change.TenantId=typed.TenantId AND change.ChangeId=typed.ChangeId WHERE change.TenantId=@TenantId AND change.EndorsementId=@EndorsementId AND change.IsDeleted=0;
 SELECT typed.* FROM Policy.PolicyEndorsementFinancialChange typed JOIN Policy.PolicyEndorsementChange change ON change.TenantId=typed.TenantId AND change.ChangeId=typed.ChangeId WHERE change.TenantId=@TenantId AND change.EndorsementId=@EndorsementId AND change.IsDeleted=0;
 SELECT typed.* FROM Policy.PolicyEndorsementLegalChange typed JOIN Policy.PolicyEndorsementChange change ON change.TenantId=typed.TenantId AND change.ChangeId=typed.ChangeId WHERE change.TenantId=@TenantId AND change.EndorsementId=@EndorsementId AND change.IsDeleted=0;
-        SELECT ApprovalId,TenantId,EndorsementId,ApprovalLevelCode,StatusCode,RequestedDateUtc,RequestedByUserId,AssignedToUserId,DecidedDateUtc,DecidedByUserId,DecisionNotes,RowVersion FROM Policy.PolicyEndorsementApproval WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0 ORDER BY RequestedDateUtc;
+        SELECT approval.ApprovalId,approval.TenantId,approval.EndorsementId,approval.ApprovalLevelCode,approval.StatusCode,approval.RequestedDateUtc,approval.RequestedByUserId,approval.AssignedToUserId,assignedTo.FullName AssignedToName,approval.DecidedDateUtc,approval.DecidedByUserId,approval.DecisionNotes,approval.RowVersion FROM Policy.PolicyEndorsementApproval approval LEFT JOIN IAM.[User] assignedTo ON assignedTo.TenantId=approval.TenantId AND assignedTo.UserId=approval.AssignedToUserId AND assignedTo.IsDeleted=0 WHERE approval.TenantId=@TenantId AND approval.EndorsementId=@EndorsementId AND approval.IsDeleted=0 ORDER BY approval.RequestedDateUtc;
+SELECT request.InformationRequestId,request.TenantId,request.EndorsementId,request.RequestNumber,request.StatusCode,request.RequestDetails,request.RequestedDateUtc,request.RequestedByUserId,requestedBy.FullName RequestedByName,request.AssignedToUserId,assignedTo.FullName AssignedToName,request.DueDateUtc,request.ResponseDetails,request.RespondedDateUtc,request.RespondedByUserId,respondedBy.FullName RespondedByName,request.ResubmittedDateUtc,request.ResubmittedByUserId,request.ClosedDateUtc,request.RowVersion
+FROM Policy.PolicyEndorsementInformationRequest request
+LEFT JOIN IAM.[User] requestedBy ON requestedBy.TenantId=request.TenantId AND requestedBy.UserId=request.RequestedByUserId AND requestedBy.IsDeleted=0
+LEFT JOIN IAM.[User] assignedTo ON assignedTo.TenantId=request.TenantId AND assignedTo.UserId=request.AssignedToUserId AND assignedTo.IsDeleted=0
+LEFT JOIN IAM.[User] respondedBy ON respondedBy.TenantId=request.TenantId AND respondedBy.UserId=request.RespondedByUserId AND respondedBy.IsDeleted=0
+WHERE request.TenantId=@TenantId AND request.EndorsementId=@EndorsementId AND request.IsDeleted=0 ORDER BY request.RequestNumber DESC;
 SELECT EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,FromStatusCode,ToStatusCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId FROM Policy.PolicyEndorsementEvent WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId ORDER BY OccurredDateUtc DESC;
-SELECT StatusTransitionId,FromStatusCode,ToStatusCode,RequiredPermissionCode,RequiresApproval,RequiresCarrierSubmission,CreatesPolicyVersion,CreatesAccountingWork,CreatesDocumentWork FROM Policy.PolicyEndorsementStatusTransition transitionRule WHERE transitionRule.TenantId=@TenantId AND transitionRule.FromStatusCode=(SELECT Status FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId) AND transitionRule.IsActive=1 AND transitionRule.IsDeleted=0 ORDER BY SortOrder;
+SELECT workflowRule.EndorsementTypeWorkflowRuleId StatusTransitionId,workflowRule.FromStatusCode,workflowRule.ToStatusCode,workflowRule.RequiredPermissionCode,
+       workflowRule.RequiresApproval,workflowRule.RequiresCarrierDispatch RequiresCarrierSubmission,workflowRule.RequiresPolicyVersion CreatesPolicyVersion,
+       workflowRule.RequiresAccountingWork CreatesAccountingWork,workflowRule.RequiresDocumentWork CreatesDocumentWork,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.actionLabel'),workflowRule.ToStatusCode) ActionLabel,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.instruction'),N'') Instruction,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.confirmationTitle'),JSON_VALUE(workflowRule.RuleJson,N'$.actionLabel'),workflowRule.ToStatusCode) ConfirmationTitle,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.confirmationMessage'),N'') ConfirmationMessage,
+       CASE WHEN JSON_VALUE(workflowRule.RuleJson,N'$.requiresNotes')=N'true' THEN CAST(1 AS BIT) ELSE CAST(0 AS BIT) END RequiresNotes,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.notesLabel'),N'Notes') NotesLabel,
+       COALESCE(JSON_VALUE(workflowRule.RuleJson,N'$.notesPlaceholder'),N'Add workflow notes.') NotesPlaceholder
+FROM Policy.EndorsementTypeWorkflowRule workflowRule
+JOIN Policy.EndorsementType type ON type.TenantId=workflowRule.TenantId AND type.EndorsementTypeId=workflowRule.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+JOIN Policy.EndorsementTypeProfile profile ON profile.TenantId=type.TenantId AND profile.EndorsementTypeId=type.EndorsementTypeId AND profile.IsActive=1 AND profile.IsDeleted=0
+JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+ AND (endorsement.EndorsementType=type.TypeCode OR (endorsement.EndorsementType=type.TypeName AND NOT EXISTS(SELECT 1 FROM Policy.EndorsementType duplicateType WHERE duplicateType.TenantId=type.TenantId AND duplicateType.TypeName=type.TypeName AND duplicateType.EndorsementTypeId<>type.EndorsementTypeId AND duplicateType.IsActive=1 AND duplicateType.IsDeleted=0)) OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0 AND (alias.DescriptionContains IS NULL OR endorsement.Description LIKE N'%'+alias.DescriptionContains+N'%')))
+WHERE workflowRule.TenantId=@TenantId
+  AND workflowRule.FromStatusCode=CASE WHEN endorsement.Status IN(N'PendingReview',N'Pending Review',N'In Review') THEN N'InReview' ELSE endorsement.Status END
+  AND (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode') IS NULL
+       OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalRequired' AND (profile.RequiresUnderwritingReview=1 OR profile.IsHighRisk=1))
+       OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalNotRequiredCarrier' AND profile.RequiresUnderwritingReview=0 AND profile.IsHighRisk=0 AND profile.RequiresCarrierApproval=1)
+       OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalNotRequiredPolicy' AND profile.RequiresUnderwritingReview=0 AND profile.IsHighRisk=0 AND profile.RequiresCarrierApproval=0))
+  AND workflowRule.IsActive=1 AND workflowRule.IsDeleted=0 ORDER BY workflowRule.SortOrder;
 SELECT CarrierDispatchId,ChannelCode,StatusCode,ExternalReferenceNumber,AttemptCount,MaxAttempts,NextAttemptDateUtc,CompletedDateUtc,ErrorCode,ErrorMessage FROM Policy.PolicyEndorsementCarrierDispatch WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0 ORDER BY CreatedDateUtc DESC;
 SELECT AccountingWorkId,WorkTypeCode,StatusCode,CurrencyCode,PremiumAmount,FeeAmount,TaxAmount,TotalAmount,ResultEntityName,ResultEntityId,ErrorMessage FROM Policy.PolicyEndorsementAccountingWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0 ORDER BY CreatedDateUtc;
 SELECT DocumentWorkId,DocumentTypeCode,StatusCode,DocumentId,ErrorMessage,CompletedDateUtc FROM Policy.PolicyEndorsementDocumentWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0 ORDER BY CreatedDateUtc;
@@ -98,6 +127,7 @@ SELECT ActivityId,EndorsementId,TenantId,ActivityType,Subject,Notes,CreatedByNam
             FinancialImpact = new PolicyEndorsementFinancialImpactDto { CurrencyCode=endorsement.CurrencyCode,PremiumChange=endorsement.PremiumDelta,AgencyFee=endorsement.AgencyFeeDelta,Taxes=endorsement.TaxDelta,TotalDue=endorsement.TotalCostDelta,ProratedPremiumChange=endorsement.ProratedPremiumDelta,BillingImpactCode=endorsement.BillingImpactCode,CommissionImpactCode=endorsement.CommissionImpactCode },
             Changes = changes,
             Approvals = (await multi.ReadAsync<PolicyEndorsementApprovalDto>()).AsList(),
+            InformationRequests = (await multi.ReadAsync<PolicyEndorsementInformationRequestDto>()).AsList(),
             Timeline = (await multi.ReadAsync<PolicyEndorsementEventDto>()).AsList(),
             AvailableTransitions = (await multi.ReadAsync<PolicyEndorsementTransitionDto>()).AsList(),
             CarrierDispatches = (await multi.ReadAsync<PolicyEndorsementCarrierDispatchDto>()).AsList(),
@@ -134,9 +164,21 @@ SELECT OptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,IsDe
         {
             const string sql = @"
 DECLARE @LockResult INT; EXEC @LockResult=sys.sp_getapplock @Resource=CONCAT(N'PolicyEndorsementNumber:',CONVERT(NVARCHAR(36),@TenantId)),@LockMode=N'Exclusive',@LockOwner=N'Transaction',@LockTimeout=30000; IF @LockResult<0 THROW 52400,N'Unable to allocate an endorsement transaction number.',1;
-DECLARE @PolicyNumber NVARCHAR(50),@AccountId UNIQUEIDENTIFIER,@AccountName NVARCHAR(200),@LineOfBusiness NVARCHAR(100),@Carrier NVARCHAR(160),@RequestedByName NVARCHAR(160),@RequestedByEmail NVARCHAR(254),@VersionBefore UNIQUEIDENTIFIER,@NextNumber INT,@EndorsementNumber NVARCHAR(50);
+DECLARE @PolicyNumber NVARCHAR(50),@AccountId UNIQUEIDENTIFIER,@AccountName NVARCHAR(200),@LineOfBusiness NVARCHAR(100),@Carrier NVARCHAR(160),@RequestedByName NVARCHAR(160),@RequestedByEmail NVARCHAR(254),@VersionBefore UNIQUEIDENTIFIER,@NextNumber INT,@EndorsementNumber NVARCHAR(50),@CategoryCode NVARCHAR(50),@SupportsReversal BIT;
 SELECT @PolicyNumber=policy.PolicyNumber,@AccountId=policy.AccountId,@AccountName=account.AccountName,@LineOfBusiness=policy.LineOfBusiness,@Carrier=carrier.CarrierName FROM Submissions.BoundPolicy policy LEFT JOIN Client.Account account ON account.TenantId=policy.TenantId AND account.AccountId=policy.AccountId AND account.IsDeleted=0 LEFT JOIN Agency.Carrier carrier ON carrier.TenantId=policy.TenantId AND carrier.CarrierId=policy.CarrierId AND carrier.IsDeleted=0 WHERE policy.TenantId=@TenantId AND policy.PolicyId=@PolicyId AND policy.IsDeleted=0;
 IF @PolicyNumber IS NULL THROW 52401,N'The policy was not found in the authenticated tenant.',1;
+SELECT @CategoryCode=profile.CategoryCode,@SupportsReversal=profile.SupportsReversal
+FROM Policy.EndorsementType type
+JOIN Policy.EndorsementTypeProfile profile ON profile.TenantId=type.TenantId AND profile.EndorsementTypeId=type.EndorsementTypeId AND profile.IsActive=1 AND profile.IsDeleted=0
+WHERE type.TenantId=@TenantId AND type.TypeCode=@EndorsementTypeCode AND type.IsActive=1 AND type.IsDeleted=0
+  AND EXISTS(SELECT 1 FROM Policy.EndorsementTypeLineOfBusiness lob WHERE lob.TenantId=type.TenantId AND lob.EndorsementTypeId=type.EndorsementTypeId AND lob.IsActive=1 AND lob.IsDeleted=0 AND (lob.LineOfBusinessCode=N'*' OR lob.LineOfBusinessCode=@LineOfBusiness));
+IF @CategoryCode IS NULL THROW 52405,N'The endorsement type is inactive, unconfigured, or not available for the policy line of business.',1;
+IF @ReversalOfEndorsementId IS NOT NULL AND COALESCE(@SupportsReversal,0)=0 THROW 52420,N'The endorsement type does not support reversal.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'Reason' AND OptionCode=@ReasonCode AND IsActive=1 AND IsDeleted=0) THROW 52406,N'The endorsement reason is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'Priority' AND OptionCode=@PriorityCode AND IsActive=1 AND IsDeleted=0) THROW 52407,N'The endorsement priority is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'CarrierMethod' AND OptionCode=@CarrierMethodCode AND IsActive=1 AND IsDeleted=0) THROW 52408,N'The carrier method is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'BillingImpact' AND OptionCode=@BillingImpactCode AND IsActive=1 AND IsDeleted=0) THROW 52409,N'The billing impact is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'CommissionImpact' AND OptionCode=@CommissionImpactCode AND IsActive=1 AND IsDeleted=0) THROW 52410,N'The commission impact is invalid.',1;
 SELECT @RequestedByName=COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(FirstName,N' ',LastName))),N''),Email),@RequestedByEmail=Email FROM IAM.[User] WHERE TenantId=@TenantId AND UserId=@CreatedByUserId AND IsDeleted=0;
 IF @RequestedByName IS NULL THROW 52402,N'The authenticated user was not found in the tenant.',1;
 SELECT TOP 1 @VersionBefore=PolicyVersionId FROM Policy.PolicyVersion WHERE TenantId=@TenantId AND PolicyId=@PolicyId AND IsDeleted=0 ORDER BY VersionNumber DESC;
@@ -144,7 +186,7 @@ SELECT @NextNumber=COUNT_BIG(1)+1 FROM Policy.PolicyEndorsement WITH(UPDLOCK,HOL
 SET @EndorsementNumber=CONCAT(N'END-',FORMAT(SYSUTCDATETIME(),N'yyyy'),N'-',FORMAT(@NextNumber,N'000000'));
 IF @ReversalOfEndorsementId IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsement WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND EndorsementId=@ReversalOfEndorsementId AND PolicyId=@PolicyId AND Status=N'Completed' AND ReversedByEndorsementId IS NULL AND RowVersion=@ReversalOfRowVersion AND IsDeleted=0) THROW 52404,N'The completed endorsement changed or is not eligible for reversal.',1;
 INSERT Policy.PolicyEndorsement(EndorsementId,TenantId,PolicyId,PolicyVersionBeforeId,AccountId,EndorsementNumber,PolicyNumber,AccountName,LineOfBusiness,Carrier,EndorsementType,ReasonCode,CarrierMethodCode,RequestSourceCode,ChangeCategoryCode,Description,EffectiveDate,RequestedDateUtc,PremiumDelta,AgencyFeeDelta,TaxDelta,TaxFeeDelta,TotalCostDelta,ProratedPremiumDelta,CurrencyCode,Status,Priority,RequestedByName,RequestedByEmail,AssignedToName,BillingImpactCode,CommissionImpactCode,InternalNotes,ClientFacingNotes,Reason,WorkflowStage,DueDate,IsUrgent,IsArchived,ReversalOfEndorsementId,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@EndorsementId,@TenantId,@PolicyId,@VersionBefore,@AccountId,@EndorsementNumber,@PolicyNumber,COALESCE(@AccountName,N''),COALESCE(@LineOfBusiness,N''),COALESCE(@Carrier,N''),@EndorsementTypeCode,@ReasonCode,@CarrierMethodCode,N'AgencyRequest',CASE WHEN @PremiumChange=0 AND @AgencyFee=0 AND @Taxes=0 THEN N'NonPremium' ELSE N'PremiumBearing' END,@Description,@EffectiveDate,SYSUTCDATETIME(),@PremiumChange,@AgencyFee,@Taxes,@Taxes,@PremiumChange+@AgencyFee+@Taxes,CASE WHEN @ProratedPremiumChange=0 THEN @PremiumChange ELSE @ProratedPremiumChange END,@CurrencyCode,N'Draft',@PriorityCode,@RequestedByName,@RequestedByEmail,@RequestedByName,@BillingImpactCode,@CommissionImpactCode,@InternalNotes,@ClientFacingNotes,@ReasonCode,N'Draft',@DueDate,@IsUrgent,0,@ReversalOfEndorsementId,SYSUTCDATETIME(),@CreatedByUserId,0);
+VALUES(@EndorsementId,@TenantId,@PolicyId,@VersionBefore,@AccountId,@EndorsementNumber,@PolicyNumber,COALESCE(@AccountName,N''),COALESCE(@LineOfBusiness,N''),COALESCE(@Carrier,N''),@EndorsementTypeCode,@ReasonCode,@CarrierMethodCode,N'AgencyRequest',@CategoryCode,@Description,@EffectiveDate,SYSUTCDATETIME(),@PremiumChange,@AgencyFee,@Taxes,@Taxes,@PremiumChange+@AgencyFee+@Taxes,CASE WHEN @ProratedPremiumChange=0 THEN @PremiumChange ELSE @ProratedPremiumChange END,@CurrencyCode,N'Draft',@PriorityCode,@RequestedByName,@RequestedByEmail,@RequestedByName,@BillingImpactCode,@CommissionImpactCode,@InternalNotes,@ClientFacingNotes,@ReasonCode,N'Draft',@DueDate,@IsUrgent,0,@ReversalOfEndorsementId,SYSUTCDATETIME(),@CreatedByUserId,0);
 IF @ReversalOfEndorsementId IS NOT NULL UPDATE Policy.PolicyEndorsement SET ReversedByEndorsementId=@EndorsementId,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@CreatedByUserId WHERE TenantId=@TenantId AND EndorsementId=@ReversalOfEndorsementId;
 INSERT Policy.PolicyEndorsementActivity(ActivityId,EndorsementId,TenantId,ActivityType,Subject,Notes,CreatedByName,ActivityDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@EndorsementId,@TenantId,N'Created',N'Endorsement draft created',@Description,@RequestedByName,SYSUTCDATETIME(),SYSUTCDATETIME(),@CreatedByUserId,0);
 INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,ToStatusCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId) VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'Created',N'Draft',N'Endorsement draft created.',JSON_OBJECT(N'endorsementNumber':@EndorsementNumber,N'policyVersionBeforeId':@VersionBefore),NEWID(),SYSUTCDATETIME(),@CreatedByUserId);";
@@ -163,7 +205,17 @@ INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,Eve
         try
         {
             const string sql = @"
+DECLARE @PolicyId UNIQUEIDENTIFIER,@PolicyLineOfBusiness NVARCHAR(100),@CategoryCode NVARCHAR(50);
+SELECT @PolicyId=endorsement.PolicyId,@PolicyLineOfBusiness=policy.LineOfBusiness FROM Policy.PolicyEndorsement endorsement JOIN Submissions.BoundPolicy policy ON policy.TenantId=endorsement.TenantId AND policy.PolicyId=endorsement.PolicyId AND policy.IsDeleted=0 WHERE endorsement.TenantId=@TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0;
+SELECT @CategoryCode=profile.CategoryCode FROM Policy.EndorsementType type JOIN Policy.EndorsementTypeProfile profile ON profile.TenantId=type.TenantId AND profile.EndorsementTypeId=type.EndorsementTypeId AND profile.IsActive=1 AND profile.IsDeleted=0 WHERE type.TenantId=@TenantId AND type.TypeCode=@EndorsementTypeCode AND type.IsActive=1 AND type.IsDeleted=0 AND EXISTS(SELECT 1 FROM Policy.EndorsementTypeLineOfBusiness lob WHERE lob.TenantId=type.TenantId AND lob.EndorsementTypeId=type.EndorsementTypeId AND lob.IsActive=1 AND lob.IsDeleted=0 AND (lob.LineOfBusinessCode=N'*' OR lob.LineOfBusinessCode=@PolicyLineOfBusiness));
+IF @PolicyId IS NULL OR @CategoryCode IS NULL THROW 52405,N'The endorsement type is not available for the policy line of business.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'Reason' AND OptionCode=@ReasonCode AND IsActive=1 AND IsDeleted=0) THROW 52406,N'The endorsement reason is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'Priority' AND OptionCode=@PriorityCode AND IsActive=1 AND IsDeleted=0) THROW 52407,N'The endorsement priority is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'CarrierMethod' AND OptionCode=@CarrierMethodCode AND IsActive=1 AND IsDeleted=0) THROW 52408,N'The carrier method is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'BillingImpact' AND OptionCode=@BillingImpactCode AND IsActive=1 AND IsDeleted=0) THROW 52409,N'The billing impact is invalid.',1;
+IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementOption WHERE TenantId=@TenantId AND OptionGroupCode=N'CommissionImpact' AND OptionCode=@CommissionImpactCode AND IsActive=1 AND IsDeleted=0) THROW 52410,N'The commission impact is invalid.',1;
 UPDATE Policy.PolicyEndorsement SET EndorsementType=@EndorsementTypeCode,ReasonCode=@ReasonCode,CarrierMethodCode=@CarrierMethodCode,Description=@Description,EffectiveDate=@EffectiveDate,PremiumDelta=@PremiumChange,AgencyFeeDelta=@AgencyFee,TaxDelta=@Taxes,TaxFeeDelta=@Taxes,TotalCostDelta=@PremiumChange+@AgencyFee+@Taxes,ProratedPremiumDelta=CASE WHEN @ProratedPremiumChange=0 THEN @PremiumChange ELSE @ProratedPremiumChange END,CurrencyCode=@CurrencyCode,Priority=@PriorityCode,BillingImpactCode=@BillingImpactCode,CommissionImpactCode=@CommissionImpactCode,InternalNotes=@InternalNotes,ClientFacingNotes=@ClientFacingNotes,DueDate=@DueDate,IsUrgent=@IsUrgent,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ModifiedByUserId
+    ,ChangeCategoryCode=@CategoryCode
 WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND Status IN(N'Draft',N'NeedMoreInfo') AND RowVersion=@RowVersion AND IsDeleted=0;
 IF @@ROWCOUNT<>1 THROW 52403,N'The endorsement draft was changed, is no longer editable, or was not found in the tenant.',1;
 UPDATE Policy.PolicyEndorsementChange SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ModifiedByUserId WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0;
@@ -180,23 +232,114 @@ INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,Eve
         const string sql = @"
 SET XACT_ABORT ON; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; BEGIN TRAN;
 IF EXISTS(SELECT 1 FROM Policy.PolicyEndorsementEvent WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND CorrelationId=@CorrelationId AND EventTypeCode=N'StatusTransition') BEGIN COMMIT; RETURN; END;
-DECLARE @FromStatus NVARCHAR(80),@PolicyId UNIQUEIDENTIFIER,@PolicyVersionId UNIQUEIDENTIFIER,@VersionNumber INT,@ActorName NVARCHAR(160),@RequiresApproval BIT,@RequiresCarrier BIT,@CreatesVersion BIT,@CreatesAccounting BIT,@EffectiveDate DATETIME2,@PolicyEffectiveDate DATETIME2,@PolicyExpirationDate DATETIME2,@ReversalOfEndorsementId UNIQUEIDENTIFIER;
-SELECT @FromStatus=endorsement.Status,@PolicyId=endorsement.PolicyId,@EffectiveDate=endorsement.EffectiveDate,@ReversalOfEndorsementId=endorsement.ReversalOfEndorsementId FROM Policy.PolicyEndorsement endorsement WITH(UPDLOCK,HOLDLOCK) WHERE endorsement.TenantId=@TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.RowVersion=@RowVersion AND endorsement.IsDeleted=0;
+DECLARE @FromStatus NVARCHAR(80),@PolicyId UNIQUEIDENTIFIER,@PolicyVersionId UNIQUEIDENTIFIER,@VersionNumber INT,@ActorName NVARCHAR(160),@RequiresApproval BIT,@RequiresCarrier BIT,@CreatesVersion BIT,@CreatesAccounting BIT,@CreatesCommission BIT,@CreatesDocuments BIT,@RequiresCertificateReview BIT,@RequiresNotes BIT,@ProfileRequiresVersion BIT,@EffectiveDate DATETIME2,@PolicyEffectiveDate DATETIME2,@PolicyExpirationDate DATETIME2,@ReversalOfEndorsementId UNIQUEIDENTIFIER;
+SELECT @FromStatus=CASE WHEN endorsement.Status IN(N'PendingReview',N'Pending Review',N'In Review') THEN N'InReview' ELSE endorsement.Status END,@PolicyId=endorsement.PolicyId,@EffectiveDate=endorsement.EffectiveDate,@ReversalOfEndorsementId=endorsement.ReversalOfEndorsementId FROM Policy.PolicyEndorsement endorsement WITH(UPDLOCK,HOLDLOCK) WHERE endorsement.TenantId=@TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.RowVersion=@RowVersion AND endorsement.IsDeleted=0;
 IF @PolicyId IS NULL THROW 52416,N'The endorsement changed, is no longer available, or was not found in the authenticated tenant.',1;
 SELECT @ActorName=COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(FirstName,N' ',LastName))),N''),Email) FROM IAM.[User] WHERE TenantId=@TenantId AND UserId=@ActorUserId AND IsDeleted=0;
 IF @ActorName IS NULL THROW 52411,N'The authenticated user was not found in the tenant.',1;
-SELECT @RequiresApproval=RequiresApproval,@RequiresCarrier=RequiresCarrierSubmission,@CreatesVersion=CreatesPolicyVersion,@CreatesAccounting=CreatesAccountingWork FROM Policy.PolicyEndorsementStatusTransition WHERE TenantId=@TenantId AND FromStatusCode=@FromStatus AND ToStatusCode=@ToStatusCode AND IsActive=1 AND IsDeleted=0;
+SELECT @RequiresApproval=workflowRule.RequiresApproval,
+       @RequiresCarrier=CASE WHEN workflowRule.RequiresCarrierDispatch=1 OR (@ToStatusCode=N'SubmittedToCarrier' AND profile.RequiresCarrierApproval=1) THEN 1 ELSE 0 END,
+       @CreatesVersion=CASE WHEN workflowRule.RequiresPolicyVersion=1 OR (@ToStatusCode=N'PolicyUpdated' AND profile.RequiresPolicyVersion=1) THEN 1 ELSE 0 END,
+       @CreatesAccounting=CASE WHEN workflowRule.RequiresAccountingWork=1 OR (@ToStatusCode=N'PolicyUpdated' AND profile.RequiresAccountingWork=1) THEN 1 ELSE 0 END,
+       @CreatesCommission=CASE WHEN workflowRule.RequiresCommissionWork=1 OR (@ToStatusCode=N'PolicyUpdated' AND profile.RequiresCommissionWork=1) THEN 1 ELSE 0 END,
+       @CreatesDocuments=CASE WHEN workflowRule.RequiresDocumentWork=1 OR (@ToStatusCode=N'Issued' AND profile.RequiresDocumentWork=1) THEN 1 ELSE 0 END,
+       @RequiresCertificateReview=CASE WHEN workflowRule.RequiresCertificateReview=1 OR (@ToStatusCode=N'Issued' AND (profile.RequiresCertificateReview=1 OR profile.IsCertificateRelated=1)) THEN 1 ELSE 0 END,
+       @RequiresNotes=CASE WHEN JSON_VALUE(workflowRule.RuleJson,N'$.requiresNotes')=N'true' THEN 1 ELSE 0 END,
+       @ProfileRequiresVersion=profile.RequiresPolicyVersion
+FROM Policy.EndorsementTypeWorkflowRule workflowRule
+JOIN Policy.EndorsementType type ON type.TenantId=workflowRule.TenantId AND type.EndorsementTypeId=workflowRule.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+JOIN Policy.EndorsementTypeProfile profile ON profile.TenantId=type.TenantId AND profile.EndorsementTypeId=type.EndorsementTypeId AND profile.IsActive=1 AND profile.IsDeleted=0
+JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+ AND (endorsement.EndorsementType=type.TypeCode OR (endorsement.EndorsementType=type.TypeName AND NOT EXISTS(SELECT 1 FROM Policy.EndorsementType duplicateType WHERE duplicateType.TenantId=type.TenantId AND duplicateType.TypeName=type.TypeName AND duplicateType.EndorsementTypeId<>type.EndorsementTypeId AND duplicateType.IsActive=1 AND duplicateType.IsDeleted=0)) OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0 AND (alias.DescriptionContains IS NULL OR endorsement.Description LIKE N'%'+alias.DescriptionContains+N'%')))
+WHERE workflowRule.TenantId=@TenantId AND workflowRule.FromStatusCode=@FromStatus AND workflowRule.ToStatusCode=@ToStatusCode AND workflowRule.IsActive=1 AND workflowRule.IsDeleted=0;
+IF @RequiresApproval IS NOT NULL AND NOT EXISTS
+(
+    SELECT 1 FROM Policy.EndorsementTypeWorkflowRule workflowRule
+    JOIN Policy.EndorsementType type ON type.TenantId=workflowRule.TenantId AND type.EndorsementTypeId=workflowRule.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+    JOIN Policy.EndorsementTypeProfile profile ON profile.TenantId=type.TenantId AND profile.EndorsementTypeId=type.EndorsementTypeId AND profile.IsActive=1 AND profile.IsDeleted=0
+    JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+      AND (endorsement.EndorsementType=type.TypeCode OR (endorsement.EndorsementType=type.TypeName AND NOT EXISTS(SELECT 1 FROM Policy.EndorsementType duplicateType WHERE duplicateType.TenantId=type.TenantId AND duplicateType.TypeName=type.TypeName AND duplicateType.EndorsementTypeId<>type.EndorsementTypeId AND duplicateType.IsActive=1 AND duplicateType.IsDeleted=0)) OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0))
+    WHERE workflowRule.TenantId=@TenantId AND workflowRule.FromStatusCode=@FromStatus AND workflowRule.ToStatusCode=@ToStatusCode AND workflowRule.IsActive=1 AND workflowRule.IsDeleted=0
+      AND (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode') IS NULL
+           OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalRequired' AND (profile.RequiresUnderwritingReview=1 OR profile.IsHighRisk=1))
+           OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalNotRequiredCarrier' AND profile.RequiresUnderwritingReview=0 AND profile.IsHighRisk=0 AND profile.RequiresCarrierApproval=1)
+           OR (JSON_VALUE(workflowRule.RuleJson,N'$.conditionCode')=N'ApprovalNotRequiredPolicy' AND profile.RequiresUnderwritingReview=0 AND profile.IsHighRisk=0 AND profile.RequiresCarrierApproval=0))
+) THROW 52426,N'The requested endorsement transition does not satisfy the configured approval condition.',1;
 IF @RequiresApproval IS NULL THROW 52412,N'The requested endorsement status transition is not allowed.',1;
+IF @RequiresNotes=1 AND NULLIF(LTRIM(RTRIM(@Notes)),N'') IS NULL THROW 52420,N'Reviewer notes are required for the selected workflow action.',1;
 IF NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementChange WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0) THROW 52413,N'At least one typed policy change is required before workflow submission.',1;
+IF @ToStatusCode IN(N'Submitted',N'InReview',N'PendingApproval') AND EXISTS
+(
+    SELECT 1
+    FROM Policy.EndorsementTypeDocumentRequirement requirement
+    JOIN Policy.EndorsementType type ON type.TenantId=requirement.TenantId AND type.EndorsementTypeId=requirement.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+    JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+     AND (endorsement.EndorsementType=type.TypeCode OR (endorsement.EndorsementType=type.TypeName AND NOT EXISTS(SELECT 1 FROM Policy.EndorsementType duplicateType WHERE duplicateType.TenantId=type.TenantId AND duplicateType.TypeName=type.TypeName AND duplicateType.EndorsementTypeId<>type.EndorsementTypeId AND duplicateType.IsActive=1 AND duplicateType.IsDeleted=0)) OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0 AND (alias.DescriptionContains IS NULL OR endorsement.Description LIKE N'%'+alias.DescriptionContains+N'%')))
+    WHERE requirement.TenantId=@TenantId AND requirement.IsRequired=1 AND requirement.IsActive=1 AND requirement.IsDeleted=0
+      AND NOT EXISTS
+      (
+          SELECT 1 FROM Policy.PolicyDocumentLink documentLink
+          WHERE documentLink.TenantId=@TenantId AND documentLink.PolicyId=@PolicyId AND documentLink.SourceEntityName=N'PolicyEndorsement'
+            AND documentLink.SourceEntityId=@EndorsementId AND documentLink.DocumentRoleCode=requirement.RequirementCode AND documentLink.IsDeleted=0
+      )
+) THROW 52419,N'One or more required endorsement documents have not been linked.',1;
 SELECT @PolicyEffectiveDate=EffectiveDate,@PolicyExpirationDate=ExpirationDate FROM Submissions.BoundPolicy WHERE TenantId=@TenantId AND PolicyId=@PolicyId AND IsDeleted=0;
 IF @EffectiveDate<@PolicyEffectiveDate OR @EffectiveDate>@PolicyExpirationDate THROW 52414,N'The endorsement effective date must be within the active policy term.',1;
 IF @RequiresApproval=1 AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementApproval WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode=N'Approved' AND IsDeleted=0) THROW 52415,N'An approved internal review is required for this transition.',1;
 IF @ToStatusCode=N'CarrierApproved' AND EXISTS(SELECT 1 FROM Policy.PolicyEndorsementCarrierDispatch WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0) THROW 52417,N'Carrier submission must complete before carrier approval.',1;
-IF @ToStatusCode=N'Completed' AND ((SELECT PolicyVersionAfterId FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId) IS NULL OR EXISTS(SELECT 1 FROM Policy.PolicyEndorsementAccountingWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0) OR EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0)) THROW 52418,N'Policy activation, accounting, and document work must complete before the endorsement can complete.',1;
+IF @ToStatusCode=N'Completed' AND ((@ProfileRequiresVersion=1 AND (SELECT PolicyVersionAfterId FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId) IS NULL) OR EXISTS(SELECT 1 FROM Policy.PolicyEndorsementAccountingWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0) OR EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0) OR EXISTS(SELECT 1 FROM Policy.PolicyEndorsementCarrierDispatch WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode<>N'Completed' AND IsDeleted=0)) THROW 52418,N'Policy activation, carrier, accounting, and document work must complete before the endorsement can complete.',1;
 
-IF @ToStatusCode=N'PendingReview' AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementApproval WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND IsDeleted=0)
-INSERT Policy.PolicyEndorsementApproval(ApprovalId,TenantId,EndorsementId,ApprovalLevelCode,StatusCode,RequestedDateUtc,RequestedByUserId,CreatedDateUtc,IsDeleted)
-SELECT NEWID(),TenantId,EndorsementId,COALESCE(ApprovalLevelCode,N'StandardAuthority'),N'Pending',SYSUTCDATETIME(),@ActorUserId,SYSUTCDATETIME(),0 FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
+IF @ToStatusCode=N'PendingApproval' AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementApproval WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND StatusCode=N'Pending' AND IsDeleted=0)
+BEGIN
+    DECLARE @ApprovalRouteId UNIQUEIDENTIFIER,@ApprovalAssigneeId UNIQUEIDENTIFIER,@ApprovalPermissionCode NVARCHAR(120),@ApprovalRoleCode NVARCHAR(100),@ApprovalStrategyCode NVARCHAR(40),@ApprovalSubject NVARCHAR(300),@ApprovalBody NVARCHAR(1000),@EndorsementNumber NVARCHAR(80),@PolicyNumber NVARCHAR(80),@ApprovalLevelCode NVARCHAR(80),@ApprovalId UNIQUEIDENTIFIER;
+    SELECT @ApprovalLevelCode=COALESCE(NULLIF(ApprovalLevelCode,N''),N'StandardAuthority') FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
+    SELECT TOP(1) @ApprovalRouteId=route.EndorsementWorkflowRouteId,@ApprovalPermissionCode=route.RequiredPermissionCode,@ApprovalRoleCode=route.AssignedRoleCode,@ApprovalStrategyCode=route.AssignmentStrategyCode,@ApprovalAssigneeId=route.AssignedToUserId,@ApprovalSubject=route.NotificationSubjectTemplate,@ApprovalBody=route.NotificationBodyTemplate
+    FROM Policy.EndorsementWorkflowRoute route
+    JOIN Policy.EndorsementType type ON type.TenantId=route.TenantId AND type.EndorsementTypeId=route.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+    JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+      AND (endorsement.EndorsementType=type.TypeCode OR (endorsement.EndorsementType=type.TypeName AND NOT EXISTS(SELECT 1 FROM Policy.EndorsementType duplicateType WHERE duplicateType.TenantId=type.TenantId AND duplicateType.TypeName=type.TypeName AND duplicateType.EndorsementTypeId<>type.EndorsementTypeId AND duplicateType.IsActive=1 AND duplicateType.IsDeleted=0)) OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0 AND (alias.DescriptionContains IS NULL OR endorsement.Description LIKE N'%'+alias.DescriptionContains+N'%')))
+    WHERE route.TenantId=@TenantId AND route.RoutePurposeCode=N'Approval' AND (route.ApprovalLevelCode=@ApprovalLevelCode OR route.ApprovalLevelCode IS NULL) AND route.IsActive=1 AND route.IsDeleted=0 ORDER BY CASE WHEN route.ApprovalLevelCode=@ApprovalLevelCode THEN 0 ELSE 1 END,route.SortOrder,route.CreatedDateUtc;
+    IF @ApprovalRouteId IS NULL THROW 52424,N'No active approval route is configured for this endorsement type.',1;
+    IF @ApprovalStrategyCode=N'ExplicitUser'
+        SELECT @ApprovalAssigneeId=appUser.UserId FROM IAM.[User] appUser WHERE appUser.TenantId=@TenantId AND appUser.UserId=@ApprovalAssigneeId AND appUser.IsActive=1 AND appUser.IsDeleted=0
+        AND EXISTS(SELECT 1 FROM IAM.UserRole userRole JOIN IAM.RolePermission rolePermission ON rolePermission.TenantId=@TenantId AND rolePermission.RoleId=userRole.RoleId AND rolePermission.IsDeleted=0 LEFT JOIN IAM.Permission permission ON permission.TenantId=@TenantId AND permission.PermissionId=rolePermission.PermissionId AND permission.IsActive=1 AND permission.IsDeleted=0 WHERE userRole.TenantId=@TenantId AND userRole.UserId=appUser.UserId AND userRole.IsActive=1 AND userRole.IsDeleted=0 AND COALESCE(rolePermission.PermissionCode,permission.PermissionCode)=@ApprovalPermissionCode);
+    ELSE
+        SELECT TOP(1) @ApprovalAssigneeId=userRole.UserId
+        FROM IAM.UserRole userRole
+        JOIN IAM.Role role ON role.TenantId=@TenantId AND role.RoleId=userRole.RoleId AND role.IsActive=1 AND role.IsDeleted=0
+        JOIN IAM.[User] appUser ON appUser.TenantId=@TenantId AND appUser.UserId=userRole.UserId AND appUser.IsActive=1 AND appUser.IsDeleted=0
+        LEFT JOIN IAM.RolePermission rolePermission ON rolePermission.TenantId=@TenantId AND rolePermission.RoleId=role.RoleId AND rolePermission.IsDeleted=0
+        LEFT JOIN IAM.Permission permission ON permission.TenantId=@TenantId AND permission.PermissionId=rolePermission.PermissionId AND permission.IsActive=1 AND permission.IsDeleted=0
+        WHERE userRole.TenantId=@TenantId AND userRole.IsActive=1 AND userRole.IsDeleted=0 AND (userRole.EffectiveStartDateUtc IS NULL OR userRole.EffectiveStartDateUtc<=SYSUTCDATETIME()) AND (userRole.EffectiveEndDateUtc IS NULL OR userRole.EffectiveEndDateUtc>SYSUTCDATETIME())
+          AND COALESCE(rolePermission.PermissionCode,permission.PermissionCode)=@ApprovalPermissionCode
+          AND ((@ApprovalStrategyCode=N'Role' AND role.RoleCode=@ApprovalRoleCode) OR @ApprovalStrategyCode=N'Permission')
+        ORDER BY CASE WHEN appUser.UserId=@ActorUserId THEN 1 ELSE 0 END,userRole.AssignedDateUtc,appUser.UserId;
+    IF @ApprovalAssigneeId IS NULL
+        SELECT TOP(1) @ApprovalAssigneeId=candidate.UserId,@ApprovalStrategyCode=candidate.StrategyCode
+        FROM Policy.PolicyEndorsement endorsement
+        CROSS APPLY
+        (
+            SELECT TOP(1) eligible.UserId,CASE WHEN eligible.Priority=0 THEN N'AccountManager' ELSE N'Producer' END StrategyCode
+            FROM (SELECT accountAssignment.UserId,CASE WHEN UPPER(REPLACE(REPLACE(REPLACE(accountAssignment.AssignmentRoleCode,N'_',N''),N'-',N''),N' ',N''))=N'ACCOUNTMANAGER' THEN 0 ELSE 1 END Priority,accountAssignment.CreatedDateUtc AssignedDateUtc FROM Client.AccountServiceAssignment accountAssignment WHERE accountAssignment.TenantId=endorsement.TenantId AND accountAssignment.AccountId=endorsement.AccountId AND UPPER(REPLACE(REPLACE(REPLACE(accountAssignment.AssignmentRoleCode,N'_',N''),N'-',N''),N' ',N'')) IN(N'ACCOUNTMANAGER',N'PRODUCER') AND accountAssignment.IsPrimary=1 AND accountAssignment.EffectiveDate<=CONVERT(date,SYSUTCDATETIME()) AND (accountAssignment.ExpirationDate IS NULL OR accountAssignment.ExpirationDate>=CONVERT(date,SYSUTCDATETIME())) AND accountAssignment.IsDeleted=0) eligible
+            JOIN IAM.[User] candidateUser ON candidateUser.TenantId=endorsement.TenantId AND candidateUser.UserId=eligible.UserId AND candidateUser.IsActive=1 AND candidateUser.IsDeleted=0
+            WHERE EXISTS(SELECT 1 FROM IAM.UserRole userRole JOIN IAM.RolePermission rolePermission ON rolePermission.TenantId=userRole.TenantId AND rolePermission.RoleId=userRole.RoleId AND rolePermission.IsDeleted=0 LEFT JOIN IAM.Permission permission ON permission.TenantId=userRole.TenantId AND permission.PermissionId=rolePermission.PermissionId AND permission.IsActive=1 AND permission.IsDeleted=0 WHERE userRole.TenantId=endorsement.TenantId AND userRole.UserId=eligible.UserId AND userRole.IsActive=1 AND userRole.IsDeleted=0 AND (userRole.EffectiveStartDateUtc IS NULL OR userRole.EffectiveStartDateUtc<=SYSUTCDATETIME()) AND (userRole.EffectiveEndDateUtc IS NULL OR userRole.EffectiveEndDateUtc>SYSUTCDATETIME()) AND COALESCE(rolePermission.PermissionCode,permission.PermissionCode)=@ApprovalPermissionCode)
+            ORDER BY eligible.Priority,eligible.AssignedDateUtc DESC,eligible.UserId
+        ) candidate
+        WHERE endorsement.TenantId=@TenantId AND endorsement.EndorsementId=@EndorsementId AND endorsement.IsDeleted=0
+    IF @ApprovalAssigneeId IS NULL THROW 52425,N'No active tenant user satisfies the configured approval route.',1;
+    SELECT @ApprovalId=ApprovalId FROM Policy.PolicyEndorsementApproval WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND ApprovalLevelCode=@ApprovalLevelCode AND IsDeleted=0;
+    IF @ApprovalId IS NULL
+    BEGIN
+        SET @ApprovalId=NEWID();
+        INSERT Policy.PolicyEndorsementApproval(ApprovalId,TenantId,EndorsementId,ApprovalLevelCode,StatusCode,RequestedDateUtc,RequestedByUserId,AssignedToUserId,CreatedDateUtc,IsDeleted)
+        VALUES(@ApprovalId,@TenantId,@EndorsementId,@ApprovalLevelCode,N'Pending',SYSUTCDATETIME(),@ActorUserId,@ApprovalAssigneeId,SYSUTCDATETIME(),0);
+    END
+    ELSE
+        UPDATE Policy.PolicyEndorsementApproval SET StatusCode=N'Pending',RequestedDateUtc=SYSUTCDATETIME(),RequestedByUserId=@ActorUserId,AssignedToUserId=@ApprovalAssigneeId,DecidedDateUtc=NULL,DecidedByUserId=NULL,DecisionNotes=NULL WHERE TenantId=@TenantId AND ApprovalId=@ApprovalId AND StatusCode=N'InformationRequested' AND IsDeleted=0;
+    SELECT @EndorsementNumber=EndorsementNumber,@PolicyNumber=PolicyNumber FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
+    INSERT Core.Notification(NotificationId,TenantId,RecipientUserId,ChannelCode,Subject,Body,EntityName,EntityId,StatusCode,IsRead,CreatedDateUtc,CreatedByUserId,IsDeleted)
+    VALUES(NEWID(),@TenantId,@ApprovalAssigneeId,N'InApp',REPLACE(REPLACE(@ApprovalSubject,N'{EndorsementNumber}',@EndorsementNumber),N'{PolicyNumber}',@PolicyNumber),REPLACE(REPLACE(@ApprovalBody,N'{EndorsementNumber}',@EndorsementNumber),N'{PolicyNumber}',@PolicyNumber),N'PolicyEndorsementApproval',@ApprovalId,N'Queued',0,SYSUTCDATETIME(),@ActorUserId,0);
+END;
 
 IF @RequiresCarrier=1
 BEGIN
@@ -224,6 +367,32 @@ INSERT Policy.PolicyEndorsementAccountingWork(AccountingWorkId,TenantId,Endorsem
 SELECT NEWID(),TenantId,EndorsementId,PolicyId,CASE WHEN TotalCostDelta<0 THEN N'Refund' ELSE N'Invoice' END,CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),EndorsementId),N':accounting'),CurrencyCode,PremiumDelta,AgencyFeeDelta,TaxDelta,TotalCostDelta,N'Queued',0,8,SYSUTCDATETIME(),SYSUTCDATETIME(),@ActorUserId,0
 FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
 
+IF @CreatesCommission=1 AND @CreatesAccounting=0
+INSERT Policy.PolicyEndorsementAccountingWork(AccountingWorkId,TenantId,EndorsementId,PolicyId,WorkTypeCode,IdempotencyKey,CurrencyCode,PremiumAmount,FeeAmount,TaxAmount,TotalAmount,StatusCode,AttemptCount,MaxAttempts,NextAttemptDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),TenantId,EndorsementId,PolicyId,N'CommissionOnly',CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),EndorsementId),N':commission'),CurrencyCode,PremiumDelta,0,0,0,N'Queued',0,8,SYSUTCDATETIME(),SYSUTCDATETIME(),@ActorUserId,0
+FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId
+AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementAccountingWork existing WHERE existing.TenantId=@TenantId AND existing.EndorsementId=@EndorsementId AND existing.WorkTypeCode=N'CommissionOnly' AND existing.IsDeleted=0);
+
+IF @CreatesDocuments=1
+INSERT Policy.PolicyEndorsementDocumentWork(DocumentWorkId,TenantId,EndorsementId,PolicyId,DocumentTypeCode,IdempotencyKey,StatusCode,AttemptCount,MaxAttempts,NextAttemptDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,@EndorsementId,@PolicyId,definition.DocumentTypeCode,CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':document:',definition.DocumentTypeCode),N'Queued',0,8,SYSUTCDATETIME(),SYSUTCDATETIME(),@ActorUserId,0
+FROM Policy.PolicyEndorsementDocumentWorkDefinition definition
+WHERE definition.TenantId=@TenantId AND definition.TriggerCode=N'Workflow' AND definition.IsActive=1 AND definition.IsDeleted=0
+AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork existing WHERE existing.TenantId=@TenantId AND existing.EndorsementId=@EndorsementId AND existing.DocumentTypeCode=definition.DocumentTypeCode AND existing.IsDeleted=0);
+
+IF @CreatesCommission=1
+INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId)
+VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'CommissionReviewRequired',N'Commission recalculation or review is required by endorsement configuration.',JSON_OBJECT(N'accountingWorkCreated':@CreatesAccounting),@CorrelationId,SYSUTCDATETIME(),@ActorUserId);
+
+IF @RequiresCertificateReview=1
+BEGIN
+INSERT Policy.PolicyEndorsementDocumentWork(DocumentWorkId,TenantId,EndorsementId,PolicyId,DocumentTypeCode,IdempotencyKey,StatusCode,AttemptCount,MaxAttempts,NextAttemptDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,@EndorsementId,@PolicyId,N'CertificateReview',CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':certificate-review'),N'Queued',0,8,SYSUTCDATETIME(),SYSUTCDATETIME(),@ActorUserId,0
+WHERE NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork existing WHERE existing.TenantId=@TenantId AND existing.EndorsementId=@EndorsementId AND existing.DocumentTypeCode=N'CertificateReview' AND existing.IsDeleted=0);
+INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId)
+VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'CertificateReviewRequired',N'Certificates affected by this endorsement require review.',JSON_OBJECT(N'endorsementId':@EndorsementId),@CorrelationId,SYSUTCDATETIME(),@ActorUserId);
+END;
+
 UPDATE Policy.PolicyEndorsement SET Status=@ToStatusCode,WorkflowStage=@ToStatusCode,PolicyVersionAfterId=COALESCE(@PolicyVersionId,PolicyVersionAfterId),LastTransitionCorrelationId=@CorrelationId,SubmittedDateUtc=CASE WHEN @ToStatusCode=N'SubmittedToCarrier' THEN SYSUTCDATETIME() ELSE SubmittedDateUtc END,ApprovedDateUtc=CASE WHEN @ToStatusCode=N'CarrierApproved' THEN SYSUTCDATETIME() ELSE ApprovedDateUtc END,IssuedDateUtc=CASE WHEN @ToStatusCode=N'PolicyUpdated' THEN SYSUTCDATETIME() ELSE IssuedDateUtc END,CompletedDateUtc=CASE WHEN @ToStatusCode=N'Completed' THEN SYSUTCDATETIME() ELSE CompletedDateUtc END,RejectedDateUtc=CASE WHEN @ToStatusCode=N'Rejected' THEN SYSUTCDATETIME() ELSE RejectedDateUtc END,CancelledDateUtc=CASE WHEN @ToStatusCode=N'Cancelled' THEN SYSUTCDATETIME() ELSE CancelledDateUtc END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND RowVersion=@RowVersion;
 IF @@ROWCOUNT<>1 THROW 52416,N'The endorsement changed while the transition was being processed.',1;
 IF @ReversalOfEndorsementId IS NOT NULL AND @ToStatusCode=N'Completed'
@@ -249,15 +418,25 @@ COMMIT;";
 SET XACT_ABORT ON; BEGIN TRAN;
 IF EXISTS(SELECT 1 FROM Policy.PolicyEndorsementEvent WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND CorrelationId=@CorrelationId AND EventTypeCode=N'ApprovalDecision') BEGIN COMMIT; RETURN; END;
 IF @DecisionCode NOT IN(N'Approved',N'Rejected') THROW 52420,N'Approval decision must be Approved or Rejected.',1;
-DECLARE @PolicyId UNIQUEIDENTIFIER,@ActorName NVARCHAR(160);
-SELECT @PolicyId=PolicyId FROM Policy.PolicyEndorsement WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND Status=N'PendingReview' AND RowVersion=@EndorsementRowVersion AND IsDeleted=0;
+DECLARE @PolicyId UNIQUEIDENTIFIER,@ActorName NVARCHAR(160),@OutcomeStatusCode NVARCHAR(80),@RequestedByUserId UNIQUEIDENTIFIER,@EndorsementNumber NVARCHAR(80);
+SELECT @PolicyId=PolicyId FROM Policy.PolicyEndorsement WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND Status=N'PendingApproval' AND RowVersion=@EndorsementRowVersion AND IsDeleted=0;
 SELECT @ActorName=COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(FirstName,N' ',LastName))),N''),Email) FROM IAM.[User] WHERE TenantId=@TenantId AND UserId=@ActorUserId AND IsDeleted=0;
 IF @PolicyId IS NULL OR @ActorName IS NULL THROW 52421,N'Endorsement or authenticated user was not found in the tenant.',1;
-UPDATE Policy.PolicyEndorsementApproval SET StatusCode=@DecisionCode,DecidedDateUtc=SYSUTCDATETIME(),DecidedByUserId=@ActorUserId,DecisionNotes=@Notes WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND ApprovalId=@ApprovalId AND StatusCode=N'Pending' AND RowVersion=@ApprovalRowVersion AND IsDeleted=0;
+UPDATE Policy.PolicyEndorsementApproval SET StatusCode=@DecisionCode,DecidedDateUtc=SYSUTCDATETIME(),DecidedByUserId=@ActorUserId,DecisionNotes=@Notes WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND ApprovalId=@ApprovalId AND AssignedToUserId=@ActorUserId AND StatusCode=N'Pending' AND RowVersion=@ApprovalRowVersion AND IsDeleted=0;
 IF @@ROWCOUNT<>1 THROW 52422,N'The pending endorsement approval was not found.',1;
-UPDATE Policy.PolicyEndorsement SET ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND RowVersion=@EndorsementRowVersion;
+SELECT @RequestedByUserId=RequestedByUserId FROM Policy.PolicyEndorsementApproval WHERE TenantId=@TenantId AND ApprovalId=@ApprovalId;
+SELECT TOP(1) @OutcomeStatusCode=CASE WHEN @DecisionCode=N'Approved' THEN route.ApprovedStatusCode ELSE route.RejectedStatusCode END
+FROM Policy.EndorsementWorkflowRoute route
+JOIN Policy.EndorsementType type ON type.TenantId=route.TenantId AND type.EndorsementTypeId=route.EndorsementTypeId AND type.IsActive=1 AND type.IsDeleted=0
+JOIN Policy.PolicyEndorsement endorsement ON endorsement.TenantId=type.TenantId AND endorsement.EndorsementId=@EndorsementId AND (endorsement.EndorsementType=type.TypeCode OR endorsement.EndorsementType=type.TypeName OR EXISTS(SELECT 1 FROM Policy.EndorsementTypeAlias alias WHERE alias.TenantId=type.TenantId AND alias.EndorsementTypeId=type.EndorsementTypeId AND alias.LegacyTypeValue=endorsement.EndorsementType AND alias.IsActive=1 AND alias.IsDeleted=0))
+WHERE route.TenantId=@TenantId AND route.RoutePurposeCode=N'Approval' AND route.IsActive=1 AND route.IsDeleted=0 ORDER BY route.SortOrder;
+IF @OutcomeStatusCode IS NULL THROW 52426,N'The approval outcome status is not configured for this endorsement type.',1;
+UPDATE Policy.PolicyEndorsement SET Status=@OutcomeStatusCode,WorkflowStage=@OutcomeStatusCode,ApprovedDateUtc=CASE WHEN @DecisionCode=N'Approved' THEN SYSUTCDATETIME() ELSE ApprovedDateUtc END,RejectedDateUtc=CASE WHEN @DecisionCode=N'Rejected' THEN SYSUTCDATETIME() ELSE RejectedDateUtc END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId AND RowVersion=@EndorsementRowVersion;
 IF @@ROWCOUNT<>1 THROW 52423,N'The endorsement changed while the approval decision was being processed.',1;
-INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId) VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'ApprovalDecision',CONCAT(N'Endorsement review ',LOWER(@DecisionCode),N' by ',@ActorName,N'.'),JSON_OBJECT(N'approvalId':@ApprovalId,N'decision':@DecisionCode,N'notes':@Notes),@CorrelationId,SYSUTCDATETIME(),@ActorUserId);
+INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,FromStatusCode,ToStatusCode,Description,DataJson,CorrelationId,OccurredDateUtc,ActorUserId) VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'ApprovalDecision',N'PendingApproval',@OutcomeStatusCode,CONCAT(N'Endorsement review ',LOWER(@DecisionCode),N' by ',@ActorName,N'.'),JSON_OBJECT(N'approvalId':@ApprovalId,N'decision':@DecisionCode,N'notes':@Notes),@CorrelationId,SYSUTCDATETIME(),@ActorUserId);
+SELECT @EndorsementNumber=EndorsementNumber FROM Policy.PolicyEndorsement WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
+IF EXISTS(SELECT 1 FROM IAM.[User] WHERE TenantId=@TenantId AND UserId=@RequestedByUserId AND IsActive=1 AND IsDeleted=0)
+INSERT Core.Notification(NotificationId,TenantId,RecipientUserId,ChannelCode,Subject,Body,EntityName,EntityId,StatusCode,IsRead,Priority,Category,DeliveryProvider,DeliveryStatus,PolicyStatus,SyncStatus,AttemptCount,MaxAttempts,CreatedDateUtc,CreatedByUserId,IsDeleted) VALUES(NEWID(),@TenantId,@RequestedByUserId,N'InApp',CONCAT(N'Endorsement ',LOWER(@DecisionCode)),CONCAT(N'Endorsement ',@EndorsementNumber,N' was ',LOWER(@DecisionCode),N'.'),N'PolicyEndorsementApproval',@ApprovalId,N'Queued',0,N'Normal',N'Policy Endorsement Approval',N'PLATFORM_IN_APP',N'Queued',N'Compliant',N'Synced',0,5,SYSUTCDATETIME(),@ActorUserId,0);
 COMMIT;";
         using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql, new { EndorsementId=endorsementId,ApprovalId=approvalId,request.TenantId,request.DecisionCode,request.Notes,request.EndorsementRowVersion,request.ApprovalRowVersion,request.CorrelationId,request.ActorUserId }, cancellationToken:cancellationToken));

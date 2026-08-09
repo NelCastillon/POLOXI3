@@ -306,6 +306,41 @@ SELECT
         return result;
     }
 
+    public async Task ReplaceServiceAssignmentsAsync(ReplaceAccountServiceAssignmentsRequest request, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SET XACT_ABORT ON;
+BEGIN TRAN;
+IF NOT EXISTS(SELECT 1 FROM Client.Account WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND AccountId=@AccountId AND IsDeleted=0)
+    THROW 51040,N'Account was not found in the authenticated tenant.',1;
+IF EXISTS
+(
+    SELECT selected.UserId
+    FROM (VALUES(@AccountManagerUserId),(@ProducerUserId),(@CsrUserId)) selected(UserId)
+    WHERE selected.UserId IS NOT NULL
+      AND NOT EXISTS(SELECT 1 FROM IAM.[User] appUser WHERE appUser.TenantId=@TenantId AND appUser.UserId=selected.UserId AND appUser.IsActive=1 AND appUser.IsDeleted=0)
+)
+    THROW 51041,N'Every service assignee must be an active user in the authenticated tenant.',1;
+
+UPDATE assignment
+SET IsDeleted=1,ExpirationDate=COALESCE(ExpirationDate,CONVERT(date,SYSUTCDATETIME())),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ModifiedByUserId
+FROM Client.AccountServiceAssignment assignment
+WHERE assignment.TenantId=@TenantId AND assignment.AccountId=@AccountId AND assignment.IsDeleted=0
+  AND UPPER(REPLACE(REPLACE(REPLACE(assignment.AssignmentRoleCode,N'_',N''),N'-',N''),N' ',N'')) IN(N'ACCOUNTMANAGER',N'PRODUCER',N'CSR');
+
+INSERT Client.AccountServiceAssignment(AccountServiceAssignmentId,TenantId,AccountId,UserId,AssignmentRoleCode,IsPrimary,EffectiveDate,ExpirationDate,Notes,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),@TenantId,@AccountId,selected.UserId,selected.RoleCode,1,CONVERT(date,SYSUTCDATETIME()),NULL,N'Primary account service assignment',SYSUTCDATETIME(),@ModifiedByUserId,0
+FROM (VALUES(N'ACCOUNT_MANAGER',@AccountManagerUserId),(N'PRODUCER',@ProducerUserId),(N'CSR',@CsrUserId)) selected(RoleCode,UserId)
+WHERE selected.UserId IS NOT NULL;
+
+INSERT Client.AccountActivity(ActivityId,TenantId,AccountId,ActivityType,[Subject],Notes,OccurredAtUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(NEWID(),@TenantId,@AccountId,N'ServiceAssignmentChanged',N'Service assignments updated',N'Primary Account Manager, Producer, and CSR assignments were updated.',SYSUTCDATETIME(),SYSUTCDATETIME(),@ModifiedByUserId,0);
+COMMIT;
+""";
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+    }
+
     public Task<Guid> UpsertNamedInsuredAsync(UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => UpsertAsync("AccountNamedInsured", "AccountNamedInsuredId", request.AccountNamedInsuredId, request.TenantId, request.AccountId, request.UserId, request, cancellationToken);
     public Task<Guid> UpsertLocationAsync(UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => UpsertAsync("AccountLocation", "AccountLocationId", request.AccountLocationId, request.TenantId, request.AccountId, request.UserId, request, cancellationToken);
     public Task<Guid> UpsertVehicleAsync(UpsertAccountVehicleRequest request, CancellationToken cancellationToken = default) => UpsertAsync("AccountVehicle", "AccountVehicleId", request.AccountVehicleId, request.TenantId, request.AccountId, request.UserId, request, cancellationToken);

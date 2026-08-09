@@ -111,6 +111,16 @@ else
         </div>
     </div>
 
+    <section class="pd-cockpit" aria-label="Policy service assignments">
+        <div class="pd-cockpit-head"><span><i class="bi bi-people-fill" aria-hidden="true"></i> Account service team</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenServiceAssignmentsAsync"><i class="bi bi-person-gear" aria-hidden="true"></i> Manage assignments</button></div>
+        <div class="pd-cockpit-grid">
+            @CockpitCard("Account Manager", AssignmentName("ACCOUNT_MANAGER"), "Primary account assignment", "bi-person-badge", "info")
+            @CockpitCard("Producer", AssignmentName("PRODUCER"), "Endorsement routing fallback", "bi-briefcase", "success")
+            @CockpitCard("CSR", AssignmentName("CSR"), "Account servicing support", "bi-headset", "neutral")
+        </div>
+        <small class="text-muted">Assignments are maintained on @_policy.Account and apply to every policy linked to this account.</small>
+    </section>
+
     <div class="pd-command-strip" aria-label="Policy executive summary">
         <div class="pd-command-card @PolicyHealthCss()">
             <span class="pd-command-icon"><i class="bi bi-activity" aria-hidden="true"></i></span>
@@ -173,6 +183,26 @@ else
             </div>
         </section>
     }
+
+@if (_showServiceAssignments)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseServiceAssignments">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-service-assignment-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-people-fill" aria-hidden="true"></i><span id="pd-service-assignment-title">Manage Account Service Team</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseServiceAssignments" aria-label="Close"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_serviceAssignmentForm" OnValidSubmit="SaveServiceAssignmentsAsync">
+                <div class="um-modal-body">
+                    <p class="text-muted">Changes update the persisted service team for <strong>@_policy?.Account</strong> and affect all linked policies.</p>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Primary Account Manager</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.AccountManagerUserId"><option value="">Unassigned</option>@foreach(var user in PolicyAccountManagerUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                        <div class="um-field"><label>Primary Producer</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.ProducerUserId"><option value="">Unassigned</option>@foreach(var user in PolicyProducerUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                        <div class="um-field"><label>CSR</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.CsrUserId"><option value="">Unassigned</option>@foreach(var user in PolicyCsrUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseServiceAssignments">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingServiceAssignments"><i class="bi bi-check-lg"></i> Save assignments</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
 
     @if (_showInvoiceEmail)
     {
@@ -1853,6 +1883,8 @@ else
     private List<PolicyCoverageDetailTemplateDto> _coverageTemplates = [];
     private List<PolicyEndorsementOptionDto> _endorsementOptions = [];
     private List<EndorsementTypeDto> _endorsementTypes = [];
+    private Account360Dto? _account360;
+    private List<UserDto> _assignmentUsers = [];
 
     private readonly DetailTab[] _detailTabs =
     [
@@ -1913,6 +1945,9 @@ else
     private bool         _showCommForm = false;
     private bool         _showDocumentUpload;
     private bool         _showClaimForm = false;
+    private bool         _showServiceAssignments;
+    private bool         _savingServiceAssignments;
+    private PolicyServiceAssignmentForm _serviceAssignmentForm = new();
     private CoverageRow? _selectedCoverage;
     private CoverageForm _coverageForm = new();
     private EditContext  _coverageEditContext = new(new CoverageForm());
@@ -1984,6 +2019,7 @@ else
             }
 
             await LoadPolicyRelatedDataAsync();
+            _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
             _servicingWorkspace = await Api.GetPolicyServicingWorkspaceAsync(_tenantId, PolicyId);
             LoadServicingWorkspaceRows();
             _accounting = await Api.GetPolicyAccountingDashboardAsync(_tenantId, PolicyId);
@@ -2013,6 +2049,63 @@ else
         {
             Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new(_policy.PolicyNumber, $"/policies/{PolicyId}"));
         }
+    }
+
+    private IEnumerable<UserDto> PolicyAccountManagerUsers => AssignmentUsersInRoles("ACCOUNT_MANAGER", "ACCOUNTMANAGER", "SERVICE_MANAGER", "SERVICEMANAGER");
+    private IEnumerable<UserDto> PolicyProducerUsers => AssignmentUsersInRoles("PRODUCER", "ACCOUNT_PRODUCER", "ACCOUNTPRODUCER");
+    private IEnumerable<UserDto> PolicyCsrUsers => AssignmentUsersInRoles("CSR", "SENIOR_CSR", "SENIORCSR");
+    private IEnumerable<UserDto> AssignmentUsersInRoles(params string[] allowedRoles)
+    {
+        var allowed = allowedRoles.Select(NormalizeAssignmentRole).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _assignmentUsers.Where(user => !user.IsLockedOut && string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) && AssignmentUserRoles(user).Any(allowed.Contains)).OrderBy(AssignmentUserName);
+    }
+    private static IEnumerable<string> AssignmentUserRoles(UserDto user) => (user.AssignedRoleCodes ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(NormalizeAssignmentRole);
+
+    private static string AssignmentUserName(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.Email;
+    private static string NormalizeAssignmentRole(string role) => role.Replace("_", "").Replace("-", "").Replace(" ", "");
+    private AccountServiceAssignmentDto? Assignment(string role) => _account360?.ServiceAssignments.FirstOrDefault(assignment => assignment.IsPrimary && string.Equals(NormalizeAssignmentRole(assignment.AssignmentRoleCode), NormalizeAssignmentRole(role), StringComparison.OrdinalIgnoreCase));
+    private string AssignmentName(string role) => Assignment(role)?.UserName ?? "Unassigned";
+
+    private async Task OpenServiceAssignmentsAsync()
+    {
+        if (_policy is null) return;
+        _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
+        var users = await Api.SearchUsersAsync(_tenantId, pageSize: 1000);
+        _assignmentUsers = users?.Items.ToList() ?? [];
+        _serviceAssignmentForm = new()
+        {
+            AccountManagerUserId = Assignment("ACCOUNT_MANAGER")?.UserId,
+            ProducerUserId = Assignment("PRODUCER")?.UserId,
+            CsrUserId = Assignment("CSR")?.UserId
+        };
+        _showServiceAssignments = true;
+    }
+
+    private void CloseServiceAssignments()
+    {
+        if (!_savingServiceAssignments) _showServiceAssignments = false;
+    }
+
+    private async Task SaveServiceAssignmentsAsync()
+    {
+        if (_policy is null) return;
+        _savingServiceAssignments = true;
+        try
+        {
+            await Api.ReplaceAccountServiceAssignmentsAsync(_policy.AccountId, new()
+            {
+                TenantId = _tenantId,
+                AccountId = _policy.AccountId,
+                AccountManagerUserId = _serviceAssignmentForm.AccountManagerUserId,
+                ProducerUserId = _serviceAssignmentForm.ProducerUserId,
+                CsrUserId = _serviceAssignmentForm.CsrUserId
+            });
+            _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
+            _showServiceAssignments = false;
+            await ShowToast("Account service assignments updated.");
+        }
+        catch (Exception ex) { await ShowErrorToast($"Assignment save failed: {ex.Message}"); }
+        finally { _savingServiceAssignments = false; }
     }
 
     private async Task LoadPolicyRelatedDataAsync()
@@ -3821,6 +3914,13 @@ else
     };
 
     // -- Models ---------------------------------------------------------------
+    private sealed class PolicyServiceAssignmentForm
+    {
+        public Guid? AccountManagerUserId { get; set; }
+        public Guid? ProducerUserId { get; set; }
+        public Guid? CsrUserId { get; set; }
+    }
+
     private sealed class PolicyRecord
     {
         public string   PolicyNumber  { get; set; } = string.Empty;

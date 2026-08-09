@@ -123,9 +123,10 @@
                     }
                     <div class="ued-field">
                         <label class="ued-label">Department</label>
-                        <AppSelect TValue="string" TItem="DepartmentDto"
+                        <AppSelect TValue="Guid?" TItem="DepartmentDto"
                                         DataSource="_departments"
-                                        @bind-Value="_form.Department"
+                                        Value="_form.DepartmentId"
+                                        ValueChanged="OnDepartmentChangedAsync"
                                         Placeholder="Select department?"
                                         ShowClearButton="true">
                             
@@ -147,7 +148,12 @@
                     </div>
                     <div class="ued-field">
                         <label class="ued-label">Job Title</label>
-                        <AppTextBox @bind-Value="_form.JobTitle" Placeholder="e.g. Account Manager" />
+                        <AppSelect TValue="Guid?" TItem="JobTitleDto"
+                                        DataSource="_jobTitles"
+                                        @bind-Value="_form.JobTitleId"
+                                        Placeholder="Select job title?"
+                                        ShowClearButton="true">
+                        </AppSelect>
                     </div>
                     <div class="ued-field">
                         <label class="ued-label">Phone</label>
@@ -226,6 +232,7 @@
     private FormModel          _form        = new();
     private List<BranchDto>    _branches    = [];
     private List<DepartmentDto> _departments = [];
+    private List<JobTitleDto> _jobTitles = [];
 
     // -- Computed ------------------------------------------------------------------
     private bool   IsCreate    => UserId is null;
@@ -304,7 +311,7 @@
         try
         {
             var user = await Api.GetUserByIdAsync(UserId!.Value);
-            if (user is not null) PopulateForm(user);
+            if (user is not null) await PopulateFormAsync(user);
         }
         catch
         {
@@ -316,7 +323,7 @@
         }
     }
 
-    private void PopulateForm(UserDto user)
+    private async Task PopulateFormAsync(UserDto user)
     {
         var nameParts = user.FullName.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         _form = new()
@@ -329,15 +336,29 @@
             FirstName    = nameParts.Length > 0 ? nameParts[0] : string.Empty,
             LastName     = nameParts.Length > 1 ? nameParts[1] : string.Empty,
             DisplayName  = user.DisplayName,
-            Department   = user.Department,
+            DepartmentId = user.DepartmentId,
             BranchCode   = _branches.FirstOrDefault(b => b.BranchId == user.BranchId)?.BranchCode,
             Region       = user.Region,
-            JobTitle     = user.JobTitle,
+            JobTitleId   = user.JobTitleId,
             PhoneNumber  = user.PhoneNumber,
             TimeZoneCode = user.TimeZoneCode,
             LocaleCode   = user.LocaleCode,
             MfaRequired  = false,
         };
+        await LoadEligibleJobTitlesAsync(preserveSelection: true);
+    }
+
+    private async Task OnDepartmentChangedAsync(Guid? departmentId)
+    {
+        _form.DepartmentId = departmentId;
+        await LoadEligibleJobTitlesAsync(preserveSelection: false);
+    }
+
+    private async Task LoadEligibleJobTitlesAsync(bool preserveSelection)
+    {
+        var selectedJobTitleId = preserveSelection ? _form.JobTitleId : null;
+        _jobTitles = _form.DepartmentId.HasValue ? (await Api.GetJobTitlesAsync(_tenantId, _form.DepartmentId))?.ToList() ?? [] : [];
+        _form.JobTitleId = selectedJobTitleId.HasValue && _jobTitles.Any(title => title.JobTitleId == selectedJobTitleId) ? selectedJobTitleId : null;
     }
 
     // -- Save actions --------------------------------------------------------------
@@ -379,9 +400,9 @@
                     UserTypeCode = _form.UserTypeCode,
                     StatusCode   = _form.StatusCode,
                     PhoneNumber  = _form.PhoneNumber,
-                    Department   = _form.Department,
+                    DepartmentId = _form.DepartmentId,
                     Region       = _form.Region,
-                    JobTitle     = _form.JobTitle,
+                    JobTitleId   = _form.JobTitleId,
                     TimeZoneCode = _form.TimeZoneCode,
                     LocaleCode   = _form.LocaleCode,
                     MfaRequired  = _form.MfaRequired,
@@ -396,9 +417,9 @@
                     FullName     = _form.FullName,
                     DisplayName  = _form.DisplayName,
                     PhoneNumber  = _form.PhoneNumber,
-                    Department   = _form.Department,
+                    DepartmentId = _form.DepartmentId,
                     Region       = _form.Region,
-                    JobTitle     = _form.JobTitle,
+                    JobTitleId   = _form.JobTitleId,
                     TimeZoneCode = _form.TimeZoneCode,
                     LocaleCode   = _form.LocaleCode,
                     MfaRequired  = _form.MfaRequired,
@@ -484,10 +505,10 @@
         public string  LastName    { get; set; } = string.Empty;
         public string? DisplayName { get; set; }
         // Organisation
-        public string? Department  { get; set; }
+        public Guid?   DepartmentId { get; set; }
         public string? BranchCode  { get; set; }
         public string? Region      { get; set; }
-        public string? JobTitle    { get; set; }
+        public Guid?   JobTitleId  { get; set; }
         [AmsPhone]
         public string? PhoneNumber { get; set; }
         // Settings

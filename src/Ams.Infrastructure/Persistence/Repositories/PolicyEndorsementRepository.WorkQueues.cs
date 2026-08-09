@@ -15,6 +15,7 @@ DECLARE @Claimed TABLE(CarrierDispatchId UNIQUEIDENTIFIER);
     SELECT TOP (@Take) dispatch.*
     FROM Policy.PolicyEndorsementCarrierDispatch dispatch WITH(UPDLOCK,READPAST,ROWLOCK)
     WHERE dispatch.IsDeleted=0 AND dispatch.AttemptCount<dispatch.MaxAttempts
+      AND dispatch.ChannelCode IN(N'Api',N'CarrierApi')
       AND ((dispatch.StatusCode IN(N'Queued',N'Failed') AND COALESCE(dispatch.NextAttemptDateUtc,dispatch.CreatedDateUtc)<=SYSUTCDATETIME())
         OR (dispatch.StatusCode=N'Processing' AND dispatch.ClaimExpiresDateUtc<SYSUTCDATETIME()))
     ORDER BY COALESCE(dispatch.NextAttemptDateUtc,dispatch.CreatedDateUtc),dispatch.CreatedDateUtc
@@ -63,9 +64,7 @@ WHERE dispatch.CarrierDispatchId=@DispatchId;
 INSERT Policy.PolicyEndorsementCarrierAttempt(CarrierAttemptId,TenantId,CarrierDispatchId,AttemptNumber,StatusCode,RequestPayload,ResponsePayload,HttpStatusCode,StartedDateUtc,CompletedDateUtc)
 SELECT NEWID(),TenantId,CarrierDispatchId,AttemptCount,@StatusCode,RequestPayload,@ResponsePayload,@HttpStatusCode,COALESCE(LastAttemptDateUtc,SYSUTCDATETIME()),SYSUTCDATETIME()
 FROM Policy.PolicyEndorsementCarrierDispatch WHERE CarrierDispatchId=@DispatchId;
-UPDATE Policy.PolicyEndorsement SET Status=CASE WHEN Status=N'SubmittedToCarrier' THEN N'CarrierProcessing' ELSE Status END,
-    WorkflowStage=CASE WHEN Status=N'SubmittedToCarrier' THEN N'CarrierProcessing' ELSE WorkflowStage END,
-    CarrierReferenceNumber=COALESCE(@ExternalReferenceNumber,CarrierReferenceNumber),ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE Policy.PolicyEndorsement SET CarrierReferenceNumber=COALESCE(@ExternalReferenceNumber,CarrierReferenceNumber),ModifiedDateUtc=SYSUTCDATETIME()
 WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId;
 INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,Description,DataJson,CorrelationId,OccurredDateUtc)
 VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'CarrierDispatchCompleted',N'Carrier submission completed.',JSON_OBJECT(N'dispatchId':@DispatchId,N'externalReference':@ExternalReferenceNumber),NEWID(),SYSUTCDATETIME());
@@ -139,18 +138,15 @@ SELECT work.* FROM {table} work JOIN @Claimed claimed ON claimed.Id=work.{id};
         var table = kind == "Accounting" ? "Policy.PolicyEndorsementAccountingWork" : "Policy.PolicyEndorsementDocumentWork";
         var id = kind == "Accounting" ? "AccountingWorkId" : "DocumentWorkId";
         var resultColumns = kind == "Accounting" ? "ResultEntityName=@ResultEntityName,ResultEntityId=@ResultEntityId," : "DocumentId=@ResultEntityId,";
-        var completedStatus = kind == "Accounting" ? "InvoiceCreated" : "DocumentsGenerated";
         var eventType = kind == "Accounting" ? "AccountingCompleted" : "DocumentsGenerated";
         var downstreamSql = kind == "Accounting"
             ? """
 INSERT Policy.PolicyEndorsementDocumentWork(DocumentWorkId,TenantId,EndorsementId,PolicyId,DocumentTypeCode,IdempotencyKey,StatusCode,AttemptCount,MaxAttempts,NextAttemptDateUtc,CreatedDateUtc,IsDeleted)
-SELECT NEWID(),@TenantId,@EndorsementId,@PolicyId,documentType.Code,CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':document:',documentType.Code),N'Queued',0,5,SYSUTCDATETIME(),SYSUTCDATETIME(),0
-FROM (VALUES(N'UpdatedDeclaration'),(N'EndorsementSchedule'),(N'InvoiceOrCreditMemo'),(N'CoverageSummary'),(N'CarrierLetter'),(N'ClientLetter')) documentType(Code)
-WHERE NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork existing WHERE existing.TenantId=@TenantId AND existing.IdempotencyKey=CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':document:',documentType.Code) AND existing.IsDeleted=0);
+SELECT NEWID(),@TenantId,@EndorsementId,@PolicyId,definition.DocumentTypeCode,CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':document:',definition.DocumentTypeCode),N'Queued',0,5,SYSUTCDATETIME(),SYSUTCDATETIME(),0
+FROM Policy.PolicyEndorsementDocumentWorkDefinition definition
+WHERE definition.TenantId=@TenantId AND definition.TriggerCode=N'AccountingCompleted' AND definition.IsActive=1 AND definition.IsDeleted=0
+AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork existing WHERE existing.TenantId=@TenantId AND existing.IdempotencyKey=CONCAT(N'endorsement:',CONVERT(NVARCHAR(36),@EndorsementId),N':document:',definition.DocumentTypeCode) AND existing.IsDeleted=0);
 """
-            : string.Empty;
-        var statusPredicate = kind == "Document"
-            ? "AND NOT EXISTS(SELECT 1 FROM Policy.PolicyEndorsementDocumentWork pending WHERE pending.TenantId=@TenantId AND pending.EndorsementId=@EndorsementId AND pending.StatusCode<>N'Completed' AND pending.IsDeleted=0)"
             : string.Empty;
         var sql = $"""
 SET XACT_ABORT ON; BEGIN TRAN;
@@ -160,8 +156,6 @@ WHERE {id}=@WorkId AND StatusCode=N'Processing' AND ClaimedBy=@WorkerId AND IsDe
 IF @@ROWCOUNT<>1 THROW 52502,N'The endorsement work claim is no longer active.',1;
 SELECT @TenantId=TenantId,@EndorsementId=EndorsementId,@PolicyId=PolicyId FROM {table} WHERE {id}=@WorkId;
 {downstreamSql}
-UPDATE Policy.PolicyEndorsement SET Status=N'{completedStatus}',WorkflowStage=N'{completedStatus}',ModifiedDateUtc=SYSUTCDATETIME()
-WHERE TenantId=@TenantId AND EndorsementId=@EndorsementId {statusPredicate};
 INSERT Policy.PolicyEndorsementEvent(EventId,TenantId,EndorsementId,PolicyId,EventTypeCode,Description,DataJson,CorrelationId,OccurredDateUtc)
 VALUES(NEWID(),@TenantId,@EndorsementId,@PolicyId,N'{eventType}',N'Endorsement {kind.ToLowerInvariant()} work completed.',JSON_OBJECT(N'workId':@WorkId,N'resultEntityId':@ResultEntityId),NEWID(),SYSUTCDATETIME());
 COMMIT;

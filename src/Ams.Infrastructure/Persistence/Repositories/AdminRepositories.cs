@@ -164,8 +164,6 @@ public class DepartmentRepository : IDepartmentRepository
     public async Task<IReadOnlyList<DepartmentDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default)
     {
         const string sql = @"
-IF OBJECT_ID(N'Agency.Department', N'U') IS NOT NULL
-BEGIN
     SELECT d.DepartmentId,
            d.TenantId,
            d.DepartmentName,
@@ -178,25 +176,7 @@ BEGIN
            d.CreatedDateUtc
     FROM Agency.Department d
     WHERE d.TenantId = @TenantId AND d.IsDeleted = 0
-    ORDER BY d.DepartmentName;
-END
-ELSE
-BEGIN
-    SELECT MIN(UserId) AS DepartmentId,
-           TenantId,
-           COALESCE(NULLIF(Department, ''), 'Unassigned') AS DepartmentName,
-           UPPER(REPLACE(COALESCE(NULLIF(Department, ''), 'Unassigned'), ' ', '-')) AS DepartmentCode,
-           NULL AS Description,
-           MAX(CASE WHEN JobTitle LIKE '%Manager%' THEN FullName END) AS ManagerName,
-           COUNT(DISTINCT COALESCE(NULLIF(JobTitle, ''), 'General')) AS TeamCount,
-           CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 'Active' ELSE 'Inactive' END AS Status,
-           CAST(CASE WHEN SUM(CASE WHEN StatusCode = 'Active' THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS bit) AS IsActive,
-           MIN(CreatedDateUtc) AS CreatedDateUtc
-    FROM IAM.[User]
-    WHERE TenantId = @TenantId AND IsDeleted = 0
-    GROUP BY TenantId, COALESCE(NULLIF(Department, ''), 'Unassigned')
-    ORDER BY DepartmentName;
-END";
+    ORDER BY d.DepartmentName;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(ct);
         var results = await cn.QueryAsync<DepartmentDto>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
         return results.ToList();

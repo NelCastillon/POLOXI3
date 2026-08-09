@@ -1,10 +1,13 @@
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Iam;
+using Ams.Api.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public sealed class UsersController : ControllerBase
 {
@@ -20,7 +23,11 @@ public sealed class UsersController : ControllerBase
 
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
-        => Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken));
+        => AuthenticatedRequestContext.HasTenantAccess(User, tenantId) ? Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken)) : Forbid();
+
+    [HttpGet("job-titles")]
+    public async Task<IActionResult> GetJobTitles([FromQuery] Guid tenantId, [FromQuery] Guid? departmentId, CancellationToken cancellationToken)
+        => AuthenticatedRequestContext.HasTenantAccess(User, tenantId) ? Ok(await _service.GetJobTitlesAsync(tenantId, departmentId, cancellationToken)) : Forbid();
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request, CancellationToken cancellationToken)

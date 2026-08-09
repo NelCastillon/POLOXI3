@@ -9,6 +9,7 @@ public interface IUserRepository
 {
     Task<UserDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<PagedResult<UserDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<JobTitleDto>> GetJobTitlesAsync(Guid tenantId, Guid? departmentId = null, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(UpdateUserRequest request, CancellationToken cancellationToken = default);
     Task SetActiveAsync(Guid userId, bool isActive, Guid? modifiedByUserId, CancellationToken cancellationToken = default);

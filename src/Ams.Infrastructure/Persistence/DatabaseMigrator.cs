@@ -347,6 +347,19 @@ public sealed partial class DatabaseMigrator
         new("0292_Tiered_Quick_Search", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0100_TieredQuickSearch.sql")),
         new("0293_Submission_Opportunity_LOB_Synchronization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0101_SubmissionOpportunityLobSynchronization.sql")),
         new("0294_Document_Intake_Submission_Promotion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0102_DocumentIntakeSubmissionPromotion.sql")),
+        new("0295_Enterprise_Policy_Endorsement_Catalog", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0103_EnterprisePolicyEndorsementCatalog.sql")),
+        new("0296_Enterprise_Policy_Endorsement_Catalog_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0104_EnterprisePolicyEndorsementCatalogCompletion.sql")),
+        new("0297_Enterprise_Policy_Endorsement_Review_Status_Normalization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0105_EnterprisePolicyEndorsementReviewStatusNormalization.sql")),
+        new("0298_Enterprise_Policy_Endorsement_Type_Normalization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0106_EnterprisePolicyEndorsementTypeNormalization.sql")),
+        new("0299_Enterprise_Policy_Endorsement_InReview_Decisions", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0107_EnterprisePolicyEndorsementInReviewDecisions.sql")),
+        new("0300_Enterprise_Policy_Endorsement_Type_Aliases", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0108_EnterprisePolicyEndorsementTypeAliases.sql")),
+        new("0301_Enterprise_Policy_Endorsement_Approval_And_Rfi_Routing", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0109_EnterprisePolicyEndorsementApprovalAndRfiRouting.sql")),
+        new("0302_Enterprise_Policy_Endorsement_Document_Work_Definitions", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0110_EnterprisePolicyEndorsementDocumentWorkDefinitions.sql")),
+        new("0303_Enterprise_Policy_Endorsement_Conditional_Approval", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0111_EnterprisePolicyEndorsementConditionalApproval.sql")),
+        new("0304_Enterprise_IAM_Job_Title_Catalog", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0112_EnterpriseIamJobTitleCatalog.sql")),
+        new("0304A_Enterprise_Department_Prerequisites", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentPrerequisites.sql")),
+        new("0305_Enterprise_Department_Job_Title_Mapping", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentJobTitleMapping.sql")),
+        new("0306_Enterprise_Agency_Team_Prerequisite", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0114_EnterpriseAgencyTeamPrerequisite.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
