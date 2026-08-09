@@ -45,7 +45,7 @@ public sealed class ExceptionHandlingMiddleware
             _logger.LogInformation(ex, "The requested resource was not found.");
             await WriteProblemAsync(context, HttpStatusCode.NotFound, "Resource not found", ex.Message);
         }
-        catch (SqlException ex) when (ex.Number is >= 52400 and <= 52599)
+        catch (SqlException ex) when (ex.Number is >= 52000 and <= 52599)
         {
             _logger.LogWarning(ex, "Persistence business or concurrency rule failed with SQL error {ErrorNumber}.", ex.Number);
             await WriteProblemAsync(context, HttpStatusCode.Conflict, "The request conflicts with the current workflow state", ex.Message);

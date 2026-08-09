@@ -146,7 +146,7 @@
                 <div class="bc-workflow-board">
                     @foreach (var status in WorkflowStatuses)
                     {
-                        var statusRows = FilteredRows.Where(r => string.Equals(r.DisplayStatus, status, StringComparison.OrdinalIgnoreCase)).ToList();
+                        var statusRows = FilteredRows.Where(r => string.Equals(r.BindWorkflowStatus, status, StringComparison.OrdinalIgnoreCase)).ToList();
                         <section class="bc-workflow-col">
                             <header><strong>@status</strong><span>@statusRows.Count</span></header>
                             @foreach (var row in statusRows)
@@ -174,7 +174,7 @@
                                 <th class="bc-num">Premium</th>
                                 <th>Effective</th>
                                 <th>Quote Expires</th>
-                                <th>Status</th>
+                                <th>Bind Status</th>
                                 <th>Producer</th>
                                 <th class="bc-actions-col"><span class="visually-hidden">Actions</span></th>
                             </tr>
@@ -197,7 +197,7 @@
                                     <td class="bc-num">@row.AnnualPremium.ToString("C0")</td>
                                     <td>@DateCell(row.EffectiveDate)</td>
                                     <td>@ExpiryCell(row)</td>
-                                    <td>@StatusChip(row.DisplayStatus)</td>
+                                    <td>@StatusChip(row.BindWorkflowStatus)</td>
                                     <td>@Display(row.ProducerName)</td>
                                     <td class="bc-actions-col" @onclick:stopPropagation="true">@GridActions(row)</td>
                                 </tr>
@@ -221,7 +221,7 @@
                         <h2 class="bc-drawer-acct">@Display(_selected.AccountName)</h2>
                         <span class="bc-drawer-meta">@Display(_selected.SubmissionNumber) - @Display(_selected.QuoteNumber)</span>
                     </div>
-                    @StatusChip(_selected.DisplayStatus)
+                    @StatusChip(_selected.BindWorkflowStatus)
                 </div>
                 <div class="bc-drawer-body">
                     <h3 class="bc-drawer-sec-head">Bind Details</h3>
@@ -513,15 +513,15 @@
     int BoundCount => _rows.Count(IsBound);
     int ExpiringCount => _rows.Count(IsExpiringSoon);
     decimal VisiblePremium => FilteredRows.Sum(x => x.AnnualPremium);
-    IEnumerable<string> StatusFilterOptions => _rows.Select(r => r.DisplayStatus).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).Prepend(string.Empty);
+    IEnumerable<string> StatusFilterOptions => _rows.Select(r => r.BindWorkflowStatus).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).Prepend(string.Empty);
     IEnumerable<string> LineOptions => _rows.Select(r => r.LineOfBusiness).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
-    IEnumerable<string> WorkflowStatuses => _rows.Select(r => r.DisplayStatus).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
+    IEnumerable<string> WorkflowStatuses => _rows.Select(r => r.BindWorkflowStatus).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
     IEnumerable<BindStatusTransitionDto> CarrierResponseTransitions => _bindDetail?.AllowedTransitions.Where(x => x.RequiresCarrierResponse) ?? [];
     bool CanRequestApproval => _bindDetail is not null && _bindDetail.AllowedTransitions.Any(x => x.ToStatusCode == "PendingApproval") && !_bindDetail.Approvals.Any(x => x.StatusCode == "Pending");
     bool CanPrepareBinderPackage => _bindDetail?.IsReadyToSubmit == true;
     bool CanReviewCarrierBinder => _bindDetail?.Request.ConfirmationCertified == true && _bindDetail.Request.BindStatusCode is "BinderReceived" or "Approved" or "BinderAccepted" or "PolicyGenerationQueued" or "PolicyCreated";
     bool CanGeneratePolicy => _bindDetail?.BinderReview?.StatusCode is "Accepted" or "GenerationQueued" && (_bindDetail.PolicyGeneration is null || _bindDetail.PolicyGeneration.StatusCode == "Failed");
-    IEnumerable<BreakdownItem> StatusBreakdown => BuildBreakdown(FilteredRows.Select(r => r.DisplayStatus));
+    IEnumerable<BreakdownItem> StatusBreakdown => BuildBreakdown(FilteredRows.Select(r => r.BindWorkflowStatus));
     IEnumerable<BreakdownItem> LineBreakdown => BuildBreakdown(FilteredRows.Select(r => r.LineOfBusiness));
     IEnumerable<BindMetric> Metrics =>
     [
@@ -540,10 +540,10 @@
 
     IEnumerable<BindQueueRow> FilteredRows => _rows
         .Where(MatchesKpi)
-        .Where(r => string.IsNullOrWhiteSpace(_statusFilter) || string.Equals(r.DisplayStatus, _statusFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(r => string.IsNullOrWhiteSpace(_statusFilter) || string.Equals(r.BindWorkflowStatus, _statusFilter, StringComparison.OrdinalIgnoreCase))
         .Where(r => string.IsNullOrWhiteSpace(_lineFilter) || string.Equals(r.LineOfBusiness, _lineFilter, StringComparison.OrdinalIgnoreCase))
         .Where(r => string.IsNullOrWhiteSpace(_search) || MatchesSearch(r, _search.Trim()))
-        .OrderBy(r => r.DisplayStatus)
+        .OrderBy(r => r.BindWorkflowStatus)
         .ThenBy(r => r.QuoteExpiresDateUtc)
         .ThenBy(r => r.AccountName);
 
@@ -565,7 +565,8 @@
                         || acceptance.QuoteId != requestedRow.QuoteId
                         || acceptance.ProposalId != RequestedProposalId
                         || acceptance.CustomerAuthorizationId != RequestedAuthorizationId
-                        || acceptance.StatusCode is not ("Accepted" or "BindRequested"))
+                        || acceptance.StatusCode != "Accepted"
+                        || acceptance.PolicyBindTransactionId.HasValue)
                     {
                         await ShowToastAsync("Bind authorization unavailable", "The persisted client acceptance no longer matches this proposal, quote, or customer authorization.", "enterprise-toast-danger");
                         return;
@@ -636,7 +637,7 @@
         }
     }
 
-    static bool MatchesSearch(BindQueueRow row, string term) => Contains(row.AccountName, term) || Contains(row.SubmissionNumber, term) || Contains(row.QuoteNumber, term) || Contains(row.CarrierName, term) || Contains(row.LineOfBusiness, term) || Contains(row.ProducerName, term) || Contains(row.DisplayStatus, term) || Contains(row.PolicyNumber, term);
+    static bool MatchesSearch(BindQueueRow row, string term) => Contains(row.AccountName, term) || Contains(row.SubmissionNumber, term) || Contains(row.QuoteNumber, term) || Contains(row.CarrierName, term) || Contains(row.LineOfBusiness, term) || Contains(row.ProducerName, term) || Contains(row.BindWorkflowStatus, term) || Contains(row.QuoteStatus, term) || Contains(row.PolicyNumber, term);
     static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
 
     bool MatchesKpi(BindQueueRow row) => _kpiFilter switch
@@ -932,8 +933,15 @@
     async Task OpenBindDialogAsync(BindQueueRow row, Guid? proposalId, Guid? customerAuthorizationId, ClientAcceptanceDto? acceptance)
     {
         if (_currentUser is null) return;
+        if (row.BindTransaction is not null)
+        {
+            await SelectRow(row);
+            await ShowToastAsync("Bind request already exists", $"Continue the existing {row.BindWorkflowStatus} bind workflow for {row.QuoteNumber}.", "enterprise-toast-danger");
+            return;
+        }
+
         acceptance ??= (await Api.GetClientAcceptancesAsync(row.SubmissionId, _currentUser.TenantId) ?? [])
-            .Where(item => item.QuoteId == row.QuoteId && item.StatusCode is "Accepted" or "BindRequested")
+            .Where(item => item.QuoteId == row.QuoteId && item.StatusCode == "Accepted" && !item.PolicyBindTransactionId.HasValue)
             .OrderByDescending(item => item.CreatedDateUtc)
             .FirstOrDefault();
         proposalId ??= acceptance?.ProposalId;
@@ -1129,7 +1137,7 @@
         public DateTime QuoteExpiresDateUtc { get; set; }
         public PolicyBindTransactionDto? BindTransaction { get; set; }
         public string? PolicyNumber => BindTransaction?.PolicyNumber;
-        public string DisplayStatus => BindTransaction?.BindStatusName ?? QuoteStatus;
+        public string BindWorkflowStatus => BindTransaction?.BindStatusName ?? "Not requested";
 
         public static BindQueueRow From(BindQueueItemDto item) => new()
         {

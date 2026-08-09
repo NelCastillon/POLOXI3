@@ -24,6 +24,7 @@ public interface IKnowledgeQueryRepository
     Task<PagedResult<KnowledgeAuditDto>> SearchAuditAsync(SearchKnowledgeAuditQuery query, CancellationToken cancellationToken = default);
     Task<PagedResult<KnowledgeImportDto>> SearchImportsAsync(SearchKnowledgeImportsQuery query, CancellationToken cancellationToken = default);
     Task<PagedResult<KnowledgePublicationDto>> SearchPublicationsAsync(SearchKnowledgePublicationsQuery query, CancellationToken cancellationToken = default);
+    Task<PagedResult<WorkflowGuideStepDto>> SearchWorkflowGuideStepsAsync(SearchWorkflowGuideStepsQuery query, CancellationToken cancellationToken = default);
     Task<PagedResult<KnowledgeValidationRuleDto>> SearchValidationRulesAsync(Guid tenantId, string? searchTerm, string? statusCode, int pageNumber, int pageSize, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<KnowledgeLookupDto>> GetLookupsAsync(GetKnowledgeLookupsQuery query, CancellationToken cancellationToken = default);
 }

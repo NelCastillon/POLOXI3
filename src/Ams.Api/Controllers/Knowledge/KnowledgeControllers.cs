@@ -21,6 +21,19 @@ public abstract class KnowledgeControllerBase : ControllerBase
         ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
 }
 
+[Route("api/knowledge/workflow-guide")]
+[Authorize(Policy = KnowledgePolicies.ConceptsRead)]
+public sealed class KnowledgeWorkflowGuideController : KnowledgeControllerBase
+{
+    private readonly IKnowledgeQueryRepository _queries;
+
+    public KnowledgeWorkflowGuideController(IKnowledgeQueryRepository queries) => _queries = queries;
+
+    [HttpGet]
+    public async Task<IActionResult> Search([FromQuery] string? searchTerm, [FromQuery] string? moduleCode, [FromQuery] string? stageName, [FromQuery] bool includeOptional = true, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 100, CancellationToken cancellationToken = default)
+        => Ok(await _queries.SearchWorkflowGuideStepsAsync(new SearchWorkflowGuideStepsQuery(TenantId, searchTerm, moduleCode, stageName, includeOptional, pageNumber, pageSize), cancellationToken));
+}
+
 [Route("api/knowledge/dashboard")]
 [Authorize(Policy = KnowledgePolicies.ConceptsRead)]
 public sealed class KnowledgeDashboardController : KnowledgeControllerBase

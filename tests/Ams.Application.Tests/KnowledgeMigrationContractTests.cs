@@ -16,13 +16,15 @@ public sealed class KnowledgeMigrationContractTests
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(6, resources.Length);
+        Assert.Equal(8, resources.Length);
         Assert.Contains("0001_InsuranceSemanticLayerFoundation", resources[0], StringComparison.Ordinal);
         Assert.Contains("0002_InsuranceSemanticLayerMvpCatalog", resources[1], StringComparison.Ordinal);
         Assert.Contains("0003_ImportStagingLifecycle", resources[2], StringComparison.Ordinal);
         Assert.Contains("0004_EnterpriseInsuranceCatalog", resources[3], StringComparison.Ordinal);
         Assert.Contains("0005_GovernedTerminologyAndSearch", resources[4], StringComparison.Ordinal);
         Assert.Contains("0006_IntelligenceOntologyCompletion", resources[5], StringComparison.Ordinal);
+        Assert.Contains("0007_WorkflowKnowledgeBase", resources[6], StringComparison.Ordinal);
+        Assert.Contains("0008_WorkflowKnowledgeNavigation", resources[7], StringComparison.Ordinal);
 
         var foundation = Read(assembly, resources[0]);
         Assert.Contains("CREATE SCHEMA knowledge", foundation, StringComparison.OrdinalIgnoreCase);

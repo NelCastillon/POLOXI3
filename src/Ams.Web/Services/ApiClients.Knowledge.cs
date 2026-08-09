@@ -14,6 +14,9 @@ public sealed partial class ApiClient
     public Task<KnowledgeDashboardDto?> GetKnowledgeDashboardAsync(CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<KnowledgeDashboardDto>("api/knowledge/dashboard", cancellationToken);
 
+    public Task<PagedResult<WorkflowGuideStepDto>?> SearchWorkflowGuideStepsAsync(string? searchTerm = null, string? moduleCode = null, string? stageName = null, bool includeOptional = true, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<WorkflowGuideStepDto>>($"api/knowledge/workflow-guide?searchTerm={Encode(searchTerm)}&moduleCode={Encode(moduleCode)}&stageName={Encode(stageName)}&includeOptional={includeOptional}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
     public Task<PagedResult<ConceptSchemeDto>?> SearchKnowledgeSchemesAsync(string? searchTerm = null, string? statusCode = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ConceptSchemeDto>>($"api/knowledge/schemes?searchTerm={Encode(searchTerm)}&statusCode={Encode(statusCode)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 

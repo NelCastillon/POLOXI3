@@ -3090,6 +3090,7 @@ SELECT * FROM Submissions.BindValidationResult WHERE PolicyBindTransactionId = @
 DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0);
 IF @OldStatusCode IS NULL THROW 52100, 'Bind request was not found.', 1;
 IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindStatus WHERE TenantId = @TenantId AND StatusCode = @StatusCode AND IsActive = 1 AND IsDeleted = 0) THROW 52101, 'Bind request status is not configured.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.BindStatusTransition WHERE TenantId = @TenantId AND FromStatusCode = @OldStatusCode AND ToStatusCode = @StatusCode AND IsActive = 1 AND IsDeleted = 0) THROW 52103, 'The requested bind status transition is not configured.', 1;
 UPDATE Submissions.PolicyBindTransaction SET BindStatusCode = @StatusCode,
     PreparedDateUtc = CASE WHEN @StatusCode = N'Ready' THEN COALESCE(PreparedDateUtc, SYSUTCDATETIME()) ELSE PreparedDateUtc END,
     SubmittedDateUtc = CASE WHEN @StatusCode = N'Submitted' THEN COALESCE(SubmittedDateUtc, SYSUTCDATETIME()) ELSE SubmittedDateUtc END,
@@ -3110,10 +3111,12 @@ VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, @OldStatusCode, @StatusCod
         const string sql = """
 IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0) THROW 52100, 'Bind request was not found.', 1;
 IF NOT EXISTS (SELECT 1 FROM Submissions.SubmissionReferenceOption WHERE TenantId = @TenantId AND OptionGroup = N'BindApprovalReason' AND OptionCode = @ApprovalReasonCode AND IsActive = 1 AND IsDeleted = 0) THROW 52102, 'Approval reason is not configured.', 1;
+DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0);
+IF NOT EXISTS (SELECT 1 FROM Submissions.BindStatusTransition WHERE TenantId = @TenantId AND FromStatusCode = @OldStatusCode AND ToStatusCode = N'PendingApproval' AND IsActive = 1 AND IsDeleted = 0) THROW 52103, 'This bind request cannot transition to pending approval.', 1;
+IF EXISTS (SELECT 1 FROM Submissions.BindApproval WHERE TenantId = @TenantId AND PolicyBindTransactionId = @PolicyBindTransactionId AND StatusCode = N'Pending' AND IsDeleted = 0) THROW 52104, 'A pending bind approval already exists.', 1;
 DECLARE @Id UNIQUEIDENTIFIER = NEWID();
 INSERT INTO Submissions.BindApproval (BindApprovalId, TenantId, PolicyBindTransactionId, ApprovalReasonCode, StatusCode, RequestedByUserId, RequestedDateUtc, AssignedApproverUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES (@Id, @TenantId, @PolicyBindTransactionId, @ApprovalReasonCode, N'Pending', @RequestedByUserId, SYSUTCDATETIME(), @AssignedApproverUserId, SYSUTCDATETIME(), @RequestedByUserId, 0);
-DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId);
 UPDATE Submissions.PolicyBindTransaction SET ApprovalRequired = 1, BindStatusCode = N'PendingApproval', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RequestedByUserId WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId;
 INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, @OldStatusCode, N'PendingApproval', N'Bind approval requested.', SYSUTCDATETIME(), @RequestedByUserId, SYSUTCDATETIME(), @RequestedByUserId, 0);
@@ -3141,11 +3144,18 @@ VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, N'PendingApproval', CASE W
     public async Task RecordBindCarrierResponseAsync(Guid policyBindTransactionId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = """
-IF NOT EXISTS (SELECT 1 FROM Submissions.PolicyBindTransaction WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0) THROW 52100, 'Bind request was not found.', 1;
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+DECLARE @OldStatusCode NVARCHAR(50) = (SELECT BindStatusCode FROM Submissions.PolicyBindTransaction WITH (UPDLOCK, HOLDLOCK) WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId AND IsDeleted = 0);
+IF @OldStatusCode IS NULL THROW 52100, 'Bind request was not found.', 1;
+IF NOT EXISTS (SELECT 1 FROM Submissions.BindStatusTransition WHERE TenantId = @TenantId AND FromStatusCode = @OldStatusCode AND ToStatusCode = @StatusCode AND RequiresCarrierResponse = 1 AND IsActive = 1 AND IsDeleted = 0) THROW 52105, 'The carrier response transition is not configured for the current bind status.', 1;
 INSERT INTO Submissions.BindCarrierMessage (BindCarrierMessageId, TenantId, PolicyBindTransactionId, DirectionCode, MessageTypeCode, DeliveryMethodCode, ExternalMessageId, Subject, MessageBody, StatusCode, SentReceivedDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, N'Inbound', @MessageTypeCode, @DeliveryMethodCode, @ExternalMessageId, @Subject, @MessageBody, @StatusCode, SYSUTCDATETIME(), SYSUTCDATETIME(), @RecordedByUserId, 0);
-UPDATE Submissions.PolicyBindTransaction SET CarrierReferenceNumber = COALESCE(NULLIF(@CarrierReferenceNumber, N''), CarrierReferenceNumber), BinderNumber = COALESCE(NULLIF(@BinderNumber, N''), BinderNumber), FinalPremium = COALESCE(@FinalPremium, FinalPremium), ConfirmationDocumentId = COALESCE(@ConfirmationDocumentId, ConfirmationDocumentId), ConfirmationSourceCode = COALESCE(NULLIF(@ConfirmationSourceCode, N''), ConfirmationSourceCode), ConfirmationCertified = CASE WHEN @ConfirmationCertified = 1 THEN 1 ELSE ConfirmationCertified END, ConfirmationNotes = COALESCE(NULLIF(@MessageBody, N''), ConfirmationNotes), ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RecordedByUserId
+UPDATE Submissions.PolicyBindTransaction SET BindStatusCode = @StatusCode, CarrierReferenceNumber = COALESCE(NULLIF(@CarrierReferenceNumber, N''), CarrierReferenceNumber), BinderNumber = COALESCE(NULLIF(@BinderNumber, N''), BinderNumber), FinalPremium = COALESCE(@FinalPremium, FinalPremium), ConfirmationDocumentId = COALESCE(@ConfirmationDocumentId, ConfirmationDocumentId), ConfirmationSourceCode = COALESCE(NULLIF(@ConfirmationSourceCode, N''), ConfirmationSourceCode), ConfirmationCertified = CASE WHEN @ConfirmationCertified = 1 THEN 1 ELSE ConfirmationCertified END, ConfirmationNotes = COALESCE(NULLIF(@MessageBody, N''), ConfirmationNotes), ReceivedDateUtc = CASE WHEN @StatusCode = N'Received' THEN COALESCE(ReceivedDateUtc, SYSUTCDATETIME()) ELSE ReceivedDateUtc END, ApprovedDateUtc = CASE WHEN @StatusCode = N'Approved' THEN COALESCE(ApprovedDateUtc, SYSUTCDATETIME()) ELSE ApprovedDateUtc END, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @RecordedByUserId
 WHERE PolicyBindTransactionId = @PolicyBindTransactionId AND TenantId = @TenantId;
+INSERT INTO Submissions.BindStatusHistory (BindStatusHistoryId, TenantId, PolicyBindTransactionId, OldStatusCode, NewStatusCode, Comments, ChangedDateUtc, ChangedByUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+VALUES (NEWID(), @TenantId, @PolicyBindTransactionId, @OldStatusCode, @StatusCode, @MessageBody, SYSUTCDATETIME(), @RecordedByUserId, SYSUTCDATETIME(), @RecordedByUserId, 0);
+COMMIT TRANSACTION;
 """;
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { PolicyBindTransactionId = policyBindTransactionId, request.TenantId, request.StatusCode, request.MessageTypeCode, request.DeliveryMethodCode, request.ExternalMessageId, request.Subject, request.MessageBody, request.CarrierReferenceNumber, request.BinderNumber, request.FinalPremium, request.ConfirmationDocumentId, request.RecordedByUserId, request.ConfirmationSourceCode, request.ConfirmationCertified }, cancellationToken: cancellationToken));
@@ -6582,13 +6592,14 @@ SELECT @CallbackId;";
 SELECT p.ProposalId,
        p.SubmissionId,
        p.TenantId,
-       CAST(CASE WHEN p.Status = N'Accepted' AND selectedQuote.QuoteId IS NOT NULL AND authorization.CustomerAuthorizationId IS NOT NULL AND acceptance.ClientAcceptanceId IS NOT NULL AND selectedQuote.IsBindable = 1 AND selectedQuote.ExpiresDateUtc > SYSUTCDATETIME() AND acceptance.QuoteFingerprint = selectedQuote.CurrentFingerprint THEN 1 ELSE 0 END AS bit) AS CanRequestBind,
+       CAST(CASE WHEN p.Status = N'Accepted' AND selectedQuote.QuoteId IS NOT NULL AND authorization.CustomerAuthorizationId IS NOT NULL AND acceptance.ClientAcceptanceId IS NOT NULL AND activeBind.PolicyBindTransactionId IS NULL AND selectedQuote.IsBindable = 1 AND selectedQuote.ExpiresDateUtc > SYSUTCDATETIME() AND acceptance.QuoteFingerprint = selectedQuote.CurrentFingerprint THEN 1 ELSE 0 END AS bit) AS CanRequestBind,
        selectedQuote.QuoteId AS SelectedQuoteId,
        authorization.CustomerAuthorizationId,
        CASE WHEN p.Status <> N'Accepted' THEN N'The customer must accept the presented proposal before requesting bind.'
             WHEN selectedQuote.QuoteId IS NULL THEN N'Customer acceptance must identify a proposal quote.'
             WHEN authorization.CustomerAuthorizationId IS NULL THEN N'Customer authorization must be recorded before requesting bind.'
              WHEN acceptance.ClientAcceptanceId IS NULL THEN N'A compliant client acceptance record is required before requesting bind.'
+             WHEN activeBind.PolicyBindTransactionId IS NOT NULL THEN CONCAT(N'A bind request already exists in ', COALESCE(activeBind.BindStatusName, activeBind.BindStatusCode), N'. Continue the existing bind workflow.')
              WHEN selectedQuote.IsBindable = 0 THEN N'The accepted quote is no longer bindable.'
              WHEN selectedQuote.ExpiresDateUtc <= SYSUTCDATETIME() THEN N'The accepted quote has expired.'
              WHEN acceptance.QuoteFingerprint <> selectedQuote.CurrentFingerprint THEN N'Quote terms changed after acceptance; client reconfirmation is required.'
@@ -6618,9 +6629,19 @@ OUTER APPLY
     FROM Submissions.ClientAcceptance ca
     WHERE ca.TenantId = p.TenantId AND ca.SubmissionId = p.SubmissionId AND ca.ProposalId = p.ProposalId
       AND ca.QuoteId = selectedQuote.QuoteId AND ca.CustomerAuthorizationId = authorization.CustomerAuthorizationId
-      AND ca.StatusCode = N'Accepted' AND ca.IsDeleted = 0
+      AND ca.StatusCode = N'Accepted' AND ca.PolicyBindTransactionId IS NULL AND ca.IsDeleted = 0
     ORDER BY ca.CreatedDateUtc DESC
 ) acceptance
+OUTER APPLY
+(
+    SELECT TOP 1 pbt.PolicyBindTransactionId, pbt.BindStatusCode, COALESCE(pbs.StatusName, pbt.BindStatusCode) AS BindStatusName
+    FROM Submissions.PolicyBindTransaction pbt
+    LEFT JOIN Submissions.PolicyBindStatus pbs
+      ON pbs.TenantId = pbt.TenantId AND pbs.StatusCode = pbt.BindStatusCode AND pbs.IsActive = 1 AND pbs.IsDeleted = 0
+    WHERE pbt.TenantId = p.TenantId AND pbt.SubmissionId = p.SubmissionId AND pbt.QuoteId = selectedQuote.QuoteId
+      AND pbt.IsDeleted = 0 AND (pbs.PolicyBindStatusId IS NULL OR pbs.IsTerminal = 0)
+    ORDER BY pbt.CreatedDateUtc DESC, pbt.PolicyBindTransactionId DESC
+) activeBind
 WHERE p.ProposalId = @ProposalId AND p.TenantId = @TenantId AND p.IsDeleted = 0;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var result = await cn.QuerySingleOrDefaultAsync<ProposalBindContinuationDto>(new CommandDefinition(sql, new { ProposalId = proposalId, TenantId = tenantId }, cancellationToken: cancellationToken));
@@ -7554,13 +7575,14 @@ SELECT CAST(CASE WHEN EXISTS
       AND q.QuoteId = @QuoteId
       AND q.IsDeleted = 0
       AND q.IsBindable = 1
+       AND q.IsSelected = 1
       AND q.ExpiresDateUtc > SYSUTCDATETIME()
-      AND q.Status IN (N'Selected', N'Presented', N'Approved for Presentation')
+       AND q.Status = N'Selected'
 ) THEN 1 ELSE 0 END AS bit);", new { request.TenantId, SubmissionId = submissionId, QuoteId = quoteId }, cancellationToken: cancellationToken));
 
             if (!quoteIsBindable)
             {
-                throw new InvalidOperationException("Quote-bound policy creation requires a non-expired bindable quote that has been approved, presented, or selected.");
+                throw new InvalidOperationException("A bind request requires the submission's selected, non-expired, bindable quote.");
             }
 
             if (!request.CustomerAuthorizationId.HasValue && string.IsNullOrWhiteSpace(request.CustomerAuthorizationMethodCode))
@@ -7631,9 +7653,32 @@ SELECT CAST(CASE WHEN EXISTS
         }
 
         const string bindRequestSql = @"
+SET XACT_ABORT ON;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+BEGIN TRANSACTION;
+
 DECLARE @PolicyBindTransactionId UNIQUEIDENTIFIER = NEWID();
 DECLARE @RequestedDateUtc DATETIME2 = SYSUTCDATETIME();
 DECLARE @CustomerAuthorizationId UNIQUEIDENTIFIER = @CustomerAuthorizationIdIn;
+
+IF @SubmissionId IS NOT NULL
+   AND @QuoteId IS NOT NULL
+   AND EXISTS
+   (
+       SELECT 1
+       FROM Submissions.PolicyBindTransaction pbt WITH (UPDLOCK, HOLDLOCK)
+       LEFT JOIN Submissions.PolicyBindStatus pbs
+         ON pbs.TenantId = pbt.TenantId
+        AND pbs.StatusCode = pbt.BindStatusCode
+        AND pbs.IsActive = 1
+        AND pbs.IsDeleted = 0
+       WHERE pbt.TenantId = @TenantId
+         AND pbt.SubmissionId = @SubmissionId
+         AND pbt.QuoteId = @QuoteId
+         AND pbt.IsDeleted = 0
+         AND (pbs.PolicyBindStatusId IS NULL OR pbs.IsTerminal = 0)
+   )
+    THROW 52072, 'An active bind request already exists for the selected submission quote. Continue the existing bind workflow.', 1;
 
 IF @QuoteId IS NOT NULL AND @QuoteId <> '00000000-0000-0000-0000-000000000000'
 BEGIN
@@ -7647,6 +7692,22 @@ BEGIN
     END
     ELSE IF NOT EXISTS (SELECT 1 FROM Submissions.CustomerAuthorization WHERE CustomerAuthorizationId = @CustomerAuthorizationId AND TenantId = @TenantId AND SubmissionId = @SubmissionId AND QuoteId = @QuoteId AND IsDeleted = 0)
         THROW 52071, 'Customer authorization does not match the selected submission quote.', 1;
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.ClientAcceptance WITH (UPDLOCK, HOLDLOCK)
+        WHERE TenantId = @TenantId
+          AND SubmissionId = @SubmissionId
+          AND QuoteId = @QuoteId
+          AND ProposalId = @ProposalId
+          AND CustomerAuthorizationId = @CustomerAuthorizationId
+          AND ClientAcceptanceId = @ClientAcceptanceId
+          AND StatusCode = N'Accepted'
+          AND PolicyBindTransactionId IS NULL
+          AND IsDeleted = 0
+    )
+        THROW 52073, 'The accepted quote authorization is no longer eligible for a new bind request. Continue the existing bind workflow or record a new customer acceptance.', 1;
 END;
 
 INSERT INTO Submissions.PolicyBindTransaction
@@ -7684,8 +7745,17 @@ SET PolicyBindTransactionId = @PolicyBindTransactionId,
     VersionNumber = VersionNumber + 1,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = COALESCE(@BoundByUserId, @RequestedByUserId)
-WHERE TenantId = @TenantId AND SubmissionId = @SubmissionId AND ProposalId = @ProposalId AND QuoteId = @QuoteId
-  AND CustomerAuthorizationId = @CustomerAuthorizationId AND StatusCode IN (N'Accepted', N'BindRequested') AND IsDeleted = 0;
+WHERE ClientAcceptanceId = @ClientAcceptanceId
+  AND TenantId = @TenantId
+  AND SubmissionId = @SubmissionId
+  AND ProposalId = @ProposalId
+  AND QuoteId = @QuoteId
+  AND CustomerAuthorizationId = @CustomerAuthorizationId
+  AND StatusCode = N'Accepted'
+  AND PolicyBindTransactionId IS NULL
+  AND IsDeleted = 0;
+IF @@ROWCOUNT <> 1
+    THROW 52073, 'The accepted quote authorization was already used or changed before bind creation completed.', 1;
 
 INSERT INTO Submissions.ClientAcceptanceAuditEvent (ClientAcceptanceAuditEventId, TenantId, ClientAcceptanceId, EventCode, EventDetail, EventDateUtc, ActorUserId)
 SELECT NEWID(), @TenantId, ClientAcceptanceId, CASE WHEN @CreatesPolicy = 1 THEN N'CarrierBound' ELSE N'BindRequested' END,
@@ -7714,6 +7784,8 @@ WHERE SubmissionId = @SubmissionId
 INSERT INTO Submissions.SubmissionActionLog (ActionLogId, SubmissionId, TenantId, ActionCode, Notes, CreatedDateUtc, RelatedEntityName, RelatedEntityId, ActionSource, IsDeleted)
 SELECT NEWID(), @SubmissionId, @TenantId, CASE WHEN @CreatesPolicy = 1 THEN N'CarrierConfirmationRecorded' ELSE N'BindRequestRecorded' END, CONCAT(CASE WHEN @CreatesPolicy = 1 THEN N'Carrier confirmation recorded with status ' ELSE N'Bind request recorded with status ' END, @BindStatusCode, N'. ', COALESCE(@PolicySourceReason, N''), CASE WHEN NULLIF(@PolicySourceNotes, N'') IS NULL THEN N'' ELSE CONCAT(N' Notes: ', @PolicySourceNotes) END), SYSUTCDATETIME(), N'PolicyBindTransaction', @PolicyBindTransactionId, N'User', 0
 WHERE @SubmissionId IS NOT NULL;
+
+COMMIT TRANSACTION;
 
 SELECT @PolicyBindTransactionId;";
 

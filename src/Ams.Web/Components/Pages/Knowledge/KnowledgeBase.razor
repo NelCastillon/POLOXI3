@@ -1,0 +1,143 @@
+@page "/knowledge-base"
+@attribute [Authorize(Policy = Ams.Web.Security.KnowledgePolicies.ConceptsRead)]
+@using Ams.Knowledge.Application.Features.Knowledge
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Knowledge Base</PageTitle>
+
+<div class="kb-page">
+    <AppPageHeader Title="Knowledge Base" Subtitle="Search the complete lead-to-renewal operating workflow, exact pages, actions, statuses, next moves, and controls" Icon="bi-search-heart">
+        <Actions><button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions>
+    </AppPageHeader>
+
+    <section class="kb-hero">
+        <div><span class="kb-eyebrow">Agency operations guide</span><h2>What should the user do next?</h2><p>Search by process, status, page, button, carrier response, blocker, endorsement, renewal, or outcome. Every result is loaded from the Knowledge database.</p></div>
+        <div class="kb-hero-stats"><div><strong>@_totalCount</strong><span>Workflow steps</span></div><div><strong>@ModuleCount</strong><span>Business areas</span></div><div><strong>@OptionalCount</strong><span>Alternate paths</span></div></div>
+    </section>
+
+    <section class="kb-filter-panel" aria-label="Knowledge Base filters">
+        <div class="kb-search"><i class="bi bi-search"></i><input @bind="_search" @bind:event="oninput" @onkeydown="HandleSearchKey" placeholder="Search: create lead, Request Quote, Selected, binder, endorsement, renewal..." aria-label="Search workflow guidance" /></div>
+        <select @bind="_module" aria-label="Filter by business area"><option value="">All business areas</option>@foreach (var module in _modules) { <option value="@module.Code">@module.Name</option> }</select>
+        <select @bind="_stage" aria-label="Filter by workflow stage"><option value="">All stages</option>@foreach (var stage in _stages) { <option value="@stage">@stage</option> }</select>
+        <label class="kb-check"><input type="checkbox" @bind="_includeOptional" /> Include alternate paths</label>
+        <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync"><i class="bi bi-search"></i> Search</button>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearAsync"><i class="bi bi-x-circle"></i> Clear</button>
+    </section>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i> @_loadError</div>
+    }
+    else if (_loading)
+    {
+        <div class="kb-empty"><AppSpinner /><span>Searching workflow knowledge...</span></div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="kb-empty"><i class="bi bi-search"></i><strong>No workflow steps matched</strong><span>Try a page name, action label, status, or business process.</span></div>
+    }
+    else
+    {
+        <section class="kb-results-head"><div><span>Lead-to-renewal workflow</span><strong>@_items.Count of @_totalCount matching step(s)</strong></div><span>Ordered by the user journey</span></section>
+        <div class="kb-timeline">
+            @foreach (var group in _items.GroupBy(x => x.StageName))
+            {
+                <section class="kb-stage">
+                    <header><span class="kb-stage-icon"><i class="bi @StageIcon(group.First().ModuleCode)"></i></span><div><span>@group.First().ModuleDisplayName</span><h2>@group.Key</h2></div><strong>@group.Count() step(s)</strong></header>
+                    <div class="kb-step-list">
+                        @foreach (var step in group)
+                        {
+                            <article class="kb-step @(step.IsOptional ? "kb-step--optional" : null)">
+                                <div class="kb-step-number">@(step.SequenceNumber / 10)</div>
+                                <div class="kb-step-content">
+                                    <div class="kb-step-title"><div><span>@step.StepCode.Replace('_', ' ')</span><h3>@step.StepTitle</h3></div>@if (step.IsOptional) { <span class="kb-optional">Alternate path</span> }</div>
+                                    <p>@step.StepDescription</p>
+                                    <div class="kb-action-grid">
+                                        <div><span>Page</span><strong><i class="bi bi-window"></i> @step.PageName</strong><code>@step.PageRoute</code></div>
+                                        <div><span>Click or submit</span><strong><i class="bi bi-cursor"></i> @step.ActionLabel</strong><small>@step.ActionTypeCode</small></div>
+                                        <div><span>Status flow</span><strong class="kb-status-flow">@Status(step.FromStatusCode) <i class="bi bi-arrow-right"></i> @Status(step.ToStatusCode)</strong></div>
+                                    </div>
+                                    <div class="kb-guidance">
+                                        <div class="kb-guidance--result"><i class="bi bi-check2-circle"></i><span><strong>Expected result</strong>@step.ExpectedResult</span></div>
+                                        <div class="kb-guidance--next"><i class="bi bi-arrow-right-circle"></i><span><strong>Next user move</strong>@step.NextUserMove</span></div>
+                                        @if (!string.IsNullOrWhiteSpace(step.ValidationRequirements)) { <div class="kb-guidance--validation"><i class="bi bi-shield-check"></i><span><strong>Required before continuing</strong>@step.ValidationRequirements</span></div> }
+                                        @if (!string.IsNullOrWhiteSpace(step.AlternatePath)) { <div class="kb-guidance--alternate"><i class="bi bi-signpost-split"></i><span><strong>Exception or alternate route</strong>@step.AlternatePath</span></div> }
+                                    </div>
+                                    <div class="kb-step-footer"><span><i class="bi bi-database-check"></i> Database-backed guidance</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenStep(step)"><i class="bi bi-box-arrow-up-right"></i> Open Page</button></div>
+                                </div>
+                            </article>
+                        }
+                    </div>
+                </section>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<WorkflowGuideStepDto> _items = [];
+    private List<ModuleOption> _modules = [];
+    private List<string> _stages = [];
+    private string _search = string.Empty;
+    private string _module = string.Empty;
+    private string _stage = string.Empty;
+    private bool _includeOptional = true;
+    private bool _loading;
+    private string? _loadError;
+    private int _totalCount;
+    private int ModuleCount => _items.Select(x => x.ModuleCode).Distinct().Count();
+    private int OptionalCount => _items.Count(x => x.IsOptional);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Knowledge Base", "/knowledge-base"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var result = await Api.SearchWorkflowGuideStepsAsync(_search, _module, _stage, _includeOptional, pageSize: 250);
+            _items = (result?.Items ?? []).OrderBy(x => x.ModuleSequenceNumber).ThenBy(x => x.SequenceNumber).ToList();
+            _totalCount = result?.TotalCount ?? 0;
+            if (_modules.Count == 0 || _stages.Count == 0)
+            {
+                var catalog = await Api.SearchWorkflowGuideStepsAsync(pageSize: 250);
+                var all = catalog?.Items ?? [];
+                _modules = all.GroupBy(x => x.ModuleCode)
+                    .Select(group => new ModuleOption(group.Key, group.OrderBy(x => x.ModuleSequenceNumber).First().ModuleDisplayName, group.Min(x => x.ModuleSequenceNumber)))
+                    .OrderBy(x => x.SequenceNumber)
+                    .ThenBy(x => x.Name)
+                    .ToList();
+                _stages = all.Select(x => x.StageName).Distinct().OrderBy(x => all.Where(y => y.StageName == x).Min(y => y.SequenceNumber)).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load workflow knowledge: {ex.Message}";
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task ClearAsync() { _search = _module = _stage = string.Empty; _includeOptional = true; await LoadAsync(); }
+    private async Task HandleSearchKey(KeyboardEventArgs args) { if (args.Key == "Enter") await LoadAsync(); }
+    private void OpenStep(WorkflowGuideStepDto step)
+    {
+        Nav.NavigateTo(step.NavigationRoute);
+    }
+
+    private static string Status(string? value) => string.IsNullOrWhiteSpace(value) ? "Start" : value;
+    private static string StageIcon(string module) => module switch
+    {
+        "CRM_LEAD" => "bi-person-plus", "CRM_OPPORTUNITY" => "bi-bullseye", "SUBMISSION" => "bi-file-earmark-text",
+        "SUBMISSION_MARKET" => "bi-building", "QUOTE_REQUEST" or "QUOTE" => "bi-receipt", "PROPOSAL" => "bi-file-earmark-richtext",
+        "CLIENT_ACCEPTANCE" => "bi-person-check", "BIND_REQUEST" => "bi-shield-check", "POLICY" => "bi-shield-fill-check",
+        "ENDORSEMENT" => "bi-pencil-square", "RENEWAL" => "bi-arrow-repeat", _ => "bi-signpost-split"
+    };
+    private sealed record ModuleOption(string Code, string Name, int SequenceNumber);
+}

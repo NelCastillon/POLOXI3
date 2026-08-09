@@ -56,6 +56,41 @@ SELECT * FROM #Filtered ORDER BY PreferredLabel, VersionNumber DESC OFFSET @Offs
         return await QueryPagedAsync<KnowledgeConceptDto>(sql, new { query.TenantId, query.ConceptSchemeId, query.SearchTerm, query.ConceptTypeCode, query.StatusCode, Offset = Offset(query.PageNumber, query.PageSize), PageSize = PageSize(query.PageSize) }, query.PageNumber, query.PageSize, cancellationToken);
     }
 
+    public async Task<PagedResult<WorkflowGuideStepDto>> SearchWorkflowGuideStepsAsync(SearchWorkflowGuideStepsQuery query, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+WITH RankedSteps AS
+(
+    SELECT WorkflowGuideStepId, WorkflowCode, StepCode, SequenceNumber, ModuleCode, ModuleSequenceNumber, ModuleDisplayName, StageName, StepTitle, StepDescription,
+           PageName, PageRoute, NavigationRoute, ActionLabel, ActionTypeCode, FromStatusCode, ToStatusCode, ExpectedResult, NextUserMove,
+           ValidationRequirements, AlternatePath, SearchKeywords, IsOptional, TenantId,
+           ROW_NUMBER() OVER (PARTITION BY WorkflowCode, StepCode ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END) AS ScopeRank
+    FROM knowledge.WorkflowGuideStep
+    WHERE IsDeleted = 0 AND IsActive = 1 AND (TenantId IS NULL OR TenantId = @TenantId)
+)
+    SELECT WorkflowGuideStepId, WorkflowCode, StepCode, SequenceNumber, ModuleCode, ModuleSequenceNumber, ModuleDisplayName, StageName, StepTitle, StepDescription,
+           PageName, PageRoute, NavigationRoute, ActionLabel, ActionTypeCode, FromStatusCode, ToStatusCode, ExpectedResult, NextUserMove,
+           ValidationRequirements, AlternatePath, SearchKeywords, IsOptional, TenantId
+    INTO #Filtered
+    FROM RankedSteps
+    WHERE ScopeRank = 1
+      AND (@ModuleCode IS NULL OR @ModuleCode = '' OR ModuleCode = @ModuleCode)
+      AND (@StageName IS NULL OR @StageName = '' OR StageName = @StageName)
+      AND (@IncludeOptional = 1 OR IsOptional = 0)
+      AND (@SearchTerm IS NULL OR @SearchTerm = ''
+           OR StepTitle LIKE '%' + @SearchTerm + '%' OR StepDescription LIKE '%' + @SearchTerm + '%'
+           OR PageName LIKE '%' + @SearchTerm + '%' OR PageRoute LIKE '%' + @SearchTerm + '%'
+           OR ActionLabel LIKE '%' + @SearchTerm + '%' OR StageName LIKE '%' + @SearchTerm + '%'
+           OR FromStatusCode LIKE '%' + @SearchTerm + '%' OR ToStatusCode LIKE '%' + @SearchTerm + '%'
+           OR ExpectedResult LIKE '%' + @SearchTerm + '%' OR NextUserMove LIKE '%' + @SearchTerm + '%'
+           OR ValidationRequirements LIKE '%' + @SearchTerm + '%' OR AlternatePath LIKE '%' + @SearchTerm + '%'
+           OR SearchKeywords LIKE '%' + @SearchTerm + '%');
+SELECT COUNT(*) FROM #Filtered;
+SELECT * FROM #Filtered ORDER BY ModuleSequenceNumber, SequenceNumber, StepTitle OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+""";
+        return await QueryPagedAsync<WorkflowGuideStepDto>(sql, new { query.TenantId, query.SearchTerm, query.ModuleCode, query.StageName, query.IncludeOptional, Offset = Offset(query.PageNumber, query.PageSize), PageSize = PageSize(query.PageSize) }, query.PageNumber, query.PageSize, cancellationToken);
+    }
+
     public async Task<KnowledgeConceptDto?> GetConceptAsync(Guid tenantId, Guid conceptId, CancellationToken cancellationToken = default)
     {
         const string sql = """

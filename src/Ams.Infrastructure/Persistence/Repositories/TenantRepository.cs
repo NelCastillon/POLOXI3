@@ -71,6 +71,9 @@ WHERE IsDeleted = 0
     public async Task<Guid> CreateAsync(CreateTenantRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+
 INSERT INTO Core.Tenant
     (TenantId, TenantCode, TenantName, StatusCode, PlanCode,
      RegionCode, IsolationMode, PrimaryDomain,
@@ -80,7 +83,11 @@ VALUES
     (@TenantId, @TenantCode, @TenantName, 'Active', @PlanCode,
      @RegionCode, @IsolationMode, @PrimaryDomain,
      @Locale, @CurrencyCode, @TimeZoneId, 1,
-     GETUTCDATE(), @GoLiveDateUtc, 0);";
+     GETUTCDATE(), @GoLiveDateUtc, 0);
+
+EXEC Submissions.EnsureTenantBindWorkflowConfiguration @TenantId = @TenantId;
+
+COMMIT TRANSACTION;";
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new

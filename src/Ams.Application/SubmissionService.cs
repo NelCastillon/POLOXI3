@@ -403,23 +403,13 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent submission is not linked to the supplied account; the bind chain is inconsistent.");
         }
 
-        var createsPolicy = await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken);
-        var requestedStatus = request.BindStatusCode;
-        var createRequest = createsPolicy || string.Equals(request.BindStatusCode, "Draft", StringComparison.OrdinalIgnoreCase)
-            ? request
-            : request with { BindStatusCode = "Draft" };
-        var bindTransactionId = await _repository.BindPolicyAsync(createRequest, cancellationToken);
-        if (createsPolicy)
+        if (!string.Equals(request.BindStatusCode, "Draft", StringComparison.OrdinalIgnoreCase))
         {
-            return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.RequestedByUserId), cancellationToken);
+            throw new InvalidOperationException("A new submission bind request must start in Draft. Validate it and use the configured workflow transitions to continue.");
         }
 
+        var bindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
         await _repository.ValidateBindRequestAsync(bindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.RequestedByUserId), cancellationToken);
-        if (!string.Equals(requestedStatus, "Draft", StringComparison.OrdinalIgnoreCase))
-        {
-            await UpdateBindRequestStatusAsync(bindTransactionId, new UpdateBindRequestStatusRequest(request.TenantId, requestedStatus, "Initial bind request workflow status.", request.RequestedByUserId), cancellationToken);
-        }
-
         return bindTransactionId;
     }
 
@@ -486,7 +476,6 @@ public sealed class SubmissionService : ISubmissionService
         }
 
         await _repository.RecordBindCarrierResponseAsync(policyBindTransactionId, request, cancellationToken);
-        await _repository.UpdateBindRequestStatusAsync(policyBindTransactionId, new UpdateBindRequestStatusRequest(request.TenantId, request.StatusCode, request.MessageBody, request.RecordedByUserId), cancellationToken);
 
         if (request.StatusCode == "NeedInformation")
         {

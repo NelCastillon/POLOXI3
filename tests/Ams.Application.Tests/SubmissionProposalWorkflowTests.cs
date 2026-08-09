@@ -131,7 +131,7 @@ public sealed class SubmissionProposalWorkflowTests
         Assert.Null(policyId);
         Assert.Equal(0, policyCreation.CreatePolicyCallCount);
         Assert.Same(request, repository.LastCarrierResponseRequest);
-        Assert.Equal("BinderReceived", repository.LastBindStatusRequest?.StatusCode);
+        Assert.Null(repository.LastBindStatusRequest);
     }
 
     [Fact]
@@ -255,6 +255,30 @@ public sealed class SubmissionProposalWorkflowTests
         Assert.Equal("Draft", repository.LastBindPolicyRequest.BindStatusCode);
         Assert.Equal("EmailApproval", repository.LastBindPolicyRequest.CustomerAuthorizationMethodCode);
         Assert.Equal("client approval email", repository.LastBindPolicyRequest.CustomerAuthorizationReference);
+    }
+
+    [Fact]
+    public async Task BindPolicyAsync_Rejects_NonDraft_Initial_Status()
+    {
+        var repository = new FakeSubmissionRepository();
+        var service = CreateService(repository);
+        var request = new BindPolicyRequest(
+            SubmissionId,
+            QuoteId,
+            TenantId,
+            AccountId,
+            Guid.Parse("77777777-7777-7777-7777-777777777777"),
+            12500m,
+            DateTime.Today,
+            DateTime.Today.AddYears(1),
+            BindStatusCode: "Submitted",
+            CustomerAuthorizationMethodCode: "EmailApproval",
+            RequestedByUserId: UserId);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.BindPolicyAsync(request));
+
+        Assert.Contains("start in Draft", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(repository.LastBindPolicyRequest);
     }
 
     [Fact]

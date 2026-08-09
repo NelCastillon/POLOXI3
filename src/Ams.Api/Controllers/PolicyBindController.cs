@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Submissions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -18,9 +20,18 @@ public sealed class PolicyBindController : ControllerBase
     }
 
     [HttpPost("bind")]
+    [Authorize]
     public async Task<IActionResult> Bind([FromBody] BindPolicyRequest request, CancellationToken cancellationToken)
     {
-        var id = await _service.BindPolicyAsync(request, cancellationToken);
+        if (!CanAccess(request.TenantId, "WORKBENCH_PRODUCER", out var denied)) return denied;
+        var userId = GetUserId();
+        if (!userId.HasValue) return Forbid();
+        var id = await _service.BindPolicyAsync(request with
+        {
+            RequestedByUserId = userId,
+            ApprovedByUserId = null,
+            BoundByUserId = null
+        }, cancellationToken);
         return Ok(new { id });
     }
 
@@ -82,5 +93,23 @@ public sealed class PolicyBindController : ControllerBase
         request.AccountId = accountId;
         var result = await _policyCreationService.CreateManualPolicyAsync(request, cancellationToken);
         return Created($"/policies/{result.PolicyId}", result);
+    }
+
+    private bool CanAccess(Guid tenantId, string permission, out IActionResult denied)
+    {
+        denied = Forbid();
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        if (tenantId == Guid.Empty || !Guid.TryParse(claim, out var authenticatedTenantId) || authenticatedTenantId != tenantId) return false;
+        return User.HasClaim("permission", permission)
+            || User.HasClaim("permission", "NAV_ALL")
+            || User.IsInRole("SYSTEM_ADMIN")
+            || User.IsInRole("TENANT_ADMIN")
+            || User.Identity?.AuthenticationType == "Development";
+    }
+
+    private Guid? GetUserId()
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        return Guid.TryParse(claim, out var userId) ? userId : null;
     }
 }

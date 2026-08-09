@@ -9,3 +9,4 @@ public sealed record GetConceptHierarchyQuery(Guid TenantId, Guid ConceptId);
 public sealed record SearchKnowledgeAuditQuery(Guid TenantId, string? SearchTerm, string? ActionType, int PageNumber = 1, int PageSize = 50);
 public sealed record SearchKnowledgeImportsQuery(Guid TenantId, string? SearchTerm, string? StatusCode, int PageNumber = 1, int PageSize = 50);
 public sealed record SearchKnowledgePublicationsQuery(Guid TenantId, string? SearchTerm, string? StatusCode, int PageNumber = 1, int PageSize = 50);
+public sealed record SearchWorkflowGuideStepsQuery(Guid TenantId, string? SearchTerm, string? ModuleCode, string? StageName, bool IncludeOptional = true, int PageNumber = 1, int PageSize = 100);
