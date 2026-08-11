@@ -225,7 +225,6 @@ public sealed class SubmissionIntakeService : ISubmissionIntakeService
         return await _accountRepository.CreateAsync(new CreateAccountRequest
         {
             TenantId = tenantId,
-            AccountNumber = $"ACC-{stamp}",
             AccountName = ResolveAccountName(intake, stamp),
             AccountTypeCode = accountType.TypeCode,
             MainEmail = string.IsNullOrWhiteSpace(intake.Email) ? null : intake.Email,

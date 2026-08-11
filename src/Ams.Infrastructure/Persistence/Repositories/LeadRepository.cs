@@ -582,7 +582,7 @@ ORDER BY CASE WHEN AccountName = @AccountName THEN 0 ELSE 1 END, CreatedDateUtc 
                 else
                 {
                     accountId = Guid.NewGuid();
-                    var accountNumber = await GenerateAccountNumberAsync(cn, tx, lead.LeadNumber, cancellationToken);
+                    var accountNumber = await AllocateAccountNumberAsync(cn, tx, request.TenantId, request.ConvertedByUserId, cancellationToken);
                     var accountDefaults = await GetConvertedAccountDefaultsAsync(cn, tx, request.TenantId, derivedAccountTypeCode, cancellationToken);
                     await cn.ExecuteAsync(new CommandDefinition(@"
 INSERT INTO Client.Account
@@ -1670,18 +1670,14 @@ FROM CRM.LeadInterestLine
 WHERE LeadId = @LeadId AND IsDeleted = 0;", new { LeadId = leadId }, transaction: transaction, cancellationToken: cancellationToken));
     }
 
-    private static async Task<string> GenerateAccountNumberAsync(IDbConnection connection, IDbTransaction transaction, string leadNumber, CancellationToken cancellationToken)
+    private static async Task<string> AllocateAccountNumberAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid? actorUserId, CancellationToken cancellationToken)
     {
-        var seed = SanitizeNumberToken(leadNumber);
-        var candidate = $"ACC-{seed}";
-        var exists = await connection.ExecuteScalarAsync<int>(new CommandDefinition(@"
-SELECT COUNT(1) FROM Client.Account WHERE AccountNumber = @Candidate AND IsDeleted = 0;", new { Candidate = candidate }, transaction: transaction, cancellationToken: cancellationToken));
-        if (exists == 0)
-        {
-            return candidate;
-        }
-
-        return $"ACC-{DateTime.UtcNow:yyyyMMddHHmmss}";
+        var parameters = new DynamicParameters();
+        parameters.Add("TenantId", tenantId);
+        parameters.Add("ActorUserId", actorUserId);
+        parameters.Add("AccountNumber", dbType: DbType.String, size: 50, direction: ParameterDirection.Output);
+        await connection.ExecuteAsync(new CommandDefinition("Client.AllocateAccountNumber", parameters, transaction, commandType: CommandType.StoredProcedure, cancellationToken: cancellationToken));
+        return parameters.Get<string>("AccountNumber");
     }
 
     private static async Task<string> GenerateOpportunityNumberAsync(IDbConnection connection, IDbTransaction transaction, string leadNumber, CancellationToken cancellationToken)

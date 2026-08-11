@@ -18,11 +18,15 @@ public sealed class AccountRepository : IAccountRepository
     public async Task<Guid> CreateAsync(CreateAccountRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+DECLARE @AccountNumber NVARCHAR(50);
+EXEC Client.AllocateAccountNumber @TenantId, @CreatedByUserId, @AccountNumber OUTPUT;
+
 INSERT INTO Client.Account
 (
     AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
     MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
     ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue,
+    Street, City, [State], Zip, Country, TaxId, NaicsCode,
     CreatedDateUtc, CreatedByUserId, IsDeleted
 )
 VALUES
@@ -30,30 +34,47 @@ VALUES
     @AccountId, @TenantId, @AccountNumber, @AccountName, @AccountTypeCode,
     @MainEmail, @MainPhone, @StatusCode, @SegmentCode, @OwnerUserId,
     @ParentAccountId, @LifecycleStageCode, @Industry, @Website, @AnnualRevenue,
+    @Street, @City, @State, @Zip, @Country, @TaxId, @NaicsCode,
     SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        using var tx = cn.BeginTransaction();
+        try
         {
-            AccountId = id,
-            request.TenantId,
-            request.AccountNumber,
-            request.AccountName,
-            request.AccountTypeCode,
-            request.MainEmail,
-            request.MainPhone,
-            request.StatusCode,
-            request.SegmentCode,
-            request.OwnerUserId,
-            request.ParentAccountId,
-            request.LifecycleStageCode,
-            request.Industry,
-            request.Website,
-            request.AnnualRevenue,
-            request.CreatedByUserId
-        }, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition(sql, new
+            {
+                AccountId = id,
+                request.TenantId,
+                request.AccountName,
+                request.AccountTypeCode,
+                request.MainEmail,
+                request.MainPhone,
+                request.StatusCode,
+                request.SegmentCode,
+                request.OwnerUserId,
+                request.ParentAccountId,
+                request.LifecycleStageCode,
+                request.Industry,
+                request.Website,
+                request.AnnualRevenue,
+                request.Street,
+                request.City,
+                request.State,
+                request.Zip,
+                request.Country,
+                request.TaxId,
+                request.NaicsCode,
+                request.CreatedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
 
         return id;
     }

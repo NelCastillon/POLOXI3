@@ -41,17 +41,17 @@
     <EditForm EditContext="@_editContext" OnValidSubmit="SubmitAsync">
         <DataAnnotationsValidator />
         <div class="um-modal-body"><div class="um-form-grid">
-            <div class="um-field"><label>Account Number <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountNumber" class="um-input" /></div>
+            <div class="um-field"><label>Account Number</label><div class="um-input acct-generated-number" aria-readonly="true"><i class="bi bi-shield-lock me-2"></i>Generated automatically when saved</div></div>
             <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" /></div>
             <div class="um-field"><label>Account Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountTypeCode" class="um-input">@foreach (var type in _typeOptions) { <option value="@type.Code">@type.Name</option> }</InputSelect></div>
             <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var status in _statusOptions) { <option value="@status.Code">@status.Name</option> }</InputSelect></div>
             <div class="um-field"><label>Segment</label><InputSelect @bind-Value="_form.SegmentCode" class="um-input"><option value="">None</option>@foreach (var segment in _segmentOptions) { <option value="@segment.Code">@segment.Name</option> }</InputSelect></div>
             <div class="um-field"><label>Lifecycle Stage</label><InputSelect @bind-Value="_form.LifecycleStageCode" class="um-input"><option value="">None</option>@foreach (var stage in _lifecycleStageOptions) { <option value="@stage.Code">@stage.Name</option> }</InputSelect></div>
-            <div class="um-field"><label>Email</label><InputText @bind-Value="_form.MainEmail" class="um-input" /></div>
-            <div class="um-field"><label>Phone</label><InputText @bind-Value="_form.MainPhone" class="um-input" /></div>
-            <div class="um-field"><label>Industry</label><InputText @bind-Value="_form.Industry" class="um-input" /></div>
-            <div class="um-field"><label>Website</label><InputText @bind-Value="_form.Website" class="um-input" placeholder="https://example.com" /></div>
-            <div class="um-field"><label>Annual Revenue</label><InputNumber @bind-Value="_form.AnnualRevenue" class="um-input" /></div>
+            <div class="um-field"><label>Email</label><InputText @bind-Value="_form.MainEmail" class="um-input" /><ValidationMessage For="() => _form.MainEmail" class="text-danger" /></div>
+            <div class="um-field"><label>Phone</label><InputText Value="@_form.MainPhone" ValueChanged="OnPhoneChanged" ValueExpression="() => _form.MainPhone" class="um-input" /><small>Phone is normalized for dialing and display.</small><ValidationMessage For="() => _form.MainPhone" class="text-danger" /></div>
+            <div class="um-field"><label>Industry</label><InputSelect @bind-Value="_form.Industry" class="um-input"><option value="">None</option>@foreach (var industry in _industryOptions) { <option value="@industry.Code">@industry.Name</option> }</InputSelect></div>
+            <div class="um-field"><label>Website</label><InputText @bind-Value="_form.Website" class="um-input" placeholder="https://example.com" /><ValidationMessage For="() => _form.Website" class="text-danger" /></div>
+            <div class="um-field"><label>Annual Revenue</label><InputNumber @bind-Value="_form.AnnualRevenue" class="um-input" /><ValidationMessage For="() => _form.AnnualRevenue" class="text-danger" /></div>
         </div></div>
         <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/accounts")'>Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Creating?" : "Create Account")</button></div>
     </EditForm>
@@ -70,6 +70,7 @@
     List<AccountOption> _statusOptions = [];
     List<AccountOption> _segmentOptions = [];
     List<AccountOption> _lifecycleStageOptions = [];
+    List<AccountOption> _industryOptions = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -90,6 +91,7 @@
         _statusOptions = ToOptions(activeOptions, "Status");
         _segmentOptions = ToOptions(activeOptions, "Segment");
         _lifecycleStageOptions = ToOptions(activeOptions, "LifecycleStage");
+        _industryOptions = ToOptions(activeOptions, "Industry");
     }
 
     async Task SubmitAsync()
@@ -101,11 +103,10 @@
             var id = await Api.CreateAccountAsync(new CreateAccountRequest
             {
                 TenantId = _tenantId,
-                AccountNumber = Normalize(_form.AccountNumber) ?? string.Empty,
                 AccountName = Normalize(_form.AccountName) ?? string.Empty,
                 AccountTypeCode = Normalize(_form.AccountTypeCode) ?? DefaultOptionCode(_typeOptions),
                 MainEmail = Normalize(_form.MainEmail),
-                MainPhone = Normalize(_form.MainPhone),
+                MainPhone = Normalize(FormatPhone(_form.MainPhone)),
                 StatusCode = Normalize(_form.StatusCode) ?? DefaultOptionCode(_statusOptions),
                 SegmentCode = Normalize(_form.SegmentCode),
                 LifecycleStageCode = Normalize(_form.LifecycleStageCode),
@@ -142,14 +143,23 @@
 
     static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    void OnPhoneChanged(string? value) => _form.MainPhone = FormatPhone(value);
+
+    static string? FormatPhone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits[0] == '1') digits = digits[1..];
+        return digits.Length == 10 ? $"({digits[..3]}) {digits[3..6]}-{digits[6..]}" : value.Trim();
+    }
+
     sealed record AccountOption(string Code, string Name, bool IsDefault);
 
     sealed class AccountNewFormModel
     {
-        [Required, StringLength(50)] public string AccountNumber { get; set; } = $"ACC-{DateTime.UtcNow:yyyyMMddHHmmss}";
-        [Required, StringLength(200)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(300)] public string AccountName { get; set; } = string.Empty;
         [Required, StringLength(50)] public string AccountTypeCode { get; set; } = string.Empty;
-        [AmsEmailAddress, StringLength(200)] public string? MainEmail { get; set; }
+        [AmsEmailAddress, StringLength(300)] public string? MainEmail { get; set; }
         [AmsPhone, StringLength(50)] public string? MainPhone { get; set; }
         [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty;
         [StringLength(50)] public string? SegmentCode { get; set; }

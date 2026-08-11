@@ -21,6 +21,11 @@ public sealed class AccountsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateAccountRequest request, CancellationToken cancellationToken)
     {
+        var tenantId = AuthenticatedRequestContext.GetTenantId(User);
+        if (!tenantId.HasValue) return Forbid();
+        if (!AuthenticatedRequestContext.CanManageAccounts(User, tenantId.Value)) return Forbid();
+        request.TenantId = tenantId.Value;
+        request.CreatedByUserId = AuthenticatedRequestContext.GetUserId(User);
         var id = await _service.CreateAsync(request, cancellationToken);
         return Ok(id);
     }

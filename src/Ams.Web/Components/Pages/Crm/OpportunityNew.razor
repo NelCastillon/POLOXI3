@@ -1,6 +1,7 @@
 @page "/crm/opportunities/new"
 @namespace Ams.Web.Components.Pages.Crm
 @using System.Globalization
+@using System.ComponentModel.DataAnnotations
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.Opportunities
 @using BlazorChangeEventArgs = Microsoft.AspNetCore.Components.ChangeEventArgs
@@ -115,7 +116,7 @@
                     }
                     else if (_section == "account")
                     {
-                        <div class="opn-section-head"><div><h2>Account relationship</h2><p>Choose the client or prospect that owns this opportunity.</p></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button></div>
+                        <div class="opn-section-head"><div><h2>Account relationship</h2><p>Choose the client or prospect that owns this opportunity.</p></div><div class="opn-section-actions"><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenCreateAccount"><i class="bi bi-building-add" aria-hidden="true"></i> Create New Account</button><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/accounts")'><i class="bi bi-building" aria-hidden="true"></i> Accounts</button></div></div>
                         <div class="opn-filter-row opportunity-search-panel">
                             <div class="opn-search-wrap opportunity-search-box"><i class="bi bi-search opn-search-icon" aria-hidden="true"></i><div class="opn-search-body opportunity-search-body"><label for="opportunityAccountSearch">Search accounts</label><input id="opportunityAccountSearch" class="opn-search-input" value="@_accountSearch" @oninput="OnAccountSearchChanged" placeholder="Search account name, number, industry, email, segment..." /></div></div>
                             <button type="button" class="um-btn um-btn-ghost" @onclick="ClearAccountSelection"><i class="bi bi-x-lg" aria-hidden="true"></i> Clear</button>
@@ -235,6 +236,14 @@
     }
 </div>
 
+<CreateAccountDialog @bind-Visible="_showAccountModal"
+                     TenantId="_tenantId"
+                     CurrentUserId="_currentUserId"
+                     InitialAccountName="_accountSearch"
+                     Title="Create Account for Opportunity"
+                     Subtitle="Create the account master record here, then continue this opportunity with the selected account."
+                     AccountSelected="OnSharedAccountSelected" />
+
 @code {
     private Guid _tenantId;
     private Guid? _currentUserId;
@@ -243,6 +252,7 @@
     private bool _loading = true;
     private bool _saving;
     private bool _toastVisible;
+    private bool _showAccountModal;
     private string _toastMessage = string.Empty;
     private string _toastKind = "success";
     private string? _loadError;
@@ -333,10 +343,16 @@
                 await ResolveCurrentUserContextAsync();
             }
 
-            var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 500);
-            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
-            var opportunities = await Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
-            var forecastCategories = await Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
+            var accountsTask = Api.SearchAccountsAsync(_tenantId, pageSize: 500);
+            var usersTask = Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            var opportunitiesTask = Api.SearchOpportunitiesAsync(_tenantId, pageSize: 500);
+            var forecastCategoriesTask = Api.SearchOpportunityForecastCategoriesAsync(_tenantId, pageSize: 200);
+            await Task.WhenAll(accountsTask, usersTask, opportunitiesTask, forecastCategoriesTask);
+
+            var accounts = accountsTask.Result;
+            var users = usersTask.Result;
+            var opportunities = opportunitiesTask.Result;
+            var forecastCategories = forecastCategoriesTask.Result;
             _accounts = accounts?.Items.ToList() ?? [];
             _users = users?.Items.ToList() ?? [];
             _opportunities = opportunities?.Items.ToList() ?? [];
@@ -406,6 +422,15 @@
     }
 
     private void SetSection(string section) => _section = section;
+    private void OpenCreateAccount() => _showAccountModal = true;
+    private void OnSharedAccountSelected(AccountDto account)
+    {
+        _accounts.RemoveAll(item => item.AccountId == account.AccountId);
+        _accounts.Add(account);
+        SelectAccount(account);
+        _accountSearch = account.AccountName;
+        ShowToast("Account selected for this opportunity.", "success");
+    }
     private void ResetDraft()
     {
         _form = new OpportunityFormModel { OwnerUserId = _currentUserId, ForecastCategoryCode = ForecastCategoryOptions.FirstOrDefault() ?? OpportunityPageConstants.DefaultForecastCategory };
@@ -433,6 +458,7 @@
     private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
     private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
     private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
     private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "Not set";
     private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";

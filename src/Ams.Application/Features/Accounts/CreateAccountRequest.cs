@@ -6,13 +6,11 @@ namespace Ams.Application.Features.Accounts;
 public sealed class CreateAccountRequest
 {
     public Guid TenantId { get; set; }
-    [Required, StringLength(50)]
-    public string AccountNumber { get; set; } = string.Empty;
-    [Required, StringLength(200)]
+    [Required, StringLength(300)]
     public string AccountName { get; set; } = string.Empty;
     [Required, StringLength(50)]
     public string AccountTypeCode { get; set; } = string.Empty;
-    [AmsEmailAddress, StringLength(200)]
+    [AmsEmailAddress, StringLength(300)]
     public string? MainEmail { get; set; }
     [AmsPhone, StringLength(50)]
     public string? MainPhone { get; set; }
@@ -30,5 +28,19 @@ public sealed class CreateAccountRequest
     public string? Website { get; set; }
     [Range(0, 999999999999)]
     public decimal? AnnualRevenue { get; set; }
+    [StringLength(200)]
+    public string? Street { get; set; }
+    [StringLength(100)]
+    public string? City { get; set; }
+    [StringLength(50)]
+    public string? State { get; set; }
+    [StringLength(20)]
+    public string? Zip { get; set; }
+    [StringLength(50)]
+    public string? Country { get; set; }
+    [StringLength(50)]
+    public string? TaxId { get; set; }
+    [StringLength(20)]
+    public string? NaicsCode { get; set; }
     public Guid? CreatedByUserId { get; set; }
 }

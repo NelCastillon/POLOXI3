@@ -1,0 +1,264 @@
+@namespace Ams.Web.Components.Shared
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Common.Validation
+@using Ams.Application.Features.Accounts
+@using Ams.Application.Features.SearchMatching
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+
+@if (Visible)
+{
+    <div class="cad-backdrop" role="presentation" @onclick="CloseAsync">
+        <div class="cad-modal" role="dialog" aria-modal="true" aria-labelledby="cad-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-building-add" aria-hidden="true"></i>
+                <span id="cad-title">@Title</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAsync" disabled="@IsBusy" aria-label="Close"><i class="bi bi-x-lg"></i></button>
+            </div>
+            @if (_loading)
+            {
+                <div class="cad-loading"><span class="spinner-border" aria-hidden="true"></span><strong>Loading account configuration...</strong></div>
+            }
+            else
+            {
+                <EditForm EditContext="@_editContext">
+                    <DataAnnotationsValidator />
+                    <div class="um-modal-body">
+                        <div class="cad-intro"><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Enterprise account master record</strong><small>@Subtitle</small></span></div>
+                        <div class="um-form-grid">
+                            <div class="um-field"><label>Account Number</label><div class="um-input cad-generated-number" aria-readonly="true"><i class="bi bi-shield-lock me-2"></i>Generated automatically when saved</div></div>
+                            <div class="um-field"><label>Account Name <span class="text-danger">*</span></label><InputText @bind-Value="_form.AccountName" class="um-input" /></div>
+                            <div class="um-field"><label>Account Type <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.AccountTypeCode" class="um-input">@foreach (var option in _typeOptions) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                            <div class="um-field"><label>Status <span class="text-danger">*</span></label><InputSelect @bind-Value="_form.StatusCode" class="um-input">@foreach (var option in _statusOptions) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                            <div class="um-field"><label>Segment</label><InputSelect @bind-Value="_form.SegmentCode" class="um-input"><option value="">None</option>@foreach (var option in _segmentOptions) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                            <div class="um-field"><label>Lifecycle Stage</label><InputSelect @bind-Value="_form.LifecycleStageCode" class="um-input"><option value="">None</option>@foreach (var option in _lifecycleOptions) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                            <div class="um-field"><label>Email</label><InputText @bind-Value="_form.MainEmail" class="um-input" /><ValidationMessage For="() => _form.MainEmail" class="text-danger" /></div>
+                            <div class="um-field"><label>Phone</label><InputText Value="@_form.MainPhone" ValueChanged="OnPhoneChanged" ValueExpression="() => _form.MainPhone" class="um-input" /><small>Phone is normalized for dialing and display.</small><ValidationMessage For="() => _form.MainPhone" class="text-danger" /></div>
+                            <div class="um-field"><label>Industry</label><InputSelect @bind-Value="_form.Industry" class="um-input"><option value="">None</option>@foreach (var option in _industryOptions) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                            <div class="um-field"><label>Website</label><InputText @bind-Value="_form.Website" class="um-input" placeholder="https://example.com" /><ValidationMessage For="() => _form.Website" class="text-danger" /></div>
+                            <div class="um-field"><label>Annual Revenue</label><InputNumber @bind-Value="_form.AnnualRevenue" class="um-input" /><ValidationMessage For="() => _form.AnnualRevenue" class="text-danger" /></div>
+                            <div class="um-field"><label>Tax ID / FEIN</label><InputText @bind-Value="_form.TaxId" class="um-input" /><ValidationMessage For="() => _form.TaxId" class="text-danger" /></div>
+                            <div class="um-field um-field--full"><label>Street Address</label><InputText @bind-Value="_form.Street" class="um-input" /><ValidationMessage For="() => _form.Street" class="text-danger" /></div>
+                            <div class="um-field"><label>City</label><InputText @bind-Value="_form.City" class="um-input" /><ValidationMessage For="() => _form.City" class="text-danger" /></div>
+                            <div class="um-field"><label>State</label><InputText @bind-Value="_form.State" class="um-input" /><ValidationMessage For="() => _form.State" class="text-danger" /></div>
+                            <div class="um-field"><label>Postal Code</label><InputText @bind-Value="_form.Zip" class="um-input" /><ValidationMessage For="() => _form.Zip" class="text-danger" /></div>
+                            <div class="um-field"><label>Country</label><InputText @bind-Value="_form.Country" class="um-input" /><ValidationMessage For="() => _form.Country" class="text-danger" /></div>
+                            @if (!string.IsNullOrWhiteSpace(_error))
+                            {
+                                <div class="alert alert-danger um-field--full" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_error</div>
+                            }
+                            @if (_matches is not null)
+                            {
+                                <div class="cad-review um-field--full">
+                                    <div class="cad-review-heading"><span><i class="bi bi-intersect"></i><strong>Duplicate review</strong></span><small>Thresholds and scoring come from the tenant's @_matches.ProfileCode database profile.</small></div>
+                                    @if (_matches.Candidates.Count == 0)
+                                    {
+                                        <div class="cad-no-matches"><i class="bi bi-check-circle-fill"></i> No matching accounts met the configured possible-match threshold.</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="cad-match-list">
+                                            @foreach (var candidate in _matches.Candidates)
+                                            {
+                                                <button type="button" class="cad-match-card" @onclick="() => UseExistingAsync(candidate)"><span><strong>@candidate.DisplayName</strong><small>@candidate.SecondaryText</small></span><span class="cad-score">@candidate.OverallScore.ToString("0")%</span><span>Use existing <i class="bi bi-arrow-right"></i></span></button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CloseAsync" disabled="@IsBusy">Cancel</button>
+                        @if (_matches is null)
+                        {
+                            <button type="button" class="um-btn um-btn-primary" @onclick="ReviewDuplicatesAsync" disabled="@IsBusy">@if (_checking) { <span class="spinner-border spinner-border-sm me-2"></span> }<i class="bi bi-intersect"></i> Review Duplicates</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="um-btn um-btn-primary" @onclick="CreateAsync" disabled="@IsBusy">@if (_saving) { <span class="spinner-border spinner-border-sm me-2"></span> }<i class="bi bi-building-add"></i> Create Account</button>
+                        }
+                    </div>
+                </EditForm>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+    [Parameter] public Guid? CurrentUserId { get; set; }
+    [Parameter] public string? InitialAccountName { get; set; }
+    [Parameter] public string Title { get; set; } = "Create Account";
+    [Parameter] public string Subtitle { get; set; } = "Create the authoritative account record, review possible duplicates, and continue with the selected account.";
+    [Parameter] public EventCallback<AccountDto> AccountSelected { get; set; }
+
+    private bool _wasVisible;
+    private bool _loading;
+    private bool _checking;
+    private bool _saving;
+    private string? _error;
+    private AccountFormModel _form = new();
+    private EditContext _editContext = default!;
+    private EntityMatchResult? _matches;
+    private List<AccountOption> _typeOptions = [];
+    private List<AccountOption> _statusOptions = [];
+    private List<AccountOption> _segmentOptions = [];
+    private List<AccountOption> _lifecycleOptions = [];
+    private List<AccountOption> _industryOptions = [];
+    private bool IsBusy => _loading || _checking || _saving;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Visible && !_wasVisible) await InitializeAsync();
+        _wasVisible = Visible;
+    }
+
+    private async Task InitializeAsync()
+    {
+        _loading = true;
+        _error = null;
+        _matches = null;
+        try
+        {
+            var typesTask = Api.SearchAccountTypesAsync(TenantId, pageSize: 200);
+            var optionsTask = Api.GetAccountReferenceOptionsAsync(TenantId);
+            await Task.WhenAll(typesTask, optionsTask);
+            _typeOptions = typesTask.Result?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName).Select(x => new AccountOption(x.TypeCode, x.TypeName, x.IsDefault)).ToList() ?? [];
+            var options = optionsTask.Result?.Where(x => x.IsActive).ToList() ?? [];
+            _statusOptions = ToOptions(options, "Status");
+            _segmentOptions = ToOptions(options, "Segment");
+            _lifecycleOptions = ToOptions(options, "LifecycleStage");
+            _industryOptions = ToOptions(options, "Industry");
+            _form = new AccountFormModel
+            {
+                AccountName = Normalize(InitialAccountName) ?? string.Empty,
+                AccountTypeCode = DefaultCode(_typeOptions),
+                StatusCode = DefaultCode(_statusOptions),
+                SegmentCode = DefaultCode(_segmentOptions),
+                LifecycleStageCode = DefaultCode(_lifecycleOptions)
+            };
+            _editContext = new(_form);
+        }
+        catch (Exception ex) { _error = $"Account configuration failed to load: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task ReviewDuplicatesAsync()
+    {
+        _matches = null;
+        _error = null;
+        if (!_editContext.Validate()) return;
+        _checking = true;
+        try
+        {
+            _matches = await Api.FindEntityMatchesAsync(new EntityMatchRequest
+            {
+                TenantId = TenantId,
+                ProfileCode = MatchProfileCodes.AccountDuplicate,
+                EntityTypeCode = "Account",
+                CorrelationId = $"shared-account:{Guid.NewGuid():N}",
+                Fields = new Dictionary<string, string?>
+                {
+                    ["BusinessName"] = Normalize(_form.AccountName),
+                    ["Fein"] = Normalize(_form.TaxId),
+                    ["EmailDomain"] = EmailDomain(_form.MainEmail),
+                    ["Phone"] = Normalize(_form.MainPhone),
+                    ["Address"] = Normalize(string.Join(' ', new[] { _form.Street, _form.City, _form.State, _form.Zip }.Where(x => !string.IsNullOrWhiteSpace(x))))
+                }
+            });
+        }
+        catch (Exception ex) { _error = $"Duplicate review failed: {ex.Message}"; }
+        finally { _checking = false; }
+    }
+
+    private async Task UseExistingAsync(MatchCandidate candidate)
+    {
+        _error = null;
+        try
+        {
+            var account = await Api.GetAccountByIdAsync(candidate.EntityId) ?? throw new InvalidOperationException("The matching account could not be loaded.");
+            if (account.TenantId != TenantId) throw new InvalidOperationException("The matching account is not available for this tenant.");
+            await SaveDecisionAsync(MatchReviewDecisionCodes.UseExisting, candidate.EntityId);
+            await CompleteAsync(account);
+        }
+        catch (Exception ex) { _error = $"Existing account selection failed: {ex.Message}"; }
+    }
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+        if (_matches is null) { _error = "Review possible duplicate accounts before creating a new account."; return; }
+        if (!_editContext.Validate()) return;
+        _saving = true;
+        try
+        {
+            var id = await Api.CreateAccountAsync(new CreateAccountRequest
+            {
+                TenantId = TenantId,
+                AccountName = Normalize(_form.AccountName) ?? string.Empty,
+                AccountTypeCode = Normalize(_form.AccountTypeCode) ?? DefaultCode(_typeOptions),
+                MainEmail = Normalize(_form.MainEmail),
+                MainPhone = Normalize(FormatPhone(_form.MainPhone)),
+                StatusCode = Normalize(_form.StatusCode) ?? DefaultCode(_statusOptions),
+                SegmentCode = Normalize(_form.SegmentCode),
+                LifecycleStageCode = Normalize(_form.LifecycleStageCode),
+                Industry = Normalize(_form.Industry),
+                Website = Normalize(_form.Website),
+                AnnualRevenue = _form.AnnualRevenue,
+                Street = Normalize(_form.Street), City = Normalize(_form.City), State = Normalize(_form.State), Zip = Normalize(_form.Zip), Country = Normalize(_form.Country),
+                TaxId = Normalize(_form.TaxId), CreatedByUserId = CurrentUserId
+            });
+            await SaveDecisionAsync(MatchReviewDecisionCodes.CreateNew, null);
+            var account = await Api.GetAccountByIdAsync(id) ?? throw new InvalidOperationException("The created account could not be reloaded.");
+            await CompleteAsync(account);
+        }
+        catch (Exception ex) { _error = $"Account creation failed: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task SaveDecisionAsync(string code, Guid? candidateId)
+    {
+        if (_matches is null || !CurrentUserId.HasValue) return;
+        await Api.SaveMatchReviewDecisionAsync(new MatchReviewDecisionRequest { TenantId = TenantId, MatchExecutionId = _matches.MatchExecutionId, CandidateEntityId = candidateId, DecisionCode = code, RequestedByUserId = CurrentUserId.Value, CorrelationId = $"shared-account-review:{_matches.MatchExecutionId:N}" });
+    }
+
+    private async Task CompleteAsync(AccountDto account)
+    {
+        await AccountSelected.InvokeAsync(account);
+        await SetVisibleAsync(false);
+    }
+
+    private Task CloseAsync() => IsBusy ? Task.CompletedTask : SetVisibleAsync(false);
+    private async Task SetVisibleAsync(bool value) { _wasVisible = value; await VisibleChanged.InvokeAsync(value); }
+    private void OnPhoneChanged(string? value) => _form.MainPhone = FormatPhone(value);
+    private static List<AccountOption> ToOptions(IEnumerable<AccountReferenceOptionDto> values, string group) => values.Where(x => string.Equals(x.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SortOrder).ThenBy(x => x.OptionName).Select(x => new AccountOption(x.OptionCode, x.OptionName, x.IsDefault)).ToList();
+    private static string DefaultCode(IReadOnlyList<AccountOption> values) => values.FirstOrDefault(x => x.IsDefault)?.Code ?? values.FirstOrDefault()?.Code ?? string.Empty;
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string? FormatPhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits[3..6]}-{digits[6..]}" : value.Trim(); }
+    private static string? EmailDomain(string? value) { var email = Normalize(value); if (email is null) return null; var index = email.LastIndexOf('@'); return index >= 0 && index < email.Length - 1 ? email[(index + 1)..] : null; }
+
+    private sealed record AccountOption(string Code, string Name, bool IsDefault);
+    private sealed class AccountFormModel
+    {
+        [Required, StringLength(300)] public string AccountName { get; set; } = string.Empty;
+        [Required, StringLength(50)] public string AccountTypeCode { get; set; } = string.Empty;
+        [AmsEmailAddress, StringLength(300)] public string? MainEmail { get; set; }
+        [AmsPhone, StringLength(50)] public string? MainPhone { get; set; }
+        [Required, StringLength(50)] public string StatusCode { get; set; } = string.Empty;
+        [StringLength(50)] public string? SegmentCode { get; set; }
+        [StringLength(50)] public string? LifecycleStageCode { get; set; }
+        [StringLength(100)] public string? Industry { get; set; }
+        [Url, StringLength(200)] public string? Website { get; set; }
+        [Range(0, 999999999999)] public decimal? AnnualRevenue { get; set; }
+        [StringLength(200)] public string? Street { get; set; }
+        [StringLength(100)] public string? City { get; set; }
+        [StringLength(50)] public string? State { get; set; }
+        [StringLength(20)] public string? Zip { get; set; }
+        [StringLength(50)] public string? Country { get; set; }
+        [StringLength(50)] public string? TaxId { get; set; }
+    }
+}
