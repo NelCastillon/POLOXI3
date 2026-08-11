@@ -1408,7 +1408,106 @@ END;";
 
     public async Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
-        const string sql = @"
+        const string searchPredicate = @"
+s.SubmissionNumber LIKE '%' + @SearchTerm + '%'
+OR s.LineOfBusiness LIKE '%' + @SearchTerm + '%'
+OR s.Status LIKE '%' + @SearchTerm + '%'
+OR s.Priority LIKE '%' + @SearchTerm + '%'
+OR a.AccountNumber LIKE '%' + @SearchTerm + '%'
+OR a.AccountName LIKE '%' + @SearchTerm + '%'
+OR a.MainEmail LIKE '%' + @SearchTerm + '%'
+OR a.MainPhone LIKE '%' + @SearchTerm + '%'
+OR a.Industry LIKE '%' + @SearchTerm + '%'
+OR a.Website LIKE '%' + @SearchTerm + '%'
+OR o.OpportunityNumber LIKE '%' + @SearchTerm + '%'
+OR o.OpportunityName LIKE '%' + @SearchTerm + '%'
+OR o.StageName LIKE '%' + @SearchTerm + '%'
+OR o.ForecastCategoryCode LIKE '%' + @SearchTerm + '%'
+OR o.Description LIKE '%' + @SearchTerm + '%'
+OR u.DisplayName LIKE '%' + @SearchTerm + '%'
+OR u.FullName LIKE '%' + @SearchTerm + '%'
+OR u.FirstName LIKE '%' + @SearchTerm + '%'
+OR u.LastName LIKE '%' + @SearchTerm + '%'
+OR u.Email LIKE '%' + @SearchTerm + '%'
+OR EXISTS
+(
+    SELECT 1 FROM Client.Contact contact
+    WHERE contact.TenantId = s.TenantId AND contact.AccountId = s.AccountId AND contact.IsDeleted = 0
+      AND (contact.FirstName LIKE '%' + @SearchTerm + '%' OR contact.LastName LIKE '%' + @SearchTerm + '%'
+        OR contact.Email LIKE '%' + @SearchTerm + '%' OR contact.Phone LIKE '%' + @SearchTerm + '%'
+        OR contact.JobTitle LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.SubmissionLine sl
+    WHERE sl.TenantId = s.TenantId AND sl.SubmissionId = s.SubmissionId AND sl.IsDeleted = 0
+      AND sl.LineOfBusiness LIKE '%' + @SearchTerm + '%'
+)
+OR EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionMarket sm
+    INNER JOIN Core.Carrier carrier ON carrier.CarrierId = sm.CarrierId AND carrier.TenantId = s.TenantId AND carrier.IsDeleted = 0
+    WHERE sm.SubmissionId = s.SubmissionId AND sm.IsDeleted = 0
+      AND (sm.Status LIKE '%' + @SearchTerm + '%' OR sm.DeclineReason LIKE '%' + @SearchTerm + '%'
+        OR carrier.CarrierCode LIKE '%' + @SearchTerm + '%' OR carrier.CarrierName LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1
+    FROM Submissions.Quote q
+    INNER JOIN Core.Carrier carrier ON carrier.CarrierId = q.CarrierId AND carrier.TenantId = s.TenantId AND carrier.IsDeleted = 0
+    WHERE q.SubmissionId = s.SubmissionId AND q.IsDeleted = 0
+      AND (q.QuoteNumber LIKE '%' + @SearchTerm + '%' OR q.Status LIKE '%' + @SearchTerm + '%'
+        OR q.CoverageNotes LIKE '%' + @SearchTerm + '%' OR carrier.CarrierCode LIKE '%' + @SearchTerm + '%'
+        OR carrier.CarrierName LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.QuoteRequest qr
+    WHERE qr.TenantId = s.TenantId AND qr.SubmissionId = s.SubmissionId AND qr.IsDeleted = 0
+      AND (qr.QuoteNumber LIKE '%' + @SearchTerm + '%' OR qr.StatusCode LIKE '%' + @SearchTerm + '%'
+        OR qr.CarrierReferenceNumber LIKE '%' + @SearchTerm + '%' OR qr.CoverageNotes LIKE '%' + @SearchTerm + '%'
+        OR qr.AssignedUnderwriterName LIKE '%' + @SearchTerm + '%' OR qr.AssignedUnderwriterEmail LIKE '%' + @SearchTerm + '%'
+        OR qr.CorrelationId LIKE '%' + @SearchTerm + '%' OR qr.LastError LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.Proposal proposal
+    WHERE proposal.TenantId = s.TenantId AND proposal.SubmissionId = s.SubmissionId AND proposal.IsDeleted = 0
+      AND (proposal.Title LIKE '%' + @SearchTerm + '%' OR proposal.Status LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.CustomerAuthorization customerAuthorization
+    WHERE customerAuthorization.TenantId = s.TenantId AND customerAuthorization.SubmissionId = s.SubmissionId AND customerAuthorization.IsDeleted = 0
+      AND (customerAuthorization.AuthorizationMethodCode LIKE '%' + @SearchTerm + '%'
+        OR customerAuthorization.AuthorizationReference LIKE '%' + @SearchTerm + '%'
+        OR customerAuthorization.AuthorizationNotes LIKE '%' + @SearchTerm + '%'
+        OR customerAuthorization.AuthorizedByName LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.SubmissionActionLog actionLog
+    WHERE actionLog.TenantId = s.TenantId AND actionLog.SubmissionId = s.SubmissionId AND actionLog.IsDeleted = 0
+      AND (actionLog.ActionCode LIKE '%' + @SearchTerm + '%' OR actionLog.Notes LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.BoundPolicy boundPolicy
+    WHERE boundPolicy.TenantId = s.TenantId AND boundPolicy.SubmissionId = s.SubmissionId AND boundPolicy.IsDeleted = 0
+      AND (boundPolicy.PolicyNumber LIKE '%' + @SearchTerm + '%' OR boundPolicy.Status LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Submissions.CarrierTransmission transmission
+    WHERE transmission.TenantId = s.TenantId AND transmission.SubmissionId = s.SubmissionId AND transmission.IsDeleted = 0
+      AND (transmission.StatusCode LIKE '%' + @SearchTerm + '%' OR transmission.Recipient LIKE '%' + @SearchTerm + '%'
+        OR transmission.Subject LIKE '%' + @SearchTerm + '%' OR transmission.ExternalReferenceNumber LIKE '%' + @SearchTerm + '%'
+        OR transmission.LastError LIKE '%' + @SearchTerm + '%')
+)";
+
+        var sql = $@"
 ;WITH Cte AS
 (
     SELECT s.SubmissionId,
@@ -1455,7 +1554,7 @@ OUTER APPLY
     LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
     WHERE  s.TenantId = @TenantId
       AND  s.IsDeleted = 0
-      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm + '%' OR s.LineOfBusiness LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%' OR o.OpportunityName LIKE '%' + @SearchTerm + '%')
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR {searchPredicate})
 ),
 Filtered AS
 (
@@ -1474,9 +1573,10 @@ OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
     FROM   Submissions.Submission s
     JOIN   Client.Account a ON a.AccountId = s.AccountId
     LEFT JOIN CRM.Opportunity o ON o.OpportunityId = s.OpportunityId
+    LEFT JOIN IAM.[User] u ON u.UserId = s.AssignedToUserId
     WHERE  s.TenantId = @TenantId
       AND  s.IsDeleted = 0
-      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR s.SubmissionNumber LIKE '%' + @SearchTerm + '%' OR s.LineOfBusiness LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%' OR o.OpportunityName LIKE '%' + @SearchTerm + '%')
+      AND  (@SearchTerm IS NULL OR @SearchTerm = '' OR {searchPredicate})
 ),
 Filtered AS
 (

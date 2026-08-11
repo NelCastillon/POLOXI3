@@ -106,10 +106,95 @@ VALUES
 
     public async Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
+        const string searchPredicate = @"
+l.FirstName LIKE '%' + @SearchTerm + '%'
+OR l.LastName LIKE '%' + @SearchTerm + '%'
+OR l.Email LIKE '%' + @SearchTerm + '%'
+OR l.Phone LIKE '%' + @SearchTerm + '%'
+OR l.AccountName LIKE '%' + @SearchTerm + '%'
+OR l.LeadNumber LIKE '%' + @SearchTerm + '%'
+OR l.InterestedService LIKE '%' + @SearchTerm + '%'
+OR l.SourceCode LIKE '%' + @SearchTerm + '%'
+OR l.NurturingStageCode LIKE '%' + @SearchTerm + '%'
+OR l.PriorityCode LIKE '%' + @SearchTerm + '%'
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadContact lc
+    WHERE lc.TenantId = l.TenantId AND lc.LeadId = l.LeadId AND lc.IsDeleted = 0
+      AND (lc.FirstName LIKE '%' + @SearchTerm + '%' OR lc.LastName LIKE '%' + @SearchTerm + '%'
+        OR lc.Title LIKE '%' + @SearchTerm + '%' OR lc.Email LIKE '%' + @SearchTerm + '%' OR lc.Phone LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadInterestLine lil
+    WHERE lil.TenantId = l.TenantId AND lil.LeadId = l.LeadId AND lil.IsDeleted = 0
+      AND (lil.LineOfBusiness LIKE '%' + @SearchTerm + '%' OR lil.Carrier LIKE '%' + @SearchTerm + '%'
+        OR lil.CurrentCarrier LIKE '%' + @SearchTerm + '%' OR lil.Priority LIKE '%' + @SearchTerm + '%' OR lil.Notes LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadActivity la
+    WHERE la.TenantId = l.TenantId AND la.LeadId = l.LeadId AND la.IsDeleted = 0
+      AND (la.ActivityTypeCode LIKE '%' + @SearchTerm + '%' OR la.Subject LIKE '%' + @SearchTerm + '%'
+        OR la.Notes LIKE '%' + @SearchTerm + '%' OR la.OutcomeCode LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadCommunication lc
+    WHERE lc.TenantId = l.TenantId AND lc.LeadId = l.LeadId AND lc.IsDeleted = 0
+      AND (lc.Channel LIKE '%' + @SearchTerm + '%' OR lc.Subject LIKE '%' + @SearchTerm + '%' OR lc.Preview LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadCampaignEnrollment lce
+    WHERE lce.TenantId = l.TenantId AND lce.LeadId = l.LeadId AND lce.IsDeleted = 0
+      AND (lce.CampaignName LIKE '%' + @SearchTerm + '%' OR lce.Status LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadDocument ld
+    WHERE ld.TenantId = l.TenantId AND ld.LeadId = l.LeadId AND ld.IsDeleted = 0
+      AND (ld.FileName LIKE '%' + @SearchTerm + '%' OR ld.Extension LIKE '%' + @SearchTerm + '%' OR ld.Category LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.Opportunity o
+    WHERE o.TenantId = l.TenantId AND o.LeadId = l.LeadId AND o.IsDeleted = 0
+      AND (o.OpportunityNumber LIKE '%' + @SearchTerm + '%' OR o.OpportunityName LIKE '%' + @SearchTerm + '%'
+        OR o.StageName LIKE '%' + @SearchTerm + '%' OR o.ForecastCategoryCode LIKE '%' + @SearchTerm + '%' OR o.Description LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM Client.Account a
+    WHERE a.TenantId = l.TenantId AND a.AccountId = l.AccountId AND a.IsDeleted = 0
+      AND (a.AccountNumber LIKE '%' + @SearchTerm + '%' OR a.AccountName LIKE '%' + @SearchTerm + '%'
+        OR a.MainEmail LIKE '%' + @SearchTerm + '%' OR a.MainPhone LIKE '%' + @SearchTerm + '%'
+        OR a.Industry LIKE '%' + @SearchTerm + '%' OR a.Website LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM IAM.[User] u
+    WHERE u.TenantId = l.TenantId AND u.UserId = l.AssignedToUserId AND u.IsDeleted = 0
+      AND (u.DisplayName LIKE '%' + @SearchTerm + '%' OR u.FullName LIKE '%' + @SearchTerm + '%'
+        OR u.FirstName LIKE '%' + @SearchTerm + '%' OR u.LastName LIKE '%' + @SearchTerm + '%' OR u.Email LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadSource ls
+    WHERE ls.TenantId = l.TenantId AND ls.SourceCode = l.SourceCode
+      AND (ls.SourceCode LIKE '%' + @SearchTerm + '%' OR ls.SourceName LIKE '%' + @SearchTerm + '%')
+)
+OR EXISTS
+(
+    SELECT 1 FROM CRM.LeadStatus lst
+    WHERE lst.TenantId = l.TenantId AND lst.IsDeleted = 0 AND lst.StatusCode = l.NurturingStageCode
+      AND (lst.StatusCode LIKE '%' + @SearchTerm + '%' OR lst.StatusName LIKE '%' + @SearchTerm + '%' OR lst.Description LIKE '%' + @SearchTerm + '%')
+)";
+
         var sql = RepositorySql.BuildPagedSearchSql(
-            "CRM.Lead",
-            "LeadId, TenantId, LeadNumber, AccountName, COALESCE(LeadTypeCode, N'Personal') AS LeadTypeCode, FirstName, LastName, Email, Phone, InterestedService, AnnualRevenue, Score, PriorityCode, SourceCode, NurturingStageCode, QualifiedDate, StatusCodeId AS StatusCode, AccountId, AssignedToUserId, CreatedDateUtc, ModifiedDateUtc",
-            "FirstName LIKE '%' + @SearchTerm + '%' OR LastName LIKE '%' + @SearchTerm + '%' OR Email LIKE '%' + @SearchTerm + '%' OR AccountName LIKE '%' + @SearchTerm + '%' OR LeadNumber LIKE '%' + @SearchTerm + '%'",
+            "CRM.Lead l",
+            "l.LeadId, l.TenantId, l.LeadNumber, l.AccountName, COALESCE(l.LeadTypeCode, N'Personal') AS LeadTypeCode, l.FirstName, l.LastName, l.Email, l.Phone, l.InterestedService, l.AnnualRevenue, l.Score, l.PriorityCode, l.SourceCode, l.NurturingStageCode, l.QualifiedDate, l.StatusCodeId AS StatusCode, l.AccountId, l.AssignedToUserId, l.CreatedDateUtc, l.ModifiedDateUtc",
+            searchPredicate,
             "CreatedDateUtc DESC",
             true);
 
@@ -774,6 +859,7 @@ ORDER BY CreatedDateUtc DESC;", new { TenantId = tenantId, OpportunityId = oppor
 
         if (existing is not null)
         {
+            await SyncSubmissionLinesFromOpportunityAsync(connection, transaction, tenantId, existing.SubmissionId, opportunityId, createdByUserId, cancellationToken);
             return existing;
         }
 
@@ -830,8 +916,36 @@ END;", new
             CreatedByUserId = createdByUserId
         }, transaction: transaction, cancellationToken: cancellationToken));
 
+        await SyncSubmissionLinesFromOpportunityAsync(connection, transaction, tenantId, draft.SubmissionId, opportunityId, createdByUserId, cancellationToken);
+
         return draft;
     }
+
+    private static Task SyncSubmissionLinesFromOpportunityAsync(IDbConnection connection, IDbTransaction transaction, Guid tenantId, Guid submissionId, Guid opportunityId, Guid createdByUserId, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(@"
+INSERT INTO Submissions.SubmissionLine
+    (SubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted, LobId)
+SELECT NEWID(), ol.TenantId, @SubmissionId, ol.OpportunityId, ol.OpportunityLineId, ol.LineOfBusiness, ol.EstPremium,
+       SYSUTCDATETIME(), @CreatedByUserId, 0, ol.LobId
+FROM CRM.OpportunityLine ol
+WHERE ol.TenantId = @TenantId
+  AND ol.OpportunityId = @OpportunityId
+  AND ol.IsDeleted = 0
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM Submissions.SubmissionLine sl
+      WHERE sl.TenantId = @TenantId
+        AND sl.SubmissionId = @SubmissionId
+        AND sl.OpportunityLineId = ol.OpportunityLineId
+        AND sl.IsDeleted = 0
+  );", new
+        {
+            TenantId = tenantId,
+            SubmissionId = submissionId,
+            OpportunityId = opportunityId,
+            CreatedByUserId = createdByUserId
+        }, transaction: transaction, cancellationToken: cancellationToken));
 
     private static string SubmissionPriority(string? leadPriority, decimal? premium)
     {

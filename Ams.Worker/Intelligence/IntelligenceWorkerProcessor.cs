@@ -2,6 +2,7 @@ using System.Data;
 using System.Text.Json;
 using Ams.Application.Abstractions.Persistence;
 using Dapper;
+using Microsoft.Data.SqlClient;
 
 namespace Ams.Worker.Intelligence;
 
@@ -84,8 +85,7 @@ SET @changed+=@@ROWCOUNT;
 COMMIT TRANSACTION;
 SELECT @changed;
 """;
-        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,commandTimeout:180,cancellationToken:cancellationToken));
+        return await ExecuteSynchronizationAsync(sql,"platform projection",180,cancellationToken);
     }
 
     public async Task<int> SynchronizeDecisionAndDiscoveryAsync(CancellationToken cancellationToken)
@@ -154,8 +154,7 @@ SET @changed+=@@ROWCOUNT;
 COMMIT TRANSACTION;
 SELECT @changed;
 """;
-        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,commandTimeout:240,cancellationToken:cancellationToken));
+        return await ExecuteSynchronizationAsync(sql,"decision and discovery",240,cancellationToken);
     }
 
     public async Task<int> SynchronizeBusinessIntelligenceAsync(CancellationToken cancellationToken)
@@ -201,8 +200,7 @@ SET @changed+=@@ROWCOUNT;
 COMMIT TRANSACTION;
 SELECT @changed;
 """;
-        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,commandTimeout:240,cancellationToken:cancellationToken));
+        return await ExecuteSynchronizationAsync(sql,"business intelligence",240,cancellationToken);
     }
 
     public async Task<int> ProcessPlatformWorkAsync(string leaseOwner,IntelligenceWorkerSettings settings,CancellationToken cancellationToken)
@@ -247,8 +245,26 @@ DECLARE @changedCount INT=(SELECT COUNT(1) FROM @changed);
 COMMIT TRANSACTION;
 SELECT @changedCount;
 """;
-        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,cancellationToken:cancellationToken));
+        return await ExecuteSynchronizationAsync(sql,"search index",180,cancellationToken);
     }
+
+    private async Task<int> ExecuteSynchronizationAsync(string sql,string synchronizationName,int commandTimeout,CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+            return await connection.ExecuteScalarAsync<int>(new CommandDefinition(sql,commandTimeout:commandTimeout,cancellationToken:cancellationToken));
+        }
+        catch(SqlException ex)when(IsSynchronizationAlreadyRunning(ex))
+        {
+            logger.LogDebug("Skipped {SynchronizationName} synchronization because another worker owns the synchronization lock.",synchronizationName);
+            return 0;
+        }
+    }
+
+    private static bool IsSynchronizationAlreadyRunning(SqlException exception)
+        => exception.Number==51000
+           && exception.Message.Contains("synchronization is already running.",StringComparison.OrdinalIgnoreCase);
 
     public async Task<int> ProcessRecommendationsAsync(string leaseOwner,IntelligenceWorkerSettings settings,CancellationToken cancellationToken)
     {

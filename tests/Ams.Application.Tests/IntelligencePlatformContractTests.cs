@@ -250,6 +250,19 @@ public sealed class IntelligencePlatformContractTests
     }
 
     [Fact]
+    public void WorkerSynchronization_TreatsOnlyKnownApplicationLockContentionAsNoOp()
+    {
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var worker=File.ReadAllText(Path.Combine(root,"Ams.Worker","Intelligence","IntelligenceWorkerProcessor.cs"));
+
+        Assert.Contains("catch(SqlException ex)when(IsSynchronizationAlreadyRunning(ex))",worker,StringComparison.Ordinal);
+        Assert.Contains("exception.Number==51000",worker,StringComparison.Ordinal);
+        Assert.Contains("synchronization is already running.",worker,StringComparison.Ordinal);
+        Assert.Contains("return 0;",worker,StringComparison.Ordinal);
+        Assert.DoesNotContain("catch(SqlException ex)",worker.Replace("catch(SqlException ex)when(IsSynchronizationAlreadyRunning(ex))",string.Empty,StringComparison.Ordinal),StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DiscoveryRuntime_UsesDatabaseConfigurationScopedRetirementAndRootAuthorization()
     {
         var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.cs"));var platformRepository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.Platform.cs"));var worker=File.ReadAllText(Path.Combine(root,"Ams.Worker","Intelligence","IntelligenceWorkerProcessor.cs"));var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0086_IntelligenceDiscoveryConfiguration.sql",StringComparison.Ordinal));var migration=Read(assembly,resource);

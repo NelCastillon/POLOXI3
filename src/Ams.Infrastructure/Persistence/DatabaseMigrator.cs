@@ -360,6 +360,8 @@ public sealed partial class DatabaseMigrator
         new("0304A_Enterprise_Department_Prerequisites", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentPrerequisites.sql")),
         new("0305_Enterprise_Department_Job_Title_Mapping", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentJobTitleMapping.sql")),
         new("0306_Enterprise_Agency_Team_Prerequisite", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0114_EnterpriseAgencyTeamPrerequisite.sql")),
+        new("0307_CRM_Lead_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0116_CrmLeadRelatedSearchIndexes.sql")),
+        new("0308_Submissions_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0117_SubmissionRelatedSearchIndexes.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

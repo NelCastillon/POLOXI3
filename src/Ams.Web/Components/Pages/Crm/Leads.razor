@@ -363,7 +363,7 @@
     <section class="ld-search-panel">
         <div class="ld-search-wrap">
             <i class="bi bi-search ld-search-icon" aria-hidden="true"></i>
-            <div class="ld-search-body"><label for="leadSearchInput">Search CRM leads</label><input id="leadSearchInput" class="ld-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search name, company, email, phone, source, owner, or stage..." /><span class="ld-search-hint">Enterprise search filters the current in-memory CRM dataset instantly.</span></div>
+            <div class="ld-search-body"><label for="leadSearchInput">Search CRM leads</label><input id="leadSearchInput" class="ld-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search leads, contacts, activities, lines, campaigns, documents, accounts, or opportunities..." /><span class="ld-search-hint">Search includes tenant-scoped lead details and linked CRM records.</span></div>
         </div>
         <select class="ld-filter-select" value="@_filterStage" @onchange="OnStageFilterChanged"><option value="">All stages</option>@foreach (var option in _stageOptions) { <option value="@option.Value">@option.Label</option> }</select>
         <select class="ld-filter-select" value="@_filterSource" @onchange="OnSourceFilterChanged"><option value="">All sources</option>@foreach (var option in _sourceOptions) { <option value="@option.Value">@option.Label</option> }</select>
@@ -447,6 +447,7 @@
     private string _toastKind = "info";
     private string _loadError = string.Empty;
     private CancellationTokenSource? _toastCts;
+    private CancellationTokenSource? _searchCts;
     private ConfirmAction? _confirmAction;
     private Guid _editingId = Guid.Empty;
     private string _view = "table";
@@ -481,6 +482,7 @@
     private List<LeadImportRow> _importPreview = [];
     private List<string> _importErrors = [];
     private List<LabelValue> _ownerOptions = [];
+    private IReadOnlyDictionary<Guid, string> _ownerLookup = new Dictionary<Guid, string>();
     private List<LeadTypeDto> _leadTypes = [];
     private List<LabelValue> _leadTypeOptions = [];
     private List<LabelValue> _stageOptions = [];
@@ -563,6 +565,8 @@
         await LeadScoringRealtime.DisposeAsync();
         _toastCts?.Cancel();
         _toastCts?.Dispose();
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
     }
 
     private async Task LoadAsync()
@@ -574,7 +578,7 @@
             if (_tenantId == Guid.Empty) await ResolveCurrentUserContextAsync();
             if (_tenantId == Guid.Empty) return;
 
-            var leadsTask = Api.SearchLeadsAsync(_tenantId);
+            var leadsTask = Api.SearchLeadsAsync(_tenantId, _search);
             var usersTask = Api.SearchUsersAsync(_tenantId);
             var leadTypesTask = Api.GetLeadTypesAsync(_tenantId);
             var sourcesTask = Api.SearchLeadSourcesAsync(_tenantId, pageSize: 250);
@@ -583,15 +587,15 @@
             await Task.WhenAll(leadsTask, usersTask, leadTypesTask, sourcesTask, statusesTask, prioritiesTask);
 
             var users = usersTask.Result?.Items?.ToList() ?? [];
-            var ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
+            _ownerLookup = users.ToDictionary(u => u.UserId, u => string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName);
             _ownerOptions = users.Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)).Select(u => new LabelValue(u.UserId.ToString(), string.IsNullOrWhiteSpace(u.DisplayName) ? u.FullName : u.DisplayName)).Where(x => !string.IsNullOrWhiteSpace(x.Label)).OrderBy(x => x.Label).ToList();
-            EnsureCurrentUserOwnerOption(ownerLookup);
+            EnsureCurrentUserOwnerOption(_ownerLookup);
             _leadTypes = leadTypesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName).ToList() ?? [];
             _leadTypeOptions = _leadTypes.Select(x => new LabelValue(x.TypeCode, x.TypeName)).ToList();
             _sourceOptions = sourcesTask.Result?.Items?.Where(x => x.IsActive).OrderBy(x => x.SourceName).Select(x => new LabelValue(x.SourceCode, x.SourceName)).ToList() ?? [];
             _stageOptions = statusesTask.Result?.Items?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.StatusName).Select(x => new LabelValue(x.StatusCode, x.StatusName)).ToList() ?? [];
             _ratingOptions = prioritiesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Label).Select(x => new LabelValue(x.Code, x.Label)).ToList() ?? [];
-            _leads = leadsTask.Result?.Items?.Select(l => MapToLeadRow(l, ownerLookup)).ToList() ?? [];
+            _leads = leadsTask.Result?.Items?.Select(l => MapToLeadRow(l, _ownerLookup)).ToList() ?? [];
             RebuildDerived();
             _detail = LeadId.HasValue
                 ? _leads.FirstOrDefault(x => x.LeadId == LeadId.Value) ?? _filtered.FirstOrDefault()
@@ -650,11 +654,6 @@
     private void ApplyFilters(bool resetPage = true)
     {
         IEnumerable<LeadRow> query = _leads;
-        if (!string.IsNullOrWhiteSpace(_search))
-        {
-            var term = _search.Trim();
-            query = query.Where(x => Contains(x.FullName, term) || Contains(x.CompanyName, term) || Contains(x.Email, term) || Contains(x.Phone, term) || Contains(x.Source, term) || Contains(x.Owner, term) || Contains(x.Stage, term));
-        }
         if (!string.IsNullOrWhiteSpace(_filterStage)) query = query.Where(x => x.Stage == _filterStage);
         if (!string.IsNullOrWhiteSpace(_filterSource)) query = query.Where(x => x.Source == _filterSource);
         if (!string.IsNullOrWhiteSpace(_filterOwner)) query = query.Where(x => x.AssignedToUserId?.ToString() == _filterOwner);
@@ -683,7 +682,39 @@
     private bool IsSelected(LeadRow lead) => _selected.Any(x => x.LeadId == lead.LeadId);
     private void ToggleSelection(LeadRow lead) { if (IsSelected(lead)) _selected.RemoveAll(x => x.LeadId == lead.LeadId); else _selected.Add(lead); }
     private void ToggleCurrentPageSelection(BlazorChangeEventArgs e) { var selected = e.Value as bool? ?? string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); if (selected) { foreach (var lead in _paged.Where(x => !IsSelected(x))) _selected.Add(lead); } else { _selected.RemoveAll(x => _paged.Any(p => p.LeadId == x.LeadId)); } }
-    private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
+    private async Task OnSearchChanged(BlazorChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? string.Empty;
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = new CancellationTokenSource();
+        var cancellationToken = _searchCts.Token;
+
+        try
+        {
+            await Task.Delay(300, cancellationToken);
+            _loading = true;
+            var result = await Api.SearchLeadsAsync(_tenantId, _search, cancellationToken: cancellationToken);
+            _leads = result?.Items?.Select(l => MapToLeadRow(l, _ownerLookup)).ToList() ?? [];
+            RebuildDerived();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            await ShowToastAsync($"Search failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _loading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
     private void OnStageFilterChanged(BlazorChangeEventArgs e) { _filterStage = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
     private void OnSourceFilterChanged(BlazorChangeEventArgs e) { _filterSource = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }
     private void OnOwnerFilterChanged(BlazorChangeEventArgs e) { _filterOwner = e.Value?.ToString() ?? string.Empty; ApplyFilters(); }

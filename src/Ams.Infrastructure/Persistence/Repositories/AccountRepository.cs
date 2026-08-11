@@ -199,9 +199,12 @@ ORDER BY c.LastName, c.FirstName;";
     public async Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-SELECT AccountId, TenantId, AccountNumber, AccountName, DbaName, AccountTypeCode, MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
-       ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue, CreatedDateUtc, ModifiedDateUtc
-FROM Client.Account WHERE TenantId=@TenantId AND AccountId=@AccountId AND IsDeleted=0;
+SELECT a.AccountId, a.TenantId, a.AccountNumber, a.AccountName, a.DbaName, a.AccountTypeCode, a.MainEmail, a.MainPhone, a.StatusCode, a.SegmentCode, a.OwnerUserId,
+       COALESCE(NULLIF(u.DisplayName,N''),NULLIF(u.FullName,N''),u.UserName) AS OwnerName,
+       a.ParentAccountId, a.LifecycleStageCode, a.Industry, a.Website, a.AnnualRevenue, a.CreatedDateUtc, a.ModifiedDateUtc
+FROM Client.Account a
+LEFT JOIN IAM.[User] u ON u.TenantId=a.TenantId AND u.UserId=a.OwnerUserId AND u.IsDeleted=0
+WHERE a.TenantId=@TenantId AND a.AccountId=@AccountId AND a.IsDeleted=0;
 
 SELECT c.ContactId, c.TenantId, c.AccountId, a.AccountName, c.FirstName, c.LastName, c.Email, c.Phone, c.JobTitle,
        c.ContactTypeCode, c.IsBillingContact, c.IsPortalUser, c.IsKeyContact, c.IsServiceContact, c.ParentContactId,
