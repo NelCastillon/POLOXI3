@@ -10,6 +10,8 @@ using Ams.Infrastructure.Persistence.Repositories;
 using Ams.Infrastructure.Persistence.TypeHandlers;
 using Ams.Infrastructure.Payments;
 using Ams.Infrastructure.Services;
+using Azure.Core;
+using Azure.Identity;
 using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,8 +38,13 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddDataProtection();
+        services.AddMemoryCache();
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
+        services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+        services.AddScoped<IAddressLocationRepository, AddressLocationRepository>();
+        services.AddScoped<IAddressLocationService, AddressLocationService>();
+        services.AddHttpClient<IAddressProvider, AzureMapsAddressProvider>();
         services.AddScoped<IDocumentStorageService, AzureBlobDocumentStorageService>();
         services.AddScoped<IDocumentIntakePayloadStore, DocumentIntakePayloadStore>();
         services.AddScoped<IDocumentOcrRouteRepository, DocumentOcrRouteRepository>();

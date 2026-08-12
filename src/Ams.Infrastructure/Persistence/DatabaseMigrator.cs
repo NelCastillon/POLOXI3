@@ -362,6 +362,11 @@ public sealed partial class DatabaseMigrator
         new("0306_Enterprise_Agency_Team_Prerequisite", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0114_EnterpriseAgencyTeamPrerequisite.sql")),
         new("0307_CRM_Lead_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0116_CrmLeadRelatedSearchIndexes.sql")),
         new("0308_Submissions_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0117_SubmissionRelatedSearchIndexes.sql")),
+        new("0309_Address_Location_Engine", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0120_AddressLocationEngine.sql")),
+        new("0310_Address_Location_Api_Version_Fix", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0311_Address_Location_Endpoint_Fix", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0312_Address_Location_Typeahead_Endpoint", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0313_Geo_Reference_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0122_GeoReferenceData.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

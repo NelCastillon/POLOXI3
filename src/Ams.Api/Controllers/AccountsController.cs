@@ -47,6 +47,11 @@ public sealed class AccountsController : ControllerBase
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAccountRequest request, CancellationToken cancellationToken)
     {
+        var tenantId = AuthenticatedRequestContext.GetTenantId(User);
+        if (!tenantId.HasValue) return Forbid();
+        if (!AuthenticatedRequestContext.CanManageAccounts(User, tenantId.Value)) return Forbid();
+        request.TenantId = tenantId.Value;
+        request.ModifiedByUserId = AuthenticatedRequestContext.GetUserId(User);
         await _service.UpdateAsync(id, request, cancellationToken);
         return NoContent();
     }

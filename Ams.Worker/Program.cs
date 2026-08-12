@@ -18,6 +18,8 @@ using Ams.Worker.Renewals;
 using Ams.Worker.Search;
 using Ams.Worker.Submissions;
 using Ams.Application.Features.DocumentIntake;
+using Azure.Core;
+using Azure.Identity;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -29,6 +31,10 @@ builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: fa
 
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddSingleton<TokenCredential>(_ =>
+    builder.Environment.IsDevelopment()
+        ? new AzureCliCredential()
+        : new ManagedIdentityCredential());
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IDocumentKnowledgeNormalizer, KnowledgeDocumentNormalizer>();
 builder.Services.AddScoped<IDocumentIntakeProcessor, DocumentIntakeProcessor>();

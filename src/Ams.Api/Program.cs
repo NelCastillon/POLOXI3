@@ -16,6 +16,8 @@ using OpenTelemetry.Trace;
 using Ams.Infrastructure.Services;
 using Ams.Api.Services;
 using Ams.Application.Abstractions.Intelligence;
+using Azure.Core;
+using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -74,6 +76,10 @@ builder.Services.AddSingleton<IAuthorizationHandler, KnowledgePermissionAuthoriz
 builder.Services.AddSingleton<IAuthorizationHandler, DocumentIntakePermissionAuthorizationHandler>();
 builder.Services.AddSingleton<IAuthorizationHandler, IntelligencePermissionAuthorizationHandler>();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddSingleton<TokenCredential>(_ =>
+    builder.Environment.IsDevelopment()
+        ? new AzureCliCredential()
+        : new ManagedIdentityCredential());
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISemanticQueryExpander,KnowledgeSemanticQueryExpander>();
 builder.Services.AddApiServices();

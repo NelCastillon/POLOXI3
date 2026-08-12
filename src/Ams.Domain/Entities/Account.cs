@@ -34,6 +34,13 @@ public sealed class Account : AuditableEntity
     public string? State { get; private set; }
     public string? Zip { get; private set; }
     public string? Country { get; private set; }
+    public Guid? AddressResolutionId { get; private set; }
+    public string? County { get; private set; }
+    public decimal? Latitude { get; private set; }
+    public decimal? Longitude { get; private set; }
+    public string? AddressValidationStatusCode { get; private set; }
+    public string? AddressProviderCode { get; private set; }
+    public string? AddressProviderPlaceId { get; private set; }
 
     private Account() { }
 
@@ -70,6 +77,26 @@ public sealed class Account : AuditableEntity
         Employees = employees;
         TaxId = taxId;
         NaicsCode = naicsCode;
+        MarkModified(modifiedByUserId);
+    }
+
+    public void ApplyAddressResolution(
+        Guid addressResolutionId,
+        string? county,
+        decimal? latitude,
+        decimal? longitude,
+        string validationStatusCode,
+        string? providerCode,
+        string? providerPlaceId,
+        Guid? modifiedByUserId)
+    {
+        AddressResolutionId = addressResolutionId;
+        County = county;
+        Latitude = latitude;
+        Longitude = longitude;
+        AddressValidationStatusCode = validationStatusCode;
+        AddressProviderCode = providerCode;
+        AddressProviderPlaceId = providerPlaceId;
         MarkModified(modifiedByUserId);
     }
 

@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using Ams.Application.Common.Validation;
+using Ams.Application.Features.Locations;
 
 namespace Ams.Application.Features.Accounts;
 
@@ -38,6 +39,7 @@ public sealed class CreateAccountRequest
     public string? Zip { get; set; }
     [StringLength(50)]
     public string? Country { get; set; }
+    public AddressResolutionInput? AddressResolution { get; set; }
     [StringLength(50)]
     public string? TaxId { get; set; }
     [StringLength(20)]

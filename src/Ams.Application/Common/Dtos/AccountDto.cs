@@ -39,6 +39,13 @@ public sealed class AccountDto
     public string? State { get; set; }
     public string? Zip { get; set; }
     public string? Country { get; set; }
+    public Guid? AddressResolutionId { get; set; }
+    public string? County { get; set; }
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public string? AddressValidationStatusCode { get; set; }
+    public string? AddressProviderCode { get; set; }
+    public string? AddressProviderPlaceId { get; set; }
 
     // Audit
     public DateTime CreatedDateUtc { get; set; }

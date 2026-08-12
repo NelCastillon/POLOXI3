@@ -55,6 +55,7 @@ using Ams.Application.Features.CrmConfig;
 using Ams.Application.Features.AccountConfig;
 using Ams.Application.Features.PolicyConfig;
 using Ams.Application.Features.PolicyCertificates;
+using Ams.Application.Features.Locations;
 
 using Ams.Application.Features.Lobs;
 using Ams.Application.Features.Appetite;
@@ -1665,6 +1666,71 @@ public sealed partial class ApiClient
     }
 
     // -- Client & Account -------------------------------------
+    public Task<AddressEngineStatusDto?> GetAddressEngineStatusAsync(CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AddressEngineStatusDto>("api/address-location/status", cancellationToken);
+
+    public Task<AddressProviderConfigurationDto?> GetAddressProviderConfigurationAsync(CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<AddressProviderConfigurationDto>("api/address-location/configuration", cancellationToken);
+
+    public async Task<IReadOnlyList<AddressSuggestionDto>> AutocompleteAddressAsync(
+        string query,
+        string? countrySet = null,
+        string? language = null,
+        int? limit = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parameters = new List<string> { $"query={Uri.EscapeDataString(query)}" };
+        if (!string.IsNullOrWhiteSpace(countrySet)) parameters.Add($"countrySet={Uri.EscapeDataString(countrySet)}");
+        if (!string.IsNullOrWhiteSpace(language)) parameters.Add($"language={Uri.EscapeDataString(language)}");
+        if (limit.HasValue) parameters.Add($"limit={limit.Value}");
+        var response = await _httpClient.GetAsync($"api/address-location/autocomplete?{string.Join('&', parameters)}", cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<AddressSuggestionDto>>(cancellationToken: cancellationToken) ?? [];
+    }
+
+    public async Task<AddressSuggestionDto?> GeocodeAddressAsync(AddressGeocodeRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/address-location/geocode", request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<AddressSuggestionDto>(cancellationToken: cancellationToken);
+    }
+
+    public async Task UpdateAddressProviderConfigurationAsync(UpdateAddressProviderConfigurationRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync("api/address-location/configuration", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<GeoStateDto>> GetGeoStatesAsync(string? countryCode = null, CancellationToken cancellationToken = default)
+    {
+        var url = string.IsNullOrWhiteSpace(countryCode)
+            ? "api/address-location/geo/states"
+            : $"api/address-location/geo/states?countryCode={Uri.EscapeDataString(countryCode)}";
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<GeoStateDto>>(url, cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<GeoCityDto>> SearchGeoCitiesAsync(string query, string? countryCode = null, int? limit = null, CancellationToken cancellationToken = default)
+    {
+        var parameters = new List<string> { $"query={Uri.EscapeDataString(query)}" };
+        if (!string.IsNullOrWhiteSpace(countryCode)) parameters.Add($"countryCode={Uri.EscapeDataString(countryCode)}");
+        if (limit.HasValue) parameters.Add($"limit={limit.Value}");
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<GeoCityDto>>(
+            $"api/address-location/geo/cities?{string.Join('&', parameters)}", cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<GeoPostalCodeDto>> GetGeoPostalCodesAsync(string stateCode, string cityName, string? countryCode = null, CancellationToken cancellationToken = default)
+    {
+        var parameters = new List<string>
+        {
+            $"stateCode={Uri.EscapeDataString(stateCode)}",
+            $"cityName={Uri.EscapeDataString(cityName)}"
+        };
+        if (!string.IsNullOrWhiteSpace(countryCode)) parameters.Add($"countryCode={Uri.EscapeDataString(countryCode)}");
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<GeoPostalCodeDto>>(
+            $"api/address-location/geo/postalcodes?{string.Join('&', parameters)}", cancellationToken) ?? [];
+    }
+
     public async Task<Guid> CreateAccountAsync(CreateAccountRequest request, CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.PostAsJsonAsync("api/accounts", request, cancellationToken);

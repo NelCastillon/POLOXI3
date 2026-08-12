@@ -1,0 +1,207 @@
+@page "/tenant/integrations/address-location"
+@namespace Ams.Web.Components.Pages.TenantConfig.IntegrationConfig
+@using Ams.Application.Features.Locations
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Address & Location - Integrations</PageTitle>
+
+<AppPageHeader Title="Address & Location"
+               Subtitle="Configure the shared AgencyBinder address autocomplete and geocoding provider"
+               Icon="bi bi-geo-alt">
+    <Actions>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button type="button" class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@(_loading || _saving)"><i class="bi bi-check-lg"></i> @(_saving ? "Saving..." : "Save Settings")</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="al-kpi-strip">
+    <div class="al-kpi-card">
+        <span class="al-kpi-icon"><i class="bi bi-cloud-check"></i></span>
+        <div><strong>@(_configuration?.DisplayName ?? "Not configured")</strong><small>Default provider</small></div>
+    </div>
+    <div class="al-kpi-card @(_status?.IsAvailable == true ? "al-kpi-card--ready" : "al-kpi-card--attention")">
+        <span class="al-kpi-icon"><i class="bi @(_status?.IsAvailable == true ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i></span>
+        <div><strong>@(_status?.IsAvailable == true ? "Ready" : "Needs configuration")</strong><small>Provider readiness</small></div>
+    </div>
+    <div class="al-kpi-card">
+        <span class="al-kpi-icon"><i class="bi bi-shield-lock"></i></span>
+        <div><strong>Managed Identity</strong><small>Server-side authentication</small></div>
+    </div>
+</div>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+}
+
+@if (_saveMessage is not null)
+{
+    <div class="alert @(_saveSucceeded ? "alert-success" : "alert-danger") al-save-message"
+         style="@(!_saveSucceeded ? "border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" : null)"
+         role="alert"
+         aria-live="polite">
+        <i class="bi @(_saveSucceeded ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")" aria-hidden="true"></i>
+        <span>@_saveMessage</span>
+        <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="DismissSaveMessage" aria-label="Dismiss save message"><i class="bi bi-x-lg"></i></button>
+    </div>
+}
+
+@if (_status is not null && !_status.IsAvailable && !string.IsNullOrWhiteSpace(_status.Message))
+{
+    <div class="al-readiness al-readiness--warning"><i class="bi bi-info-circle-fill"></i><div><strong>Manual entry remains available</strong><span>@_status.Message</span></div></div>
+}
+else if (_status?.IsAvailable == true)
+{
+    <div class="al-readiness al-readiness--ready"><i class="bi bi-patch-check-fill"></i><div><strong>Address engine is ready</strong><span>Autocomplete and geocoding requests are routed through @_status.ProviderName using the App Service managed identity.</span></div></div>
+}
+
+<div class="al-layout">
+    <section class="al-card">
+        <div class="al-card-header"><span><i class="bi bi-map"></i></span><div><h2>Azure Maps provider</h2><p>Provider endpoints and protocol settings are controlled by the database seed. Configure the Azure Maps Account Client ID and tenant behavior here.</p></div></div>
+        @if (_loading)
+        {
+            <div class="al-loading"><span class="spinner-border"></span><span>Loading address provider settings...</span></div>
+        }
+        else
+        {
+            <EditForm Model="_form" OnValidSubmit="SaveAsync">
+                <DataAnnotationsValidator />
+                <div class="al-form-grid">
+                    <div class="um-field"><label>Provider</label><div class="um-input al-readonly">@_configuration?.DisplayName</div></div>
+                    <div class="um-field"><label>Provider Code</label><div class="um-input al-readonly">@_form.ProviderCode</div></div>
+                    <div class="um-field um-field--full"><label>Azure Maps Account Client ID</label><InputText @bind-Value="_form.MapsClientId" class="um-input" placeholder="Enter the Azure Maps Account Client ID" /><small>This identifier is not a subscription key or secret.</small><ValidationMessage For="() => _form.MapsClientId" class="text-danger" /></div>
+                    <div class="um-field"><label>Default Country Set</label><InputText @bind-Value="_form.DefaultCountrySet" class="um-input" placeholder="Comma-separated country codes" /><ValidationMessage For="() => _form.DefaultCountrySet" class="text-danger" /></div>
+                    <div class="um-field"><label>Default Language</label><InputText @bind-Value="_form.DefaultLanguage" class="um-input" placeholder="Language and region code" /><ValidationMessage For="() => _form.DefaultLanguage" class="text-danger" /></div>
+                    <div class="um-field"><label>Minimum Query Length</label><InputNumber @bind-Value="_form.MinimumQueryLength" class="um-input" /><ValidationMessage For="() => _form.MinimumQueryLength" class="text-danger" /></div>
+                    <div class="um-field"><label>Debounce (milliseconds)</label><InputNumber @bind-Value="_form.DebounceMilliseconds" class="um-input" /><ValidationMessage For="() => _form.DebounceMilliseconds" class="text-danger" /></div>
+                    <div class="um-field"><label>Maximum Suggestions</label><InputNumber @bind-Value="_form.MaximumSuggestions" class="um-input" /><ValidationMessage For="() => _form.MaximumSuggestions" class="text-danger" /></div>
+                    <div class="um-field"><label>Request Timeout (seconds)</label><InputNumber @bind-Value="_form.RequestTimeoutSeconds" class="um-input" /><ValidationMessage For="() => _form.RequestTimeoutSeconds" class="text-danger" /></div>
+                    <div class="um-field um-field--full al-toggle"><label><InputCheckbox @bind-Value="_form.IsEnabled" /><span><strong>Enable address lookup</strong><small>When disabled, all shared address fields continue to support manual entry.</small></span></label></div>
+                </div>
+                <div class="al-actions"><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check-lg"></i> @(_saving ? "Saving..." : "Save Provider Settings")</button></div>
+            </EditForm>
+        }
+    </section>
+
+    <aside class="al-card al-details">
+        <div class="al-card-header"><span><i class="bi bi-diagram-3"></i></span><div><h2>Runtime architecture</h2><p>Provider details currently loaded from the database.</p></div></div>
+        <dl>
+            <div><dt>Endpoint</dt><dd>@(_configuration?.ServiceEndpoint ?? "Unavailable")</dd></div>
+            <div><dt>API Version</dt><dd>@(_configuration?.ApiVersion ?? "Unavailable")</dd></div>
+            <div><dt>Autocomplete Path</dt><dd>@(_configuration?.AutocompletePath ?? "Unavailable")</dd></div>
+            <div><dt>Geocode Path</dt><dd>@(_configuration?.GeocodePath ?? "Unavailable")</dd></div>
+            <div><dt>Authentication</dt><dd>Microsoft Entra ID / Managed Identity</dd></div>
+        </dl>
+        <div class="al-security"><i class="bi bi-shield-check"></i><p>The browser never receives an Azure Maps subscription key. AgencyBinder API calls Azure Maps using its Azure identity.</p></div>
+    </aside>
+</div>
+
+<EnterpriseToast @ref="_toast" NewestOnTop="true" ShowProgressBar="true" />
+
+@code {
+    private AddressProviderConfigurationDto? _configuration;
+    private AddressEngineStatusDto? _status;
+    private AddressProviderForm _form = new();
+    private EnterpriseToast _toast = default!;
+    private bool _loading;
+    private bool _saving;
+    private bool _saveSucceeded;
+    private string? _loadError;
+    private string? _saveMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await CurrentUser.RequireAsync();
+        Breadcrumbs.SetCrumbs(new("Integrations", "/tenant/integrations"), new("Address & Location", "/tenant/integrations/address-location"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        _saveMessage = null;
+        try
+        {
+            var configurationTask = Api.GetAddressProviderConfigurationAsync();
+            var statusTask = Api.GetAddressEngineStatusAsync();
+            await Task.WhenAll(configurationTask, statusTask);
+            _configuration = configurationTask.Result ?? throw new InvalidOperationException("The address provider configuration was not found.");
+            _status = statusTask.Result;
+            _form = new AddressProviderForm
+            {
+                ProviderCode = _configuration.ProviderCode,
+                MapsClientId = _configuration.MapsClientId,
+                DefaultCountrySet = _configuration.DefaultCountrySet,
+                DefaultLanguage = _configuration.DefaultLanguage,
+                MinimumQueryLength = _configuration.MinimumQueryLength,
+                DebounceMilliseconds = _configuration.DebounceMilliseconds,
+                MaximumSuggestions = _configuration.MaximumSuggestions,
+                RequestTimeoutSeconds = _configuration.RequestTimeoutSeconds,
+                IsEnabled = _configuration.IsEnabled
+            };
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Address provider settings failed to load: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _saveMessage = null;
+        try
+        {
+            await Api.UpdateAddressProviderConfigurationAsync(new UpdateAddressProviderConfigurationRequest
+            {
+                ProviderCode = _form.ProviderCode,
+                MapsClientId = Normalize(_form.MapsClientId),
+                DefaultCountrySet = Normalize(_form.DefaultCountrySet),
+                DefaultLanguage = Normalize(_form.DefaultLanguage),
+                MinimumQueryLength = _form.MinimumQueryLength,
+                DebounceMilliseconds = _form.DebounceMilliseconds,
+                MaximumSuggestions = _form.MaximumSuggestions,
+                RequestTimeoutSeconds = _form.RequestTimeoutSeconds,
+                IsEnabled = _form.IsEnabled
+            });
+            await LoadAsync();
+            _saveSucceeded = true;
+            _saveMessage = "Address & Location settings were saved successfully.";
+            await _toast.ShowAsync(new() { Content = _saveMessage, CssClass = "enterprise-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            _saveSucceeded = false;
+            _saveMessage = $"Save failed: {ex.Message}";
+            await _toast.ShowAsync(new() { Content = _saveMessage, CssClass = "enterprise-toast-danger" });
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void DismissSaveMessage() => _saveMessage = null;
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed class AddressProviderForm
+    {
+        [Required, StringLength(50)] public string ProviderCode { get; set; } = string.Empty;
+        [StringLength(100)] public string? MapsClientId { get; set; }
+        [StringLength(200)] public string? DefaultCountrySet { get; set; }
+        [StringLength(20)] public string? DefaultLanguage { get; set; }
+        [Range(2, 20)] public int MinimumQueryLength { get; set; }
+        [Range(100, 5000)] public int DebounceMilliseconds { get; set; }
+        [Range(1, 20)] public int MaximumSuggestions { get; set; }
+        [Range(1, 120)] public int RequestTimeoutSeconds { get; set; }
+        public bool IsEnabled { get; set; }
+    }
+}

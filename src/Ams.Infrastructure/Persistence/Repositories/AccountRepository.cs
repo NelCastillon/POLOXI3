@@ -2,6 +2,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Ams.Application.Features.Accounts;
+using Ams.Application.Features.Locations;
 using Dapper;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
@@ -19,14 +20,42 @@ public sealed class AccountRepository : IAccountRepository
     {
         const string sql = @"
 DECLARE @AccountNumber NVARCHAR(50);
+DECLARE @AddressResolutionId UNIQUEIDENTIFIER = NULL;
 EXEC Client.AllocateAccountNumber @TenantId, @CreatedByUserId, @AccountNumber OUTPUT;
+
+IF @HasAddress = 1
+BEGIN
+    SET @AddressResolutionId = NEWID();
+    INSERT Location.AddressResolution
+    (
+        AddressResolutionId, TenantId, EntityTypeCode, EntityId, AddressFieldCode,
+        ProviderCode, ProviderPlaceId, QueryText, FormattedAddress, AddressLine1,
+        AddressLine2, City, StateCode, PostalCode, CountryCode, County,
+        Latitude, Longitude, ResolutionStatusCode, ConfidenceCode,
+        IsProviderValidated, ResolvedDateUtc, CreatedByUserId, IsDeleted
+    )
+    VALUES
+    (
+        @AddressResolutionId, @TenantId, N'Account', @AccountId, N'Primary',
+        @AddressProviderCode, @AddressProviderPlaceId, @AddressQueryText, @FormattedAddress, @Street,
+        @AddressLine2, @City, @State, @Zip, @Country, @County,
+        @Latitude, @Longitude, @AddressValidationStatusCode, @ConfidenceCode,
+        @IsProviderValidated, CASE WHEN @IsProviderValidated = 1 THEN SYSUTCDATETIME() ELSE NULL END, @CreatedByUserId, 0
+    );
+
+    IF @IsProviderValidated = 1 AND NULLIF(LTRIM(RTRIM(@City)), N'') IS NOT NULL AND NULLIF(LTRIM(RTRIM(@State)), N'') IS NOT NULL
+        EXEC Location.LearnGeoResolution
+            @CountryCode = @Country, @StateCode = @State, @CityName = @City, @County = @County,
+            @PostalCode = @Zip, @Latitude = @Latitude, @Longitude = @Longitude, @UserId = @CreatedByUserId;
+END;
 
 INSERT INTO Client.Account
 (
     AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
     MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
     ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue,
-    Street, City, [State], Zip, Country, TaxId, NaicsCode,
+    Street, City, [State], Zip, Country, AddressResolutionId, County, Latitude, Longitude,
+    AddressValidationStatusCode, AddressProviderCode, AddressProviderPlaceId, TaxId, NaicsCode,
     CreatedDateUtc, CreatedByUserId, IsDeleted
 )
 VALUES
@@ -34,11 +63,13 @@ VALUES
     @AccountId, @TenantId, @AccountNumber, @AccountName, @AccountTypeCode,
     @MainEmail, @MainPhone, @StatusCode, @SegmentCode, @OwnerUserId,
     @ParentAccountId, @LifecycleStageCode, @Industry, @Website, @AnnualRevenue,
-    @Street, @City, @State, @Zip, @Country, @TaxId, @NaicsCode,
+    @Street, @City, @State, @Zip, @Country, @AddressResolutionId, @County, @Latitude, @Longitude,
+    @AddressValidationStatusCode, @AddressProviderCode, @AddressProviderPlaceId, @TaxId, @NaicsCode,
     SYSUTCDATETIME(), @CreatedByUserId, 0
 );";
 
         var id = Guid.NewGuid();
+        var address = BuildAddressResolution(request.AddressResolution, request.Street, request.City, request.State, request.Zip, request.Country);
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var tx = cn.BeginTransaction();
         try
@@ -64,6 +95,18 @@ VALUES
                 request.State,
                 request.Zip,
                 request.Country,
+                HasAddress = address is not null,
+                AddressProviderCode = address?.ProviderCode,
+                AddressProviderPlaceId = address?.ProviderPlaceId,
+                AddressQueryText = address?.QueryText,
+                FormattedAddress = address?.FormattedAddress,
+                AddressLine2 = address?.AddressLine2,
+                County = address?.County,
+                Latitude = address?.Latitude,
+                Longitude = address?.Longitude,
+                AddressValidationStatusCode = address is null ? null : address.IsProviderValidated ? "ProviderValidated" : "Manual",
+                ConfidenceCode = address?.ConfidenceCode,
+                IsProviderValidated = address?.IsProviderValidated ?? false,
                 request.TaxId,
                 request.NaicsCode,
                 request.CreatedByUserId
@@ -85,6 +128,8 @@ VALUES
 SELECT AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
        MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
        ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue,
+       Street, City, [State], Zip, Country, AddressResolutionId, County, Latitude, Longitude,
+       AddressValidationStatusCode, AddressProviderCode, AddressProviderPlaceId,
        CreatedDateUtc, ModifiedDateUtc
 FROM Client.Account
 WHERE AccountId = @Id AND IsDeleted = 0;";
@@ -101,6 +146,8 @@ WHERE AccountId = @Id AND IsDeleted = 0;";
     SELECT AccountId, TenantId, AccountNumber, AccountName, AccountTypeCode,
            MainEmail, MainPhone, StatusCode, SegmentCode, OwnerUserId,
            ParentAccountId, LifecycleStageCode, Industry, Website, AnnualRevenue,
+           Street, City, [State], Zip, Country, AddressResolutionId, County, Latitude, Longitude,
+           AddressValidationStatusCode, AddressProviderCode, AddressProviderPlaceId,
            CreatedDateUtc, ModifiedDateUtc
     FROM Client.Account
     WHERE TenantId = @TenantId AND IsDeleted = 0
@@ -147,6 +194,64 @@ WHERE TenantId = @TenantId AND IsDeleted = 0
     public async Task UpdateAsync(Guid id, UpdateAccountRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+DECLARE @AddressResolutionId UNIQUEIDENTIFIER;
+SELECT @AddressResolutionId = AddressResolutionId
+FROM Client.Account WITH (UPDLOCK, HOLDLOCK)
+WHERE AccountId = @Id AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @HasAddress = 1
+BEGIN
+    IF @AddressResolutionId IS NULL
+    BEGIN
+        SET @AddressResolutionId = NEWID();
+        INSERT Location.AddressResolution
+        (
+            AddressResolutionId, TenantId, EntityTypeCode, EntityId, AddressFieldCode,
+            ProviderCode, ProviderPlaceId, QueryText, FormattedAddress, AddressLine1,
+            AddressLine2, City, StateCode, PostalCode, CountryCode, County,
+            Latitude, Longitude, ResolutionStatusCode, ConfidenceCode,
+            IsProviderValidated, ResolvedDateUtc, CreatedByUserId, IsDeleted
+        )
+        VALUES
+        (
+            @AddressResolutionId, @TenantId, N'Account', @Id, N'Primary',
+            @AddressProviderCode, @AddressProviderPlaceId, @AddressQueryText, @FormattedAddress, @Street,
+            @AddressLine2, @City, @State, @Zip, @Country, @County,
+            @Latitude, @Longitude, @AddressValidationStatusCode, @ConfidenceCode,
+            @IsProviderValidated, CASE WHEN @IsProviderValidated = 1 THEN SYSUTCDATETIME() ELSE NULL END, @ModifiedByUserId, 0
+        );
+    END
+    ELSE
+    BEGIN
+        UPDATE Location.AddressResolution
+        SET ProviderCode = @AddressProviderCode,
+            ProviderPlaceId = @AddressProviderPlaceId,
+            QueryText = @AddressQueryText,
+            FormattedAddress = @FormattedAddress,
+            AddressLine1 = @Street,
+            AddressLine2 = @AddressLine2,
+            City = @City,
+            StateCode = @State,
+            PostalCode = @Zip,
+            CountryCode = @Country,
+            County = @County,
+            Latitude = @Latitude,
+            Longitude = @Longitude,
+            ResolutionStatusCode = @AddressValidationStatusCode,
+            ConfidenceCode = @ConfidenceCode,
+            IsProviderValidated = @IsProviderValidated,
+            ResolvedDateUtc = CASE WHEN @IsProviderValidated = 1 THEN SYSUTCDATETIME() ELSE NULL END,
+            ModifiedDateUtc = SYSUTCDATETIME(),
+            ModifiedByUserId = @ModifiedByUserId
+        WHERE AddressResolutionId = @AddressResolutionId AND TenantId = @TenantId AND IsDeleted = 0;
+    END;
+
+    IF @IsProviderValidated = 1 AND NULLIF(LTRIM(RTRIM(@City)), N'') IS NOT NULL AND NULLIF(LTRIM(RTRIM(@State)), N'') IS NOT NULL
+        EXEC Location.LearnGeoResolution
+            @CountryCode = @Country, @StateCode = @State, @CityName = @City, @County = @County,
+            @PostalCode = @Zip, @Latitude = @Latitude, @Longitude = @Longitude, @UserId = @ModifiedByUserId;
+END;
+
 UPDATE Client.Account
 SET AccountName = @AccountName,
     AccountTypeCode = @AccountTypeCode,
@@ -160,28 +265,69 @@ SET AccountName = @AccountName,
     Industry = @Industry,
     Website = @Website,
     AnnualRevenue = @AnnualRevenue,
+    Street = CASE WHEN @HasAddress = 1 THEN @Street ELSE Street END,
+    City = CASE WHEN @HasAddress = 1 THEN @City ELSE City END,
+    [State] = CASE WHEN @HasAddress = 1 THEN @State ELSE [State] END,
+    Zip = CASE WHEN @HasAddress = 1 THEN @Zip ELSE Zip END,
+    Country = CASE WHEN @HasAddress = 1 THEN @Country ELSE Country END,
+    AddressResolutionId = CASE WHEN @HasAddress = 1 THEN @AddressResolutionId ELSE AddressResolutionId END,
+    County = CASE WHEN @HasAddress = 1 THEN @County ELSE County END,
+    Latitude = CASE WHEN @HasAddress = 1 THEN @Latitude ELSE Latitude END,
+    Longitude = CASE WHEN @HasAddress = 1 THEN @Longitude ELSE Longitude END,
+    AddressValidationStatusCode = CASE WHEN @HasAddress = 1 THEN @AddressValidationStatusCode ELSE AddressValidationStatusCode END,
+    AddressProviderCode = CASE WHEN @HasAddress = 1 THEN @AddressProviderCode ELSE AddressProviderCode END,
+    AddressProviderPlaceId = CASE WHEN @HasAddress = 1 THEN @AddressProviderPlaceId ELSE AddressProviderPlaceId END,
     ModifiedDateUtc = SYSUTCDATETIME(),
     ModifiedByUserId = @ModifiedByUserId
-WHERE AccountId = @Id AND IsDeleted = 0;";
+WHERE AccountId = @Id AND TenantId = @TenantId AND IsDeleted = 0;";
 
+        var address = BuildAddressResolution(request.AddressResolution, request.Street, request.City, request.State, request.Zip, request.Country);
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        using var tx = cn.BeginTransaction();
+        try
         {
-            Id = id,
-            request.AccountName,
-            request.AccountTypeCode,
-            request.MainEmail,
-            request.MainPhone,
-            request.StatusCode,
-            request.SegmentCode,
-            request.OwnerUserId,
-            request.ParentAccountId,
-            request.LifecycleStageCode,
-            request.Industry,
-            request.Website,
-            request.AnnualRevenue,
-            request.ModifiedByUserId
-        }, cancellationToken: cancellationToken));
+            await cn.ExecuteAsync(new CommandDefinition(sql, new
+            {
+                Id = id,
+                request.TenantId,
+                request.AccountName,
+                request.AccountTypeCode,
+                request.MainEmail,
+                request.MainPhone,
+                request.StatusCode,
+                request.SegmentCode,
+                request.OwnerUserId,
+                request.ParentAccountId,
+                request.LifecycleStageCode,
+                request.Industry,
+                request.Website,
+                request.AnnualRevenue,
+                request.Street,
+                request.City,
+                request.State,
+                request.Zip,
+                request.Country,
+                HasAddress = address is not null,
+                AddressProviderCode = address?.ProviderCode,
+                AddressProviderPlaceId = address?.ProviderPlaceId,
+                AddressQueryText = address?.QueryText,
+                FormattedAddress = address?.FormattedAddress,
+                AddressLine2 = address?.AddressLine2,
+                County = address?.County,
+                Latitude = address?.Latitude,
+                Longitude = address?.Longitude,
+                AddressValidationStatusCode = address is null ? null : address.IsProviderValidated ? "ProviderValidated" : "Manual",
+                ConfidenceCode = address?.ConfidenceCode,
+                IsProviderValidated = address?.IsProviderValidated ?? false,
+                request.ModifiedByUserId
+            }, transaction: tx, cancellationToken: cancellationToken));
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     public async Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default)
@@ -437,5 +583,33 @@ ORDER BY AccountName;";
             criteria.Phone
         }, cancellationToken: cancellationToken));
         return results.AsList();
+    }
+
+    private static AddressResolutionInput? BuildAddressResolution(
+        AddressResolutionInput? resolution,
+        string? street,
+        string? city,
+        string? state,
+        string? postalCode,
+        string? country)
+    {
+        if (resolution is not null) return resolution;
+
+        var parts = new[] { street, city, state, postalCode, country }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .ToArray();
+        if (parts.Length == 0) return null;
+
+        return new AddressResolutionInput
+        {
+            FormattedAddress = string.Join(", ", parts),
+            AddressLine1 = street,
+            City = city,
+            StateCode = state,
+            PostalCode = postalCode,
+            CountryCode = country,
+            IsProviderValidated = false
+        };
     }
 }
