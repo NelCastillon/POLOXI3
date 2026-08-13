@@ -1,0 +1,882 @@
+@page "/policies/checking"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PolicyChecks
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Policy Checking - AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="pk-toast pk-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="pk-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal pk-modal" role="dialog" aria-modal="true" aria-labelledby="pk-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
+                <span id="pk-form-title">Start Policy Check</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveCheckAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Bound Policy <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" Value="_form.PolicyId" ValueExpression="() => _form.PolicyId" TValue="Guid?" ValueChanged="OnEligiblePolicySelected">
+                                <option value="">@(_eligiblePolicies.Count == 0 ? "No bound policies found" : "Select a bound policy from the database")</option>
+                                @foreach (var p in _eligiblePolicies)
+                                {
+                                    <option value="@p.PolicyId">@p.PolicyNumber — @p.AccountName — @(p.CarrierName ?? "No carrier")</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PolicyId" class="text-danger" />
+                        </div>
+                        @if (_form.PolicyId is not null)
+                        {
+                            <div class="um-field um-field--full pk-policy-summary">
+                                <div>
+                                    <span>Selected Bound Policy</span>
+                                    <strong>@_form.PolicyNumber</strong>
+                                    <small>@_form.AccountName</small>
+                                </div>
+                                <div>
+                                    <span>Carrier</span>
+                                    <strong>@(_form.CarrierName ?? "Not specified")</strong>
+                                    <small>@(_form.LineOfBusiness ?? "Line of business not specified")</small>
+                                </div>
+                                <div>
+                                    <span>Policy Term</span>
+                                    <strong>@DateText(_form.PolicyEffectiveDate) - @DateText(_form.PolicyExpirationDate)</strong>
+                                    <small>Loaded from Submissions.BoundPolicy</small>
+                                </div>
+                            </div>
+                        }
+                        <div class="um-field">
+                            <label>Policy Number</label>
+                            <InputText class="form-control" @bind-Value="_form.PolicyNumber" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Account</label>
+                            <InputText class="form-control" @bind-Value="_form.AccountName" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Carrier</label>
+                            <InputText class="form-control" @bind-Value="_form.CarrierName" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Line of Business</label>
+                            <InputText class="form-control" @bind-Value="_form.LineOfBusiness" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Effective Date</label>
+                            <input class="form-control" value="@DateText(_form.PolicyEffectiveDate)" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Expiration Date</label>
+                            <input class="form-control" value="@DateText(_form.PolicyExpirationDate)" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Check Type</label>
+                            <InputSelect class="form-select" @bind-Value="_form.CheckTypeCode">
+                                <option value="NewBusiness">New Business</option>
+                                <option value="Renewal">Renewal</option>
+                                <option value="Endorsement">Endorsement</option>
+                                <option value="Rewrite">Rewrite</option>
+                                <option value="Audit">Audit</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.CheckTypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Priority</label>
+                            <InputSelect class="form-select" @bind-Value="_form.PriorityCode">
+                                <option value="Low">Low</option>
+                                <option value="Normal">Normal</option>
+                                <option value="High">High</option>
+                                <option value="Critical">Critical</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PriorityCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Due Date</label>
+                            <InputDate class="form-control" @bind-Value="_form.DueDate" />
+                        </div>
+                        <div class="um-field">
+                            <label class="pk-check-inline"><InputCheckbox @bind-Value="_form.IsUrgent" /> Mark urgent</label>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_form.Notes" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-clipboard2-check" aria-hidden="true"></i> Start Check</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showItemForm && _itemTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal pk-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-check2-square" aria-hidden="true"></i>
+                <span>Verify: @_itemTarget.ItemName</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showItemForm = false" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_itemForm" OnValidSubmit="SaveItemAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Expected (Quoted)</label>
+                            <InputText class="form-control" @bind-Value="_itemForm.ExpectedValue" />
+                            <ValidationMessage For="() => _itemForm.ExpectedValue" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Actual (Issued Policy)</label>
+                            <InputText class="form-control" @bind-Value="_itemForm.ActualValue" />
+                            <ValidationMessage For="() => _itemForm.ActualValue" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Result</label>
+                            <InputSelect class="form-select" @bind-Value="_itemForm.MatchStatusCode">
+                                <option value="Unchecked">Unchecked</option>
+                                <option value="Match">Matched</option>
+                                <option value="Discrepancy">Discrepant</option>
+                                <option value="NotApplicable">Not Applicable</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _itemForm.MatchStatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_itemForm.Notes" />
+                            <ValidationMessage For="() => _itemForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showItemForm = false" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">Save Verification</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showDiscrepancyForm)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal pk-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-exclamation-diamond" aria-hidden="true"></i>
+                <span>Log Discrepancy</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDiscrepancyForm = false" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_discrepancyForm" OnValidSubmit="SaveDiscrepancyAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" Value="_discrepancyForm.TypeCode" ValueExpression="() => _discrepancyForm.TypeCode" TValue="string" ValueChanged="OnDiscrepancyTypeChanged">
+                                <option value="">Select type</option>
+                                @foreach (var t in _discrepancyTypes)
+                                {
+                                    <option value="@t.TypeCode">@t.TypeName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _discrepancyForm.TypeCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Severity</label>
+                            <InputSelect class="form-select" @bind-Value="_discrepancyForm.SeverityCode">
+                                <option value="Minor">Minor</option>
+                                <option value="Major">Major</option>
+                                <option value="Critical">Critical</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _discrepancyForm.SeverityCode" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Description <span class="text-danger">*</span></label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_discrepancyForm.Description" />
+                            <ValidationMessage For="() => _discrepancyForm.Description" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDiscrepancyForm = false" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-danger" disabled="@_actionBusy"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Log Discrepancy</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showResolveForm && _resolveTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal pk-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                <span>Resolve: @_resolveTarget.TypeName</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showResolveForm = false" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_resolveForm" OnValidSubmit="SaveResolveAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Outcome</label>
+                            <InputSelect class="form-select" @bind-Value="_resolveForm.StatusCode">
+                                <option value="Resolved">Resolved</option>
+                                <option value="CarrierCorrecting">Carrier Correcting</option>
+                                <option value="Accepted">Accepted As-Is</option>
+                                <option value="Escalated">Escalated</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _resolveForm.StatusCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Carrier Reference #</label>
+                            <InputText class="form-control" @bind-Value="_resolveForm.CarrierReferenceNumber" />
+                            <ValidationMessage For="() => _resolveForm.CarrierReferenceNumber" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label class="pk-check-inline"><InputCheckbox @bind-Value="_resolveForm.CarrierNotified" /> Carrier notified</label>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Resolution Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_resolveForm.ResolutionNotes" />
+                            <ValidationMessage For="() => _resolveForm.ResolutionNotes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showResolveForm = false" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">Save Resolution</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showArchiveConfirm && _archiveTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal um-confirm-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-archive" aria-hidden="true"></i></div>
+            <h3>Archive policy check?</h3>
+            <p>@_archiveTarget.CheckNumber for policy <strong>@_archiveTarget.PolicyNumber</strong> will be archived. History is preserved.</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showArchiveConfirm = false" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ArchiveAsync" disabled="@_actionBusy"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="pk-page">
+    <AppPageHeader Icon="bi-clipboard2-check" Title="Policy Checking" Subtitle="Verify carrier-issued policies against bound quote terms, track discrepancies, and confirm coverage accuracy.">
+        <Actions>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Start Check</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        </Actions>
+    </AppPageHeader>
+
+    <div class="pc-kpi-strip">
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__open" ? "pc-kpi-card--active" : null)" title="Checks not yet completed" @onclick='() => ApplyKpiFilter("__open")'>
+            <span class="pc-kpi-label"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Open</span>
+            <span class="pc-kpi-value">@OpenCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__overdue" ? "pc-kpi-card--active" : null)" title="Open checks past their due date" @onclick='() => ApplyKpiFilter("__overdue")'>
+            <span class="pc-kpi-label"><i class="bi bi-alarm" aria-hidden="true"></i> Overdue</span>
+            <span class="pc-kpi-value">@OverdueCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__discrepant" ? "pc-kpi-card--active" : null)" title="Checks with open discrepancies" @onclick='() => ApplyKpiFilter("__discrepant")'>
+            <span class="pc-kpi-label"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> With Discrepancies</span>
+            <span class="pc-kpi-value">@DiscrepantCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__urgent" ? "pc-kpi-card--active" : null)" title="Urgent checks" @onclick='() => ApplyKpiFilter("__urgent")'>
+            <span class="pc-kpi-label"><i class="bi bi-lightning-charge" aria-hidden="true"></i> Urgent</span>
+            <span class="pc-kpi-value">@UrgentCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__completed" ? "pc-kpi-card--active" : null)" title="Completed checks" @onclick='() => ApplyKpiFilter("__completed")'>
+            <span class="pc-kpi-label"><i class="bi bi-check2-circle" aria-hidden="true"></i> Completed</span>
+            <span class="pc-kpi-value">@CompletedCount</span>
+        </button>
+    </div>
+
+    <div class="um-search-filter-row">
+        <div class="um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-search-input" placeholder="Search check #, policy #, account, carrier, LOB, assignee..." value="@_searchText" @oninput="e => { _searchText = e.Value?.ToString(); }" />
+        </div>
+        <label>
+            <span>Status</span>
+            <select class="form-select" value="@_statusFilter" @onchange='e => { _statusFilter = e.Value?.ToString(); }'>
+                <option value="">All statuses</option>
+                @foreach (var s in _statuses)
+                {
+                    <option value="@s.StatusCode">@s.StatusName</option>
+                }
+            </select>
+        </label>
+        <label>
+            <span>Priority</span>
+            <select class="form-select" value="@_priorityFilter" @onchange='e => { _priorityFilter = e.Value?.ToString(); }'>
+                <option value="">All priorities</option>
+                <option value="Low">Low</option>
+                <option value="Normal">Normal</option>
+                <option value="High">High</option>
+                <option value="Critical">Critical</option>
+            </select>
+        </label>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear</button>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <div class="pk-layout">
+        <div class="pk-table-card">
+            @if (_loading)
+            {
+                <div class="pk-empty"><i class="bi bi-arrow-repeat pk-spin" aria-hidden="true"></i> Loading policy checks…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="pk-empty"><i class="bi bi-clipboard2-check" aria-hidden="true"></i><strong>No policy checks found</strong><span>Start a check from a bound policy awaiting verification.</span></div>
+            }
+            else
+            {
+                <div class="pk-table-scroll">
+                    <table class="pk-table" aria-label="Policy checking register">
+                        <thead>
+                            <tr>
+                                <th>Check #</th>
+                                <th>Policy #</th>
+                                <th>Account</th>
+                                <th>LOB</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Progress</th>
+                                <th>Due</th>
+                                <th>Assigned</th>
+                                <th class="pk-actions-col"><span class="visually-hidden">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in FilteredRows)
+                            {
+                                <tr class="@(_selected?.PolicyCheckId == row.PolicyCheckId ? "pk-row-selected" : null)" @onclick="() => SelectRowAsync(row)">
+                                    <td><strong>@row.CheckNumber</strong>@(row.IsUrgent ? " " : "")@if (row.IsUrgent) {<i class="bi bi-lightning-charge-fill pk-urgent" title="Urgent" aria-hidden="true"></i>}</td>
+                                    <td>@row.PolicyNumber</td>
+                                    <td><div class="pk-name-cell"><strong>@row.AccountName</strong><small>@row.CarrierName</small></div></td>
+                                    <td>@row.LineOfBusiness</td>
+                                    <td>@row.CheckTypeCode</td>
+                                    <td><span class="pk-status" style="@StatusStyle(row.StatusCode)">@StatusName(row.StatusCode)</span></td>
+                                    <td>
+                                        <div class="pk-progress" title="@row.ItemsMatched matched / @row.ItemsDiscrepant discrepant of @row.ItemsTotal">
+                                            <div class="pk-progress-bar"><i class="pk-progress-matched" style="width:@MatchedPercent(row)%"></i><i class="pk-progress-discrepant" style="width:@DiscrepantPercent(row)%"></i></div>
+                                            <span>@(row.ItemsMatched + row.ItemsDiscrepant)/@row.ItemsTotal</span>
+                                        </div>
+                                    </td>
+                                    <td><span class="@(row.IsOverdue ? "pk-overdue" : null)">@(row.DueDate?.ToString("MM/dd/yyyy") ?? "-")</span></td>
+                                    <td>@(row.AssignedToName ?? "-")</td>
+                                    <td class="pk-actions-col">
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenArchiveConfirm(row)" title="Archive" aria-label="Archive check"><i class="bi bi-archive" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+        <aside class="pk-detail-card">
+            @if (_detail is null)
+            {
+                <div class="pk-empty"><i class="bi bi-layout-sidebar-inset-reverse" aria-hidden="true"></i><strong>Select a check</strong><span>Click a policy check row to review checklist items, discrepancies, and activity history.</span></div>
+            }
+            else
+            {
+                <div class="pk-detail-head">
+                    <div>
+                        <span class="pk-detail-eyebrow"><i class="bi bi-clipboard2-check" aria-hidden="true"></i> @_detail.Check.CheckTypeCode</span>
+                        <h2>@_detail.Check.CheckNumber</h2>
+                        <p>@_detail.Check.PolicyNumber — @_detail.Check.AccountName</p>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseDetail" aria-label="Close details"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="pk-detail-body">
+                    <div class="pk-detail-summary">
+                        <div><span>Status</span><strong>@StatusName(_detail.Check.StatusCode)</strong></div>
+                        <div><span>Priority</span><strong>@_detail.Check.PriorityCode</strong></div>
+                        <div><span>Days Open</span><strong>@_detail.Check.DaysOpen</strong></div>
+                        <div><span>Carrier</span><strong>@(_detail.Check.CarrierName ?? "-")</strong></div>
+                    </div>
+                    <div class="pk-detail-actions">
+                        <label>Move to</label>
+                        <select class="form-select form-select-sm" @onchange="e => UpdateStatusAsync(e.Value?.ToString())">
+                            <option value="">Select status…</option>
+                            @foreach (var s in _statuses.Where(s => s.StatusCode != _detail.Check.StatusCode))
+                            {
+                                <option value="@s.StatusCode">@s.StatusName</option>
+                            }
+                        </select>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDiscrepancyForm"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Discrepancy</button>
+                    </div>
+
+                    <h3 class="pk-section-title"><i class="bi bi-list-check" aria-hidden="true"></i> Checklist (@_detail.Items.Count)</h3>
+                    <div class="pk-items">
+                        @foreach (var group in _detail.Items.GroupBy(i => i.CategoryName))
+                        {
+                            <div class="pk-item-cat">@group.Key</div>
+                            @foreach (var item in group.OrderBy(i => i.SortOrder))
+                            {
+                                <button type="button" class="pk-item @ItemClass(item.MatchStatusCode)" @onclick="() => OpenItemForm(item)">
+                                    <i class="bi @ItemIcon(item.MatchStatusCode)" aria-hidden="true"></i>
+                                    <div class="pk-item-main">
+                                        <strong>@item.ItemName</strong>
+                                        @if (!string.IsNullOrWhiteSpace(item.ExpectedValue) || !string.IsNullOrWhiteSpace(item.ActualValue))
+                                        {
+                                            <small>Expected: @(item.ExpectedValue ?? "-") · Actual: @(item.ActualValue ?? "-")</small>
+                                        }
+                                    </div>
+                                    <span class="pk-item-status">@item.MatchStatusCode</span>
+                                </button>
+                            }
+                        }
+                    </div>
+
+                    @if (_detail.Discrepancies.Any())
+                    {
+                        <h3 class="pk-section-title"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Discrepancies (@_detail.Discrepancies.Count)</h3>
+                        <div class="pk-discrepancies">
+                            @foreach (var d in _detail.Discrepancies)
+                            {
+                                <div class="pk-discrepancy pk-sev-@d.SeverityCode.ToLowerInvariant()">
+                                    <div class="pk-discrepancy-head">
+                                        <strong>@d.TypeName</strong>
+                                        <span class="pk-status">@d.StatusCode</span>
+                                    </div>
+                                    <p>@d.Description</p>
+                                    @if (d.StatusCode == "Open")
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenResolveForm(d)"><i class="bi bi-check2-circle" aria-hidden="true"></i> Resolve</button>
+                                    }
+                                    else if (d.ResolvedDateUtc is not null)
+                                    {
+                                        <small>Resolved @d.ResolvedDateUtc.Value.ToString("MM/dd/yyyy") by @d.ResolvedByName — @d.ResolutionNotes</small>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    <h3 class="pk-section-title"><i class="bi bi-clock-history" aria-hidden="true"></i> Activity</h3>
+                    <div class="pk-timeline">
+                        @foreach (var a in _detail.Activities)
+                        {
+                            <div class="pk-timeline-row">
+                                <span class="pk-timeline-dot"></span>
+                                <div>
+                                    <strong>@a.Subject</strong>
+                                    @if (!string.IsNullOrWhiteSpace(a.Notes)) {<p>@a.Notes</p>}
+                                    <small>@a.ActivityDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt") · @a.CreatedByName</small>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </aside>
+    </div>
+</div>
+
+@code {
+    Guid _tenantId;
+    Guid? _userId;
+    string _userName = "System";
+
+    readonly List<PolicyCheckDto> _rows = [];
+    readonly List<PolicyCheckStatusDto> _statuses = [];
+    readonly List<PolicyCheckDiscrepancyTypeDto> _discrepancyTypes = [];
+    readonly List<PolicyCheckEligiblePolicyDto> _eligiblePolicies = [];
+
+    PolicyCheckDto? _selected;
+    PolicyCheckDetailDto? _detail;
+    PolicyCheckItemDto? _itemTarget;
+    PolicyCheckDiscrepancyDto? _resolveTarget;
+    PolicyCheckDto? _archiveTarget;
+
+    bool _loading = true;
+    bool _actionBusy;
+    string? _loadError;
+    string? _searchText;
+    string? _statusFilter;
+    string? _priorityFilter;
+    string? _kpiFilter;
+
+    bool _showForm;
+    bool _showItemForm;
+    bool _showDiscrepancyForm;
+    bool _showResolveForm;
+    bool _showArchiveConfirm;
+
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+
+    CheckFormModel _form = new();
+    UpdatePolicyCheckItemRequest _itemForm = new();
+    AddPolicyCheckDiscrepancyRequest _discrepancyForm = new();
+    ResolvePolicyCheckDiscrepancyRequest _resolveForm = new();
+
+    static readonly string[] OpenStatusCodes = ["Pending", "InProgress", "OnHold", "DiscrepancyFound"];
+
+    int OpenCount => _rows.Count(r => OpenStatusCodes.Contains(r.StatusCode));
+    int OverdueCount => _rows.Count(r => r.IsOverdue);
+    int DiscrepantCount => _rows.Count(r => r.ItemsDiscrepant > 0);
+    int UrgentCount => _rows.Count(r => r.IsUrgent && OpenStatusCodes.Contains(r.StatusCode));
+    int CompletedCount => _rows.Count(r => r.CompletedDateUtc is not null);
+
+    IEnumerable<PolicyCheckDto> FilteredRows
+    {
+        get
+        {
+            IEnumerable<PolicyCheckDto> rows = _rows;
+            rows = _kpiFilter switch
+            {
+                "__open" => rows.Where(r => OpenStatusCodes.Contains(r.StatusCode)),
+                "__overdue" => rows.Where(r => r.IsOverdue),
+                "__discrepant" => rows.Where(r => r.ItemsDiscrepant > 0),
+                "__urgent" => rows.Where(r => r.IsUrgent && OpenStatusCodes.Contains(r.StatusCode)),
+                "__completed" => rows.Where(r => r.CompletedDateUtc is not null),
+                _ => rows
+            };
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) rows = rows.Where(r => r.StatusCode == _statusFilter);
+            if (!string.IsNullOrWhiteSpace(_priorityFilter)) rows = rows.Where(r => r.PriorityCode == _priorityFilter);
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var term = _searchText.Trim();
+                rows = rows.Where(r => string.Join(' ', r.CheckNumber, r.PolicyNumber, r.AccountName, r.CarrierName, r.LineOfBusiness, r.AssignedToName, r.StatusCode, r.PriorityCode, r.CheckTypeCode).Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+            return rows;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        _userName = "Current User";
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Policy Checking", "/policies/checking"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var center = await Api.GetPolicyCheckCenterAsync(_tenantId);
+            _rows.Clear(); _statuses.Clear(); _discrepancyTypes.Clear(); _eligiblePolicies.Clear();
+            _rows.AddRange(center?.Checks ?? []);
+            _statuses.AddRange(center?.Statuses ?? []);
+            _discrepancyTypes.AddRange(center?.DiscrepancyTypes ?? []);
+            _eligiblePolicies.AddRange(center?.EligiblePolicies ?? []);
+            if (_selected is not null)
+                _selected = _rows.FirstOrDefault(r => r.PolicyCheckId == _selected.PolicyCheckId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policy checks: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally { _loading = false; }
+    }
+
+    async Task SelectRowAsync(PolicyCheckDto row)
+    {
+        _selected = row;
+        try { _detail = await Api.GetPolicyCheckDetailAsync(row.PolicyCheckId); }
+        catch (Exception ex) { ShowToast($"Failed to load detail: {ex.Message}", "danger"); }
+    }
+
+    void CloseDetail() { _selected = null; _detail = null; }
+
+    void OpenCreate() { _form = new(); _showForm = true; }
+    void CloseForm() => _showForm = false;
+
+    void OnEligiblePolicySelected(Guid? policyId)
+    {
+        _form.PolicyId = policyId;
+        var p = _eligiblePolicies.FirstOrDefault(x => x.PolicyId == policyId);
+        if (p is null) return;
+        _form.PolicyNumber = p.PolicyNumber;
+        _form.AccountName = p.AccountName;
+        _form.AccountId = p.AccountId;
+        _form.QuoteId = p.QuoteId;
+        _form.CarrierName = p.CarrierName;
+        _form.LineOfBusiness = p.LineOfBusiness;
+        _form.PolicyEffectiveDate = p.EffectiveDate;
+        _form.PolicyExpirationDate = p.ExpirationDate;
+        _form.DueDate ??= DateTime.Today.AddDays(10);
+    }
+
+    async Task SaveCheckAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            var id = await Api.CreatePolicyCheckAsync(new CreatePolicyCheckRequest
+            {
+                TenantId = _tenantId,
+                PolicyId = _form.PolicyId,
+                AccountId = _form.AccountId,
+                QuoteId = _form.QuoteId,
+                PolicyNumber = _form.PolicyNumber,
+                AccountName = _form.AccountName,
+                CarrierName = _form.CarrierName,
+                LineOfBusiness = _form.LineOfBusiness,
+                PolicyEffectiveDate = _form.PolicyEffectiveDate,
+                PolicyExpirationDate = _form.PolicyExpirationDate,
+                CheckTypeCode = _form.CheckTypeCode,
+                PriorityCode = _form.PriorityCode,
+                DueDate = _form.DueDate,
+                Notes = _form.Notes,
+                IsUrgent = _form.IsUrgent,
+                CreatedByUserId = _userId
+            });
+            _showForm = false;
+            ShowToast("Policy check started.", "success");
+            await LoadAsync();
+            var row = _rows.FirstOrDefault(r => r.PolicyCheckId == id);
+            if (row is not null) await SelectRowAsync(row);
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenItemForm(PolicyCheckItemDto item)
+    {
+        _itemTarget = item;
+        _itemForm = new UpdatePolicyCheckItemRequest
+        {
+            ExpectedValue = item.ExpectedValue,
+            ActualValue = item.ActualValue,
+            MatchStatusCode = item.MatchStatusCode,
+            Notes = item.Notes,
+            CheckedByName = _userName,
+            ModifiedByUserId = _userId
+        };
+        _showItemForm = true;
+    }
+
+    async Task SaveItemAsync()
+    {
+        if (_itemTarget is null) return;
+        _actionBusy = true;
+        try
+        {
+            _itemForm.CheckedByName = _userName;
+            _itemForm.ModifiedByUserId = _userId;
+            await Api.UpdatePolicyCheckItemAsync(_itemTarget.PolicyCheckItemId, _itemForm);
+            _showItemForm = false;
+            ShowToast("Checklist item updated.", "success");
+            await RefreshDetailAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenDiscrepancyForm()
+    {
+        if (_detail is null) return;
+        _discrepancyForm = new AddPolicyCheckDiscrepancyRequest
+        {
+            TenantId = _tenantId,
+            PolicyCheckId = _detail.Check.PolicyCheckId,
+            CreatedByName = _userName,
+            CreatedByUserId = _userId
+        };
+        _showDiscrepancyForm = true;
+    }
+
+    void OnDiscrepancyTypeChanged(string typeCode)
+    {
+        _discrepancyForm.TypeCode = typeCode;
+        var t = _discrepancyTypes.FirstOrDefault(x => x.TypeCode == typeCode);
+        if (t is null) return;
+        _discrepancyForm.TypeName = t.TypeName;
+        _discrepancyForm.SeverityCode = t.DefaultSeverityCode;
+    }
+
+    async Task SaveDiscrepancyAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            await Api.AddPolicyCheckDiscrepancyAsync(_discrepancyForm);
+            _showDiscrepancyForm = false;
+            ShowToast("Discrepancy logged.", "success");
+            await LoadAndRefreshAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenResolveForm(PolicyCheckDiscrepancyDto d)
+    {
+        _resolveTarget = d;
+        _resolveForm = new ResolvePolicyCheckDiscrepancyRequest { ResolvedByName = _userName, ModifiedByUserId = _userId };
+        _showResolveForm = true;
+    }
+
+    async Task SaveResolveAsync()
+    {
+        if (_resolveTarget is null) return;
+        _actionBusy = true;
+        try
+        {
+            _resolveForm.ResolvedByName = _userName;
+            _resolveForm.ModifiedByUserId = _userId;
+            await Api.ResolvePolicyCheckDiscrepancyAsync(_resolveTarget.PolicyCheckDiscrepancyId, _resolveForm);
+            _showResolveForm = false;
+            ShowToast("Discrepancy resolved.", "success");
+            await LoadAndRefreshAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    async Task UpdateStatusAsync(string? statusCode)
+    {
+        if (_detail is null || string.IsNullOrWhiteSpace(statusCode)) return;
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdatePolicyCheckStatusAsync(_detail.Check.PolicyCheckId, new UpdatePolicyCheckStatusRequest
+            {
+                StatusCode = statusCode,
+                CreatedByName = _userName,
+                ModifiedByUserId = _userId
+            });
+            ShowToast($"Status updated to {StatusName(statusCode)}.", "success");
+            await LoadAndRefreshAsync();
+        }
+        catch (Exception ex) { ShowToast($"Status update failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenArchiveConfirm(PolicyCheckDto row) { _archiveTarget = row; _showArchiveConfirm = true; }
+
+    async Task ArchiveAsync()
+    {
+        if (_archiveTarget is null) return;
+        _actionBusy = true;
+        try
+        {
+            await Api.ArchivePolicyCheckAsync(_archiveTarget.PolicyCheckId, _userId);
+            _showArchiveConfirm = false;
+            if (_selected?.PolicyCheckId == _archiveTarget.PolicyCheckId) CloseDetail();
+            ShowToast("Policy check archived.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Archive failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    async Task RefreshDetailAsync()
+    {
+        if (_selected is null) return;
+        try { _detail = await Api.GetPolicyCheckDetailAsync(_selected.PolicyCheckId); }
+        catch (Exception ex) { ShowToast($"Refresh failed: {ex.Message}", "danger"); }
+    }
+
+    async Task LoadAndRefreshAsync()
+    {
+        await LoadAsync();
+        await RefreshDetailAsync();
+    }
+
+    void ApplyKpiFilter(string filter) => _kpiFilter = _kpiFilter == filter ? null : filter;
+    void ClearFilters() { _searchText = null; _statusFilter = null; _priorityFilter = null; _kpiFilter = null; }
+
+    string StatusName(string code) => _statuses.FirstOrDefault(s => s.StatusCode == code)?.StatusName ?? code;
+    string StatusStyle(string code)
+    {
+        var color = _statuses.FirstOrDefault(s => s.StatusCode == code)?.ColorHex;
+        return string.IsNullOrWhiteSpace(color) ? string.Empty : $"--pk-status-color:{color}";
+    }
+
+    static int MatchedPercent(PolicyCheckDto r) => r.ItemsTotal == 0 ? 0 : (int)Math.Round(100.0 * r.ItemsMatched / r.ItemsTotal);
+    static int DiscrepantPercent(PolicyCheckDto r) => r.ItemsTotal == 0 ? 0 : (int)Math.Round(100.0 * r.ItemsDiscrepant / r.ItemsTotal);
+    static string DateText(DateTime? value) => value?.ToString("MM/dd/yyyy") ?? "Not specified";
+
+    static string ItemClass(string status) => status switch
+    {
+        "Match" => "pk-item--matched",
+        "Discrepancy" => "pk-item--discrepant",
+        "NotApplicable" => "pk-item--na",
+        _ => "pk-item--unchecked"
+    };
+
+    static string ItemIcon(string status) => status switch
+    {
+        "Match" => "bi-check-circle-fill",
+        "Discrepancy" => "bi-x-circle-fill",
+        "NotApplicable" => "bi-dash-circle",
+        _ => "bi-circle"
+    };
+
+    void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    void HideToast() => _toastVisible = false;
+
+    sealed class CheckFormModel
+    {
+        [Required(ErrorMessage = "Select a bound policy.")]
+        public Guid? PolicyId { get; set; }
+        public Guid? AccountId { get; set; }
+        public Guid? QuoteId { get; set; }
+        [Required, StringLength(120)]
+        public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)]
+        public string AccountName { get; set; } = string.Empty;
+        [StringLength(200)]
+        public string? CarrierName { get; set; }
+        [StringLength(120)]
+        public string? LineOfBusiness { get; set; }
+        public DateTime? PolicyEffectiveDate { get; set; }
+        public DateTime? PolicyExpirationDate { get; set; }
+        [Required, StringLength(40)]
+        public string CheckTypeCode { get; set; } = "NewBusiness";
+        [Required, StringLength(30)]
+        public string PriorityCode { get; set; } = "Normal";
+        public DateTime? DueDate { get; set; }
+        [StringLength(2000)]
+        public string? Notes { get; set; }
+        public bool IsUrgent { get; set; }
+    }
+}

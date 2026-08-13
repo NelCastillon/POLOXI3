@@ -482,6 +482,12 @@ public static class ServiceCollectionExtensions
         // ── Policy Cancellations Workflow ────────────────────────────
         services.AddScoped<IPolicyCancellationRepository, PolicyCancellationRepository>();
         services.AddScoped<IPolicyCancellationService, PolicyCancellationService>();
+        services.AddScoped<IPolicyCheckRepository, PolicyCheckRepository>();
+        services.AddScoped<IPolicyCheckService, PolicyCheckService>();
+
+        // ── Policy Non-Renewal Workflow ─────────────────────────────────────
+        services.AddScoped<INonRenewalRepository, NonRenewalRepository>();
+        services.AddScoped<INonRenewalService, NonRenewalService>();
 
         // ── Policy Certificates Workflow ─────────────────────────────
         services.AddScoped<IPolicyCertificateRepository, PolicyCertificateRepository>();

@@ -1,0 +1,803 @@
+@page "/policies/non-renewals"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.NonRenewals
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Non-Renewal Center - AMS</PageTitle>
+
+@if (_toastVisible)
+{
+    <div class="nr-toast nr-toast-@_toastKind" role="status" aria-live="polite">
+        <i class="bi @(_toastKind == "danger" ? "bi-exclamation-triangle-fill" : "bi-check-circle-fill")" aria-hidden="true"></i>
+        <span>@_toastMessage</span>
+        <button type="button" class="nr-toast-close" @onclick="HideToast" aria-label="Close notification"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+    </div>
+}
+
+@if (_showForm)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal nr-modal" role="dialog" aria-modal="true" aria-labelledby="nr-form-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-calendar-x" aria-hidden="true"></i>
+                <span id="nr-form-title">Log Non-Renewal Notice</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SaveNonRenewalAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Bound Policy <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" Value="_form.PolicyId" ValueExpression="() => _form.PolicyId" TValue="Guid?" ValueChanged="OnEligiblePolicySelected">
+                                <option value="">@(_eligiblePolicies.Count == 0 ? "No bound policies found" : "Select a bound policy from the database")</option>
+                                @foreach (var p in _eligiblePolicies)
+                                {
+                                    <option value="@p.PolicyId">@p.PolicyNumber — @p.AccountName — @(p.CarrierName ?? "No carrier")</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.PolicyId" class="text-danger" />
+                        </div>
+                        @if (_form.PolicyId is not null)
+                        {
+                            <div class="um-field um-field--full nr-policy-summary">
+                                <div>
+                                    <span>Selected Bound Policy</span>
+                                    <strong>@_form.PolicyNumber</strong>
+                                    <small>@_form.AccountName</small>
+                                </div>
+                                <div>
+                                    <span>Carrier</span>
+                                    <strong>@(_form.CarrierName ?? "Not specified")</strong>
+                                    <small>@(_form.LineOfBusiness ?? "Line of business not specified")</small>
+                                </div>
+                                <div>
+                                    <span>Expiration</span>
+                                    <strong>@DateText(_form.PolicyExpirationDate)</strong>
+                                    <small>Loaded from Submissions.BoundPolicy</small>
+                                </div>
+                            </div>
+                        }
+                        <div class="um-field">
+                            <label>Policy Number</label>
+                            <InputText class="form-control" @bind-Value="_form.PolicyNumber" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>Account</label>
+                            <InputText class="form-control" @bind-Value="_form.AccountName" readonly />
+                        </div>
+                        <div class="um-field">
+                            <label>State <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.StateCode">
+                                <option value="">Select state</option>
+                                @foreach (var s in _stateRequirements)
+                                {
+                                    <option value="@s.StateCode">@s.StateName (@s.MinimumNoticeDays-day notice)</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StateCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Reason <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_form.ReasonCode">
+                                <option value="">Select reason</option>
+                                @foreach (var r in _reasons)
+                                {
+                                    <option value="@r.ReasonCode">@r.ReasonName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.ReasonCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Initiated By</label>
+                            <InputSelect class="form-select" @bind-Value="_form.InitiatedByCode">
+                                <option value="Carrier">Carrier</option>
+                                <option value="Insured">Insured</option>
+                                <option value="Agency">Agency</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.InitiatedByCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Carrier Notice Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_form.CarrierNoticeDate" />
+                            <ValidationMessage For="() => _form.CarrierNoticeDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Notice Method</label>
+                            <InputSelect class="form-select" @bind-Value="_form.CarrierNoticeMethodCode">
+                                <option value="">Select method</option>
+                                <option value="Mail">Mail</option>
+                                <option value="Email">Email</option>
+                                <option value="Portal">Carrier Portal</option>
+                                <option value="Fax">Fax</option>
+                                <option value="Api">API / Download</option>
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Carrier Reference #</label>
+                            <InputText class="form-control" @bind-Value="_form.CarrierNoticeReference" />
+                            <ValidationMessage For="() => _form.CarrierNoticeReference" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label class="nr-check-inline"><InputCheckbox @bind-Value="_form.IsUrgent" /> Mark as urgent</label>
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notice Summary</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_form.CarrierNoticeSummary" />
+                            <ValidationMessage For="() => _form.CarrierNoticeSummary" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_form.Notes" />
+                            <ValidationMessage For="() => _form.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseForm" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-calendar-x" aria-hidden="true"></i> Log Notice</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showNotifyForm && _detail is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal nr-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-envelope-check" aria-hidden="true"></i>
+                <span>Record Insured Notification</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showNotifyForm = false" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_notifyForm" OnValidSubmit="SaveInsuredNotificationAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Notified Date <span class="text-danger">*</span></label>
+                            <InputDate class="form-control" @bind-Value="_notifyForm.InsuredNotifiedDate" />
+                            <ValidationMessage For="() => _notifyForm.InsuredNotifiedDate" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Method <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_notifyForm.InsuredNotificationMethodCode">
+                                <option value="">Select method</option>
+                                <option value="CertifiedMail">Certified Mail</option>
+                                <option value="Mail">Mail</option>
+                                <option value="Email">Email</option>
+                                <option value="Phone">Phone</option>
+                                <option value="InPerson">In Person</option>
+                                <option value="Portal">Client Portal</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _notifyForm.InsuredNotificationMethodCode" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Proof Reference <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_notifyForm.InsuredNotificationProofReference" placeholder="Tracking #, email subject, document ref..." />
+                            <ValidationMessage For="() => _notifyForm.InsuredNotificationProofReference" class="text-danger" />
+                        </div>
+                        <div class="um-field">
+                            <label>Sent By <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_notifyForm.InsuredNotificationSentByName">
+                                <option value="">Select user</option>
+                                @foreach (var u in _users)
+                                {
+                                    <option value="@u.FullName">@u.FullName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _notifyForm.InsuredNotificationSentByName" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_notifyForm.Notes" />
+                            <ValidationMessage For="() => _notifyForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showNotifyForm = false" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-envelope-check" aria-hidden="true"></i> Record Notification</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showActivityForm && _detail is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal nr-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-journal-plus" aria-hidden="true"></i>
+                <span>Add Activity</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showActivityForm = false" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_activityForm" OnValidSubmit="SaveActivityAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <div class="um-field">
+                            <label>Type <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_activityForm.ActivityType">
+                                <option value="Note">Note</option>
+                                <option value="Call">Call</option>
+                                <option value="Email">Email</option>
+                                <option value="Task">Task</option>
+                                <option value="Remarketing">Remarketing</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _activityForm.ActivityType" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Subject <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_activityForm.Subject" />
+                            <ValidationMessage For="() => _activityForm.Subject" class="text-danger" />
+                        </div>
+                        <div class="um-field um-field--full">
+                            <label>Notes</label>
+                            <InputTextArea class="form-control" rows="3" @bind-Value="_activityForm.Notes" />
+                            <ValidationMessage For="() => _activityForm.Notes" class="text-danger" />
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showActivityForm = false" disabled="@_actionBusy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy">Save Activity</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showArchiveConfirm && _archiveTarget is not null)
+{
+    <div class="mt-modal-backdrop" role="presentation">
+        <div class="mt-modal um-confirm-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-archive" aria-hidden="true"></i></div>
+            <h3>Archive non-renewal?</h3>
+            <p>@_archiveTarget.NonRenewalNumber for policy <strong>@_archiveTarget.PolicyNumber</strong> will be archived. History is preserved.</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showArchiveConfirm = false" disabled="@_actionBusy">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" @onclick="ArchiveAsync" disabled="@_actionBusy"><i class="bi bi-archive" aria-hidden="true"></i> Archive</button>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="nr-page">
+    <AppPageHeader Icon="bi-calendar-x" Title="Non-Renewal Center" Subtitle="Track carrier non-renewal notices, state-mandated notice deadlines, insured notification proof, and remarketing outcomes.">
+        <Actions>
+            <button type="button" class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg" aria-hidden="true"></i> Log Notice</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh</button>
+        </Actions>
+    </AppPageHeader>
+
+    <div class="pc-kpi-strip">
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__open" ? "pc-kpi-card--active" : null)" title="Non-renewals not yet resolved" @onclick='() => ApplyKpiFilter("__open")'>
+            <span class="pc-kpi-label"><i class="bi bi-hourglass-split" aria-hidden="true"></i> Open</span>
+            <span class="pc-kpi-value">@OpenCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__deadline" ? "pc-kpi-card--active" : null)" title="Open items past the state-mandated notice deadline without insured notification" @onclick='() => ApplyKpiFilter("__deadline")'>
+            <span class="pc-kpi-label"><i class="bi bi-alarm" aria-hidden="true"></i> Deadline Passed</span>
+            <span class="pc-kpi-value">@DeadlineCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__noncompliant" ? "pc-kpi-card--active" : null)" title="Carrier notice received after the state-mandated deadline" @onclick='() => ApplyKpiFilter("__noncompliant")'>
+            <span class="pc-kpi-label"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Non-Compliant Notice</span>
+            <span class="pc-kpi-value">@NonCompliantCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__pendingnotify" ? "pc-kpi-card--active" : null)" title="Open items where the insured has not been notified" @onclick='() => ApplyKpiFilter("__pendingnotify")'>
+            <span class="pc-kpi-label"><i class="bi bi-envelope-exclamation" aria-hidden="true"></i> Insured Not Notified</span>
+            <span class="pc-kpi-value">@PendingNotifyCount</span>
+        </button>
+        <button type="button" class="pc-kpi-card @(_kpiFilter == "__resolved" ? "pc-kpi-card--active" : null)" title="Resolved non-renewals (replaced, rescinded, non-renewed, closed)" @onclick='() => ApplyKpiFilter("__resolved")'>
+            <span class="pc-kpi-label"><i class="bi bi-check2-circle" aria-hidden="true"></i> Resolved</span>
+            <span class="pc-kpi-value">@ResolvedCount</span>
+        </button>
+    </div>
+
+    <div class="um-search-filter-row">
+        <div class="um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input class="um-search-input" placeholder="Search NRN #, policy #, account, carrier, LOB, state, assignee..." value="@_searchText" @oninput="e => { _searchText = e.Value?.ToString(); }" />
+        </div>
+        <label>
+            <span>Status</span>
+            <select class="form-select" value="@_statusFilter" @onchange='e => { _statusFilter = e.Value?.ToString(); }'>
+                <option value="">All statuses</option>
+                @foreach (var s in _statuses)
+                {
+                    <option value="@s.StatusCode">@s.StatusName</option>
+                }
+            </select>
+        </label>
+        <label>
+            <span>Reason</span>
+            <select class="form-select" value="@_reasonFilter" @onchange='e => { _reasonFilter = e.Value?.ToString(); }'>
+                <option value="">All reasons</option>
+                @foreach (var r in _reasons)
+                {
+                    <option value="@r.ReasonCode">@r.ReasonName</option>
+                }
+            </select>
+        </label>
+        <button type="button" class="um-btn um-btn-ghost" @onclick="ClearFilters"><i class="bi bi-x-circle" aria-hidden="true"></i> Clear</button>
+    </div>
+
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">@_loadError</div>
+    }
+
+    <div class="nr-layout">
+        <div class="nr-table-card">
+            @if (_loading)
+            {
+                <div class="nr-empty"><i class="bi bi-arrow-repeat nr-spin" aria-hidden="true"></i> Loading non-renewals…</div>
+            }
+            else if (!FilteredRows.Any())
+            {
+                <div class="nr-empty"><i class="bi bi-calendar-x" aria-hidden="true"></i><strong>No non-renewals found</strong><span>Log a carrier non-renewal notice to start the workflow.</span></div>
+            }
+            else
+            {
+                <div class="nr-table-scroll">
+                    <table class="nr-table" aria-label="Non-renewal register">
+                        <thead>
+                            <tr>
+                                <th>NRN #</th>
+                                <th>Policy #</th>
+                                <th>Account</th>
+                                <th>Carrier</th>
+                                <th>State</th>
+                                <th>Status</th>
+                                <th>Notice Deadline</th>
+                                <th>Expiration</th>
+                                <th>Insured Notified</th>
+                                <th class="nr-actions-col"><span class="visually-hidden">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in FilteredRows)
+                            {
+                                <tr class="@(_selected?.NonRenewalId == row.NonRenewalId ? "nr-row-selected" : null)" @onclick="() => SelectRowAsync(row)">
+                                    <td><strong>@row.NonRenewalNumber</strong>@if (row.IsUrgent) {<i class="bi bi-lightning-charge-fill nr-urgent" title="Urgent" aria-hidden="true"></i>}</td>
+                                    <td>@row.PolicyNumber</td>
+                                    <td>@row.AccountName</td>
+                                    <td>@(row.CarrierName ?? "—")</td>
+                                    <td>@(row.StateCode ?? "—")</td>
+                                    <td><span class="nr-status" style="@StatusStyle(row.StatusCode)">@StatusName(row.StatusCode)</span></td>
+                                    <td class="@(row.IsDeadlinePassed ? "nr-overdue" : null)">@DateText(row.NoticeDeadlineDate)</td>
+                                    <td>@DateText(row.PolicyExpirationDate)</td>
+                                    <td>
+                                        @if (row.InsuredNotifiedDate is not null)
+                                        {
+                                            <i class="bi bi-check-circle-fill nr-ok" aria-hidden="true"></i> @DateText(row.InsuredNotifiedDate)
+                                        }
+                                        else
+                                        {
+                                            <span class="nr-pending">Pending</span>
+                                        }
+                                    </td>
+                                    <td class="nr-actions-col">
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-xs" title="Archive" @onclick="() => OpenArchiveConfirm(row)" @onclick:stopPropagation="true"><i class="bi bi-archive" aria-hidden="true"></i></button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+
+        <aside class="nr-detail-card">
+            @if (_detail is null)
+            {
+                <div class="nr-empty"><i class="bi bi-arrow-left-circle" aria-hidden="true"></i><strong>Select a non-renewal</strong><span>Choose a row to view deadlines, insured notification proof, and activity.</span></div>
+            }
+            else
+            {
+                var nr = _detail.NonRenewal;
+                <div class="nr-detail-head">
+                    <div>
+                        <span class="nr-detail-eyebrow"><i class="bi bi-calendar-x" aria-hidden="true"></i> @nr.NonRenewalNumber</span>
+                        <h2>@nr.PolicyNumber</h2>
+                        <p>@nr.AccountName · @(nr.CarrierName ?? "No carrier") · @(nr.LineOfBusiness ?? "No LOB")</p>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseDetail" aria-label="Close detail"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                </div>
+                <div class="nr-detail-body">
+                    <div class="nr-detail-summary">
+                        <div><span>Status</span><strong><span class="nr-status" style="@StatusStyle(nr.StatusCode)">@StatusName(nr.StatusCode)</span></strong></div>
+                        <div><span>Reason</span><strong>@ReasonName(nr.ReasonCode)</strong></div>
+                        <div><span>Initiated By</span><strong>@nr.InitiatedByCode</strong></div>
+                        <div><span>State / Required Notice</span><strong>@(nr.StateCode ?? "—") / @(nr.RequiredNoticeDays?.ToString() ?? "—") days</strong></div>
+                        <div><span>Carrier Notice Date</span><strong>@DateText(nr.CarrierNoticeDate)</strong></div>
+                        <div>
+                            <span>Notice Deadline</span>
+                            <strong class="@(nr.IsDeadlinePassed ? "nr-overdue" : null)">@DateText(nr.NoticeDeadlineDate)</strong>
+                        </div>
+                        <div>
+                            <span>Notice Compliance</span>
+                            <strong>@(nr.IsNoticeCompliant is null ? "Unknown" : nr.IsNoticeCompliant.Value ? "Compliant" : "Non-compliant")</strong>
+                        </div>
+                        <div><span>Expiration</span><strong>@DateText(nr.PolicyExpirationDate)</strong></div>
+                    </div>
+
+                    <h3 class="nr-section-title"><i class="bi bi-envelope-check" aria-hidden="true"></i> Insured Notification Proof</h3>
+                    @if (nr.InsuredNotifiedDate is not null)
+                    {
+                        <div class="nr-detail-summary">
+                            <div><span>Notified Date</span><strong>@DateText(nr.InsuredNotifiedDate)</strong></div>
+                            <div><span>Method</span><strong>@nr.InsuredNotificationMethodCode</strong></div>
+                            <div><span>Proof Reference</span><strong>@nr.InsuredNotificationProofReference</strong></div>
+                            <div><span>Sent By</span><strong>@nr.InsuredNotificationSentByName</strong></div>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="nr-muted">Insured has not been notified yet.</p>
+                    }
+
+                    <div class="nr-detail-actions">
+                        <label>Status</label>
+                        <select class="form-select" value="@nr.StatusCode" @onchange='e => UpdateStatusAsync(e.Value?.ToString())' disabled="@_actionBusy">
+                            @foreach (var s in _statuses)
+                            {
+                                <option value="@s.StatusCode">@s.StatusName</option>
+                            }
+                        </select>
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNotifyForm" disabled="@_actionBusy"><i class="bi bi-envelope-check" aria-hidden="true"></i> Record Insured Notification</button>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenActivityForm" disabled="@_actionBusy"><i class="bi bi-journal-plus" aria-hidden="true"></i> Add Activity</button>
+                    </div>
+
+                    <h3 class="nr-section-title"><i class="bi bi-clock-history" aria-hidden="true"></i> Activity</h3>
+                    <div class="nr-timeline">
+                        @foreach (var a in _detail.Activities)
+                        {
+                            <div class="nr-timeline-row">
+                                <span class="nr-timeline-dot"></span>
+                                <div>
+                                    <strong>@a.Subject</strong>
+                                    @if (!string.IsNullOrWhiteSpace(a.Notes)) {<p>@a.Notes</p>}
+                                    <small>@a.ActivityDateUtc.ToLocalTime().ToString("MM/dd/yyyy h:mm tt") · @a.CreatedByName</small>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </aside>
+    </div>
+</div>
+
+@code {
+    Guid _tenantId;
+    Guid? _userId;
+    string _userName = "Current User";
+
+    readonly List<NonRenewalDto> _rows = [];
+    readonly List<NonRenewalStatusDto> _statuses = [];
+    readonly List<NonRenewalReasonDto> _reasons = [];
+    readonly List<NonRenewalStateRequirementDto> _stateRequirements = [];
+    readonly List<NonRenewalEligiblePolicyDto> _eligiblePolicies = [];
+    readonly List<UserDto> _users = [];
+
+    NonRenewalDto? _selected;
+    NonRenewalDetailDto? _detail;
+    NonRenewalDto? _archiveTarget;
+
+    bool _loading = true;
+    bool _actionBusy;
+    string? _loadError;
+    string? _searchText;
+    string? _statusFilter;
+    string? _reasonFilter;
+    string? _kpiFilter;
+
+    bool _showForm;
+    bool _showNotifyForm;
+    bool _showActivityForm;
+    bool _showArchiveConfirm;
+
+    bool _toastVisible;
+    string _toastMessage = string.Empty;
+    string _toastKind = "success";
+
+    NonRenewalFormModel _form = new();
+    RecordInsuredNotificationRequest _notifyForm = new();
+    AddNonRenewalActivityRequest _activityForm = new();
+
+    bool IsTerminal(string code) => _statuses.FirstOrDefault(s => s.StatusCode == code)?.IsTerminal ?? false;
+
+    int OpenCount => _rows.Count(r => !IsTerminal(r.StatusCode));
+    int DeadlineCount => _rows.Count(r => r.IsDeadlinePassed && !IsTerminal(r.StatusCode));
+    int NonCompliantCount => _rows.Count(r => r.IsNoticeCompliant == false);
+    int PendingNotifyCount => _rows.Count(r => r.InsuredNotifiedDate is null && !IsTerminal(r.StatusCode));
+    int ResolvedCount => _rows.Count(r => IsTerminal(r.StatusCode));
+
+    IEnumerable<NonRenewalDto> FilteredRows
+    {
+        get
+        {
+            IEnumerable<NonRenewalDto> rows = _rows;
+            rows = _kpiFilter switch
+            {
+                "__open" => rows.Where(r => !IsTerminal(r.StatusCode)),
+                "__deadline" => rows.Where(r => r.IsDeadlinePassed && !IsTerminal(r.StatusCode)),
+                "__noncompliant" => rows.Where(r => r.IsNoticeCompliant == false),
+                "__pendingnotify" => rows.Where(r => r.InsuredNotifiedDate is null && !IsTerminal(r.StatusCode)),
+                "__resolved" => rows.Where(r => IsTerminal(r.StatusCode)),
+                _ => rows
+            };
+            if (!string.IsNullOrWhiteSpace(_statusFilter)) rows = rows.Where(r => r.StatusCode == _statusFilter);
+            if (!string.IsNullOrWhiteSpace(_reasonFilter)) rows = rows.Where(r => r.ReasonCode == _reasonFilter);
+            if (!string.IsNullOrWhiteSpace(_searchText))
+            {
+                var term = _searchText.Trim();
+                rows = rows.Where(r => string.Join(' ', r.NonRenewalNumber, r.PolicyNumber, r.AccountName, r.CarrierName, r.LineOfBusiness, r.StateCode, r.AssignedToName, r.StatusCode).Contains(term, StringComparison.OrdinalIgnoreCase));
+            }
+            return rows;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new("Non-Renewals", "/policies/non-renewals"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var center = await Api.GetNonRenewalCenterAsync(_tenantId);
+            var users = await Api.SearchUsersAsync(_tenantId, pageSize: 500);
+            _rows.Clear(); _statuses.Clear(); _reasons.Clear(); _stateRequirements.Clear(); _eligiblePolicies.Clear(); _users.Clear();
+            _rows.AddRange(center?.NonRenewals ?? []);
+            _statuses.AddRange(center?.Statuses ?? []);
+            _reasons.AddRange(center?.Reasons ?? []);
+            _stateRequirements.AddRange(center?.StateRequirements ?? []);
+            _eligiblePolicies.AddRange(center?.EligiblePolicies ?? []);
+            _users.AddRange(users?.Items ?? []);
+            var me = _users.FirstOrDefault(u => u.UserId == _userId);
+            if (me is not null) _userName = me.FullName;
+            if (_selected is not null)
+                _selected = _rows.FirstOrDefault(r => r.NonRenewalId == _selected.NonRenewalId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load non-renewals: {ex.Message}";
+            ShowToast($"Load failed: {ex.Message}", "danger");
+        }
+        finally { _loading = false; }
+    }
+
+    async Task SelectRowAsync(NonRenewalDto row)
+    {
+        _selected = row;
+        try { _detail = await Api.GetNonRenewalDetailAsync(row.NonRenewalId); }
+        catch (Exception ex) { ShowToast($"Failed to load detail: {ex.Message}", "danger"); }
+    }
+
+    void CloseDetail() { _selected = null; _detail = null; }
+
+    void OpenCreate()
+    {
+        _form = new NonRenewalFormModel();
+        _showForm = true;
+    }
+
+    void CloseForm() => _showForm = false;
+
+    void OnEligiblePolicySelected(Guid? policyId)
+    {
+        _form.PolicyId = policyId;
+        var p = _eligiblePolicies.FirstOrDefault(x => x.PolicyId == policyId);
+        if (p is null) return;
+        _form.AccountId = p.AccountId;
+        _form.PolicyNumber = p.PolicyNumber;
+        _form.AccountName = p.AccountName;
+        _form.CarrierName = p.CarrierName;
+        _form.LineOfBusiness = p.LineOfBusiness;
+        _form.PolicyExpirationDate = p.ExpirationDate;
+    }
+
+    async Task SaveNonRenewalAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            await Api.CreateNonRenewalAsync(new CreateNonRenewalRequest
+            {
+                TenantId = _tenantId,
+                PolicyId = _form.PolicyId,
+                AccountId = _form.AccountId,
+                PolicyNumber = _form.PolicyNumber,
+                AccountName = _form.AccountName,
+                CarrierName = _form.CarrierName,
+                LineOfBusiness = _form.LineOfBusiness,
+                StateCode = _form.StateCode,
+                PolicyExpirationDate = _form.PolicyExpirationDate,
+                ReasonCode = _form.ReasonCode,
+                InitiatedByCode = _form.InitiatedByCode,
+                CarrierNoticeDate = _form.CarrierNoticeDate,
+                CarrierNoticeMethodCode = _form.CarrierNoticeMethodCode,
+                CarrierNoticeReference = _form.CarrierNoticeReference,
+                CarrierNoticeSummary = _form.CarrierNoticeSummary,
+                Notes = _form.Notes,
+                IsUrgent = _form.IsUrgent,
+                CreatedByUserId = _userId
+            });
+            _showForm = false;
+            ShowToast("Non-renewal notice logged.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenNotifyForm()
+    {
+        _notifyForm = new RecordInsuredNotificationRequest
+        {
+            InsuredNotifiedDate = DateTime.UtcNow.Date,
+            InsuredNotificationSentByName = _users.FirstOrDefault(u => u.UserId == _userId)?.FullName ?? _userName,
+            ModifiedByUserId = _userId
+        };
+        _showNotifyForm = true;
+    }
+
+    async Task SaveInsuredNotificationAsync()
+    {
+        if (_detail is null) return;
+        _actionBusy = true;
+        try
+        {
+            _notifyForm.ModifiedByUserId = _userId;
+            await Api.RecordNonRenewalInsuredNotificationAsync(_detail.NonRenewal.NonRenewalId, _notifyForm);
+            _showNotifyForm = false;
+            ShowToast("Insured notification recorded.", "success");
+            await LoadAndRefreshAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenActivityForm()
+    {
+        if (_detail is null) return;
+        _activityForm = new AddNonRenewalActivityRequest
+        {
+            TenantId = _tenantId,
+            NonRenewalId = _detail.NonRenewal.NonRenewalId,
+            ActivityType = "Note",
+            CreatedByName = _userName,
+            CreatedByUserId = _userId
+        };
+        _showActivityForm = true;
+    }
+
+    async Task SaveActivityAsync()
+    {
+        _actionBusy = true;
+        try
+        {
+            await Api.AddNonRenewalActivityAsync(_activityForm);
+            _showActivityForm = false;
+            ShowToast("Activity added.", "success");
+            await RefreshDetailAsync();
+        }
+        catch (Exception ex) { ShowToast($"Save failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    async Task UpdateStatusAsync(string? statusCode)
+    {
+        if (_detail is null || string.IsNullOrWhiteSpace(statusCode)) return;
+        _actionBusy = true;
+        try
+        {
+            await Api.UpdateNonRenewalStatusAsync(_detail.NonRenewal.NonRenewalId, new UpdateNonRenewalStatusRequest
+            {
+                StatusCode = statusCode,
+                CreatedByName = _userName,
+                ModifiedByUserId = _userId
+            });
+            ShowToast($"Status updated to {StatusName(statusCode)}.", "success");
+            await LoadAndRefreshAsync();
+        }
+        catch (Exception ex) { ShowToast($"Status update failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    void OpenArchiveConfirm(NonRenewalDto row) { _archiveTarget = row; _showArchiveConfirm = true; }
+
+    async Task ArchiveAsync()
+    {
+        if (_archiveTarget is null) return;
+        _actionBusy = true;
+        try
+        {
+            await Api.ArchiveNonRenewalAsync(_archiveTarget.NonRenewalId, _userId);
+            _showArchiveConfirm = false;
+            if (_selected?.NonRenewalId == _archiveTarget.NonRenewalId) CloseDetail();
+            ShowToast("Non-renewal archived.", "success");
+            await LoadAsync();
+        }
+        catch (Exception ex) { ShowToast($"Archive failed: {ex.Message}", "danger"); }
+        finally { _actionBusy = false; }
+    }
+
+    async Task RefreshDetailAsync()
+    {
+        if (_selected is null) return;
+        try { _detail = await Api.GetNonRenewalDetailAsync(_selected.NonRenewalId); }
+        catch (Exception ex) { ShowToast($"Refresh failed: {ex.Message}", "danger"); }
+    }
+
+    async Task LoadAndRefreshAsync()
+    {
+        await LoadAsync();
+        await RefreshDetailAsync();
+    }
+
+    void ApplyKpiFilter(string filter) => _kpiFilter = _kpiFilter == filter ? null : filter;
+    void ClearFilters() { _searchText = null; _statusFilter = null; _reasonFilter = null; _kpiFilter = null; }
+
+    string StatusName(string code) => _statuses.FirstOrDefault(s => s.StatusCode == code)?.StatusName ?? code;
+    string ReasonName(string? code) => _reasons.FirstOrDefault(r => r.ReasonCode == code)?.ReasonName ?? (code ?? "Not specified");
+    string StatusStyle(string code)
+    {
+        var color = _statuses.FirstOrDefault(s => s.StatusCode == code)?.ColorHex;
+        return string.IsNullOrWhiteSpace(color) ? string.Empty : $"--nr-status-color:{color}";
+    }
+
+    static string DateText(DateTime? value) => value?.ToString("MM/dd/yyyy") ?? "Not specified";
+
+    void ShowToast(string message, string kind) { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
+    void HideToast() => _toastVisible = false;
+
+    sealed class NonRenewalFormModel
+    {
+        [Required(ErrorMessage = "Select a bound policy.")]
+        public Guid? PolicyId { get; set; }
+        public Guid? AccountId { get; set; }
+        [Required, StringLength(120)]
+        public string PolicyNumber { get; set; } = string.Empty;
+        [Required, StringLength(200)]
+        public string AccountName { get; set; } = string.Empty;
+        [StringLength(200)]
+        public string? CarrierName { get; set; }
+        [StringLength(120)]
+        public string? LineOfBusiness { get; set; }
+        [Required(ErrorMessage = "Select a state."), StringLength(2)]
+        public string? StateCode { get; set; }
+        public DateTime? PolicyExpirationDate { get; set; }
+        [Required(ErrorMessage = "Select a reason."), StringLength(50)]
+        public string? ReasonCode { get; set; }
+        [Required, StringLength(30)]
+        public string InitiatedByCode { get; set; } = "Carrier";
+        [Required(ErrorMessage = "Carrier notice date is required.")]
+        public DateTime? CarrierNoticeDate { get; set; } = DateTime.UtcNow.Date;
+        [StringLength(40)]
+        public string? CarrierNoticeMethodCode { get; set; }
+        [StringLength(120)]
+        public string? CarrierNoticeReference { get; set; }
+        [StringLength(1000)]
+        public string? CarrierNoticeSummary { get; set; }
+        [StringLength(2000)]
+        public string? Notes { get; set; }
+        public bool IsUrgent { get; set; }
+    }
+}
