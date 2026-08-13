@@ -172,8 +172,14 @@ public sealed class AddressLocationServiceTests
         public Task<IReadOnlyList<GeoCityDto>> SearchCitiesAsync(string countryCode, string query, int limit, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<GeoCityDto>>([]);
 
+        public Task<IReadOnlyList<GeoCityDto>> GetCityFuzzyCandidatesAsync(string countryCode, string query, int maxCandidates, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<GeoCityDto>>([]);
+
         public Task<IReadOnlyList<GeoPostalCodeDto>> GetPostalCodesAsync(string countryCode, string stateCode, string cityName, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<GeoPostalCodeDto>>([]);
+
+        public Task LearnGeoAsync(string countryCode, string stateCode, string cityName, string? county, string? postalCode, decimal? latitude, decimal? longitude, Guid? userId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FakeProvider : IAddressProvider

@@ -9,6 +9,7 @@ public interface IAddressLocationRepository
     Task<Guid> UpsertResolutionAsync(PersistAddressResolutionRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<GeoStateDto>> GetStatesAsync(string countryCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<GeoCityDto>> SearchCitiesAsync(string countryCode, string query, int limit, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<GeoCityDto>> GetCityFuzzyCandidatesAsync(string countryCode, string query, int maxCandidates, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<GeoPostalCodeDto>> GetPostalCodesAsync(string countryCode, string stateCode, string cityName, CancellationToken cancellationToken = default);
     Task LearnGeoAsync(string countryCode, string stateCode, string cityName, string? county, string? postalCode, decimal? latitude, decimal? longitude, Guid? userId, CancellationToken cancellationToken = default);
 }

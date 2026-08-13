@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Locations;
+using Ams.Application.Services;
 
 namespace Ams.Application;
 
@@ -96,11 +97,57 @@ public sealed class AddressLocationService : IAddressLocationService
     public Task<IReadOnlyList<GeoStateDto>> GetStatesAsync(string? countryCode, CancellationToken cancellationToken = default) =>
         _repository.GetStatesAsync(NormalizeCountry(countryCode), cancellationToken);
 
-    public Task<IReadOnlyList<GeoCityDto>> SearchCitiesAsync(string? countryCode, string query, int limit, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<GeoCityDto>> SearchCitiesAsync(string? countryCode, string query, int limit, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < 2)
-            return Task.FromResult<IReadOnlyList<GeoCityDto>>([]);
-        return _repository.SearchCitiesAsync(NormalizeCountry(countryCode), query.Trim(), Math.Clamp(limit, 1, 20), cancellationToken);
+            return [];
+
+        var normalizedCountry = NormalizeCountry(countryCode);
+        var trimmedQuery = query.Trim();
+        var effectiveLimit = Math.Clamp(limit, 1, 20);
+
+        var results = new List<GeoCityDto>(
+            await _repository.SearchCitiesAsync(normalizedCountry, trimmedQuery, effectiveLimit, cancellationToken));
+        if (results.Count >= effectiveLimit || trimmedQuery.Length < FuzzyMinimumQueryLength) return results;
+
+        var candidates = await _repository.GetCityFuzzyCandidatesAsync(normalizedCountry, trimmedQuery, FuzzyCandidatePoolSize, cancellationToken);
+        var seen = results.Select(city => city.GeoCityId).ToHashSet();
+        var querySoundex = SearchMatchingAlgorithms.Soundex(trimmedQuery.ToLowerInvariant());
+
+        var ranked = candidates
+            .Where(candidate => seen.Add(candidate.GeoCityId))
+            .Select(candidate => new
+            {
+                City = candidate,
+                Score = ScoreCity(candidate.CityName, trimmedQuery, querySoundex)
+            })
+            .Where(match => match.Score >= FuzzyMatchThreshold)
+            .OrderByDescending(match => match.Score)
+            .ThenBy(match => match.City.CityName)
+            .ThenBy(match => match.City.StateCode)
+            .Take(effectiveLimit - results.Count)
+            .Select(match => match.City);
+
+        results.AddRange(ranked);
+        return results;
+    }
+
+    private const int FuzzyCandidatePoolSize = 200;
+    private const decimal FuzzyMatchThreshold = 55m;
+    private const int FuzzyMinimumQueryLength = 4;
+
+    private static decimal ScoreCity(string cityName, string query, string querySoundex)
+    {
+        var normalizedCity = cityName.Trim().ToLowerInvariant();
+        var normalizedQuery = query.ToLowerInvariant();
+
+        if (normalizedCity.Contains(normalizedQuery, StringComparison.Ordinal))
+            return 100m - Math.Min(30m, normalizedCity.Length - normalizedQuery.Length);
+
+        var score = SearchMatchingAlgorithms.EditSimilarity(normalizedCity, normalizedQuery);
+        if (SearchMatchingAlgorithms.Soundex(normalizedCity) == querySoundex)
+            score = Math.Min(100m, score + 15m);
+        return score;
     }
 
     public Task<IReadOnlyList<GeoPostalCodeDto>> GetPostalCodesAsync(string? countryCode, string stateCode, string cityName, CancellationToken cancellationToken = default)

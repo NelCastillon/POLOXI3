@@ -249,6 +249,22 @@ public sealed class AddressLocationRepository : IAddressLocationRepository
             new CommandDefinition(sql, new { CountryCode = countryCode, Query = query, Limit = limit }, cancellationToken: cancellationToken))).AsList();
     }
 
+    public async Task<IReadOnlyList<GeoCityDto>> GetCityFuzzyCandidatesAsync(string countryCode, string query, int maxCandidates, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+            SELECT TOP (@MaxCandidates) GeoCityId, CountryCode, StateCode, CityName, County
+            FROM Location.GeoCity
+            WHERE CountryCode = @CountryCode
+              AND IsActive = 1 AND IsDeleted = 0
+              AND (CityName LIKE N'%' + @Query + N'%' OR SOUNDEX(CityName) = SOUNDEX(@Query))
+            ORDER BY CityName, StateCode;
+            """;
+
+        using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<GeoCityDto>(
+            new CommandDefinition(sql, new { CountryCode = countryCode, Query = query, MaxCandidates = maxCandidates }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public async Task<IReadOnlyList<GeoPostalCodeDto>> GetPostalCodesAsync(string countryCode, string stateCode, string cityName, CancellationToken cancellationToken = default)
     {
         const string sql = """

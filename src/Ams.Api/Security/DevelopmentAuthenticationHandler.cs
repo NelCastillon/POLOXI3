@@ -9,6 +9,7 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
 {
     public const string SchemeName = "Development";
     private static readonly Guid DemoUserId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+    private static readonly Guid DemoTenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
 
     public DevelopmentAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
@@ -44,10 +45,10 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
             claims.Add(new Claim(ClaimTypes.Email, actingUserEmail));
         }
 
-        if (Guid.TryParse(actingTenantId, out var tenantId) && tenantId != Guid.Empty)
-        {
-            claims.Add(new Claim("tenant_id", tenantId.ToString()));
-        }
+        var effectiveTenantId = Guid.TryParse(actingTenantId, out var tenantId) && tenantId != Guid.Empty
+            ? tenantId
+            : DemoTenantId;
+        claims.Add(new Claim("tenant_id", effectiveTenantId.ToString()));
 
         var identity = new ClaimsIdentity(claims, SchemeName);
         var principal = new ClaimsPrincipal(identity);

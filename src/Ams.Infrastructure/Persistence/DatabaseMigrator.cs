@@ -367,6 +367,8 @@ public sealed partial class DatabaseMigrator
         new("0311_Address_Location_Endpoint_Fix", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
         new("0312_Address_Location_Typeahead_Endpoint", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
         new("0313_Geo_Reference_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0122_GeoReferenceData.sql")),
+        new("0314_Geo_City_Seed_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0123_GeoCitySeedData.sql")),
+        new("0315_Geo_City_Full_Us_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0124_GeoCityFullUsSeed.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -3959,7 +3961,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
             var sql = NormalizeMigrationSql(migration.Sql);
             foreach (var batch in SplitMigrationBatches(sql))
             {
-                await cn.ExecuteAsync(new CommandDefinition(batch, transaction: tx, cancellationToken: cancellationToken));
+                await cn.ExecuteAsync(new CommandDefinition(batch, transaction: tx, commandTimeout: 600, cancellationToken: cancellationToken));
             }
 
             await cn.ExecuteAsync(new CommandDefinition(

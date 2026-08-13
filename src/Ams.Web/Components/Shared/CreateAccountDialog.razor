@@ -10,7 +10,7 @@
 
 @if (Visible)
 {
-    <div class="cad-backdrop" role="presentation" @onclick="CloseAsync">
+    <div class="cad-backdrop" role="presentation">
         <div class="cad-modal" role="dialog" aria-modal="true" aria-labelledby="cad-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-building-add" aria-hidden="true"></i>
@@ -60,7 +60,7 @@
                                         {
                                             <button type="button" role="option" @onclick="() => SelectCityAsync(city)">
                                                 <i class="bi bi-buildings"></i>
-                                                <span><strong>@city.CityName</strong><small>@city.StateCode</small></span>
+                                                <span><strong>@city.CityName</strong><small>@city.StateCode@(string.IsNullOrWhiteSpace(city.County) ? string.Empty : $" · {city.County}")</small></span>
                                             </button>
                                         }
                                     </div>
@@ -163,6 +163,10 @@
     private readonly List<GeoCityDto> _citySuggestions = [];
     private readonly List<GeoPostalCodeDto> _zipOptions = [];
     private CancellationTokenSource? _cityCancellation;
+    private const int DefaultCityMinQueryLength = 3;
+    private const int DefaultCityDebounceMilliseconds = 300;
+    private int _cityMinQueryLength = DefaultCityMinQueryLength;
+    private int _cityDebounceMilliseconds = DefaultCityDebounceMilliseconds;
     private bool IsBusy => _loading || _checking || _saving;
 
     protected override async Task OnParametersSetAsync()
@@ -200,6 +204,20 @@
             _zipOptions.Clear();
             try { _geoStates = await Api.GetGeoStatesAsync(_form.Country ?? "US"); }
             catch (Exception ex) { _error = $"State list failed to load: {ex.Message}"; }
+            try
+            {
+                var status = await Api.GetAddressEngineStatusAsync();
+                if (status is not null)
+                {
+                    _cityMinQueryLength = status.MinimumQueryLength > 0 ? status.MinimumQueryLength : DefaultCityMinQueryLength;
+                    _cityDebounceMilliseconds = status.DebounceMilliseconds > 0 ? status.DebounceMilliseconds : DefaultCityDebounceMilliseconds;
+                }
+            }
+            catch
+            {
+                _cityMinQueryLength = DefaultCityMinQueryLength;
+                _cityDebounceMilliseconds = DefaultCityDebounceMilliseconds;
+            }
         }
         catch (Exception ex) { _error = $"Account configuration failed to load: {ex.Message}"; }
         finally { _loading = false; }
@@ -216,11 +234,11 @@
         _citySuggestions.Clear();
 
         var query = value?.Trim();
-        if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return;
+        if (string.IsNullOrWhiteSpace(query) || query.Length < _cityMinQueryLength) return;
 
         try
         {
-            await Task.Delay(250, token);
+            await Task.Delay(_cityDebounceMilliseconds, token);
             var cities = await Api.SearchGeoCitiesAsync(query, _form.Country ?? "US", 8, token);
             _citySuggestions.AddRange(cities);
 
