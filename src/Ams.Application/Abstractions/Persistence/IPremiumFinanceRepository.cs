@@ -13,11 +13,11 @@ public interface IPremiumFinanceRepository
     Task UpdateRequestStatusAsync(Guid premiumFinanceRequestId, UpdatePremiumFinanceStatusRequest request, CancellationToken cancellationToken = default);
     Task<Guid> AddQuoteOptionAsync(AddPremiumFinanceQuoteOptionRequest request, CancellationToken cancellationToken = default);
     Task SelectQuoteOptionAsync(Guid premiumFinanceRequestId, SelectPremiumFinanceQuoteOptionRequest request, CancellationToken cancellationToken = default);
-    Task<Guid> CreateAgreementAsync(SubmitPremiumFinanceApplicationRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreateAgreementAsync(SubmitPremiumFinanceApplicationRequest request, PremiumFinanceProviderResultDto providerResult, CancellationToken cancellationToken = default);
     Task UpdateAgreementAsync(UpdatePremiumFinanceAgreementRequest request, CancellationToken cancellationToken = default);
     Task ReplacePaymentScheduleAsync(ReplacePremiumFinancePaymentScheduleRequest request, CancellationToken cancellationToken = default);
     Task<Guid> AddActivityAsync(AddPremiumFinanceActivityRequest request, CancellationToken cancellationToken = default);
     Task<Guid> LinkDocumentAsync(LinkPremiumFinanceDocumentRequest request, CancellationToken cancellationToken = default);
     Task<Guid> UpsertProviderAsync(UpsertPremiumFinanceProviderRequest request, CancellationToken cancellationToken = default);
-    Task CancelRequestAsync(CancelPremiumFinanceRequest request, CancellationToken cancellationToken = default);
+    Task CancelRequestAsync(CancelPremiumFinanceRequest request, Guid? financeCompanyId, PremiumFinanceProviderResultDto? providerResult, CancellationToken cancellationToken = default);
 }

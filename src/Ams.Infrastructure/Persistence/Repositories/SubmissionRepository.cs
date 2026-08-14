@@ -4654,6 +4654,59 @@ WHERE  SubmissionId = (SELECT SubmissionId FROM Submissions.SubmissionMarket WHE
 
     // ── Quotes ────────────────────────────────────────────────────────
 
+    public async Task<IReadOnlyList<SubmissionQuoteRegisterDto>> GetQuoteRegisterAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        const string sql = """
+SELECT q.QuoteId, q.SubmissionId, q.SubmissionMarketId, q.CarrierId, carrier.CarrierName,
+       q.QuoteNumber, q.Status, q.AnnualPremium, q.Deductible, q.[Limit], q.CoverageNotes,
+       q.QuoteReceivedDateUtc, q.QuotedDateUtc, q.ExpiresDateUtc,
+       submission.SubmissionNumber, account.AccountName, submission.LineOfBusiness,
+       submission.EffectiveDate,
+       COALESCE(assignedUser.FullName, assignedUser.DisplayName, assignedUser.UserName) AS AssignedToUserName
+FROM Submissions.Quote q
+JOIN Submissions.Submission submission
+  ON submission.SubmissionId = q.SubmissionId
+ AND submission.TenantId = @TenantId
+ AND submission.IsDeleted = 0
+JOIN Client.Account account
+  ON account.AccountId = submission.AccountId
+ AND account.TenantId = @TenantId
+ AND account.IsDeleted = 0
+JOIN Core.Carrier carrier
+  ON carrier.CarrierId = q.CarrierId
+ AND carrier.TenantId = @TenantId
+ AND carrier.IsDeleted = 0
+LEFT JOIN IAM.[User] assignedUser ON assignedUser.UserId = submission.AssignedToUserId
+WHERE q.IsDeleted = 0
+ORDER BY submission.CreatedDateUtc DESC, q.QuotedDateUtc DESC;
+
+SELECT ql.QuoteLineId, ql.TenantId, ql.QuoteId, ql.SubmissionId, ql.SubmissionLineId, ql.OpportunityLineId,
+       ql.LineOfBusiness, ql.Status, ql.QuotedPremium, ql.Deductible, ql.[Limit], ql.CommissionPercent,
+       ql.CoverageForms, ql.Subjectivities, ql.Exclusions, ql.PaymentTerms, ql.MinimumEarnedPremium,
+       ql.TaxesAndFees, ql.BrokerFee, ql.TriaIncluded, ql.IsBindable, ql.CoverageNotes, ql.SortOrder,
+       ql.CreatedDateUtc, ql.ModifiedDateUtc
+FROM Submissions.QuoteLine ql
+JOIN Submissions.Quote q
+  ON q.QuoteId = ql.QuoteId
+ AND q.IsDeleted = 0
+JOIN Submissions.Submission submission
+  ON submission.SubmissionId = q.SubmissionId
+ AND submission.TenantId = @TenantId
+ AND submission.IsDeleted = 0
+WHERE ql.TenantId = @TenantId
+  AND ql.IsDeleted = 0
+ORDER BY ql.QuoteId, ql.SortOrder, ql.LineOfBusiness;
+""";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));
+        var quotes = (await multi.ReadAsync<SubmissionQuoteRegisterDto>()).AsList();
+        var lines = (await multi.ReadAsync<SubmissionQuoteLineDto>()).AsList();
+        var linesByQuote = lines.GroupBy(line => line.QuoteId).ToDictionary(group => group.Key, group => (IReadOnlyList<SubmissionQuoteLineDto>)group.ToList());
+        foreach (var quote in quotes)
+            quote.Lines = linesByQuote.GetValueOrDefault(quote.QuoteId) ?? [];
+        return quotes;
+    }
+
     public async Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
     {
         const string sql = """

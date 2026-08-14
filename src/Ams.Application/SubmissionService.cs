@@ -229,6 +229,9 @@ public sealed class SubmissionService : ISubmissionService
     public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default)
         => _repository.SynchronizeOverdueMarketRequestsAsync(cancellationToken);
 
+    public Task<IReadOnlyList<SubmissionQuoteRegisterDto>> GetQuoteRegisterAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetQuoteRegisterAsync(tenantId, cancellationToken);
+
     public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetQuoteComparisonAsync(submissionId, tenantId, cancellationToken);
 

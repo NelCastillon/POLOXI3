@@ -231,13 +231,13 @@ IF NOT EXISTS(SELECT 1 FROM Billing.PremiumFinanceQuoteOption WHERE TenantId=@Te
 UPDATE Billing.PremiumFinanceQuoteOption SET IsSelected=0,StatusCode=CASE WHEN StatusCode=N'Received' THEN N'NotSelected' ELSE StatusCode END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@SelectedByUserId WHERE TenantId=@TenantId AND PremiumFinanceRequestId=@RequestId AND IsDeleted=0;
 UPDATE Billing.PremiumFinanceQuoteOption SET IsSelected=1,StatusCode=N'Selected',SelectedDateUtc=SYSUTCDATETIME(),SelectedByUserId=@SelectedByUserId,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@SelectedByUserId WHERE TenantId=@TenantId AND PremiumFinanceQuoteOptionId=@PremiumFinanceQuoteOptionId;
 UPDATE Billing.PremiumFinanceRequest SET SelectedQuoteOptionId=@PremiumFinanceQuoteOptionId,StatusCode=N'OptionSelected',ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@SelectedByUserId WHERE TenantId=@TenantId AND PremiumFinanceRequestId=@RequestId AND IsDeleted=0;
-INSERT Billing.PremiumFinanceActivity(PremiumFinanceActivityId,TenantId,PremiumFinanceRequestId,ActivityTypeCode,Subject,NewStatusCode,CreatedByName,CreatedByUserId) VALUES(NEWID(),@TenantId,@RequestId,N'StatusChanged',N'Financing option selected',N'OptionSelected',@SelectedByName,@SelectedByUserId);
+INSERT Billing.PremiumFinanceActivity(PremiumFinanceActivityId,TenantId,PremiumFinanceRequestId,ActivityTypeCode,Subject,NewStatusCode,CreatedByName,CreatedByUserId) VALUES(NEWID(),@TenantId,@RequestId,N'OptionSelected',N'Financing option selected',N'OptionSelected',@SelectedByName,@SelectedByUserId);
 COMMIT;
 """;
         await ExecuteAsync(sql, new { RequestId = premiumFinanceRequestId, request.TenantId, request.PremiumFinanceQuoteOptionId, request.SelectedByUserId, request.SelectedByName }, cancellationToken);
     }
 
-    public async Task<Guid> CreateAgreementAsync(SubmitPremiumFinanceApplicationRequest request, CancellationToken cancellationToken = default)
+    public async Task<Guid> CreateAgreementAsync(SubmitPremiumFinanceApplicationRequest request, PremiumFinanceProviderResultDto providerResult, CancellationToken cancellationToken = default)
     {
         const string sql = """
 SET XACT_ABORT ON; BEGIN TRAN; DECLARE @OptionId UNIQUEIDENTIFIER,@PolicyId UNIQUEIDENTIFIER,@QuoteId UNIQUEIDENTIFIER,@AccountId UNIQUEIDENTIFIER,@Premium DECIMAL(18,2),@TaxFee DECIMAL(18,2),@ReceivableId UNIQUEIDENTIFIER;
@@ -251,11 +251,15 @@ SELECT @Id,@TenantId,@ReceivableId,@FinanceCompanyId,@AgreementNumber,qo.AmountF
 IF @@ROWCOUNT<>1 THROW 51000,N'Selected option does not match the submitted provider.',1;
 UPDATE Billing.PremiumFinanceRequest SET StatusCode=N'ApplicationSubmitted',SubmittedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@SubmittedByUserId WHERE TenantId=@TenantId AND PremiumFinanceRequestId=@PremiumFinanceRequestId;
 INSERT Billing.PremiumFinanceActivity(PremiumFinanceActivityId,TenantId,PremiumFinanceRequestId,FinanceAgreementId,ActivityTypeCode,Subject,NewStatusCode,ProviderReference,CreatedByName,CreatedByUserId) VALUES(NEWID(),@TenantId,@PremiumFinanceRequestId,@Id,N'ProviderContact',N'Application submission recorded',N'ApplicationSubmitted',@ProviderApplicationReference,@SubmittedByName,@SubmittedByUserId);
-INSERT Billing.PremiumFinanceProviderTransaction(PremiumFinanceProviderTransactionId,TenantId,FinanceCompanyId,PremiumFinanceRequestId,FinanceAgreementId,OperationCode,StatusCode,CompletedDateUtc,CreatedByUserId) VALUES(NEWID(),@TenantId,@FinanceCompanyId,@PremiumFinanceRequestId,@Id,N'SubmitApplication',N'ManuallyRecorded',SYSUTCDATETIME(),@SubmittedByUserId);
+INSERT Billing.PremiumFinanceProviderTransaction(PremiumFinanceProviderTransactionId,TenantId,FinanceCompanyId,PremiumFinanceRequestId,FinanceAgreementId,OperationCode,ExternalTransactionId,StatusCode,ResponsePayloadJson,CompletedDateUtc,CreatedByUserId) VALUES(NEWID(),@TenantId,@FinanceCompanyId,@PremiumFinanceRequestId,@Id,N'SubmitApplication',@ExternalTransactionId,@ProviderStatusCode,@ProviderResponseJson,SYSUTCDATETIME(),@SubmittedByUserId);
 COMMIT; SELECT @Id;
 """;
         using var cn = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.QuerySingleAsync<Guid>(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
+        var parameters = new DynamicParameters(request);
+        parameters.Add("ExternalTransactionId", providerResult.ExternalReference);
+        parameters.Add("ProviderStatusCode", providerResult.StatusCode);
+        parameters.Add("ProviderResponseJson", System.Text.Json.JsonSerializer.Serialize(providerResult));
+        return await cn.QuerySingleAsync<Guid>(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken));
     }
 
     public async Task UpdateAgreementAsync(UpdatePremiumFinanceAgreementRequest request, CancellationToken cancellationToken = default)
@@ -265,7 +269,7 @@ SET XACT_ABORT ON; BEGIN TRAN; DECLARE @RequestId UNIQUEIDENTIFIER,@OldStatus NV
 SELECT @RequestId=PremiumFinanceRequestId,@OldStatus=StatusCode FROM Billing.FinanceAgreement WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND FinanceAgreementId=@FinanceAgreementId AND IsDeleted=0;
 IF @RequestId IS NULL THROW 51000,N'Premium finance agreement not found for tenant.',1;
 UPDATE Billing.FinanceAgreement SET ApplicationStatusCode=COALESCE(@ApplicationStatusCode,ApplicationStatusCode),SignatureStatusCode=COALESCE(@SignatureStatusCode,SignatureStatusCode),FundingStatusCode=COALESCE(@FundingStatusCode,FundingStatusCode),AccountStatusCode=COALESCE(@AccountStatusCode,AccountStatusCode),StatusCode=COALESCE(@StatusCode,StatusCode),DocumentId=COALESCE(@DocumentId,DocumentId),ESignEnvelopeId=COALESCE(@ESignEnvelopeId,ESignEnvelopeId),FundedDate=COALESCE(@FundedDate,FundedDate),NextPaymentDate=COALESCE(@NextPaymentDate,NextPaymentDate),ApprovedDateUtc=COALESCE(@ApprovedDateUtc,ApprovedDateUtc),ActivatedDateUtc=COALESCE(@ActivatedDateUtc,ActivatedDateUtc),PayoffAmount=COALESCE(@PayoffAmount,PayoffAmount),PayoffGoodThroughDate=COALESCE(@PayoffGoodThroughDate,PayoffGoodThroughDate),LastSynchronizedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ModifiedByUserId WHERE TenantId=@TenantId AND FinanceAgreementId=@FinanceAgreementId;
-DECLARE @RequestStatus NVARCHAR(50)=CASE WHEN @StatusCode=N'Active' THEN N'Active' WHEN @ApplicationStatusCode=N'Approved' THEN N'Approved' WHEN @SignatureStatusCode=N'Signed' THEN N'PendingApproval' WHEN @SignatureStatusCode=N'Sent' THEN N'PendingSignature' ELSE NULL END;
+DECLARE @RequestStatus NVARCHAR(50)=CASE WHEN @ApplicationStatusCode=N'Declined' OR @SignatureStatusCode=N'Declined' THEN N'Declined' WHEN @StatusCode=N'Active' THEN N'Active' WHEN @ApplicationStatusCode=N'Approved' THEN N'Approved' WHEN @SignatureStatusCode=N'Signed' THEN N'PendingApproval' WHEN @SignatureStatusCode=N'Sent' THEN N'PendingSignature' ELSE NULL END;
 IF @RequestStatus IS NOT NULL UPDATE Billing.PremiumFinanceRequest SET StatusCode=@RequestStatus,CompletedDateUtc=CASE WHEN @RequestStatus=N'Active' THEN COALESCE(CompletedDateUtc,SYSUTCDATETIME()) ELSE CompletedDateUtc END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ModifiedByUserId WHERE TenantId=@TenantId AND PremiumFinanceRequestId=@RequestId;
 INSERT Billing.PremiumFinanceActivity(PremiumFinanceActivityId,TenantId,PremiumFinanceRequestId,FinanceAgreementId,ActivityTypeCode,Subject,Notes,OldStatusCode,NewStatusCode,CreatedByName,CreatedByUserId) VALUES(NEWID(),@TenantId,@RequestId,@FinanceAgreementId,N'StatusChanged',N'Financing agreement updated',@Notes,@OldStatus,COALESCE(@StatusCode,@OldStatus),@ModifiedByName,@ModifiedByUserId);
 COMMIT;
@@ -336,7 +340,7 @@ ELSE BEGIN UPDATE Billing.FinanceCompany SET CompanyCode=@CompanyCode,CompanyNam
         return await cn.QuerySingleAsync<Guid>(new CommandDefinition(sql, request, cancellationToken: cancellationToken));
     }
 
-    public async Task CancelRequestAsync(CancelPremiumFinanceRequest request, CancellationToken cancellationToken = default)
+    public async Task CancelRequestAsync(CancelPremiumFinanceRequest request, Guid? financeCompanyId, PremiumFinanceProviderResultDto? providerResult, CancellationToken cancellationToken = default)
     {
         const string sql = """
 SET XACT_ABORT ON; BEGIN TRAN;
@@ -344,9 +348,15 @@ UPDATE Billing.PremiumFinanceRequest SET StatusCode=N'Cancelled',CancelledDateUt
 IF @@ROWCOUNT<>1 THROW 51000,N'Premium finance request cannot be cancelled.',1;
 UPDATE Billing.FinanceAgreement SET StatusCode=N'Cancelled',ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@CancelledByUserId WHERE TenantId=@TenantId AND PremiumFinanceRequestId=@PremiumFinanceRequestId AND IsDeleted=0 AND StatusCode<>N'Active';
 INSERT Billing.PremiumFinanceActivity(PremiumFinanceActivityId,TenantId,PremiumFinanceRequestId,ActivityTypeCode,Subject,Notes,NewStatusCode,CreatedByName,CreatedByUserId) VALUES(NEWID(),@TenantId,@PremiumFinanceRequestId,N'StatusChanged',N'Premium finance request cancelled',@Reason,N'Cancelled',@CancelledByName,@CancelledByUserId);
+IF @FinanceCompanyId IS NOT NULL INSERT Billing.PremiumFinanceProviderTransaction(PremiumFinanceProviderTransactionId,TenantId,FinanceCompanyId,PremiumFinanceRequestId,OperationCode,ExternalTransactionId,StatusCode,ResponsePayloadJson,CompletedDateUtc,CreatedByUserId) VALUES(NEWID(),@TenantId,@FinanceCompanyId,@PremiumFinanceRequestId,N'CancelRequest',@ExternalTransactionId,@ProviderStatusCode,@ProviderResponseJson,SYSUTCDATETIME(),@CancelledByUserId);
 COMMIT;
 """;
-        await ExecuteAsync(sql, request, cancellationToken);
+        var parameters = new DynamicParameters(request);
+        parameters.Add("FinanceCompanyId", financeCompanyId);
+        parameters.Add("ExternalTransactionId", providerResult?.ExternalReference);
+        parameters.Add("ProviderStatusCode", providerResult?.StatusCode);
+        parameters.Add("ProviderResponseJson", providerResult is null ? null : System.Text.Json.JsonSerializer.Serialize(providerResult));
+        await ExecuteAsync(sql, parameters, cancellationToken);
     }
 
     private async Task ExecuteAsync(string sql, object parameters, CancellationToken cancellationToken)

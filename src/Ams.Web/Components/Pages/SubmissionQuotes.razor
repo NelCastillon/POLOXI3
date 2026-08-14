@@ -662,8 +662,7 @@
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Quotes", "/submissions/quotes"));
-        await LoadReferenceDataAsync();
-        await LoadAsync();
+        await Task.WhenAll(LoadReferenceDataAsync(), LoadAsync());
     }
 
     async Task LoadReferenceDataAsync()
@@ -681,18 +680,30 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 500);
+            var quotes = await Api.GetSubmissionQuoteRegisterAsync(_tenantId) ?? [];
             _rows.Clear();
-            var submissions = (result?.Items ?? [])
-                .Where(s => s.QuoteCount > 0 || s.Status is "Quoted" or "Bound" or "Declined")
-                .OrderByDescending(s => s.CreatedDateUtc)
-                .ToList();
-
-            foreach (var submission in submissions)
+            _rows.AddRange(quotes.Select(q => new QuoteRow
             {
-                var quoteRows = await BuildQuoteRowsAsync(submission);
-                _rows.AddRange(quoteRows);
-            }
+                QuoteId = q.QuoteId,
+                QuoteNo = q.QuoteNumber,
+                SubmissionNo = q.SubmissionNumber,
+                SubId = q.SubmissionId,
+                Account = q.AccountName,
+                Lob = q.LineOfBusiness,
+                CarrierId = q.CarrierId,
+                SubmissionMarketId = q.SubmissionMarketId,
+                Carrier = q.CarrierName,
+                Status = NormalizeQuoteStatus(q.Status, q.ExpiresDateUtc),
+                QuotedPremium = q.AnnualPremium,
+                Deductible = q.Deductible,
+                Limit = q.Limit,
+                CoverageNotes = q.CoverageNotes,
+                QuotedDateUtc = q.QuoteReceivedDateUtc ?? q.QuotedDateUtc,
+                EffDate = q.EffectiveDate,
+                ExpiryDate = q.ExpiresDateUtc,
+                Producer = q.AssignedToUserName ?? "Unassigned",
+                Lines = q.Lines
+            }));
 
             _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.QuoteId == _selected.QuoteId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
             _page = Math.Min(_page, TotalPages);
@@ -707,45 +718,6 @@
             _loading = false;
             _refreshIconClass = string.Empty;
         }
-    }
-
-    async Task<IReadOnlyList<QuoteRow>> BuildQuoteRowsAsync(SubmissionDto submission)
-    {
-        try
-        {
-            var quotes = await Api.GetSubmissionQuoteComparisonAsync(submission.SubmissionId, submission.TenantId);
-            if (quotes?.Count > 0)
-            {
-                return quotes.Select(q => new QuoteRow
-                {
-                    QuoteId = q.QuoteId,
-                    QuoteNo = q.QuoteNumber,
-                    SubmissionNo = submission.SubmissionNumber,
-                    SubId = submission.SubmissionId,
-                    Account = submission.AccountName,
-                    Lob = submission.LineOfBusiness,
-                    CarrierId = q.CarrierId,
-                    SubmissionMarketId = q.SubmissionMarketId,
-                    Carrier = q.CarrierName,
-                    Status = NormalizeQuoteStatus(q.Status, q.ExpiresDateUtc),
-                    QuotedPremium = q.AnnualPremium,
-                    Deductible = q.Deductible,
-                    Limit = q.Limit,
-                    CoverageNotes = q.CoverageNotes,
-                    QuotedDateUtc = q.QuoteReceivedDateUtc ?? q.QuotedDateUtc,
-                    EffDate = submission.EffectiveDate,
-                    ExpiryDate = q.ExpiresDateUtc,
-                    Producer = submission.AssignedToUserName ?? "Unassigned",
-                    Lines = q.Lines
-                }).ToList();
-            }
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Quote comparison unavailable for {submission.SubmissionNumber}: {ex.Message}", "qde-toast--danger");
-        }
-
-        return [];
     }
 
     IEnumerable<QuoteRow> ApplyFilters(IEnumerable<QuoteRow> rows)
@@ -1035,26 +1007,18 @@
 
     void CloseCompareDialog() => _showCompareDialog = false;
 
-    async Task OpenCompareDialogAsync()
+    Task OpenCompareDialogAsync()
     {
-        if (_selected is null) return;
+        if (_selected is null) return Task.CompletedTask;
 
         _compareRows.Clear();
-        try
-        {
-            var submission = await Api.GetSubmissionByIdAsync(_selected.SubId);
-            if (submission is not null)
-                _compareRows.AddRange(await BuildQuoteRowsAsync(submission));
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Compare failed: {ex.Message}", "qde-toast--danger");
-        }
+        _compareRows.AddRange(_rows.Where(row => row.SubId == _selected.SubId));
 
         if (_compareRows.Count == 0)
             _compareRows.Add(_selected);
 
         _showCompareDialog = true;
+        return Task.CompletedTask;
     }
 
     async Task ExecuteConfirmedActionAsync()

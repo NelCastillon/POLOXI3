@@ -92,6 +92,19 @@ public sealed class SubmissionProposalWorkflowTests
     }
 
     [Fact]
+    public async Task GetQuoteRegisterAsync_ForwardsTenantScopeAndReturnsRepositoryRows()
+    {
+        var expected = new SubmissionQuoteRegisterDto { QuoteId = QuoteId, SubmissionId = SubmissionId };
+        var repository = new FakeSubmissionRepository { QuoteRegisterItems = [expected] };
+        var service = CreateService(repository);
+
+        var result = await service.GetQuoteRegisterAsync(TenantId);
+
+        Assert.Equal(TenantId, repository.LastQuoteRegisterTenantId);
+        Assert.Same(expected, Assert.Single(result));
+    }
+
+    [Fact]
     public async Task GetBindQueueAsync_ForwardsTenantScopeAndReturnsRepositoryRows()
     {
         var expected = new BindQueueItemDto { TenantId = TenantId, SubmissionId = SubmissionId, QuoteId = QuoteId };
@@ -435,6 +448,8 @@ public sealed class SubmissionProposalWorkflowTests
         public Guid? LastQuoteReadTenantId { get; private set; }
         public Guid? LastQuoteComparisonSubmissionId { get; private set; }
         public Guid? LastQuoteComparisonTenantId { get; private set; }
+        public Guid? LastQuoteRegisterTenantId { get; private set; }
+        public IReadOnlyList<SubmissionQuoteRegisterDto> QuoteRegisterItems { get; set; } = [];
         public Guid? LastBindQueueTenantId { get; private set; }
         public IReadOnlyList<BindQueueItemDto> BindQueueItems { get; set; } = [];
         public BindRequestDetailDto? BindRequestDetail { get; set; }
@@ -534,6 +549,12 @@ public sealed class SubmissionProposalWorkflowTests
         public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task<IReadOnlyList<SubmissionQuoteRegisterDto>> GetQuoteRegisterAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        {
+            LastQuoteRegisterTenantId = tenantId;
+            return Task.FromResult(QuoteRegisterItems);
+        }
+
         public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         {
             LastQuoteComparisonSubmissionId = submissionId;

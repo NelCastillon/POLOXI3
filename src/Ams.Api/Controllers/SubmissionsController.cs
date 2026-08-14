@@ -396,6 +396,11 @@ public sealed class SubmissionsController : ControllerBase
     public async Task<IActionResult> ExecutePolicyRegisterAction(Guid policyId, [FromBody] PolicyRegisterActionRequest request, CancellationToken cancellationToken)
         => Ok(await _service.ExecutePolicyRegisterActionAsync(policyId, request, cancellationToken));
 
+    [HttpGet("quotes/register")]
+    [Authorize]
+    public async Task<IActionResult> GetQuoteRegister([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => TryTenant(tenantId, out var denied) ? Ok(await _service.GetQuoteRegisterAsync(tenantId, cancellationToken)) : denied;
+
     [HttpGet("{id:guid}/quotes")]
     [Authorize]
     public async Task<IActionResult> GetQuotes(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)

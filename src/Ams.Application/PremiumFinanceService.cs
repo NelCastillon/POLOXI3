@@ -30,11 +30,20 @@ public sealed class PremiumFinanceService(
     public async Task<Guid> CreateRequestAsync(CreatePremiumFinanceRequest request, CancellationToken cancellationToken = default)
     {
         EnsureTenant(request.TenantId);
+        await RequireReferenceCodeAsync(request.TenantId, "SourceType", request.SourceTypeCode, cancellationToken);
         var sourceId = ResolveSourceId(request);
         var source = await repository.GetSourceAsync(request.TenantId, request.SourceTypeCode, sourceId, cancellationToken)
             ?? throw new InvalidOperationException("Premium finance source was not found for the tenant.");
         if (!source.IsEligible)
             throw new InvalidOperationException(source.IneligibilityReason ?? "The selected source is not eligible for premium financing.");
+        if (request.PreferredFinanceCompanyId is not null)
+            await RequireProviderAsync(request.TenantId, request.PreferredFinanceCompanyId.Value, p => p.SupportsQuotes, cancellationToken, "Preferred provider does not support premium finance quote requests.");
+
+        var totalCost = source.PremiumAmount + source.TaxAmount + source.FeeAmount;
+        if (request.RequestedDownPaymentAmount < 0 || request.RequestedDownPaymentAmount > totalCost)
+            throw new InvalidOperationException("Requested down payment must be between zero and the total premium, taxes, and fees.");
+        if (request.RequestedInstallmentCount is < 1 or > 120)
+            throw new InvalidOperationException("Requested payments must be between 1 and 120.");
 
         var normalized = request with
         {
@@ -69,7 +78,7 @@ public sealed class PremiumFinanceService(
         if (IsTerminal(detail.Request.StatusCode)) throw new InvalidOperationException("Completed, declined, or cancelled requests cannot be edited.");
         if (request.RequestedDownPaymentAmount > detail.Request.TotalCostAmount) throw new InvalidOperationException("Requested down payment cannot exceed total premium, taxes, and fees.");
         if (request.PreferredFinanceCompanyId is not null)
-            await RequireProviderAsync(request.TenantId, request.PreferredFinanceCompanyId.Value, null, cancellationToken);
+            await RequireProviderAsync(request.TenantId, request.PreferredFinanceCompanyId.Value, p => p.SupportsQuotes, cancellationToken, "Preferred provider does not support premium finance quote requests.");
         await repository.UpdateRequestAsync(premiumFinanceRequestId, Normalize(request), cancellationToken);
     }
 
@@ -121,7 +130,8 @@ public sealed class PremiumFinanceService(
         var result = await adapter.SubmitApplicationAsync(normalized, cancellationToken);
         if (!result.IsSuccessful)
             throw new InvalidOperationException(result.Message ?? "Premium finance application submission failed.");
-        return await repository.CreateAgreementAsync(normalized, cancellationToken);
+        await RequireReferenceCodeAsync(request.TenantId, "ProviderTransactionStatus", result.StatusCode, cancellationToken);
+        return await repository.CreateAgreementAsync(normalized, result, cancellationToken);
     }
 
     public async Task UpdateAgreementAsync(UpdatePremiumFinanceAgreementRequest request, CancellationToken cancellationToken = default)
@@ -179,6 +189,8 @@ public sealed class PremiumFinanceService(
         EnsureTenant(request.TenantId);
         if (!request.IntegrationLevelCode.Equals("Manual", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(request.ProviderKey))
             throw new InvalidOperationException("A provider adapter key is required for assisted or API integrations.");
+        if (!request.IntegrationLevelCode.Equals("Manual", StringComparison.OrdinalIgnoreCase))
+            providerResolver.Resolve(request.ProviderKey);
         var normalized = request with { CompanyCode = request.CompanyCode.Trim().ToUpperInvariant(), CompanyName = request.CompanyName.Trim(), ContactName = Clean(request.ContactName), EmailAddress = Clean(request.EmailAddress), PhoneNumber = Clean(request.PhoneNumber), ProviderKey = Clean(request.ProviderKey), WebsiteUrl = Clean(request.WebsiteUrl), PortalUrl = Clean(request.PortalUrl), ExternalProviderId = Clean(request.ExternalProviderId), RemittanceInstructions = Clean(request.RemittanceInstructions) };
         return repository.UpsertProviderAsync(normalized, cancellationToken);
     }
@@ -193,8 +205,11 @@ public sealed class PremiumFinanceService(
         var financeCompanyId = detail.Agreement?.FinanceCompanyId ?? detail.Request.PreferredFinanceCompanyId;
         var provider = financeCompanyId is null ? null : workspace.Providers.SingleOrDefault(x => x.FinanceCompanyId == financeCompanyId);
         var adapter = providerResolver.Resolve(provider?.ProviderKey);
-        await adapter.CancelRequestAsync(request, cancellationToken);
-        await repository.CancelRequestAsync(request, cancellationToken);
+        var result = await adapter.CancelRequestAsync(request, cancellationToken);
+        if (!result.IsSuccessful)
+            throw new InvalidOperationException(result.Message ?? "Premium finance provider cancellation failed.");
+        await RequireReferenceCodeAsync(request.TenantId, "ProviderTransactionStatus", result.StatusCode, cancellationToken);
+        await repository.CancelRequestAsync(request, financeCompanyId, result, cancellationToken);
     }
 
     private async Task<PremiumFinanceDetailDto> RequireDetailAsync(Guid tenantId, Guid requestId, CancellationToken cancellationToken)

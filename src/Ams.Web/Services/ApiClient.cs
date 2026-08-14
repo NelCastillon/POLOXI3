@@ -3244,6 +3244,9 @@ public sealed partial class ApiClient
         return result!.Id;
     }
 
+    public Task<IReadOnlyList<SubmissionQuoteRegisterDto>?> GetSubmissionQuoteRegisterAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<SubmissionQuoteRegisterDto>>($"api/submissions/quotes/register?tenantId={tenantId}", cancellationToken);
+
     public Task<IReadOnlyList<QuoteComparisonDto>?> GetSubmissionQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<QuoteComparisonDto>>($"api/submissions/{submissionId}/quotes?tenantId={tenantId}", cancellationToken);
 
