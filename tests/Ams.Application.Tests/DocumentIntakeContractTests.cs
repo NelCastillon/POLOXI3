@@ -262,6 +262,57 @@ public sealed class DocumentIntakeContractTests
         Assert.Contains("EntityName = N'Submission'", repository, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void WorkflowHardeningMigration_CoversEveryModuleAndTenantRelationship()
+    {
+        var assembly = typeof(DatabaseMigrator).Assembly;
+        var resource = assembly.GetManifestResourceNames().Single(name => name.EndsWith("0130_DocumentIntakeWorkflowHardening.sql", StringComparison.Ordinal));
+        var sql = Read(assembly, resource);
+
+        foreach (var module in DocumentIntakeModules.All)
+            Assert.Contains($"N'{module}.EXTRACTION'", sql, StringComparison.Ordinal);
+
+        Assert.Contains("required\":[\"entityTypeCode\",\"entityKey\",\"path\",\"value\",\"valueTypeCode\",\"confidence\"]", sql, StringComparison.Ordinal);
+        Assert.Contains("FOREIGN KEY (TenantId, IntakeSessionId) REFERENCES DMS.IntakeSession(TenantId, IntakeSessionId)", sql, StringComparison.Ordinal);
+        Assert.Contains("FOREIGN KEY (TenantId, IntakeSessionId, IntakeWorkItemId) REFERENCES DMS.IntakeWorkItem(TenantId, IntakeSessionId, IntakeWorkItemId)", sql, StringComparison.Ordinal);
+        Assert.Contains("FOREIGN KEY (TenantId, IntakeSessionId, IntakeDraftFieldId) REFERENCES DMS.IntakeDraftField(TenantId, IntakeSessionId, IntakeDraftFieldId)", sql, StringComparison.Ordinal);
+        Assert.Contains("UX_DMS_IntakePromotion_Session", sql, StringComparison.Ordinal);
+        Assert.Contains("HAVING COUNT(*) > 1", sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkerAndPayloadContracts_UseDatabaseSettingsAndTenantSessionScope()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var worker = File.ReadAllText(Path.Combine(root, "Ams.Worker", "Documents", "DocumentIntakeWorkerService.cs"));
+        var processor = File.ReadAllText(Path.Combine(root, "Ams.Worker", "Documents", "DocumentIntakeProcessor.cs"));
+        var payload = File.ReadAllText(Path.Combine(root, "src", "Ams.Infrastructure", "Services", "DocumentIntakePayloadStore.cs"));
+
+        Assert.Contains("settings.WorkerBatchSize", worker, StringComparison.Ordinal);
+        Assert.Contains("settings.WorkerPollIntervalSeconds", worker, StringComparison.Ordinal);
+        Assert.Contains("settings.LeaseDurationSeconds", worker, StringComparison.Ordinal);
+        Assert.Contains("ReadJsonAsync(context.Session.TenantId,context.Session.IntakeSessionId", processor, StringComparison.Ordinal);
+        Assert.Contains("expectedPrefix", payload, StringComparison.Ordinal);
+        Assert.Contains("does not belong to the requested tenant and session scope", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReviewReprocessAndPromotion_AreCanonicalAtomicAndSessionUnique()
+    {
+        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var repository = File.ReadAllText(Path.Combine(root, "src", "Ams.Infrastructure", "Persistence", "Repositories", "DocumentIntakeRepository.cs"));
+        var detail = File.ReadAllText(Path.Combine(root, "src", "Ams.Web", "Components", "Pages", "DocumentIntake", "DocumentIntakeDetail.razor"));
+
+        Assert.Contains("COALESCE(@Previous,@Normalized,@Extracted)", repository, StringComparison.Ordinal);
+        Assert.Contains("IF @FromWorkTypeCode NOT IN", repository, StringComparison.Ordinal);
+        Assert.Contains("ExecuteTransactionAsync", repository, StringComparison.Ordinal);
+        Assert.Contains("WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND IntakeSessionId=@IntakeSessionId", repository, StringComparison.Ordinal);
+        Assert.Contains("_correctionContext.Validate()", detail, StringComparison.Ordinal);
+        Assert.Contains("_reprocessContext.Validate()", detail, StringComparison.Ordinal);
+        Assert.Contains("_issueContext.Validate()", detail, StringComparison.Ordinal);
+        Assert.Contains("disabled=\"@_saving\"", detail, StringComparison.Ordinal);
+    }
+
     private static string Read(System.Reflection.Assembly assembly, string resource)
     {
         using var stream = assembly.GetManifestResourceStream(resource)!;

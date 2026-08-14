@@ -371,6 +371,10 @@ public sealed partial class DatabaseMigrator
         new("0315_Geo_City_Full_Us_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0124_GeoCityFullUsSeed.sql")),
         new("0316_Policy_Checking_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0125_PolicyCheckingWorkflow.sql")),
         new("0317_NonRenewal_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0126_NonRenewalWorkflow.sql")),
+        new("0318_Premium_Finance_Management", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0127_PremiumFinanceManagement.sql")),
+        new("0319_Premium_Finance_Seed_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0128_PremiumFinanceSeedData.sql")),
+        new("0320_Premium_Finance_Integrity_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0129_PremiumFinanceIntegrityHardening.sql")),
+        new("0321_Document_Intake_Workflow_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0130_DocumentIntakeWorkflowHardening.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

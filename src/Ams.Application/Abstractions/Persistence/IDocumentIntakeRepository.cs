@@ -17,8 +17,8 @@ public interface IDocumentIntakeRepository
     Task CancelAsync(CancelDocumentIntakeCommand command, CancellationToken cancellationToken = default);
     Task<SubmissionIntakeDraft> BuildReviewedSubmissionDraftAsync(Guid tenantId, Guid intakeSessionId, CancellationToken cancellationToken = default);
     Task<DocumentIntakePromotionConfigurationDto?> GetPromotionConfigurationAsync(Guid tenantId, string moduleCode, CancellationToken cancellationToken = default);
-    Task<DocumentIntakePromotionRecord?> GetPromotionAsync(Guid tenantId, string idempotencyKey, CancellationToken cancellationToken = default);
-    Task<Guid> BeginPromotionAsync(PromoteDocumentIntakeCommand command, string requestJson, CancellationToken cancellationToken = default);
+    Task<DocumentIntakePromotionRecord?> GetPromotionAsync(Guid tenantId, Guid intakeSessionId, string idempotencyKey, CancellationToken cancellationToken = default);
+    Task<DocumentIntakePromotionStart> BeginPromotionAsync(PromoteDocumentIntakeCommand command, string requestJson, CancellationToken cancellationToken = default);
     Task UpdatePromotionProgressAsync(Guid tenantId, Guid promotionId, Guid? submissionIntakeId, Guid? accountId, Guid? opportunityId, Guid? lobId, string? errorMessage, CancellationToken cancellationToken = default);
     Task LinkDocumentsToSubmissionAsync(Guid tenantId, Guid intakeSessionId, Guid promotionId, Guid submissionId, Guid actorUserId, CancellationToken cancellationToken = default);
     Task CompletePromotionAsync(Guid tenantId, Guid intakeSessionId, Guid promotionId, Guid targetEntityId, string resultJson, Guid actorUserId, byte[] expectedSessionRowVersion, CancellationToken cancellationToken = default);
@@ -35,6 +35,7 @@ public interface IDocumentIntakeRepository
 }
 
 public sealed record DocumentIntakePromotionRecord(Guid IntakePromotionId, string StatusCode, Guid? TargetEntityId, string? ResultJson, Guid? SubmissionIntakeId, Guid? AccountId, Guid? OpportunityId, Guid? LobId, string? LastErrorMessage);
+public sealed record DocumentIntakePromotionStart(Guid IntakePromotionId, bool Created);
 
 public sealed record DocumentIntakeProcessingContext(
     DocumentIntakeWorkItemDto WorkItem,

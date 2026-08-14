@@ -30,10 +30,16 @@ public sealed class DocumentIntakePayloadStore : IDocumentIntakePayloadStore
         return reference;
     }
 
-    public async Task<string> ReadJsonAsync(string storageReference,CancellationToken cancellationToken=default)
+    public async Task<string> ReadJsonAsync(Guid tenantId,Guid? intakeSessionId,string storageReference,CancellationToken cancellationToken=default)
     {
+        if(tenantId==Guid.Empty)throw new ArgumentException("Tenant is required.",nameof(tenantId));
         if(string.IsNullOrWhiteSpace(storageReference))throw new ArgumentException("Storage reference is required.",nameof(storageReference));
-        var response=await _container.GetBlobClient(storageReference.TrimStart('/')).DownloadContentAsync(cancellationToken);
+        var normalized=storageReference.TrimStart('/');
+        var expectedPrefix=intakeSessionId.HasValue
+            ?$"tenants/{tenantId:D}/document-intake/{intakeSessionId.Value:D}/"
+            :$"tenants/{tenantId:D}/document-intake/";
+        if(!normalized.StartsWith(expectedPrefix,StringComparison.OrdinalIgnoreCase))throw new UnauthorizedAccessException("The intake payload reference does not belong to the requested tenant and session scope.");
+        var response=await _container.GetBlobClient(normalized).DownloadContentAsync(cancellationToken);
         return response.Value.Content.ToString();
     }
 }

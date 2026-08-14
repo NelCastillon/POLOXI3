@@ -287,6 +287,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOperationsWorkbenchService, OperationsWorkbenchService>();
         services.AddScoped<IRenewalRetentionRepository, RenewalRetentionRepository>();
         services.AddScoped<IRenewalRetentionService, RenewalRetentionService>();
+        services.AddScoped<IPremiumFinanceRepository, PremiumFinanceRepository>();
+        services.AddScoped<IPremiumFinanceService, PremiumFinanceService>();
+        services.AddScoped<IPremiumFinanceProvider, ManualPremiumFinanceProvider>();
+        services.AddScoped<IPremiumFinanceProviderResolver, PremiumFinanceProviderResolver>();
 
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();

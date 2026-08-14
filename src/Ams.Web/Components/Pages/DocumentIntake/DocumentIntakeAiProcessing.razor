@@ -1,0 +1,104 @@
+@page "/operations/document-intake/ai-processing"
+@attribute [Authorize(Policy=Ams.Web.Security.DocumentIntakePolicies.Read)]
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Document Intake AI Processing</PageTitle>
+
+<DocumentIntakeWorkspace>
+    <div class="ai-guide">
+        <header class="ai-guide__hero">
+            <div>
+                <span class="ai-guide__eyebrow"><i class="bi bi-shield-check"></i> Governed AI processing</span>
+                <h1>Prompt Governance and AI Processing</h1>
+                <p>See how approved database prompts, retained OCR evidence, and strict output schemas produce reviewable draft data without allowing AI to update AMS records directly.</p>
+            </div>
+            <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Admin">
+                <a class="um-btn um-btn-secondary" href="/operations/document-intake/operations"><i class="bi bi-activity"></i> View live controls</a>
+            </AuthorizeView>
+        </header>
+
+        <section class="ai-guide__flow" aria-label="AI document processing flow">
+            <article><span>1</span><i class="bi bi-file-earmark-text"></i><strong>OCR evidence</strong><small>The retained, tenant-scoped OCR JSON is loaded from governed payload storage.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>2</span><i class="bi bi-database-check"></i><strong>Approved prompt</strong><small>The active tenant override or global prompt and schema are loaded from the database.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>3</span><i class="bi bi-cpu"></i><strong>Azure OpenAI</strong><small>The prompt, OCR evidence, and strict JSON schema are sent through the configured provider route.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>4</span><i class="bi bi-ui-checks-grid"></i><strong>Reviewed draft</strong><small>Structured fields are normalized and validated before a user can approve or promote them.</small></article>
+        </section>
+
+        <div class="ai-guide__grid">
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-database"></i> Database prompt source</h2>
+                <p>The operational Document Intake worker reads from <code>DMS.AiPromptDefinition</code>. Each definition stores the prompt code, category, version, system prompt, output schema, status, approval metadata, effective dates, tenant scope, and row version.</p>
+                <div class="ai-guide__facts">
+                    <span><strong>Tenant override</strong>Preferred when its TenantId matches the intake session.</span>
+                    <span><strong>Global fallback</strong>Used when TenantId is null and no active tenant override exists.</span>
+                    <span><strong>Runtime gate</strong>Only approved, currently effective, non-expired versions are eligible.</span>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-braces"></i> Runtime prompt selection</h2>
+                <p>Classification uses <code>DOCUMENT.CLASSIFICATION</code>. Extraction resolves the module-specific code <code>{ModuleCode}.EXTRACTION</code>, such as <code>SUBMISSION.EXTRACTION</code> or <code>POLICY.EXTRACTION</code>.</p>
+                <div class="ai-guide__callout">
+                    <i class="bi bi-exclamation-circle"></i>
+                    <span>If no approved active prompt exists, processing stops with <strong>APPROVED_PROMPT_MISSING</strong>. It does not silently fall back to an unapproved prompt.</span>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-chat-square-text"></i> What the model receives</h2>
+                <div class="ai-guide__message">
+                    <span>System message</span>
+                    <p>The approved <code>SystemPrompt</code> from the database, including instructions to return structured evidence and never mutate AMS records.</p>
+                </div>
+                <div class="ai-guide__message">
+                    <span>User message</span>
+                    <p>The module code, correlation identifier, and retained OCR JSON for the current tenant-scoped intake session.</p>
+                </div>
+                <div class="ai-guide__message">
+                    <span>Response format</span>
+                    <p>The database-stored <code>OutputSchemaJson</code>, submitted as a strict JSON schema response format.</p>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-journal-check"></i> Evidence and audit trail</h2>
+                <p>Interpretation output is retained as governed payload evidence. <code>DMS.AiExecution</code> records the provider, model, prompt code and version, input/output references and hashes, confidence, duration, token usage, work item, document, session, and tenant.</p>
+                <ul>
+                    <li>Raw payload access is audited and tenant scoped.</li>
+                    <li>Extracted values remain draft data until reviewed.</li>
+                    <li>Promotion uses backend validation and application services.</li>
+                    <li>AI never creates or updates the target business record directly.</li>
+                </ul>
+            </section>
+        </div>
+
+        <section class="ai-guide__panel ai-guide__governance">
+            <div>
+                <h2><i class="bi bi-clipboard2-check"></i> Evaluation and approval gates</h2>
+                <p>Prompt evaluation runs use the same interpretation provider as production. Test inputs are processed, actual outputs are retained, expected and actual results are scored, and the run records pass rate and average score.</p>
+            </div>
+            <div class="ai-guide__governance-steps">
+                <span><i class="bi bi-collection"></i><strong>Evaluation suite</strong>DB-backed cases and thresholds</span>
+                <span><i class="bi bi-play-circle"></i><strong>Evaluation run</strong>Real provider, prompt, model, and schema</span>
+                <span><i class="bi bi-check2-circle"></i><strong>Approval</strong>Passing run required when configured</span>
+                <span><i class="bi bi-clock-history"></i><strong>Effective version</strong>Approved dates and row-version concurrency</span>
+            </div>
+        </section>
+
+        <section class="ai-guide__panel ai-guide__source-note">
+            <i class="bi bi-diagram-3"></i>
+            <div>
+                <h2>Document Intake and the Intelligence Platform</h2>
+                <p>The broader Intelligence Platform also has centralized prompt definitions. The current Document Intake runtime remains sourced from <code>DMS.AiPromptDefinition</code>; later synchronization supports broader governance, but it does not change the worker's operational source of truth.</p>
+            </div>
+        </section>
+    </div>
+</DocumentIntakeWorkspace>
+
+@code {
+    protected override void OnInitialized()
+        => Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"), new("Document Intake", "/operations/document-intake"), new("AI Processing", "/operations/document-intake/ai-processing"));
+}

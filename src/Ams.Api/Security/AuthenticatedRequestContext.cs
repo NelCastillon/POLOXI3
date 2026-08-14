@@ -16,6 +16,14 @@ public static class AuthenticatedRequestContext
         => HasTenantAccess(user, tenantId)
             && HasAnyPermission(user, "ACCOUNT_MANAGE", "ACCOUNT_EDIT", "ACCOUNT_CONFIG_MANAGE");
 
+    public static bool CanViewPremiumFinance(ClaimsPrincipal user, Guid tenantId)
+        => HasTenantAccess(user, tenantId)
+            && HasAnyPermission(user, "PREMIUM_FINANCE_VIEW", "PREMIUM_FINANCE_MANAGE", "POLICY_VIEW", "POLICY_MANAGE", "BILLING_VIEW", "BILLING_MANAGE");
+
+    public static bool CanManagePremiumFinance(ClaimsPrincipal user, Guid tenantId)
+        => HasTenantAccess(user, tenantId)
+            && HasAnyPermission(user, "PREMIUM_FINANCE_MANAGE", "POLICY_MANAGE", "POLICY_EDIT", "BILLING_MANAGE");
+
     public static bool HasPolicyEndorsementPermission(ClaimsPrincipal user, Guid tenantId, params string[] permissions)
         => HasTenantAccess(user, tenantId)
             && HasAnyPermission(user, [.. permissions, "ENDORSEMENT_MANAGE"]);

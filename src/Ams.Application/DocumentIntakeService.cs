@@ -97,7 +97,7 @@ public sealed class DocumentIntakeService : IDocumentIntakeService
     public async Task<DocumentIntakePromotionResult> PromoteAsync(PromoteDocumentIntakeCommand command, CancellationToken cancellationToken = default)
     {
         DocumentIntakeValidator.Validate(command);
-        var existing = await _repository.GetPromotionAsync(command.TenantId, command.IdempotencyKey, cancellationToken);
+        var existing = await _repository.GetPromotionAsync(command.TenantId, command.IntakeSessionId, command.IdempotencyKey, cancellationToken);
         if (existing?.TargetEntityId is Guid existingTarget)
             return new(command.IntakeSessionId, existingTarget, DocumentIntakeModules.Submission, true, "The reviewed intake was already promoted.");
 
@@ -112,7 +112,18 @@ public sealed class DocumentIntakeService : IDocumentIntakeService
         var configuration = await _repository.GetPromotionConfigurationAsync(command.TenantId, detail.Session.ModuleCode, cancellationToken)
             ?? throw new InvalidOperationException("Submission promotion configuration is not active for this tenant.");
         var requestJson = JsonSerializer.Serialize(draft);
-        var promotionId = existing?.IntakePromotionId ?? await _repository.BeginPromotionAsync(command, requestJson, cancellationToken);
+        var promotionStart = existing is null
+            ? await _repository.BeginPromotionAsync(command, requestJson, cancellationToken)
+            : new DocumentIntakePromotionStart(existing.IntakePromotionId, false);
+        var promotionId = promotionStart.IntakePromotionId;
+        if (!promotionStart.Created && existing is null)
+        {
+            existing = await _repository.GetPromotionAsync(command.TenantId, command.IntakeSessionId, command.IdempotencyKey, cancellationToken);
+        }
+        if (!promotionStart.Created && existing?.TargetEntityId is Guid concurrentTarget)
+            return new(command.IntakeSessionId, concurrentTarget, DocumentIntakeModules.Submission, true, "The reviewed intake was already promoted.");
+        if (!promotionStart.Created && existing?.SubmissionIntakeId is null)
+            throw new InvalidOperationException("Promotion for this intake session is already in progress.");
 
         var submissionIntakeId = existing?.SubmissionIntakeId ?? await _submissionIntakeService.CaptureAsync(new CreateSubmissionIntakeRequest
         {

@@ -1,6 +1,7 @@
 @page "/operations/document-intake/{Id:guid}"
 @attribute [Authorize(Policy = Ams.Web.Security.DocumentIntakePolicies.Read)]
 @using Ams.Application.Features.DocumentIntake
+@using System.ComponentModel.DataAnnotations
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject CurrentUserContext CurrentUser
@@ -37,20 +38,20 @@
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Draft)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
-                            <button class="um-btn um-btn-ghost" @onclick="OpenUpload"><i class="bi bi-cloud-arrow-up"></i> Manual upload</button>
-                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_detail.Documents.Count == 0)">Queue processing</button>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenUpload" disabled="@_saving"><i class="bi bi-cloud-arrow-up"></i> Manual upload</button>
+                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_saving || _detail.Documents.Count == 0)">Queue processing</button>
                         </AuthorizeView>
                     }
                     @if (_detail.Session.StatusCode is DocumentIntakeStatuses.Failed or DocumentIntakeStatuses.ReviewRequired or DocumentIntakeStatuses.Ready)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Reprocess">
-                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess">Reprocess</button>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess" disabled="@_saving">Reprocess</button>
                         </AuthorizeView>
                     }
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Ready)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Promote">
-                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync" disabled="@(_detail.PromotionReadiness?.CanPromote != true)">Create @ModuleLabel</button>
+                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync" disabled="@(_saving || _detail.PromotionReadiness?.CanPromote != true)">Create @ModuleLabel</button>
                         </AuthorizeView>
                     }
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Completed && _detail.Session.PromotedEntityId.HasValue)
@@ -59,7 +60,7 @@
                     }
                     @if (_detail.Session.StatusCode is not (DocumentIntakeStatuses.Completed or DocumentIntakeStatuses.Cancelled))
                     {
-                        <button class="um-btn um-btn-ghost" @onclick="CancelAsync">Cancel</button>
+                        <button class="um-btn um-btn-ghost" @onclick="CancelAsync" disabled="@_saving">Cancel</button>
                     }
                 </div>
             </Actions>
@@ -145,9 +146,9 @@
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
                             <div class="intake-actions mt-2">
-                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)">Approve</button>
-                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)">Correct</button>
-                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)">Reject</button>
+                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)" disabled="@_saving">Approve</button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)" disabled="@_saving">Correct</button>
+                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)" disabled="@_saving">Reject</button>
                             </div>
                         </AuthorizeView>
                     }
@@ -163,7 +164,7 @@
                     <GridColumn Field="@nameof(DocumentIntakeIssueDto.IssueCode)" HeaderText="Code" />
                     <GridColumn Field="@nameof(DocumentIntakeIssueDto.Message)" HeaderText="Message" />
                     <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeIssueDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
-                    <GridColumn HeaderText="Action"><Template>@{ var row = (DocumentIntakeIssueDto)context; }@if (row.StatusCode == "OPEN") { <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ResolveIssueAsync(row)">Resolve</button></AuthorizeView> }</Template></GridColumn>
+                    <GridColumn HeaderText="Action"><Template>@{ var row = (DocumentIntakeIssueDto)context; }@if (row.StatusCode == "OPEN") { <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenIssueResolution(row)" disabled="@_saving">Resolve</button></AuthorizeView> }</Template></GridColumn>
                 </GridColumns>
             </AppGrid>
         </section>
@@ -184,38 +185,49 @@
 </DocumentIntakeWorkspace>
 
 <AppCrudDrawer @bind-Visible="_correctionDrawer" Title="Correct extracted value" Icon="bi-pencil" OnConfirm="SaveCorrectionAsync" IsBusy="_saving">
-    <Content><div class="intake-field-card"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionValue" /><label class="mt-3">Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reason" /></div></Content>
+    <Content><EditForm EditContext="_correctionContext"><DataAnnotationsValidator /><div class="intake-field-card"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Value" /><ValidationMessage For="() => _correctionForm.Value" class="text-danger" /><label class="mt-3">Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Reason" /><ValidationMessage For="() => _correctionForm.Reason" class="text-danger" /></div></EditForm></Content>
 </AppCrudDrawer>
 <AppCrudDrawer @bind-Visible="_reprocessDrawer" Title="Reprocess intake" Icon="bi-arrow-repeat" OnConfirm="ReprocessAsync" IsBusy="_saving">
-    <Content><div class="intake-field-card"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessType"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option></InputSelect><label class="mt-3">Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reason" /></div></Content>
+    <Content><EditForm EditContext="_reprocessContext"><DataAnnotationsValidator /><div class="intake-field-card"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessForm.WorkTypeCode"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option><option value="SEARCH_INDEXING">Search indexing</option></InputSelect><ValidationMessage For="() => _reprocessForm.WorkTypeCode" class="text-danger" /><label class="mt-3">Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reprocessForm.Reason" /><ValidationMessage For="() => _reprocessForm.Reason" class="text-danger" /></div></EditForm></Content>
+</AppCrudDrawer>
+<AppCrudDrawer @bind-Visible="_issueDrawer" Title="Resolve intake issue" Icon="bi-check2-circle" OnConfirm="ResolveIssueAsync" IsBusy="_saving" ConfirmText="Resolve issue">
+    <Content><EditForm EditContext="_issueContext"><DataAnnotationsValidator /><div class="intake-field-card"><strong>@_selectedIssue?.IssueCode</strong><p>@_selectedIssue?.Message</p><label>Resolution notes</label><InputTextArea class="intake-input w-100" @bind-Value="_issueForm.Notes" /><ValidationMessage For="() => _issueForm.Notes" class="text-danger" /></div></EditForm></Content>
 </AppCrudDrawer>
 
 @code {
     [Parameter] public Guid Id { get; set; }
     private DocumentIntakeDetailDto? _detail;
     private Guid _tenantId, _userId;
-    private bool _loading = true, _saving, _uploadOpen, _correctionDrawer, _reprocessDrawer;
+    private bool _loading = true, _saving, _uploadOpen, _correctionDrawer, _reprocessDrawer, _issueDrawer;
     private string? _error;
     private DocumentIntakeDraftFieldDto? _selectedField;
-    private string _correctionValue = "", _reason = "Reviewed document evidence", _reprocessType = "OCR";
+    private DocumentIntakeIssueDto? _selectedIssue;
+    private CorrectionForm _correctionForm = new();
+    private ReprocessForm _reprocessForm = new();
+    private IssueResolutionForm _issueForm = new();
+    private EditContext _correctionContext = default!, _reprocessContext = default!, _issueContext = default!;
     private string SessionSubtitle => _detail is null ? "" : $"{ModuleLabel} · {_detail.Session.EntryPointCode.Replace('_', ' ')}";
     private string ModuleLabel => _detail?.Session.ModuleCode.Replace('_', ' ') ?? "record";
 
-    protected override async Task OnInitializedAsync() { var user = await CurrentUser.RequireAsync(); _tenantId = user.TenantId; _userId = user.UserId; Breadcrumbs.SetCrumbs(new("Home", "/"), new("Document Intake", "/operations/document-intake"), new("Review")); await LoadAsync(); }
+    protected override async Task OnInitializedAsync() { _correctionContext = new(_correctionForm); _reprocessContext = new(_reprocessForm); _issueContext = new(_issueForm); var user = await CurrentUser.RequireAsync(); _tenantId = user.TenantId; _userId = user.UserId; Breadcrumbs.SetCrumbs(new("Home", "/"), new("Document Intake", "/operations/document-intake"), new("Review")); await LoadAsync(); }
     private async Task LoadAsync() { _loading = true; try { _detail = await Api.GetDocumentIntakeAsync(Id); _error = null; } catch (Exception ex) { _error = ex.Message; } finally { _loading = false; } }
     private void OpenUpload() => _uploadOpen = true;
-    private void OpenReprocess() => _reprocessDrawer = true;
-    private async Task HandleUploadedAsync(Guid documentId) { try { await Api.AttachDocumentToIntakeAsync(Id, new(_tenantId, Id, documentId, "SOURCE", null, (_detail?.Documents.Count ?? 0) + 1, _userId)); _uploadOpen = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private void OpenReprocess() { _reprocessForm = new(); _reprocessContext = new(_reprocessForm); _reprocessDrawer = true; }
+    private async Task HandleUploadedAsync(Guid documentId) { if (_saving) return; _saving = true; try { await Api.AttachDocumentToIntakeAsync(Id, new(_tenantId, Id, documentId, "SOURCE", null, (_detail?.Documents.Count ?? 0) + 1, _userId)); _uploadOpen = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
     private void HandleUploadFailed(string message) => Fail(message);
-    private async Task QueueAsync() { if (_detail is null) return; try { await Api.QueueDocumentIntakeAsync(Id, new(_tenantId, Id, "Queued evidence for governed AI processing", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private void OpenCorrection(DocumentIntakeDraftFieldDto field) { _selectedField = field; _correctionValue = field.NormalizedValue ?? field.ExtractedValue ?? ""; _reason = "Corrected against source evidence"; _correctionDrawer = true; }
-    private async Task SaveCorrectionAsync() { if (_selectedField is not null) await ReviewAsync(_selectedField, DocumentIntakeReviewStatuses.Corrected, _correctionValue); _correctionDrawer = false; }
-    private async Task ReviewAsync(DocumentIntakeDraftFieldDto field, string decision, string? value) { try { await Api.ReviewDocumentIntakeFieldAsync(Id, field.IntakeDraftFieldId, new(_tenantId, Id, field.IntakeDraftFieldId, decision, value, _reason, Guid.NewGuid().ToString("N"), _userId, field.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private async Task ResolveIssueAsync(DocumentIntakeIssueDto issue) { try { await Api.ResolveDocumentIntakeIssueAsync(Id, issue.IntakeIssueId, new(_tenantId, Id, issue.IntakeIssueId, "RESOLVED", "Verified and resolved against source evidence", Guid.NewGuid().ToString("N"), _userId, issue.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private async Task ReprocessAsync() { if (_detail is null) return; try { await Api.ReprocessDocumentIntakeAsync(Id, new(_tenantId, Id, _reprocessType, _reason, Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); _reprocessDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private async Task CancelAsync() { if (_detail is null || !await Confirmations.ConfirmAsync("Cancel intake", "Cancel this intake session and pending work?")) return; try { await Api.CancelDocumentIntakeAsync(Id, new(_tenantId, Id, "Cancelled by reviewer", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
-    private async Task PromoteAsync() { if (_detail?.PromotionReadiness?.CanPromote != true || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success", result is null ? null : $"/submissions/{result.TargetEntityId}")); if (result is not null) Nav.NavigateTo($"/submissions/{result.TargetEntityId}"); else await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } }
+    private async Task QueueAsync() { if (_detail is null || _saving) return; _saving = true; try { await Api.QueueDocumentIntakeAsync(Id, new(_tenantId, Id, "Queued evidence for governed AI processing", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private void OpenCorrection(DocumentIntakeDraftFieldDto field) { _selectedField = field; _correctionForm = new() { Value = field.NormalizedValue ?? field.ExtractedValue ?? "", Reason = "Corrected against source evidence" }; _correctionContext = new(_correctionForm); _correctionDrawer = true; }
+    private void OpenIssueResolution(DocumentIntakeIssueDto issue) { _selectedIssue = issue; _issueForm = new(); _issueContext = new(_issueForm); _issueDrawer = true; }
+    private async Task SaveCorrectionAsync() { if (_selectedField is null || !_correctionContext.Validate()) return; await ReviewAsync(_selectedField, DocumentIntakeReviewStatuses.Corrected, _correctionForm.Value, _correctionForm.Reason); if (!_saving) _correctionDrawer = false; }
+    private async Task ReviewAsync(DocumentIntakeDraftFieldDto field, string decision, string? value, string reason = "Reviewed document evidence") { if (_saving) return; _saving = true; try { await Api.ReviewDocumentIntakeFieldAsync(Id, field.IntakeDraftFieldId, new(_tenantId, Id, field.IntakeDraftFieldId, decision, value, reason, Guid.NewGuid().ToString("N"), _userId, field.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task ResolveIssueAsync() { if (_selectedIssue is null || !_issueContext.Validate() || _saving) return; _saving = true; try { await Api.ResolveDocumentIntakeIssueAsync(Id, _selectedIssue.IntakeIssueId, new(_tenantId, Id, _selectedIssue.IntakeIssueId, "RESOLVED", _issueForm.Notes, Guid.NewGuid().ToString("N"), _userId, _selectedIssue.RowVersion)); _issueDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task ReprocessAsync() { if (_detail is null || !_reprocessContext.Validate() || _saving) return; _saving = true; try { await Api.ReprocessDocumentIntakeAsync(Id, new(_tenantId, Id, _reprocessForm.WorkTypeCode, _reprocessForm.Reason, Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); _reprocessDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task CancelAsync() { if (_detail is null || _saving || !await Confirmations.ConfirmAsync("Cancel intake", "Cancel this intake session and pending work?")) return; _saving = true; try { await Api.CancelDocumentIntakeAsync(Id, new(_tenantId, Id, "Cancelled by reviewer", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task PromoteAsync() { if (_detail?.PromotionReadiness?.CanPromote != true || _saving || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; _saving = true; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success", result is null ? null : $"/submissions/{result.TargetEntityId}")); if (result is not null) Nav.NavigateTo($"/submissions/{result.TargetEntityId}"); else await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
     private void OpenPromotedRecord() { if (_detail?.Session.PromotedEntityId is Guid submissionId) Nav.NavigateTo($"/submissions/{submissionId}"); }
     private void Fail(string message) => Notifications.Add(new(Guid.NewGuid(), "Document intake operation failed", message, "bi-exclamation-triangle", "danger"));
     private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
+    private sealed class CorrectionForm { [Required, StringLength(4000)] public string Value { get; set; } = ""; [Required, StringLength(2000)] public string Reason { get; set; } = ""; }
+    private sealed class ReprocessForm { [Required, StringLength(50)] public string WorkTypeCode { get; set; } = "OCR"; [Required, StringLength(2000)] public string Reason { get; set; } = "Reprocess requested after reviewed evidence changed"; }
+    private sealed class IssueResolutionForm { [Required, StringLength(2000)] public string Notes { get; set; } = ""; }
 }

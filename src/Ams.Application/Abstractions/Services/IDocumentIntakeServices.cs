@@ -42,7 +42,7 @@ public interface IDocumentKnowledgeNormalizer
 public interface IDocumentIntakePayloadStore
 {
     Task<string> SaveJsonAsync(Guid tenantId, Guid intakeSessionId, string payloadType, string json, CancellationToken cancellationToken = default);
-    Task<string> ReadJsonAsync(string storageReference, CancellationToken cancellationToken = default);
+    Task<string> ReadJsonAsync(Guid tenantId, Guid? intakeSessionId, string storageReference, CancellationToken cancellationToken = default);
 }
 
 public sealed record DocumentIntakePromotionResult(Guid IntakeSessionId, Guid TargetEntityId, string ModuleCode, bool AlreadyPromoted, string Message);
