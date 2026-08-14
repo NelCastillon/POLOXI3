@@ -88,6 +88,132 @@
             </div>
         </section>
 
+        <section class="ai-guide__panel ai-guide__mapping">
+            <div class="ai-guide__section-heading">
+                <span><i class="bi bi-signpost-split"></i></span>
+                <div>
+                    <h2>How OpenAI fields become Submission data</h2>
+                    <p>The AI response is evidence-backed draft data. It passes through persistence, normalization, validation, human review, and backend promotion before any official Account, Opportunity, or Submission is created.</p>
+                </div>
+            </div>
+
+            <div class="ai-guide__mapping-flow" aria-label="OpenAI field mapping workflow">
+                <article>
+                    <span>1</span>
+                    <i class="bi bi-braces-asterisk"></i>
+                    <div><strong>Structured fields returned</strong><small><code>AzureOpenAiDocumentInterpretationProvider.InterpretAsync</code> parses the strict JSON response into <code>List&lt;ExtractedDocumentField&gt;</code>.</small></div>
+                </article>
+                <article>
+                    <span>2</span>
+                    <i class="bi bi-database-add"></i>
+                    <div><strong>Draft fields persisted</strong><small><code>DocumentIntakeProcessor.InterpretAsync</code> calls <code>SaveInterpretationAsync</code>, which upserts tenant-scoped rows in <code>DMS.IntakeDraftField</code>.</small></div>
+                </article>
+                <article>
+                    <span>3</span>
+                    <i class="bi bi-diagram-2"></i>
+                    <div><strong>Normalized and validated</strong><small>Knowledge mapping stores canonical values and concepts. Deterministic validation creates actionable issues for missing or low-confidence data.</small></div>
+                </article>
+                <article>
+                    <span>4</span>
+                    <i class="bi bi-person-check"></i>
+                    <div><strong>Human reviewed</strong><small>A reviewer approves, corrects, or rejects each field. Promotion only uses approved or corrected values.</small></div>
+                </article>
+                <article>
+                    <span>5</span>
+                    <i class="bi bi-table"></i>
+                    <div><strong>Submission draft mapped</strong><small><code>BuildReviewedSubmissionDraftAsync</code> converts stable field paths into a typed <code>SubmissionIntakeDraft</code>.</small></div>
+                </article>
+                <article>
+                    <span>6</span>
+                    <i class="bi bi-box-arrow-up-right"></i>
+                    <div><strong>Business records promoted</strong><small>The application services stage <code>Submissions.SubmissionIntake</code>, then match or create an Account and create the Opportunity, Opportunity Line, Submission, and Submission Lines.</small></div>
+                </article>
+            </div>
+        </section>
+
+        <div class="ai-guide__grid">
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-braces"></i> 1. OpenAI response contract</h2>
+                <p>The model returns a <code>fields</code> collection constrained by the approved database-backed <code>OutputSchemaJson</code>. Each field carries its business path, value type, confidence, and source evidence.</p>
+                <div class="ai-guide__field-tags" aria-label="Extracted field properties">
+                    <code>entityTypeCode</code><code>entityKey</code><code>path</code><code>value</code><code>valueTypeCode</code><code>confidence</code><code>sourcePage</code><code>boundingBoxJson</code>
+                </div>
+                <div class="ai-guide__example">
+                    <span>Submission path examples</span>
+                    <code>submission.businessName</code>
+                    <code>submission.applicantName</code>
+                    <code>submission.lineOfBusiness</code>
+                    <code>submission.requestedEffectiveDate</code>
+                    <code>submission.estimatedPremium</code>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-database-check"></i> 2. Intake draft persistence</h2>
+                <p><code>DocumentIntakeRepository.SaveInterpretationAsync</code> retains the complete interpretation payload, records <code>DMS.AiExecution</code>, and maps every parsed field into <code>DMS.IntakeDraftField</code>.</p>
+                <div class="ai-guide__table-wrap">
+                    <table class="ai-guide__table">
+                        <thead><tr><th>OpenAI field</th><th>Draft column</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>entityTypeCode</code></td><td>EntityTypeCode</td></tr>
+                            <tr><td><code>entityKey</code></td><td>EntityKey</td></tr>
+                            <tr><td><code>path</code></td><td>FieldPath</td></tr>
+                            <tr><td><code>value</code></td><td>ExtractedValue</td></tr>
+                            <tr><td><code>valueTypeCode</code></td><td>ValueTypeCode</td></tr>
+                            <tr><td><code>confidence</code></td><td>Confidence</td></tr>
+                            <tr><td><code>sourcePage</code></td><td>SourcePageNumber</td></tr>
+                            <tr><td><code>boundingBoxJson</code></td><td>SourceBoundingBoxJson</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-ui-checks"></i> 3. Canonical review value</h2>
+                <p>Knowledge mapping can add a canonical <code>NormalizedValue</code>. Review can add a user-confirmed <code>ReviewedValue</code>. Promotion selects the value in this order:</p>
+                <div class="ai-guide__value-order">
+                    <span><strong>1</strong> ReviewedValue</span><i class="bi bi-chevron-right"></i>
+                    <span><strong>2</strong> NormalizedValue</span><i class="bi bi-chevron-right"></i>
+                    <span><strong>3</strong> ExtractedValue</span>
+                </div>
+                <div class="ai-guide__callout"><i class="bi bi-shield-lock"></i><span>Only fields with an <strong>APPROVED</strong> or <strong>CORRECTED</strong> review status can enter the Submission promotion mapping.</span></div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-arrow-left-right"></i> 4. Submission field-path mapping</h2>
+                <p><code>DocumentIntakeRepository.BuildReviewedSubmissionDraftAsync</code> is the explicit mapping boundary. It converts reviewed field paths to typed properties and parses date and decimal values using invariant formats.</p>
+                <div class="ai-guide__table-wrap">
+                    <table class="ai-guide__table">
+                        <thead><tr><th>Reviewed field path</th><th>Draft property</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>submission.businessName</code></td><td>BusinessName</td></tr>
+                            <tr><td><code>submission.applicantName</code></td><td>ApplicantName</td></tr>
+                            <tr><td><code>submission.lineOfBusiness</code></td><td>LineOfBusiness</td></tr>
+                            <tr><td><code>submission.requestedEffectiveDate</code></td><td>RequestedEffectiveDate</td></tr>
+                            <tr><td><code>submission.estimatedPremium</code></td><td>EstimatedPremium</td></tr>
+                            <tr><td><code>submission.email</code> / <code>submission.phone</code></td><td>Email / Phone</td></tr>
+                            <tr><td><code>submission.state</code></td><td>State</td></tr>
+                            <tr><td><code>submission.notes</code></td><td>Notes</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <section class="ai-guide__panel ai-guide__promotion">
+            <div>
+                <h2><i class="bi bi-building-add"></i> 5. Staging and official record creation</h2>
+                <p><code>DocumentIntakeService.PromoteAsync</code> first creates an idempotent <code>Submissions.SubmissionIntake</code> staging record. <code>SubmissionIntakeService.PromoteAsync</code> then performs tenant-scoped matching and creates official records through their owning repositories.</p>
+            </div>
+            <div class="ai-guide__promotion-records">
+                <span><i class="bi bi-person-vcard"></i><strong>Account</strong>Match an existing account or create a Prospect.</span>
+                <span><i class="bi bi-bullseye"></i><strong>Opportunity</strong>Create the sales/work container.</span>
+                <span><i class="bi bi-list-check"></i><strong>Opportunity Line</strong>Use the canonical tenant Line of Business.</span>
+                <span><i class="bi bi-file-earmark-richtext"></i><strong>Submission</strong>Create a Draft with configured priority, dates, premium, risk state, and assignment.</span>
+            </div>
+            <div class="ai-guide__callout ai-guide__callout--success"><i class="bi bi-check2-shield"></i><span>OpenAI never writes to <code>Submissions.Submission</code>. Official records are created only after review and backend readiness validation.</span></div>
+        </section>
+
         <section class="ai-guide__panel ai-guide__source-note">
             <i class="bi bi-diagram-3"></i>
             <div>
