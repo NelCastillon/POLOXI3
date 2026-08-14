@@ -128,7 +128,7 @@ FROM Submissions.Quote q JOIN Submissions.Submission s ON s.SubmissionId=q.Submi
 JOIN Client.Account a ON a.AccountId=s.AccountId AND a.TenantId=s.TenantId AND a.IsDeleted=0
 LEFT JOIN Core.Carrier c ON c.CarrierId=q.CarrierId AND c.TenantId=s.TenantId AND c.IsDeleted=0
 LEFT JOIN IAM.[User] u ON u.UserId=s.AssignedToUserId AND u.TenantId=s.TenantId AND u.IsDeleted=0
-WHERE q.TenantId=@TenantId AND q.QuoteId=@SourceId AND q.IsDeleted=0;
+WHERE q.QuoteId=@SourceId AND q.IsDeleted=0;
 """,
             "policy" => """
 SELECT N'Policy' SourceTypeCode, bp.PolicyId SourceId, bp.TenantId, bp.QuoteId, bp.PolicyId,

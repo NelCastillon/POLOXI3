@@ -57,7 +57,9 @@ public sealed class PremiumFinanceManagementContractTests
     {
         var repository = Read("src", "Ams.Infrastructure", "Persistence", "Repositories", "PremiumFinanceRepository.cs");
 
-        Assert.Contains("WHERE q.TenantId=@TenantId AND q.QuoteId=@SourceId", repository, StringComparison.Ordinal);
+        Assert.Contains("s.TenantId=@TenantId", repository, StringComparison.Ordinal);
+        Assert.Contains("WHERE q.QuoteId=@SourceId AND q.IsDeleted=0", repository, StringComparison.Ordinal);
+        Assert.DoesNotContain("q.TenantId=@TenantId", repository, StringComparison.Ordinal);
         Assert.Contains("SupportsQuotes=1", repository, StringComparison.Ordinal);
         Assert.Contains("Agreement does not belong to the selected request.", repository, StringComparison.Ordinal);
         Assert.Contains("OptionGroupCode=N'ActivityType'", repository, StringComparison.Ordinal);
@@ -111,7 +113,7 @@ public sealed class PremiumFinanceManagementContractTests
         Assert.Contains("_source?.IsEligible != true", page, StringComparison.Ordinal);
         Assert.Contains("GetPremiumFinanceSourceAsync", page, StringComparison.Ordinal);
         Assert.Contains("OnParametersSetAsync", page, StringComparison.Ordinal);
-        Assert.Contains("OpenRequest(sourceType?.OptionCode??SourceType)", page, StringComparison.Ordinal);
+        Assert.Contains("OpenRequestForSource(sourceType?.OptionCode??SourceType)", page, StringComparison.Ordinal);
         Assert.Contains("disabled=\"@IsSourceLaunch\"", page, StringComparison.Ordinal);
         Assert.Contains("class=\"text-danger\"", page, StringComparison.Ordinal);
 
