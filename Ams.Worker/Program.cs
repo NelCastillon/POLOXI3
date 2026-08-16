@@ -31,10 +31,9 @@ builder.Configuration.AddUserSecrets<Program>(optional: true, reloadOnChange: fa
 
 builder.Services.Configure<WorkerOptions>(builder.Configuration.GetSection("Worker"));
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddSingleton<TokenCredential>(_ =>
-    builder.Environment.IsDevelopment()
-        ? new AzureCliCredential()
-        : new ManagedIdentityCredential());
+builder.Services.AddSingleton<TokenCredential>(_ => new ChainedTokenCredential(
+    new AzureCliCredential(),
+    new ManagedIdentityCredential()));
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IDocumentKnowledgeNormalizer, KnowledgeDocumentNormalizer>();
 builder.Services.AddScoped<IDocumentIntakeProcessor, DocumentIntakeProcessor>();

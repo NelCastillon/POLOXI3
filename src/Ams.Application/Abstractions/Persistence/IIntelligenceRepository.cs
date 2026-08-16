@@ -22,6 +22,13 @@ public interface IIntelligenceRepository
     Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetAuthorizedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> entities,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<IntelligenceSearchResultDto>> GetRelatedSearchDocumentsAsync(IntelligenceSearchRequest request,IReadOnlyCollection<IntelligenceSearchEntityKey> sources,int maximumResults,CancellationToken cancellationToken=default);
     Task CompleteUnifiedSearchAsync(Guid tenantId,Guid userId,Guid searchQueryId,string normalizedQuery,IntelligenceSearchWeightsDto weights,IReadOnlyCollection<IntelligenceSearchResultDto> results,string summaryStatusCode,Guid? summaryExecutionId,long durationMilliseconds,CancellationToken cancellationToken=default);
+    Task<EphConfiguration> GetEphConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<EphCapabilityDto>> GetEphCapabilitiesAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task<EphHierarchyRecord?> GetReusableEphHierarchyAsync(Guid tenantId,string querySignature,CancellationToken cancellationToken=default);
+    Task<EphHierarchyRecord> SaveEphHierarchyAsync(Guid tenantId,Guid userId,string querySignature,string normalizedQuery,EphHierarchyProposal proposal,string? providerCode,string? modelCode,DateTime expiresDateUtc,IReadOnlyCollection<EphBranchRecord> branches,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<EphEvidenceDto>> ExecuteEphBranchAsync(EphSearchRequest request,EphBranchRecord branch,EphCapabilityDto capability,int maximumResults,CancellationToken cancellationToken=default);
+    Task<Guid> StartEphExecutionAsync(EphExecutionStart execution,CancellationToken cancellationToken=default);
+    Task CompleteEphExecutionAsync(Guid tenantId,Guid userId,Guid ephExecutionId,Guid hierarchyId,IReadOnlyCollection<EphEvidenceDto> evidence,string explanationStatusCode,string? explanation,long durationMilliseconds,CancellationToken cancellationToken=default);
     Task<PagedResult<AiReviewQueueItemDto>> SearchReviewQueueAsync(SearchAiReviewQueueQuery query,CancellationToken cancellationToken=default);
     Task DecideReviewAsync(DecideAiReviewRequest request,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<AiEvaluationDefinitionDto>> GetEvaluationDefinitionsAsync(Guid tenantId,CancellationToken cancellationToken=default);

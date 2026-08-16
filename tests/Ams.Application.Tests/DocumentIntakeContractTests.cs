@@ -100,12 +100,18 @@ public sealed class DocumentIntakeContractTests
     {
         var sourcePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "Ams.Web", "Components", "Pages", "SubmissionDetail.razor"));
         var source = File.ReadAllText(sourcePath);
+        var api = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "Ams.Api", "Controllers", "DocumentsController.cs"));
 
         Assert.Contains("$\"SUBMISSION:{SubmissionId:D}:DOCUMENT:{document.DocumentId:D}\"", source, StringComparison.Ordinal);
         Assert.Contains("$\"SUBMISSION:{SubmissionId:D}:PACKAGE\"", source, StringComparison.Ordinal);
         Assert.Contains("Api.AttachDocumentToIntakeAsync", source, StringComparison.Ordinal);
         Assert.Contains("document.DocumentId", source, StringComparison.Ordinal);
         Assert.Contains("<EnterpriseDocumentUpload", source, StringComparison.Ordinal);
+        Assert.Contains("await AnalyzeSubmissionDocumentAsync(document)", source, StringComparison.Ordinal);
+        Assert.Contains("the document was not persisted", source, StringComparison.Ordinal);
+        Assert.Contains("EnsureSubmissionIntakeAsync(form,documentId", api, StringComparison.Ordinal);
+        Assert.Contains("$\"SUBMISSION:{submissionId:D}:DOCUMENT:{documentId:D}\"", api, StringComparison.Ordinal);
+        Assert.Contains("_documentIntakeService.QueueAsync", api, StringComparison.Ordinal);
         Assert.Contains("targetEntityId: SubmissionId", source, StringComparison.Ordinal);
         Assert.Contains("Submission analysis history", source, StringComparison.Ordinal);
         Assert.Contains("LoadDocumentIntakeSessionsAsync", source, StringComparison.Ordinal);
@@ -226,10 +232,17 @@ public sealed class DocumentIntakeContractTests
         var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
         var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","DocumentIntakeService.cs"));
         var operations=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","DocumentIntakeOperationsRepository.cs"));
+        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","DocumentIntakeRepository.cs"));
+        var malwareDisabledMigration=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Migrations","0134_TemporarilyDisableDocumentIntakeMalwareScanning.sql"));
         var worker=File.ReadAllText(Path.Combine(root,"Ams.Worker","Program.cs"));
 
-        Assert.Contains("EnsureDocumentCleanAsync",service,StringComparison.Ordinal);
+        Assert.Contains("EnsureDocumentCleanAsync(command.TenantId,command.IntakeSessionId,false",service,StringComparison.Ordinal);
         Assert.Contains("All evidence documents must have a CLEAN malware scan",operations,StringComparison.Ordinal);
+        Assert.Contains("@MalwareEnabled=0 OR WorkTypeCode<>N'OCR'",repository,StringComparison.Ordinal);
+        Assert.Contains("scan.StatusCode=N'CLEAN'",repository,StringComparison.Ordinal);
+        Assert.Contains("scan.StatusCode NOT IN(N'INFECTED',N'QUARANTINED')",repository,StringComparison.Ordinal);
+        Assert.Contains("DocumentIntake.Malware.Enabled",malwareDisabledMigration,StringComparison.Ordinal);
+        Assert.Contains("SettingValue=N'false'",malwareDisabledMigration,StringComparison.Ordinal);
         Assert.Contains("DMS.IntakePayloadAccessAudit",operations,StringComparison.Ordinal);
         Assert.Contains("A passing evaluation run is required before prompt approval",operations,StringComparison.Ordinal);
         Assert.Contains("DMS.IntakeWorkReplayHistory",operations,StringComparison.Ordinal);
@@ -291,6 +304,11 @@ public sealed class DocumentIntakeContractTests
         Assert.Contains("settings.WorkerBatchSize", worker, StringComparison.Ordinal);
         Assert.Contains("settings.WorkerPollIntervalSeconds", worker, StringComparison.Ordinal);
         Assert.Contains("settings.LeaseDurationSeconds", worker, StringComparison.Ordinal);
+        Assert.Contains("source.CopyToAsync(content,token)", processor, StringComparison.Ordinal);
+        Assert.Contains("INTAKE_CONTENT_COPY_FAILED", processor, StringComparison.Ordinal);
+        Assert.Contains("content.Position=0", processor, StringComparison.Ordinal);
+        Assert.Contains("_logger.LogError(ex", processor, StringComparison.Ordinal);
+        Assert.Contains("ex.ToString()", processor, StringComparison.Ordinal);
         Assert.Contains("ReadJsonAsync(context.Session.TenantId,context.Session.IntakeSessionId", processor, StringComparison.Ordinal);
         Assert.Contains("expectedPrefix", payload, StringComparison.Ordinal);
         Assert.Contains("does not belong to the requested tenant and session scope", payload, StringComparison.Ordinal);
@@ -304,6 +322,8 @@ public sealed class DocumentIntakeContractTests
         var detail = File.ReadAllText(Path.Combine(root, "src", "Ams.Web", "Components", "Pages", "DocumentIntake", "DocumentIntakeDetail.razor"));
 
         Assert.Contains("COALESCE(@Previous,@Normalized,@Extracted)", repository, StringComparison.Ordinal);
+        Assert.Contains("OverallConfidence=(SELECT AVG(Confidence)", repository, StringComparison.Ordinal);
+        Assert.Contains("LastErrorCode=NULL,LastErrorMessage=NULL WHERE IntakeWorkItemId=@Id", repository, StringComparison.Ordinal);
         Assert.Contains("IF @FromWorkTypeCode NOT IN", repository, StringComparison.Ordinal);
         Assert.Contains("ExecuteTransactionAsync", repository, StringComparison.Ordinal);
         Assert.Contains("WITH(UPDLOCK,HOLDLOCK) WHERE TenantId=@TenantId AND IntakeSessionId=@IntakeSessionId", repository, StringComparison.Ordinal);

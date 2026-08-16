@@ -378,6 +378,12 @@ public sealed partial class DatabaseMigrator
         new("0322_Premium_Finance_Source_Types", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0131_PremiumFinanceSourceTypes.sql")),
         new("0323_Premium_Finance_Workflow_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0132_PremiumFinanceWorkflowCompletion.sql")),
         new("0324_Premium_Finance_Source_Type_Repair", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0133_PremiumFinanceSourceTypeRepair.sql")),
+        new("0325_Enterprise_Document_Intelligence_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0135_EnterpriseDocumentIntelligenceRouteSeed.sql")),
+        new("0326_Configure_Document_Intelligence_Endpoint", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0136_ConfigureDocumentIntelligenceEndpoint.sql")),
+        new("0327_Document_Intake_Ai_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0137_DocumentIntakeAiRouteSeed.sql")),
+        new("0328_Intelligence_Search_Ai_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0138_IntelligenceSearchAiRouteSeed.sql")),
+        new("0329_Intelligent_Search_EPH", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0139_IntelligentSearchEph.sql")),
+        new("0330_Configure_Shared_Azure_OpenAI_Route", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0140_ConfigureSharedAzureOpenAiRoute.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

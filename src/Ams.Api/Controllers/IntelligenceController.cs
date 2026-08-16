@@ -145,6 +145,10 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> Search([FromBody]IntelligenceSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
 
+    [HttpPost("search/eph")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> SearchWithEph([FromBody]EphSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchWithEphAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
+
     [HttpPost("quick-search/fast")]
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> QuickSearchFastPath([FromBody]QuickSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.QuickSearchFastPathAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));

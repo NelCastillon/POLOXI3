@@ -32,34 +32,41 @@
     </section>
 
     <div class="di-center-kpis" aria-label="Document intake summary">
-        <article class="di-center-kpi di-center-kpi--review">
+        <button type="button" class="di-center-kpi di-center-kpi--all @KpiClass(null)" title="Show all intake sessions." @onclick="() => SetKpiFilter(null)">
+            <span class="di-center-kpi__icon"><i class="bi bi-grid-3x3-gap"></i></span>
+            <div>
+                <strong>@_total</strong>
+                <span>All sessions</span>
+            </div>
+        </button>
+        <button type="button" class="di-center-kpi di-center-kpi--review @KpiClass(DocumentIntakeStatuses.ReviewRequired)" title="Sessions that require reviewer attention before promotion." @onclick="() => SetKpiFilter(DocumentIntakeStatuses.ReviewRequired)">
             <span class="di-center-kpi__icon"><i class="bi bi-person-check"></i></span>
             <div>
                 <strong>@_review</strong>
                 <span>Awaiting review</span>
             </div>
-        </article>
-        <article class="di-center-kpi di-center-kpi--processing">
+        </button>
+        <button type="button" class="di-center-kpi di-center-kpi--processing @KpiClass(KpiProcessingFilter)" title="Queued or actively processing intake sessions." @onclick="() => SetKpiFilter(KpiProcessingFilter)">
             <span class="di-center-kpi__icon"><i class="bi bi-arrow-repeat"></i></span>
             <div>
                 <strong>@_processing</strong>
                 <span>Processing</span>
             </div>
-        </article>
-        <article class="di-center-kpi di-center-kpi--failed">
+        </button>
+        <button type="button" class="di-center-kpi di-center-kpi--failed @KpiClass(DocumentIntakeStatuses.Failed)" title="Sessions with blocking workflow exceptions." @onclick="() => SetKpiFilter(DocumentIntakeStatuses.Failed)">
             <span class="di-center-kpi__icon"><i class="bi bi-exclamation-triangle"></i></span>
             <div>
                 <strong>@_failed</strong>
                 <span>Exceptions</span>
             </div>
-        </article>
-        <article class="di-center-kpi di-center-kpi--ready">
+        </button>
+        <button type="button" class="di-center-kpi di-center-kpi--ready @KpiClass(DocumentIntakeStatuses.Ready)" title="Reviewed sessions ready for promotion." @onclick="() => SetKpiFilter(DocumentIntakeStatuses.Ready)">
             <span class="di-center-kpi__icon"><i class="bi bi-check2-circle"></i></span>
             <div>
                 <strong>@_ready</strong>
                 <span>Ready to promote</span>
             </div>
-        </article>
+        </button>
     </div>
 
     <section class="di-center-command-panel" aria-label="Document intake queue">
@@ -71,7 +78,7 @@
             </div>
             <span class="di-center-panel-badge"><i class="bi bi-shield-check"></i> Tenant scoped</span>
         </div>
-        <DocumentIntakeQueue @ref="_queue" />
+        <DocumentIntakeQueue @ref="_queue" Status="@_activeKpiFilter" FilterLabel="@_activeFilterLabel" />
     </section>
 </DocumentIntakeWorkspace>
 
@@ -79,7 +86,7 @@
     <Content>
         <EditForm Model="_form" OnValidSubmit="CreateAsync">
             <DataAnnotationsValidator />
-            <ValidationSummary />
+            <ValidationSummary class="di-validation-summary text-danger" />
             <div class="di-create-intro">
                 <span><i class="bi bi-shield-check"></i></span>
                 <div>
@@ -96,6 +103,7 @@
                             <option value="@module">@module.Replace('_', ' ')</option>
                         }
                     </InputSelect>
+                    <ValidationMessage For="() => _form.ModuleCode" class="text-danger" />
                 </div>
                 <div class="di-create-field">
                     <label>Entry point</label>
@@ -107,6 +115,7 @@
                         <option>CLIENT_PORTAL</option>
                         <option>API</option>
                     </InputSelect>
+                    <ValidationMessage For="() => _form.EntryPointCode" class="text-danger" />
                 </div>
                 <div class="di-create-field">
                     <label>Priority</label>
@@ -115,10 +124,12 @@
                         <option>HIGH</option>
                         <option>LOW</option>
                     </InputSelect>
+                    <ValidationMessage For="() => _form.PriorityCode" class="text-danger" />
                 </div>
                 <div class="di-create-field di-create-field--wide">
                     <label>Idempotency key</label>
                     <InputText class="intake-input" @bind-Value="_form.IdempotencyKey" />
+                    <ValidationMessage For="() => _form.IdempotencyKey" class="text-danger" />
                     <small>Use the source message, package, or transaction identifier to prevent duplicates.</small>
                 </div>
             </div>
@@ -129,7 +140,10 @@
 @code {
     private DocumentIntakeQueue? _queue;
     private bool _drawer, _saving;
-    private int _review, _processing, _failed, _ready;
+    private const string KpiProcessingFilter = "__PROCESSING__";
+    private int _total, _review, _processing, _failed, _ready;
+    private string? _activeKpiFilter;
+    private string _activeFilterLabel = "All sessions";
     private FormModel _form = new();
 
     protected override async Task OnInitializedAsync()
@@ -141,11 +155,26 @@
     private async Task LoadKpisAsync()
     {
         var rows = (await Api.SearchDocumentIntakeAsync(pageSize: 500))?.Items ?? [];
+        _total = rows.Count;
         _review = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.ReviewRequired);
         _processing = rows.Count(x => x.StatusCode is DocumentIntakeStatuses.Processing or DocumentIntakeStatuses.Queued);
         _failed = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.Failed);
         _ready = rows.Count(x => x.StatusCode == DocumentIntakeStatuses.Ready);
     }
+
+    private async Task SetKpiFilter(string? status)
+    {
+        _activeKpiFilter = status;
+        _activeFilterLabel = status switch
+        {
+            null => "All sessions",
+            KpiProcessingFilter => "Processing and queued",
+            _ => status.Replace('_', ' ')
+        };
+        if (_queue is not null) await _queue.SetStatusFilterAsync(_activeKpiFilter);
+    }
+
+    private string KpiClass(string? status) => _activeKpiFilter == status ? "di-center-kpi--active" : string.Empty;
 
     private async Task CreateAsync()
     {

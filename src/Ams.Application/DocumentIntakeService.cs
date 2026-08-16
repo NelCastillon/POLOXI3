@@ -66,7 +66,7 @@ public sealed class DocumentIntakeService : IDocumentIntakeService
     {
         DocumentIntakeValidator.Validate(command);
         var settings=await _operations.GetSettingsAsync(command.TenantId,cancellationToken);
-        if(settings.MalwareEnabled)await _operations.EnsureDocumentCleanAsync(command.TenantId,command.IntakeSessionId,settings.MalwareFailClosed,cancellationToken);
+        if(settings.MalwareEnabled)await _operations.EnsureDocumentCleanAsync(command.TenantId,command.IntakeSessionId,false,cancellationToken);
         await _repository.QueueAsync(command, cancellationToken);
     }
 
@@ -229,7 +229,8 @@ public sealed class DocumentIntakeService : IDocumentIntakeService
 
         LineOfBusinessDto? lob = null;
         var lobField = detail.DraftFields.FirstOrDefault(field => string.Equals(field.FieldPath, "submission.lineOfBusiness", StringComparison.OrdinalIgnoreCase));
-        var lobValue = lobField?.ReviewedValue ?? lobField?.NormalizedValue ?? lobField?.ExtractedValue;
+        var lobReviewed = lobField?.ReviewStatusCode is DocumentIntakeReviewStatuses.Approved or DocumentIntakeReviewStatuses.Corrected;
+        var lobValue = lobReviewed ? lobField?.ReviewedValue : null;
         if (string.IsNullOrWhiteSpace(lobValue))
         {
             blockers.Add("A reviewed line of business is required.");

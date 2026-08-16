@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Ams.Application.Abstractions.Intelligence;
 using Ams.Application.Abstractions.Persistence;
@@ -89,6 +91,155 @@ public sealed class IntelligenceService(IIntelligenceRepository repository,IReco
         await repository.CompleteUnifiedSearchAsync(request.TenantId,request.UserId,baseResponse.SearchQueryId,request.Query.ToLowerInvariant(),configuration.Weights,candidates,summaryStatus,summaryExecutionId,timer.ElapsedMilliseconds,cancellationToken);
         return baseResponse with{Results=candidates,DurationMilliseconds=timer.ElapsedMilliseconds,NormalizedQuery=request.Query.ToLowerInvariant(),EffectiveWeights=configuration.Weights,GroundedSummary=summary,SummaryStatusCode=summaryStatus,SummaryExecutionId=summaryExecutionId};
     }
+
+    public async Task<EphSearchResponse> SearchWithEphAsync(EphSearchRequest request,CancellationToken cancellationToken=default)
+    {
+        Validate(request);
+        if(request.UserId==Guid.Empty)throw new UnauthorizedAccessException("An authenticated user is required for EPH search.");
+        var timer=Stopwatch.StartNew();
+        var normalizedQuery=NormalizeQuery(request.Query).ToLowerInvariant();
+        request=request with{Query=NormalizeQuery(request.Query),MaximumResults=Math.Clamp(request.MaximumResults,1,100),CorrelationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"eph-search:{Guid.NewGuid():N}":request.CorrelationId.Trim()};
+        var configuration=await repository.GetEphConfigurationAsync(request.TenantId,cancellationToken);
+        var capabilities=await repository.GetEphCapabilitiesAsync(request.TenantId,cancellationToken);
+        if(capabilities.Count==0)throw new InvalidOperationException("No active EPH capabilities are configured.");
+        if(!request.UseEphEngine)return await SearchWithoutEphEngineAsync(request,capabilities,configuration,timer,cancellationToken);
+        var signature=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedQuery)));
+        var hierarchy=configuration.EnableHierarchyReuse?await repository.GetReusableEphHierarchyAsync(request.TenantId,signature,cancellationToken):null;
+        var reused=hierarchy is not null;
+        if(hierarchy is null)
+        {
+            var generated=await GenerateEphProposalAsync(request,capabilities,configuration,cancellationToken);
+            var branches=ValidateEphBranches(generated.Proposal,capabilities,configuration);
+            hierarchy=await repository.SaveEphHierarchyAsync(request.TenantId,request.UserId,signature,normalizedQuery,generated.Proposal,generated.ProviderCode,generated.ModelCode,DateTime.UtcNow.AddHours(configuration.HierarchyCacheHours),branches,cancellationToken);
+        }
+        var validBranches=hierarchy.Branches.Where(branch=>branch.ValidationStatusCode.Equals("VALID",StringComparison.OrdinalIgnoreCase)).Take(configuration.MaximumBranches).ToArray();
+        var executionId=await repository.StartEphExecutionAsync(new(request.TenantId,hierarchy.HierarchyId,request.UserId,request.Query,request.CorrelationId,reused,validBranches.Length,hierarchy.Branches.Count-validBranches.Length,hierarchy.Confidence),cancellationToken);
+        var evidence=new List<EphEvidenceDto>();
+        foreach(var branch in validBranches)
+        {
+            var capability=capabilities.First(item=>item.CapabilityCode.Equals(branch.CapabilityCode,StringComparison.OrdinalIgnoreCase));
+            evidence.AddRange(await repository.ExecuteEphBranchAsync(request,branch,capability,configuration.MaximumResults,cancellationToken));
+        }
+        var ranked=evidence.GroupBy(item=>$"{item.EntityTypeCode}:{item.EntityId:D}",StringComparer.OrdinalIgnoreCase).Select(group=>
+        {
+            var first=group.OrderByDescending(item=>item.RelevanceScore).First();
+            var branchNames=group.SelectMany(item=>item.MatchedBranches).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var score=Math.Clamp(group.Max(item=>item.RelevanceScore)+Math.Min(.20m,(branchNames.Length-1)*.05m),0,1);
+            return first with{RelevanceScore=score,MatchedBranches=branchNames};
+        }).OrderByDescending(item=>item.RelevanceScore).ThenBy(item=>item.Title).Take(Math.Min(request.MaximumResults,configuration.MaximumResults)).Select((item,index)=>item with{RankNumber=index+1}).ToArray();
+        string? explanation=null;
+        var explanationStatus="NOT_REQUESTED";
+        if(request.IncludeExplanation&&ranked.Length>0)
+        {
+            try
+            {
+                var grounding=string.Join('\n',ranked.Take(12).Select((item,index)=>$"[{index+1}] {item.Title} ({string.Join(", ",item.MatchedBranches)}): {item.Excerpt}"));
+                var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_EPH_EXPLANATION","Explain only the supplied authorized EPH evidence. Cite evidence numbers in brackets. Clearly state unsupported hierarchy branches and never invent facts.",$"Question: {request.Query}\nValidated concept: {hierarchy.DisplayName}\nEvidence:\n{grounding}",null,request.CorrelationId,new("Intelligence",null,null,request.Query,"EPH_EVIDENCE",executionId,request.CorrelationId,"Intelligent Search Using EPH"),cancellationToken);
+                explanation=result.Content;
+                explanationStatus="COMPLETED";
+            }
+            catch(Exception exception) when(exception is AiProviderUnavailableException or TimeoutException)
+            {
+                explanationStatus="UNAVAILABLE";
+            }
+        }
+        timer.Stop();
+        await repository.CompleteEphExecutionAsync(request.TenantId,request.UserId,executionId,hierarchy.HierarchyId,ranked,explanationStatus,explanation,timer.ElapsedMilliseconds,cancellationToken);
+        return new(executionId,hierarchy.HierarchyId,request.Query,hierarchy.ConceptCode,hierarchy.DisplayName,hierarchy.VersionNumber,reused,hierarchy.Confidence,hierarchy.Branches,ranked,explanation,explanationStatus,timer.ElapsedMilliseconds);
+    }
+
+    // 'EPH Engine' filter disabled: bypass LLM hierarchy generation, cache reuse, and execution persistence.
+    // Runs the same deterministic authorized capability searches directly against every active capability.
+    private async Task<EphSearchResponse> SearchWithoutEphEngineAsync(EphSearchRequest request,IReadOnlyCollection<EphCapabilityDto> capabilities,EphConfiguration configuration,Stopwatch timer,CancellationToken cancellationToken)
+    {
+        var branches=capabilities.OrderBy(capability=>capability.SortOrder).Take(configuration.MaximumBranches).Select((capability,index)=>new EphBranchRecord(Guid.NewGuid(),null,capability.CapabilityCode,capability.DisplayName,"Direct authorized search without EPH hierarchy.",capability.CapabilityCode,"VALID","EPH engine bypassed by request filter.",request.Query,capability.SupportsRecency,1m,index+1)).ToArray();
+        var evidence=new List<EphEvidenceDto>();
+        foreach(var branch in branches)
+        {
+            var capability=capabilities.First(item=>item.CapabilityCode.Equals(branch.CapabilityCode,StringComparison.OrdinalIgnoreCase));
+            evidence.AddRange(await repository.ExecuteEphBranchAsync(request,branch,capability,configuration.MaximumResults,cancellationToken));
+        }
+        var ranked=evidence.GroupBy(item=>$"{item.EntityTypeCode}:{item.EntityId:D}",StringComparer.OrdinalIgnoreCase).Select(group=>
+        {
+            var first=group.OrderByDescending(item=>item.RelevanceScore).First();
+            var branchNames=group.SelectMany(item=>item.MatchedBranches).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var score=Math.Clamp(group.Max(item=>item.RelevanceScore)+Math.Min(.20m,(branchNames.Length-1)*.05m),0,1);
+            return first with{RelevanceScore=score,MatchedBranches=branchNames};
+        }).OrderByDescending(item=>item.RelevanceScore).ThenBy(item=>item.Title).Take(Math.Min(request.MaximumResults,configuration.MaximumResults)).Select((item,index)=>item with{RankNumber=index+1}).ToArray();
+        timer.Stop();
+        return new(Guid.Empty,Guid.Empty,request.Query,"DIRECT_SEARCH","Direct authorized search (EPH engine off)",0,false,1m,branches,ranked,null,"NOT_REQUESTED",timer.ElapsedMilliseconds);
+    }
+
+    private async Task<(EphHierarchyProposal Proposal,string ProviderCode,string ModelCode)> GenerateEphProposalAsync(EphSearchRequest request,IReadOnlyCollection<EphCapabilityDto> capabilities,EphConfiguration configuration,CancellationToken cancellationToken)
+    {
+        var schema="""
+{
+  "type": "object",
+  "$defs": {
+    "branch": {
+      "type": "object",
+      "properties": {
+        "branchCode": { "type": "string" },
+        "displayName": { "type": "string" },
+        "condition": { "type": "string" },
+        "capabilityCode": { "type": ["string", "null"] },
+        "searchText": { "type": ["string", "null"] },
+        "orderByRecency": { "type": "boolean" },
+        "confidence": { "type": "number" },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/branch" }
+        }
+      },
+      "required": ["branchCode", "displayName", "condition", "capabilityCode", "searchText", "orderByRecency", "confidence", "children"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "conceptCode": { "type": "string" },
+    "displayName": { "type": "string" },
+    "confidence": { "type": "number" },
+    "branches": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/branch" }
+    }
+  },
+  "required": ["conceptCode", "displayName", "confidence", "branches"],
+  "additionalProperties": false
+}
+""";
+        var catalog=string.Join('\n',capabilities.Select(capability=>$"{capability.CapabilityCode}: {capability.Description}; approved terms: {string.Join(", ",capability.ApprovedTerms)}; recency: {capability.SupportsRecency}"));
+        var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_EPH_HIERARCHY","Propose a concise enterprise progressive hierarchy. You may invent reasoning branches, but map a branch to a capabilityCode only when the supplied catalog can ground it. Use null capabilityCode for unsupported branches. Never produce SQL or claim records exist.",$"Question: {request.Query}\nMaximum branches: {configuration.MaximumBranches}\nApproved capability catalog:\n{catalog}",schema,request.CorrelationId,new("Intelligence",null,null,request.Query,"EPH_HIERARCHY",null,request.CorrelationId,"Intelligent Search Using EPH"),cancellationToken);
+        var proposal=JsonSerializer.Deserialize<EphHierarchyProposal>(result.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new ValidationException("The EPH hierarchy response was empty.");
+        return (proposal,result.ProviderCode,result.ModelCode);
+    }
+
+    private static IReadOnlyCollection<EphBranchRecord> ValidateEphBranches(EphHierarchyProposal proposal,IReadOnlyCollection<EphCapabilityDto> capabilities,EphConfiguration configuration)
+    {
+        var validated=new List<EphBranchRecord>();
+        void Visit(EphProposedBranch branch,Guid? parentId)
+        {
+            if(validated.Count>=configuration.MaximumBranches)return;
+            var id=Guid.NewGuid();
+            var capability=capabilities.FirstOrDefault(item=>item.CapabilityCode.Equals(branch.CapabilityCode,StringComparison.OrdinalIgnoreCase));
+            var confidence=Math.Clamp(branch.Confidence,0,1);
+            var valid=capability is not null&&capability.ExecutionHandlerCode.Equals("AUTHORIZED_SEARCH_DOCUMENT",StringComparison.OrdinalIgnoreCase)&&confidence>=Math.Max(configuration.MinimumBranchConfidence,capability.MinimumConfidence)&&(!branch.OrderByRecency||capability.SupportsRecency);
+            var searchText=valid?NormalizeEphSearchText(branch.SearchText,capability!):null;
+            validated.Add(new(id,parentId,NormalizeCode(branch.BranchCode),branch.DisplayName.Trim(),branch.Condition.Trim(),capability?.CapabilityCode,valid?"VALID":"UNSUPPORTED",valid?"Grounded by an approved deterministic capability.":"No approved capability can deterministically ground this branch.",searchText,valid&&branch.OrderByRecency,confidence,validated.Count+1));
+            foreach(var child in branch.Children??[])Visit(child,id);
+        }
+        foreach(var branch in proposal.Branches??[])Visit(branch,null);
+        return validated;
+    }
+
+    private static string NormalizeEphSearchText(string? searchText,EphCapabilityDto capability)
+    {
+        if(string.IsNullOrWhiteSpace(searchText))return string.Empty;
+        var normalized=searchText.Trim();
+        return capability.ApprovedTerms.FirstOrDefault(term=>normalized.Contains(term,StringComparison.OrdinalIgnoreCase))??string.Empty;
+    }
+    private static string NormalizeCode(string value)=>new(value.Trim().ToUpperInvariant().Select(character=>char.IsLetterOrDigit(character)?character:'_').ToArray());
     public async Task<QuickSearchFastPathResponse> QuickSearchFastPathAsync(QuickSearchRequest request,CancellationToken cancellationToken=default)
     {
         Validate(request);

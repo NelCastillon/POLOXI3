@@ -124,3 +124,6 @@
 
 ## AgencyBinder Public Website Content
 - For AgencyBinder public website content, give heavy prominence to the Intelligence Platform, explicit AI positioning, and Core Engines. Present workflows only as high-level concepts rather than detailed internal steps, and use the home index page as the primary showcase.
+
+## Troubleshooting Guidelines
+- When troubleshooting, provide direct instructions tied to the exact current log/state; avoid mixing alternative paths or unnecessary background details.

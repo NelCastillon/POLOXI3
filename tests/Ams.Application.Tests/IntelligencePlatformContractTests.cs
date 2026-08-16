@@ -18,6 +18,70 @@ namespace Ams.Application.Tests;
 public sealed class IntelligencePlatformContractTests
 {
     [Fact]
+    public void IntelligentSearchUsingEph_DefinesGovernedDatabaseApiAndUiFlow()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0139_IntelligentSearchEph.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        foreach(var table in new[]{"EPH.Capability","EPH.Hierarchy","EPH.HierarchyBranch","EPH.Execution","EPH.ExecutionEvidence"})Assert.Contains(table,sql,StringComparison.OrdinalIgnoreCase);
+        foreach(var feature in new[]{"INTELLIGENCE_EPH_HIERARCHY","INTELLIGENCE_EPH_EXPLANATION"})Assert.Contains(feature,sql,StringComparison.Ordinal);
+        Assert.Contains("AUTHORIZED_SEARCH_DOCUMENT",sql,StringComparison.Ordinal);
+        Assert.Contains("TenantId",sql,StringComparison.Ordinal);
+        Assert.Contains("CreatedDateUtc",sql,StringComparison.Ordinal);
+        Assert.Contains("IsDeleted",sql,StringComparison.Ordinal);
+
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","IntelligenceService.cs"));
+        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.Eph.cs"));
+        var controller=File.ReadAllText(Path.Combine(root,"src","Ams.Api","Controllers","IntelligenceController.cs"));
+        var client=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Services","ApiClients.Intelligence.cs"));
+        var page=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Pages","Intelligence","IntelligenceSearchEph.razor"));
+        var navigation=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Layout","NavSidebar.razor"));
+        Assert.Contains("INTELLIGENCE_EPH_HIERARCHY",service,StringComparison.Ordinal);
+        Assert.Contains("INTELLIGENCE_EPH_EXPLANATION",service,StringComparison.Ordinal);
+        Assert.Contains("ValidationStatusCode.Equals(\"VALID\"",service,StringComparison.Ordinal);
+        Assert.Contains("AI.SearchPermission",repository,StringComparison.Ordinal);
+        Assert.Contains("permission.PrincipalTypeCode=N'USER'",repository,StringComparison.Ordinal);
+        Assert.Contains("HttpPost(\"search/eph\")",controller,StringComparison.Ordinal);
+        Assert.Contains("IntelligentSearchUsingEphAsync",client,StringComparison.Ordinal);
+        Assert.Contains("@page \"/intelligence/search/eph\"",page,StringComparison.Ordinal);
+        Assert.Contains("Intelligent Search Using EPH",navigation,StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteSql",service,StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void IntelligenceSearchAiRouteMigration_BackfillsGovernedIntentAndSummaryPolicies()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0138_IntelligenceSearchAiRouteSeed.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        Assert.Contains("INTELLIGENCE_SEARCH_INTENT",sql,StringComparison.Ordinal);
+        Assert.Contains("INTELLIGENCE_SEARCH_SUMMARY",sql,StringComparison.Ordinal);
+        Assert.Contains("AI:AzureOpenAI:Endpoint",sql,StringComparison.Ordinal);
+        Assert.Contains("Intelligence.Search.EnableLlmIntentFallback",sql,StringComparison.Ordinal);
+        Assert.Contains("Intelligence.Search.EnableAiSummary",sql,StringComparison.Ordinal);
+        Assert.Contains("model.CapabilityCode=N'CHAT'",sql,StringComparison.Ordinal);
+        Assert.Contains("model.TenantId=tenant.TenantId OR model.TenantId IS NULL",sql,StringComparison.Ordinal);
+        Assert.Contains("MERGE AI.FeaturePolicy",sql,StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("target.IsDeleted=0",sql,StringComparison.Ordinal);
+        Assert.DoesNotContain("INSERT INTO Core.Tenant",sql,StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SharedAzureOpenAiRoute_UsesDeployedResourceAndManagedIdentityFallback()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0140_ConfigureSharedAzureOpenAiRoute.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        Assert.Contains("https://agencybinder-1226-resource.cognitiveservices.azure.com/",sql,StringComparison.Ordinal);
+        Assert.Contains("AI:AzureOpenAI:Endpoint",sql,StringComparison.Ordinal);
+        Assert.Contains("AI:AzureOpenAI:Credential",sql,StringComparison.Ordinal);
+        Assert.Contains("SettingValue=N''",sql,StringComparison.Ordinal);
+        Assert.Contains("DefaultAzureCredential",sql,StringComparison.Ordinal);
+        Assert.DoesNotContain("api-key",sql,StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Migration_DefinesCompleteTenantAwarePlatformWithoutFabricatedEvidence()
     {
         var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0081_EnterpriseIntelligencePlatform.sql",StringComparison.Ordinal));var sql=Read(assembly,resource);
@@ -190,8 +254,9 @@ public sealed class IntelligencePlatformContractTests
     [Fact]
     public void PlatformGapRemediation_UsesSecureTenantAwareRoutesAndTruthfulEvidence()
     {
-        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0090_PlatformGapRemediation.sql",StringComparison.Ordinal));var sql=Read(assembly,resource);var ocrRoute=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","DocumentOcrRouteRepository.cs"));var ocrProvider=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Services","AzureDocumentIntelligenceOcrProvider.cs"));var readiness=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Services","DocumentIntakeReadinessHealthCheck.cs"));
-        Assert.Contains("ROW_NUMBER() OVER(PARTITION BY setting.SettingKey",ocrRoute,StringComparison.Ordinal);Assert.Contains("CASE WHEN setting.TenantId=@TenantId THEN 0 ELSE 1 END",ocrRoute,StringComparison.Ordinal);Assert.Contains("setting.TenantId IS NULL OR setting.TenantId=@TenantId",ocrRoute,StringComparison.Ordinal);Assert.Contains("IDocumentOcrRouteRepository",ocrProvider,StringComparison.Ordinal);Assert.Contains("DefaultAzureCredential",ocrProvider,StringComparison.Ordinal);Assert.Contains("env://",ocrProvider,StringComparison.Ordinal);Assert.Contains("DOCUMENT_INTELLIGENCE_CREDENTIAL_INVALID",ocrProvider,StringComparison.Ordinal);Assert.DoesNotContain("DocumentAiOptions",ocrProvider,StringComparison.Ordinal);Assert.Contains("GetRouteAsync",readiness,StringComparison.Ordinal);Assert.DoesNotContain("DocumentAiOptions",readiness,StringComparison.Ordinal);
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));var assembly=typeof(DatabaseMigrator).Assembly;var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0090_PlatformGapRemediation.sql",StringComparison.Ordinal));var sql=Read(assembly,resource);var routeSeedResource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0135_EnterpriseDocumentIntelligenceRouteSeed.sql",StringComparison.Ordinal));var routeSeed=Read(assembly,routeSeedResource);var ocrRoute=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","DocumentOcrRouteRepository.cs"));var ocrProvider=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Services","AzureDocumentIntelligenceOcrProvider.cs"));var readiness=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Services","DocumentIntakeReadinessHealthCheck.cs"));
+        Assert.Contains("ROW_NUMBER() OVER(PARTITION BY setting.SettingKey",ocrRoute,StringComparison.Ordinal);Assert.Contains("CASE WHEN setting.TenantId=@TenantId THEN 0 ELSE 1 END",ocrRoute,StringComparison.Ordinal);Assert.Contains("setting.TenantId IS NULL OR setting.TenantId=@TenantId",ocrRoute,StringComparison.Ordinal);Assert.Contains("FROM resolved",ocrRoute,StringComparison.Ordinal);Assert.Contains("IDocumentOcrRouteRepository",ocrProvider,StringComparison.Ordinal);Assert.Contains("TokenCredential credential",ocrProvider,StringComparison.Ordinal);Assert.DoesNotContain("new DefaultAzureCredential",ocrProvider,StringComparison.Ordinal);Assert.Contains("Operation-Location",ocrProvider,StringComparison.Ordinal);Assert.Contains("ResolveEndpoint",ocrProvider,StringComparison.Ordinal);Assert.Contains("Uri.UriSchemeHttps",ocrProvider,StringComparison.Ordinal);Assert.Contains("DOCUMENT_INTELLIGENCE_ENDPOINT_MISSING",ocrProvider,StringComparison.Ordinal);Assert.Contains("DOCUMENT_INTELLIGENCE_CREDENTIAL_INVALID",ocrProvider,StringComparison.Ordinal);Assert.DoesNotContain("DocumentAiOptions",ocrProvider,StringComparison.Ordinal);Assert.Contains("GetRouteAsync",readiness,StringComparison.Ordinal);Assert.DoesNotContain("DocumentAiOptions",readiness,StringComparison.Ordinal);
+        var endpointResource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0136_ConfigureDocumentIntelligenceEndpoint.sql",StringComparison.Ordinal));var endpointSeed=Read(assembly,endpointResource);foreach(var setting in new[]{"DocumentIntelligence.Endpoint","DocumentIntelligence.ModelId","DocumentIntelligence.ApiVersion","DocumentIntelligence.CredentialReference","DocumentIntelligence.TimeoutSeconds"})Assert.Contains(setting,routeSeed,StringComparison.Ordinal);Assert.Contains("env://AMS_DOCUMENT_INTELLIGENCE_ENDPOINT",routeSeed,StringComparison.Ordinal);Assert.Contains("prebuilt-layout",routeSeed,StringComparison.Ordinal);Assert.Contains("2024-11-30",routeSeed,StringComparison.Ordinal);Assert.Contains("DefaultAzureCredential and managed identity",routeSeed,StringComparison.Ordinal);Assert.Contains("https://ams-document-intelligence-dev.cognitiveservices.azure.com/",endpointSeed,StringComparison.Ordinal);Assert.Contains("tenant-specific database setting",endpointSeed,StringComparison.Ordinal);
         foreach(var gap in new[]{"DOCUMENT_OCR_CONFIGURATION","PROPOSAL_SMTP_BYPASS","CONTACT_SMTP_BYPASS","BUSINESS_OPTIONS_CONFIGURATION"})Assert.Contains($"GapCode=N'{gap}'",sql,StringComparison.Ordinal);Assert.Contains("GapCode=N'BUSINESS_OPTIONS_CONFIGURATION'",sql,StringComparison.Ordinal);Assert.Contains("StatusCode=N'IN_PROGRESS'",sql,StringComparison.Ordinal);Assert.Contains("remove generated operational BuildStub datasets",sql,StringComparison.Ordinal);Assert.Contains("DocumentOcrRouteRepository tenant-over-platform query",sql,StringComparison.Ordinal);
     }
 

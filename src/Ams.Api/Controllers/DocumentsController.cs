@@ -1,4 +1,5 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.DocumentIntake;
 using Ams.Application.Features.Documents;
 using Ams.Api.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -20,11 +21,13 @@ public sealed class DocumentsController : ControllerBase
 
     private readonly IDocumentService _service;
     private readonly IDocumentStorageService _storageService;
+    private readonly IDocumentIntakeService _documentIntakeService;
 
-    public DocumentsController(IDocumentService service, IDocumentStorageService storageService)
+    public DocumentsController(IDocumentService service, IDocumentStorageService storageService, IDocumentIntakeService documentIntakeService)
     {
         _service = service;
         _storageService = storageService;
+        _documentIntakeService = documentIntakeService;
     }
 
     [HttpGet("{id:guid}")]
@@ -132,7 +135,43 @@ public sealed class DocumentsController : ControllerBase
         }, cancellationToken);
 
         await _service.LogAccessAsync(form.TenantId, documentId, form.CreatedByUserId ?? GetCurrentUserId(), null, "Upload", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        await EnsureSubmissionIntakeAsync(form,documentId,cancellationToken);
         return Ok(documentId);
+    }
+
+    private async Task EnsureSubmissionIntakeAsync(UploadDocumentForm form,Guid documentId,CancellationToken cancellationToken)
+    {
+        if (!string.Equals(form.EntityName,"Submission",StringComparison.OrdinalIgnoreCase) || form.EntityId is not Guid submissionId || submissionId==Guid.Empty)
+            return;
+        if (string.Equals(form.DocumentTypeCode,"QUOTE",StringComparison.OrdinalIgnoreCase) || string.Equals(form.CategoryCode,"QUOTE",StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var actorUserId=form.CreatedByUserId ?? GetCurrentUserId() ?? throw new UnauthorizedAccessException("An authenticated user is required to queue Submission document analysis.");
+        var correlationId=Guid.NewGuid().ToString("N");
+        var intakeId=await _documentIntakeService.CreateAsync(new(
+            form.TenantId,
+            $"SUBMISSION:{submissionId:D}:DOCUMENT:{documentId:D}",
+            DocumentIntakeModules.Submission,
+            "SUBMISSION_DOCUMENTS",
+            "NORMAL",
+            submissionId,
+            null,
+            correlationId,
+            actorUserId),cancellationToken);
+
+        var detail=await _documentIntakeService.GetAsync(form.TenantId,intakeId,cancellationToken)
+            ?? throw new InvalidOperationException("The Submission document intake session could not be loaded after upload.");
+        if (detail.Session.StatusCode!=DocumentIntakeStatuses.Draft)
+            return;
+
+        if (!detail.Documents.Any(document=>document.DocumentId==documentId))
+        {
+            await _documentIntakeService.AttachDocumentAsync(new(form.TenantId,intakeId,documentId,"SOURCE",null,detail.Documents.Count+1,actorUserId),cancellationToken);
+            detail=await _documentIntakeService.GetAsync(form.TenantId,intakeId,cancellationToken)
+                ?? throw new InvalidOperationException("The Submission document intake session could not be refreshed after upload.");
+        }
+
+        await _documentIntakeService.QueueAsync(new(form.TenantId,intakeId,"Queued Submission document automatically after upload.",correlationId,actorUserId,detail.Session.RowVersion),cancellationToken);
     }
 
     [HttpPut("metadata")]

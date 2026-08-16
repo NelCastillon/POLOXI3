@@ -337,6 +337,7 @@ public sealed record DocumentInterpretationResult(
     string OutputJson,
     int? InputTokenCount,
     int? OutputTokenCount,
+    string InputHashSha256,
     long DurationMilliseconds);
 
 public sealed record DocumentClassificationOutput(

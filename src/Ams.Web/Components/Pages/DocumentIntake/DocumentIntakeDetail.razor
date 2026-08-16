@@ -34,18 +34,18 @@
         <div class="di-detail-shell">
         <AppPageHeader Title="@_detail.Session.SessionNumber" Subtitle="@SessionSubtitle" Icon="bi-stars" ReturnUrl="/operations/document-intake">
             <Actions>
-                <div class="intake-actions">
+                <div class="intake-actions di-command-actions">
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Draft)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
                             <button class="um-btn um-btn-ghost" @onclick="OpenUpload" disabled="@_saving"><i class="bi bi-cloud-arrow-up"></i> Manual upload</button>
-                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_saving || _detail.Documents.Count == 0)">Queue processing</button>
+                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_saving || _detail.Documents.Count == 0)"><i class="bi bi-play-circle"></i> Queue processing</button>
                         </AuthorizeView>
                     }
                     @if (_detail.Session.StatusCode is DocumentIntakeStatuses.Failed or DocumentIntakeStatuses.ReviewRequired or DocumentIntakeStatuses.Ready)
                     {
                         <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Reprocess">
-                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess" disabled="@_saving">Reprocess</button>
+                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess" disabled="@_saving"><i class="bi bi-arrow-repeat"></i> Reprocess</button>
                         </AuthorizeView>
                     }
                     @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Ready)
@@ -60,138 +60,266 @@
                     }
                     @if (_detail.Session.StatusCode is not (DocumentIntakeStatuses.Completed or DocumentIntakeStatuses.Cancelled))
                     {
-                        <button class="um-btn um-btn-ghost" @onclick="CancelAsync" disabled="@_saving">Cancel</button>
+                        <button class="um-btn di-danger-action" @onclick="CancelAsync" disabled="@_saving"><i class="bi bi-x-octagon"></i> Cancel intake</button>
                     }
                 </div>
             </Actions>
         </AppPageHeader>
 
-        @if (_detail.Session.ModuleCode == DocumentIntakeModules.Submission)
-        {
-            <section class="intake-panel di-readiness-panel">
-                <div class="di-readiness-heading">
-                    <span><i class="bi bi-shield-check"></i></span>
+        <div class="di-command-center">
+            @if (_detail.Session.ModuleCode == DocumentIntakeModules.Submission)
+            {
+                <section class="intake-panel di-readiness-panel">
+                    <div class="di-readiness-heading">
+                        <span><i class="bi bi-shield-check"></i></span>
+                        <div>
+                            <h2 class="h5">Submission promotion readiness</h2>
+                            <p>Readiness is validated from reviewed intake data, tenant configuration, source documents, and canonical Line of Business records.</p>
+                        </div>
+                    </div>
+                    @if (_detail.PromotionReadiness is { CanPromote: true } readiness)
+                    {
+                        <div class="alert alert-success di-readiness-alert" role="status">
+                            <i class="bi bi-check-circle-fill me-2"></i>
+                            Ready to create the Account, Opportunity, canonical @readiness.LobName line, Submission, linked documents, and configured follow-up records.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-danger di-readiness-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                            <strong>Promotion is blocked.</strong>
+                            <ul class="mb-0 mt-2">
+                                @foreach (var blocker in _detail.PromotionReadiness?.Blockers ?? [])
+                                {
+                                    <li>@blocker</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+                </section>
+            }
+
+            <section class="di-properties-panel" aria-label="Document intake properties">
+                <div class="di-properties-heading">
+                    <span><i class="bi bi-card-checklist"></i></span>
                     <div>
-                        <h2 class="h5">Submission promotion readiness</h2>
-                        <p>Readiness is validated from reviewed intake data, tenant configuration, source documents, and canonical Line of Business records.</p>
+                        <strong>Intake properties</strong>
+                        <small>Operational state and review indicators</small>
                     </div>
                 </div>
-                @if (_detail.PromotionReadiness is { CanPromote: true } readiness)
-                {
-                    <div class="alert alert-success di-readiness-alert" role="status">
-                        <i class="bi bi-check-circle-fill me-2"></i>
-                        Ready to create the Account, Opportunity, canonical @readiness.LobName line, Submission, linked documents, and configured follow-up records.
-                    </div>
-                }
-                else
-                {
-                    <div class="alert alert-danger di-readiness-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
-                        <strong>Promotion is blocked.</strong>
-                        <ul class="mb-0 mt-2">
-                            @foreach (var blocker in _detail.PromotionReadiness?.Blockers ?? [])
-                            {
-                                <li>@blocker</li>
-                            }
-                        </ul>
-                    </div>
-                }
+                <div class="di-properties-grid">
+                    <div class="di-property"><span>Workflow status</span><strong><AppStatusBadge Status="@_detail.Session.StatusCode" /></strong></div>
+                    <div class="di-property"><span>Overall confidence</span><strong>@FormatConfidence(_detail.Session.OverallConfidence)</strong></div>
+                    <div class="di-property"><span>Warnings</span><strong>@_detail.Session.WarningCount</strong></div>
+                    <div class="di-property"><span>Blocking errors</span><strong>@_detail.Session.ErrorCount</strong></div>
+                </div>
             </section>
-        }
-
-        <div class="intake-kpis">
-            <div class="intake-kpi"><strong><AppStatusBadge Status="@_detail.Session.StatusCode" /></strong><span>Workflow status</span></div>
-            <div class="intake-kpi"><strong>@FormatConfidence(_detail.Session.OverallConfidence)</strong><span>Overall confidence</span></div>
-            <div class="intake-kpi"><strong>@_detail.Session.WarningCount</strong><span>Warnings</span></div>
-            <div class="intake-kpi"><strong>@_detail.Session.ErrorCount</strong><span>Blocking errors</span></div>
         </div>
 
-        <section class="intake-panel">
-            <h2 class="h5">Evidence documents</h2>
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-files"></i></span>
+                <div>
+                    <h2 class="h5">Evidence documents</h2>
+                    <p>Persisted source files attached to this governed intake session.</p>
+                </div>
+            </div>
             @if (_detail.Documents.Count == 0)
             {
                 <div class="intake-state">Use Manual upload to persist evidence in Azure Blob Storage and DMS before processing.</div>
             }
             else
             {
-                <AppGrid TValue="DocumentIntakeDocumentDto" DataSource="_detail.Documents">
-                    <GridColumns>
-                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.FileName)" HeaderText="File" />
-                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.DocumentRoleCode)" HeaderText="Role" />
-                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.ContentType)" HeaderText="Content type" />
-                        <GridColumn Field="@nameof(DocumentIntakeDocumentDto.ContentHashSha256)" HeaderText="SHA-256" />
-                    </GridColumns>
-                </AppGrid>
+                <div class="di-detail-table-shell">
+                    <table class="di-detail-table">
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Role</th>
+                                <th>Content type</th>
+                                <th>SHA-256</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var document in _detail.Documents)
+                            {
+                                <tr>
+                                    <td><div class="di-document-cell"><span><i class="bi bi-file-earmark-text"></i></span><strong>@document.FileName</strong></div></td>
+                                    <td><span class="di-soft-pill">@document.DocumentRoleCode</span></td>
+                                    <td>@(document.ContentType ?? "—")</td>
+                                    <td><code class="di-hash">@document.ContentHashSha256</code></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
             }
         </section>
 
-        <section class="intake-panel">
-            <h2 class="h5">Extracted and normalized values</h2>
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-ui-checks-grid"></i></span>
+                <div>
+                    <h2 class="h5">Extracted and normalized values</h2>
+                    <p>Compare OCR extraction, knowledge normalization, and reviewer-approved values.</p>
+                </div>
+            </div>
             @if (_detail.DraftFields.Count == 0)
             {
                 <div class="intake-state">No draft values have been extracted yet.</div>
             }
             @foreach (var field in _detail.DraftFields)
             {
-                <article class="intake-field-card">
+                <article class="intake-field-card di-field-card">
                     <header>
                         <div><strong>@field.FieldPath</strong><div class="intake-source">@field.EntityTypeCode · Source page @(field.SourcePageNumber?.ToString() ?? "—") · Confidence @FormatConfidence(field.Confidence)</div></div>
-                        <AppStatusBadge Status="@field.ReviewStatusCode" />
+                        <div class="di-field-card-actions">
+                            <AppStatusBadge Status="@field.ReviewStatusCode" />
+                            @if (field.ReviewStatusCode == DocumentIntakeReviewStatuses.Pending)
+                            {
+                                <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
+                                    <div class="intake-actions di-review-actions">
+                                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)" disabled="@_saving">Approve</button>
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)" disabled="@_saving">Correct</button>
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)" disabled="@_saving">Reject</button>
+                                    </div>
+                                </AuthorizeView>
+                            }
+                        </div>
                     </header>
                     <div class="intake-detail-grid mt-2">
                         <div class="intake-detail"><small>Extracted</small>@(field.ExtractedValue ?? "—")</div>
                         <div class="intake-detail"><small>Knowledge normalized</small>@(field.NormalizedValue ?? "—")</div>
                         <div class="intake-detail"><small>Reviewed</small>@(field.ReviewedValue ?? "—")</div>
                     </div>
-                    @if (field.ReviewStatusCode == DocumentIntakeReviewStatuses.Pending)
-                    {
-                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
-                            <div class="intake-actions mt-2">
-                                <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)" disabled="@_saving">Approve</button>
-                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)" disabled="@_saving">Correct</button>
-                                <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)" disabled="@_saving">Reject</button>
-                            </div>
-                        </AuthorizeView>
-                    }
                 </article>
             }
         </section>
 
-        <section class="intake-panel">
-            <h2 class="h5">Warnings and conflicts</h2>
-            <AppGrid TValue="DocumentIntakeIssueDto" DataSource="_detail.Issues">
-                <GridColumns>
-                    <GridColumn HeaderText="Severity"><Template>@{ var row = (DocumentIntakeIssueDto)context; }<AppStatusBadge Status="@row.SeverityCode" /></Template></GridColumn>
-                    <GridColumn Field="@nameof(DocumentIntakeIssueDto.IssueCode)" HeaderText="Code" />
-                    <GridColumn Field="@nameof(DocumentIntakeIssueDto.Message)" HeaderText="Message" />
-                    <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeIssueDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
-                    <GridColumn HeaderText="Action"><Template>@{ var row = (DocumentIntakeIssueDto)context; }@if (row.StatusCode == "OPEN") { <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenIssueResolution(row)" disabled="@_saving">Resolve</button></AuthorizeView> }</Template></GridColumn>
-                </GridColumns>
-            </AppGrid>
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-exclamation-octagon"></i></span>
+                <div>
+                    <h2 class="h5">Warnings and conflicts</h2>
+                    <p>Review open AI, validation, and reconciliation issues before promotion.</p>
+                </div>
+            </div>
+            <div class="di-detail-table-shell">
+                <table class="di-detail-table">
+                    <thead>
+                        <tr>
+                            <th>Severity</th>
+                            <th>Code</th>
+                            <th>Message</th>
+                            <th>Status</th>
+                            <th class="di-action-cell">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var issue in _detail.Issues)
+                        {
+                            <tr>
+                                <td><AppStatusBadge Status="@issue.SeverityCode" /></td>
+                                <td><strong>@issue.IssueCode</strong></td>
+                                <td>@issue.Message</td>
+                                <td><AppStatusBadge Status="@issue.StatusCode" /></td>
+                                <td class="di-action-cell">
+                                    @if (issue.StatusCode == "OPEN")
+                                    {
+                                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenIssueResolution(issue)" disabled="@_saving">Resolve</button>
+                                        </AuthorizeView>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
         </section>
 
-        <section class="intake-panel">
-            <h2 class="h5">Processing pipeline</h2>
-            <AppGrid TValue="DocumentIntakeWorkItemDto" DataSource="_detail.WorkItems">
-                <GridColumns>
-                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.WorkTypeCode)" HeaderText="Stage" />
-                    <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeWorkItemDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
-                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.AttemptCount)" HeaderText="Attempts" />
-                    <GridColumn Field="@nameof(DocumentIntakeWorkItemDto.LastErrorMessage)" HeaderText="Last error" />
-                </GridColumns>
-            </AppGrid>
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-cpu"></i></span>
+                <div>
+                    <h2 class="h5">Processing pipeline</h2>
+                    <p>Audit each stage, retry attempt, and any retained processing error.</p>
+                </div>
+            </div>
+            <div class="di-pipeline-list">
+                @foreach (var workItem in _detail.WorkItems)
+                {
+                    <article class="di-pipeline-card">
+                        <span class="di-pipeline-icon"><i class="bi bi-cpu"></i></span>
+                        <div class="di-pipeline-main">
+                            <strong>@workItem.WorkTypeCode.Replace('_', ' ')</strong>
+                            <small>@(string.IsNullOrWhiteSpace(workItem.LastErrorMessage) ? "No retained error" : workItem.LastErrorMessage)</small>
+                        </div>
+                        <div class="di-pipeline-meta">
+                            <AppStatusBadge Status="@workItem.StatusCode" />
+                            <span>@workItem.AttemptCount attempt@(workItem.AttemptCount == 1 ? string.Empty : "s")</span>
+                        </div>
+                    </article>
+                }
+            </div>
         </section>
         </div>
     }
 </DocumentIntakeWorkspace>
 
-<AppCrudDrawer @bind-Visible="_correctionDrawer" Title="Correct extracted value" Icon="bi-pencil" OnConfirm="SaveCorrectionAsync" IsBusy="_saving">
-    <Content><EditForm EditContext="_correctionContext"><DataAnnotationsValidator /><div class="intake-field-card"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Value" /><ValidationMessage For="() => _correctionForm.Value" class="text-danger" /><label class="mt-3">Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Reason" /><ValidationMessage For="() => _correctionForm.Reason" class="text-danger" /></div></EditForm></Content>
+<AppCrudDrawer @bind-Visible="_correctionDrawer" Title="Correct extracted value" Icon="bi-pencil" OnConfirm="SaveCorrectionAsync" IsBusy="_saving" ConfirmText="Save correction" Width="640px">
+    <Content>
+        <EditForm EditContext="_correctionContext">
+            <DataAnnotationsValidator />
+            <div class="di-drawer-intro"><span><i class="bi bi-pencil-square"></i></span><div><strong>Reviewer correction</strong><small>Capture the corrected value and evidence-based reason for audit history.</small></div></div>
+            <div class="di-drawer-form">
+                <div class="di-drawer-field"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Value" /><ValidationMessage For="() => _correctionForm.Value" class="text-danger" /></div>
+                <div class="di-drawer-field"><label>Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Reason" /><ValidationMessage For="() => _correctionForm.Reason" class="text-danger" /></div>
+            </div>
+        </EditForm>
+    </Content>
 </AppCrudDrawer>
-<AppCrudDrawer @bind-Visible="_reprocessDrawer" Title="Reprocess intake" Icon="bi-arrow-repeat" OnConfirm="ReprocessAsync" IsBusy="_saving">
-    <Content><EditForm EditContext="_reprocessContext"><DataAnnotationsValidator /><div class="intake-field-card"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessForm.WorkTypeCode"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option><option value="SEARCH_INDEXING">Search indexing</option></InputSelect><ValidationMessage For="() => _reprocessForm.WorkTypeCode" class="text-danger" /><label class="mt-3">Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reprocessForm.Reason" /><ValidationMessage For="() => _reprocessForm.Reason" class="text-danger" /></div></EditForm></Content>
-</AppCrudDrawer>
-<AppCrudDrawer @bind-Visible="_issueDrawer" Title="Resolve intake issue" Icon="bi-check2-circle" OnConfirm="ResolveIssueAsync" IsBusy="_saving" ConfirmText="Resolve issue">
-    <Content><EditForm EditContext="_issueContext"><DataAnnotationsValidator /><div class="intake-field-card"><strong>@_selectedIssue?.IssueCode</strong><p>@_selectedIssue?.Message</p><label>Resolution notes</label><InputTextArea class="intake-input w-100" @bind-Value="_issueForm.Notes" /><ValidationMessage For="() => _issueForm.Notes" class="text-danger" /></div></EditForm></Content>
+<AppModal @bind-Visible="_reprocessDrawer" Width="640px" CssClass="di-centered-modal" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="di-modal-card">
+            <div class="um-modal-header di-modal-header">
+                <span class="di-modal-icon"><i class="bi bi-arrow-repeat"></i></span>
+                <div>
+                    <strong>Reprocess intake</strong>
+                    <small>Restart governed processing from a selected stage.</small>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _reprocessDrawer = false" disabled="@_saving"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body di-modal-body">
+                <EditForm EditContext="_reprocessContext">
+                    <DataAnnotationsValidator />
+                    <div class="di-drawer-intro"><span><i class="bi bi-arrow-repeat"></i></span><div><strong>Controlled reprocessing</strong><small>Restart from a selected stage while retaining prior audit attempts and evidence.</small></div></div>
+                    <div class="di-drawer-form">
+                        <div class="di-drawer-field"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessForm.WorkTypeCode"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option><option value="SEARCH_INDEXING">Search indexing</option></InputSelect><ValidationMessage For="() => _reprocessForm.WorkTypeCode" class="text-danger" /></div>
+                        <div class="di-drawer-field"><label>Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reprocessForm.Reason" /><ValidationMessage For="() => _reprocessForm.Reason" class="text-danger" /></div>
+                    </div>
+                </EditForm>
+            </div>
+            <div class="um-modal-footer di-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _reprocessDrawer = false" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="ReprocessAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    Queue reprocess
+                </button>
+            </div>
+        </div>
+    </DialogContent>
+</AppModal>
+<AppCrudDrawer @bind-Visible="_issueDrawer" Title="Resolve intake issue" Icon="bi-check2-circle" OnConfirm="ResolveIssueAsync" IsBusy="_saving" ConfirmText="Resolve issue" Width="640px">
+    <Content>
+        <EditForm EditContext="_issueContext">
+            <DataAnnotationsValidator />
+            <div class="di-drawer-intro di-drawer-intro--warning"><span><i class="bi bi-exclamation-octagon"></i></span><div><strong>@_selectedIssue?.IssueCode</strong><small>@_selectedIssue?.Message</small></div></div>
+            <div class="di-drawer-form">
+                <div class="di-drawer-field"><label>Resolution notes</label><InputTextArea class="intake-input w-100" @bind-Value="_issueForm.Notes" /><ValidationMessage For="() => _issueForm.Notes" class="text-danger" /></div>
+            </div>
+        </EditForm>
+    </Content>
 </AppCrudDrawer>
 
 @code {

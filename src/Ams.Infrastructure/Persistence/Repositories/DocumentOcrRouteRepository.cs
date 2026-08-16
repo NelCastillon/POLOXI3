@@ -23,7 +23,8 @@ SELECT
     MAX(CASE WHEN SettingKey=N'DocumentIntelligence.ModelId' AND Choice=1 THEN SettingValue END) ModelId,
     MAX(CASE WHEN SettingKey=N'DocumentIntelligence.ApiVersion' AND Choice=1 THEN SettingValue END) ApiVersion,
     MAX(CASE WHEN SettingKey=N'DocumentIntelligence.CredentialReference' AND Choice=1 THEN SettingValue END) CredentialReference,
-    TRY_CONVERT(int,MAX(CASE WHEN SettingKey=N'DocumentIntelligence.TimeoutSeconds' AND Choice=1 THEN SettingValue END)) TimeoutSeconds;
+    TRY_CONVERT(int,MAX(CASE WHEN SettingKey=N'DocumentIntelligence.TimeoutSeconds' AND Choice=1 THEN SettingValue END)) TimeoutSeconds
+FROM resolved;
 """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var row = await connection.QuerySingleAsync<RouteRow>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));

@@ -76,8 +76,8 @@ public sealed class DocumentIntakeOperationsRepository(ISqlConnectionFactory con
         const string sql="""
             IF EXISTS(SELECT 1 FROM DMS.IntakeSessionDocument link LEFT JOIN DMS.IntakeMalwareScan scan ON scan.TenantId=link.TenantId AND scan.DocumentId=link.DocumentId WHERE link.TenantId=@TenantId AND link.IntakeSessionId=@SessionId AND (scan.DocumentId IS NULL OR scan.StatusCode<>N'CLEAN'))
             BEGIN
-                IF @FailClosed=1 THROW 51000,'All evidence documents must have a CLEAN malware scan before processing.',1;
-                IF EXISTS(SELECT 1 FROM DMS.IntakeSessionDocument link JOIN DMS.IntakeMalwareScan scan ON scan.TenantId=link.TenantId AND scan.DocumentId=link.DocumentId WHERE link.TenantId=@TenantId AND link.IntakeSessionId=@SessionId AND scan.StatusCode IN(N'INFECTED',N'QUARANTINED')) THROW 51000,'Quarantined evidence cannot be processed.',1;
+                IF @FailClosed=1 THROW 52000,'All evidence documents must have a CLEAN malware scan before processing.',1;
+                IF EXISTS(SELECT 1 FROM DMS.IntakeSessionDocument link JOIN DMS.IntakeMalwareScan scan ON scan.TenantId=link.TenantId AND scan.DocumentId=link.DocumentId WHERE link.TenantId=@TenantId AND link.IntakeSessionId=@SessionId AND scan.StatusCode IN(N'INFECTED',N'QUARANTINED')) THROW 52000,'Quarantined evidence cannot be processed.',1;
             END;
             """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

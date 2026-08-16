@@ -23,7 +23,7 @@ public interface IDocumentIntakeRepository
     Task LinkDocumentsToSubmissionAsync(Guid tenantId, Guid intakeSessionId, Guid promotionId, Guid submissionId, Guid actorUserId, CancellationToken cancellationToken = default);
     Task CompletePromotionAsync(Guid tenantId, Guid intakeSessionId, Guid promotionId, Guid targetEntityId, string resultJson, Guid actorUserId, byte[] expectedSessionRowVersion, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyCollection<DocumentIntakeWorkItemDto>> LeaseWorkItemsAsync(string leaseOwner, int batchSize, TimeSpan leaseDuration, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DocumentIntakeWorkItemDto>> LeaseWorkItemsAsync(string leaseOwner, int batchSize, TimeSpan leaseDuration, bool malwareEnabled = true, bool malwareFailClosed = true, CancellationToken cancellationToken = default);
     Task<DocumentIntakeProcessingContext?> GetProcessingContextAsync(Guid workItemId, string leaseOwner, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<ExtractedDocumentField>> GetExtractedFieldsAsync(Guid tenantId, Guid intakeSessionId, CancellationToken cancellationToken = default);
     Task ValidateDraftAsync(DocumentIntakeProcessingContext context, CancellationToken cancellationToken = default);

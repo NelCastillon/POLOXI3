@@ -1,4 +1,5 @@
 @using Ams.Application.Features.DocumentIntake
+@implements IDisposable
 @inject ApiClient Api
 @inject NavigationManager Nav
 <div class="intake-panel intake-queue-panel">
@@ -7,11 +8,11 @@
             <span class="es-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
             <div class="es-search-body">
                 <label for="intake-search">Document intake search</label>
-                <input id="intake-search" class="es-search-input" placeholder="Search session or correlation" aria-label="Search document intake sessions" @bind="_search" />
+                <input id="intake-search" class="es-search-input" placeholder="Search session or correlation" aria-label="Search document intake sessions" value="@_search" @oninput="OnSearchChangedAsync" />
                 <span class="es-search-hint">Filters governed intake sessions by session number or correlation.</span>
             </div>
         </div>
-        <select class="es-filter-select" @bind="_module" aria-label="Module filter">
+        <select class="es-filter-select" value="@_module" @onchange="OnModuleChangedAsync" aria-label="Module filter">
             <option value="">All modules</option>
             @foreach (var module in DocumentIntakeModules.All.Order())
             {
@@ -20,7 +21,7 @@
         </select>
         @if (!LockStatus)
         {
-            <select class="es-filter-select" @bind="_status" aria-label="Status filter">
+            <select class="es-filter-select" value="@_status" @onchange="OnStatusChangedAsync" aria-label="Status filter">
                 <option value="">All statuses</option>
                 @foreach (var status in Statuses)
                 {
@@ -28,7 +29,14 @@
                 }
             </select>
         }
-        <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-funnel"></i> Apply filters</button>
+        <button class="um-btn um-btn-ghost" @onclick="ClearFiltersAsync"><i class="bi bi-x-circle"></i> Clear filters</button>
+    </div>
+    <div class="di-grid-toolbar" aria-label="Active document intake grid filter">
+        <div>
+            <span class="di-grid-toolbar__eyebrow">Active list</span>
+            <strong>@ActiveFilterLabel</strong>
+        </div>
+        <span class="di-grid-toolbar__count">@_items.Count session@(_items.Count == 1 ? string.Empty : "s")</span>
     </div>
     @if (_error is not null)
     {
@@ -44,19 +52,44 @@
     }
     else
     {
-        <div class="intake-grid-shell">
-        <AppGrid TValue="DocumentIntakeSessionDto" DataSource="_items" AllowPaging="true">
-            <GridColumns>
-                <GridColumn Field="@nameof(DocumentIntakeSessionDto.SessionNumber)" HeaderText="Session" />
-                <GridColumn Field="@nameof(DocumentIntakeSessionDto.ModuleCode)" HeaderText="Module" />
-                <GridColumn HeaderText="Status"><Template>@{ var row = (DocumentIntakeSessionDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
-                <GridColumn HeaderText="Confidence"><Template>@{ var row = (DocumentIntakeSessionDto)context; }@FormatConfidence(row.OverallConfidence)</Template></GridColumn>
-                <GridColumn Field="@nameof(DocumentIntakeSessionDto.WarningCount)" HeaderText="Warnings" />
-                <GridColumn Field="@nameof(DocumentIntakeSessionDto.ErrorCount)" HeaderText="Errors" />
-                <GridColumn Field="@nameof(DocumentIntakeSessionDto.CreatedDateUtc)" HeaderText="Created UTC" />
-                <GridColumn HeaderText="Action" Width="90"><Template>@{ var row = (DocumentIntakeSessionDto)context; }<button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(row.IntakeSessionId)">Open</button></Template></GridColumn>
-            </GridColumns>
-        </AppGrid>
+        <div class="intake-grid-shell di-enterprise-grid-shell">
+            <table class="di-enterprise-table">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Module</th>
+                        <th>Status</th>
+                        <th>Confidence</th>
+                        <th class="di-number-cell">Warnings</th>
+                        <th class="di-number-cell">Errors</th>
+                        <th>Created</th>
+                        <th class="di-action-cell">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in PagedItems)
+                    {
+                        <tr class="@RowClass(item.StatusCode)" @onclick="() => Open(item.IntakeSessionId)">
+                            <td data-label="Session"><div class="di-session-cell"><span class="di-session-icon"><i class="bi bi-stars"></i></span><div><strong>@item.SessionNumber</strong><small>Governed intake session</small></div></div></td>
+                            <td data-label="Module"><span class="di-module-pill">@item.ModuleCode.Replace('_', ' ')</span></td>
+                            <td data-label="Status"><AppStatusBadge Status="@item.StatusCode" /></td>
+                            <td data-label="Confidence"><span class="di-confidence">@FormatConfidence(item.OverallConfidence)</span></td>
+                            <td data-label="Warnings" class="di-number-cell">@item.WarningCount</td>
+                            <td data-label="Errors" class="di-number-cell">@item.ErrorCount</td>
+                            <td data-label="Created"><span class="di-created-date">@item.CreatedDateUtc.ToString("MMM d, yyyy")</span></td>
+                            <td data-label="Action" class="di-action-cell"><button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => Open(item.IntakeSessionId)" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Open</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="di-pagination" aria-label="Document intake pagination">
+        <div class="di-pagination__summary">Showing @PageStart-@PageEnd of @_items.Count · 10 per page</div>
+            <div class="di-pagination__controls">
+                <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
+                <span class="di-pagination__page">Page @_page of @TotalPages</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+            </div>
         </div>
     }
 </div>
@@ -64,18 +97,29 @@
 @code {
     [Parameter] public string? Status { get; set; }
     [Parameter] public bool LockStatus { get; set; }
+    [Parameter] public string? FilterLabel { get; set; }
 
     private List<DocumentIntakeSessionDto> _items = [];
+    private const int PageSize = 10;
+    private int _page = 1;
     private string _search = "", _module = "", _status = "";
     private string? _loadedSearch, _loadedModule, _loadedStatus;
     private bool _loading;
+    private bool _hasLoaded;
+    private CancellationTokenSource? _searchDebounce;
     private string? _error;
+    private IReadOnlyList<DocumentIntakeSessionDto> PagedItems => _items.Skip((_page - 1) * PageSize).Take(PageSize).ToList();
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_items.Count / (double)PageSize));
+    private int PageStart => _items.Count == 0 ? 0 : ((_page - 1) * PageSize) + 1;
+    private int PageEnd => Math.Min(_page * PageSize, _items.Count);
+    private string ActiveFilterLabel => !string.IsNullOrWhiteSpace(FilterLabel) && _status == (Status ?? string.Empty) ? FilterLabel : (string.IsNullOrWhiteSpace(_status) ? "All sessions" : _status == "__PROCESSING__" ? "Processing and queued" : _status.Replace('_', ' '));
     private static readonly string[] Statuses = [DocumentIntakeStatuses.Draft, DocumentIntakeStatuses.Queued, DocumentIntakeStatuses.Processing, DocumentIntakeStatuses.ReviewRequired, DocumentIntakeStatuses.Ready, DocumentIntakeStatuses.Completed, DocumentIntakeStatuses.Failed, DocumentIntakeStatuses.Cancelled];
 
     protected override async Task OnParametersSetAsync()
     {
-        _status = Status ?? _status;
-        if (_loadedSearch != _search || _loadedModule != _module || _loadedStatus != _status)
+        var incomingStatus = Status ?? string.Empty;
+        if (incomingStatus != _status) _status = incomingStatus;
+        if (!_hasLoaded || _loadedSearch != _search || _loadedModule != _module || _loadedStatus != _status)
         {
             await LoadAsync();
         }
@@ -87,7 +131,11 @@
         _error = null;
         try
         {
-            _items = (await Api.SearchDocumentIntakeAsync(_search, _module, _status, pageSize: 500))?.Items.ToList() ?? [];
+            var apiStatus = _status == "__PROCESSING__" ? string.Empty : _status;
+            _items = (await Api.SearchDocumentIntakeAsync(_search, _module, apiStatus, pageSize: 500))?.Items.ToList() ?? [];
+            if (_status == "__PROCESSING__") _items = _items.Where(x => x.StatusCode is DocumentIntakeStatuses.Processing or DocumentIntakeStatuses.Queued).ToList();
+            _items = _items.OrderBy(x => IsActiveStatus(x.StatusCode) ? 0 : 1).ThenByDescending(x => x.CreatedDateUtc).ToList();
+            _page = Math.Min(_page, TotalPages);
         }
         catch (Exception ex)
         {
@@ -98,10 +146,65 @@
             _loadedSearch = _search;
             _loadedModule = _module;
             _loadedStatus = _status;
+            _hasLoaded = true;
             _loading = false;
         }
     }
 
+    private async Task OnSearchChangedAsync(ChangeEventArgs args)
+    {
+        _search = args.Value?.ToString() ?? string.Empty;
+        _page = 1;
+        _searchDebounce?.Cancel();
+        _searchDebounce?.Dispose();
+        _searchDebounce = new();
+        try
+        {
+            await Task.Delay(250, _searchDebounce.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        await LoadAsync();
+    }
+
+    private async Task OnModuleChangedAsync(ChangeEventArgs args)
+    {
+        _module = args.Value?.ToString() ?? string.Empty;
+        _page = 1;
+        await LoadAsync();
+    }
+
+    private async Task OnStatusChangedAsync(ChangeEventArgs args)
+    {
+        _status = args.Value?.ToString() ?? string.Empty;
+        _page = 1;
+        await LoadAsync();
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        _search = string.Empty;
+        _module = string.Empty;
+        if (!LockStatus) _status = Status ?? string.Empty;
+        _page = 1;
+        await LoadAsync();
+    }
+
+    public async Task SetStatusFilterAsync(string? status)
+    {
+        _status = status ?? string.Empty;
+        _page = 1;
+        await LoadAsync();
+    }
+
+    private void PreviousPage(){if(_page>1)_page--;}
+    private void NextPage(){if(_page<TotalPages)_page++;}
+
     private void Open(Guid id) => Nav.NavigateTo($"/operations/document-intake/{id}");
     private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
+    private static bool IsActiveStatus(string status) => status is DocumentIntakeStatuses.Queued or DocumentIntakeStatuses.Processing or DocumentIntakeStatuses.ReviewRequired or DocumentIntakeStatuses.Ready or DocumentIntakeStatuses.Failed;
+    private static string RowClass(string status) => IsActiveStatus(status) ? "di-row-active" : "di-row-archived";
+    public void Dispose(){_searchDebounce?.Cancel();_searchDebounce?.Dispose();}
 }
