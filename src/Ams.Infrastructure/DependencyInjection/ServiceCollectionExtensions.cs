@@ -621,6 +621,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRecommendationGenerationRepository>(provider => provider.GetRequiredService<IIntelligenceRepository>() as IRecommendationGenerationRepository
             ?? throw new InvalidOperationException("The intelligence repository must support recommendation generation."));
         services.AddScoped<IIntelligenceService, IntelligenceService>();
+        services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
+        services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
         services.AddScoped<IRulesPlatformService, RulesPlatformService>();
         services.AddScoped<IValidationPlatformService, ValidationPlatformService>();
         services.AddSingleton<ISemanticQueryExpander, NullSemanticQueryExpander>();

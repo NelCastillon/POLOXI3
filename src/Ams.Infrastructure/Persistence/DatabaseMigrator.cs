@@ -384,6 +384,9 @@ public sealed partial class DatabaseMigrator
         new("0328_Intelligence_Search_Ai_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0138_IntelligenceSearchAiRouteSeed.sql")),
         new("0329_Intelligent_Search_EPH", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0139_IntelligentSearchEph.sql")),
         new("0330_Configure_Shared_Azure_OpenAI_Route", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0140_ConfigureSharedAzureOpenAiRoute.sql")),
+        new("0331_EPH_Hierarchy_Deterministic_Temperature", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0141_EphHierarchyDeterministicTemperature.sql")),
+        new("0332_Intelligence_Wide_Dynamic_Hierarchy", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0142_IntelligenceWideDynamicHierarchy.sql")),
+        new("0333_Intelligence_Wide_Answer_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0143_IntelligenceWideAnswerOutputBudget.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
