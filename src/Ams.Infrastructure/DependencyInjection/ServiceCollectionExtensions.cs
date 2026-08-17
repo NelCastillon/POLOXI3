@@ -4,6 +4,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Services;
 using Ams.Infrastructure.Configuration;
+using Ams.Infrastructure.Intelligence;
 using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
 using Ams.Infrastructure.Persistence.Repositories;
@@ -623,6 +624,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntelligenceService, IntelligenceService>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
+        services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
         services.AddScoped<IRulesPlatformService, RulesPlatformService>();
         services.AddScoped<IValidationPlatformService, ValidationPlatformService>();
         services.AddSingleton<ISemanticQueryExpander, NullSemanticQueryExpander>();

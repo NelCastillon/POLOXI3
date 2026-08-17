@@ -25,11 +25,19 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // back to the LLM). Displayed in Authorized Evidence as complete result sets, ordered by branch scoring;
     // never enterprise-verified.
     public IReadOnlyCollection<WideInterpretiveResultDto> InterpretiveResults{get;init;}=[];
+    // Fresh external snippets that grounded the answer (Stage 2.5); empty when live grounding is disabled.
+    public IReadOnlyCollection<WideExternalKnowledgeSnippet> ExternalKnowledge{get;init;}=[];
 }
 
 public sealed record WideExternalReferenceDto(string Title,string Url,string Source,string Summary,string BranchDisplayName);
 
-public sealed record WideInterpretiveResultDto(string BranchDisplayName,string Interpretation,decimal Confidence,IReadOnlyCollection<WideInterpretiveResultItemDto> Items);
+public sealed record WideInterpretiveResultDto(string BranchDisplayName,string Interpretation,decimal Confidence,IReadOnlyCollection<WideInterpretiveResultItemDto> Items)
+{
+    // STABLE: durable knowledge. TIME_SENSITIVE: prices, rates, rankings, availability - figures may be outdated.
+    public string DataVolatility{get;init;}="STABLE";
+    // True when the result set was composed from live external retrieval (Stage 2.5), not LLM recall.
+    public bool IsExternallyGrounded{get;init;}
+}
 
 public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail);
 
@@ -37,6 +45,13 @@ public sealed record WideActionSuggestionDto(string DisplayName,string Navigatio
 
 // Wide pipeline configuration loaded from Core.ConfigurationSetting (DB is the source of truth).
 public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls);
+
+// Stage 2.5 external grounding configuration loaded from Core.ConfigurationSetting (DB is the source of truth).
+// A blank ApiKey or Enabled=false disables live retrieval; the pipeline degrades to interpretive-only answers.
+public sealed record WideExternalGroundingConfiguration(bool Enabled,string ProviderCode,string ApiKey,int MaximumQueriesPerExecution,int MaximumSnippetsPerQuery,int CacheHours,int TimeoutSeconds);
+
+// A fresh real-world snippet retrieved at answer time (live provider call or EPH.ExternalKnowledge cache hit).
+public sealed record WideExternalKnowledgeSnippet(string Query,string Title,string Url,string Snippet,decimal Score,DateTime RetrievedDateUtc);
 
 // LLM structured outputs (strict JSON schema payloads).
 public sealed record WideProposedBranch(string BranchCode,string DisplayName,string Interpretation,string? CapabilityCode,string? SearchText,decimal Confidence,bool ContinueNarrowing,string? StopReason,string? ParentBranchCode);
@@ -53,7 +68,10 @@ public sealed record WideAnswerProposal(string Answer,string VerificationCode,de
 
 public sealed record WideExternalReference(string Title,string Url,string Source,string Summary,string BranchDisplayName);
 
-public sealed record WideInterpretiveResult(string BranchDisplayName,string Interpretation,IReadOnlyCollection<WideInterpretiveResultItem> Items);
+public sealed record WideInterpretiveResult(string BranchDisplayName,string Interpretation,IReadOnlyCollection<WideInterpretiveResultItem> Items)
+{
+    public string DataVolatility{get;init;}="STABLE";
+}
 
 public sealed record WideInterpretiveResultItem(int RankNumber,string Name,string Detail);
 
