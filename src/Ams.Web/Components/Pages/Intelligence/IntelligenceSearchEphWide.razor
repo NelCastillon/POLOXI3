@@ -41,8 +41,24 @@
                 <section class="eph-explanation">
                     <div class="eph-explanation-icon"><i class="bi bi-chat-square-quote"></i></div>
                     <div class="eph-explanation-body">
-                        <div class="eph-panel-header"><div><span>@VerificationLabel</span><h2>Verified answer</h2></div><span class="eph-status">@_response.AnswerVerificationCode</span></div>
+                        <div class="eph-panel-header"><div><span>@VerificationLabel</span><h2>@AnswerHeading</h2></div><span class="eph-status">@GroundingBadge</span></div>
                         <p>@_response.FinalAnswer</p>
+                        @if (_response.QueryContract is { } contract && (contract.HardConstraints.Count > 0 || contract.AmbiguousConcepts.Count > 0))
+                        {
+                            <div class="eph-grounded-branches">
+                                <small>Query contract:</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var constraint in contract.HardConstraints)
+                                    {
+                                        <span class="eph-branch-chip" title="Hard constraint — fixed by your query, never reinterpreted."><i class="bi bi-lock"></i>@constraint<em>FIXED</em></span>
+                                    }
+                                    @foreach (var concept in contract.AmbiguousConcepts)
+                                    {
+                                        <span class="eph-branch-chip" title="Ambiguous concept — the only part EPH disambiguated."><i class="bi bi-question-circle"></i>@concept<em>DISAMBIGUATED</em></span>
+                                    }
+                                </div>
+                            </div>
+                        }
                         @if (SurvivingBranches.Count > 0)
                         {
                             <div class="eph-grounded-branches">
@@ -76,10 +92,43 @@
             <section class="eph-kpis">
                 <article><span>Status</span><strong>@_response.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
                 <article><span>Depth reached</span><strong>@_response.DepthReached</strong><small>@_response.LlmCallCount LLM calls</small></article>
-                <article><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count eliminated</small></article>
-                <article><span>Evidence</span><strong>@_response.Evidence.Count</strong><small>@_response.DurationMilliseconds ms</small></article>
-                <article><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>Aggregate</small></article>
+                <article><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
+                <article><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external · @_response.EnterpriseEvidenceCount enterprise</small></article>
+                <article><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>branches supported</small></article>
+                <article><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>EPH conclusion</small></article>
             </section>
+
+            @if (_response.Candidates.Count > 0)
+            {
+                <section class="eph-panel">
+                    <div class="eph-panel-header"><div><span>Candidate × Branch competition · ranked by surviving interpretations</span><h2>EPH Answer ranking</h2></div><span class="eph-status" title="EPH Journey: interpretations explored → evidence-supported → final dimensions → ranked candidates">@_response.Branches.Count → @SurvivingBranches.Count → @ActiveBranchCount → @_response.Candidates.Count</span></div>
+                    @foreach (var candidate in _response.Candidates)
+                    {
+                        <article class="eph-evidence @(candidate.IsConstraintViolation ? "eph-branch-unsupported" : null)">
+                            <span class="eph-rank">@candidate.RankNumber</span>
+                            <div class="eph-evidence-main">
+                                <strong>@candidate.DisplayName</strong>
+                                <p>@candidate.Detail</p>
+                                <div>
+                                    @if (candidate.IsConstraintViolation)
+                                    {
+                                        <span class="um-badge um-badge-danger" title="Failed a hard query constraint; kept visible, never hidden."><i class="bi bi-slash-circle"></i> RULED OUT</span>
+                                    }
+                                    else if (candidate.EvidenceCoverage < .5m)
+                                    {
+                                        <span class="um-badge um-badge-warning" title="This candidate has evidence on only some interpretation dimensions; its ranking is discounted accordingly."><i class="bi bi-exclamation-triangle"></i> LOW COVERAGE @candidate.EvidenceCoverage.ToString("P0")</span>
+                                    }
+                                    @foreach (var score in candidate.BranchScores)
+                                    {
+                                        <span class="um-badge um-badge-neutral" title="Evidence score for this interpretation dimension.">@score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="eph-score"><strong>@candidate.CompositeScore.ToString("P0")</strong><small>Composite</small></div>
+                        </article>
+                    }
+                </section>
+            }
 
             @if (_response.Branches.Count > 0 || _response.ExternalReferences.Count > 0 || _response.InterpretiveResults.Count > 0)
             {
@@ -95,7 +144,7 @@
                                 <article class="eph-branch @(branch.IsEliminated ? "eph-branch-unsupported" : "eph-branch-valid")">
                                     <span class="eph-branch-icon"><i class="bi @(branch.IsEliminated ? "bi-slash-circle" : branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i></span>
                                     <div><strong>@branch.DisplayName</strong><p>@branch.Interpretation</p><small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small></div>
-                                    <div class="eph-branch-meta"><span>@(branch.IsEliminated ? "ELIMINATED" : branch.GroundingStatusCode)</span><small>@branch.Confidence.ToString("P0")</small></div>
+                                    <div class="eph-branch-meta"><span>@BranchStateLabel(branch)</span><small title="Interpretation prior (LLM) · Evidence support · EPH confidence">@(branch.EphConfidence > 0 ? $"{branch.InterpretationPrior:P0} · {branch.EvidenceSupport:P0} · {branch.EphConfidence:P0}" : branch.Confidence.ToString("P0"))</small></div>
                                 </article>
                             }
                         }
@@ -119,7 +168,7 @@
                     }
                     @if (_response.InterpretiveResults.Count > 0)
                     {
-                        <h2>Verified Answers</h2>
+                        <h2>Interpretation results</h2>
                         @if (_response.InterpretiveResults.Any(r => r.DataVolatility == "TIME_SENSITIVE" && !r.IsExternallyGrounded))
                         {
                             <div class="alert alert-warning" role="alert" style="border-left: 4px solid #ffc107;">
@@ -208,6 +257,21 @@
         "PARTIALLY_VERIFIED" => "Partially verified against enterprise evidence",
         _ => "Interpretation not verified against enterprise data"
     };
+    private string AnswerHeading => _response?.AnswerVerificationCode == "VERIFIED" ? "Verified answer" : "Grounded answer";
+    private string GroundingBadge => _response switch
+    {
+        { AnswerVerificationCode: "VERIFIED" } => "VERIFIED",
+        { EvidenceCoverage: >= .5m } => "PARTIALLY GROUNDED",
+        _ => "LIMITED EVIDENCE"
+    };
+    private static string BranchStateLabel(WideBranchDto branch) => branch.BranchStateCode switch
+    {
+        "PRUNED" => "RULED OUT",
+        "DORMANT" => "NOT PRIORITIZED",
+        "SECONDARY" => "ALSO RELEVANT",
+        _ => branch.IsEliminated ? "RULED OUT" : branch.GroundingStatusCode
+    };
+    private int ActiveBranchCount => SurvivingBranches.Count(x => x.BranchStateCode == "ACTIVE");
 
     protected override Task OnInitializedAsync()
     {

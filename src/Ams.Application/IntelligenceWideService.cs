@@ -199,8 +199,18 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var ephRequest=new EphSearchRequest(request.TenantId,request.UserId,request.Query,request.MaximumResults,request.CorrelationId){GrantedPermissions=request.GrantedPermissions};
         try
         {
+            // Stage 0 (V2.1): Query Contract — separate hard constraints, output requirements, and the
+            // ambiguous concepts that actually need disambiguation. Fail-soft: a null contract degrades
+            // to the V2 behavior of branching the whole query.
+            WideQueryContract? queryContract=null;
+            if(configuration.EnableQueryContract)
+            {
+                queryContract=await ExtractQueryContractAsync(request,cancellationToken);
+                if(queryContract is not null)llmCalls++;
+            }
+
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
-            var intent=await ProposeIntentAsync(request,capabilities,configuration,cancellationToken);
+            var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
             llmCalls++;
             var currentLevel=MaterializeBranches(intent.Branches,executionId,request.TenantId,1,new Dictionary<string,WideBranchRecord>(),configuration);
             await wideRepository.SaveWideBranchesAsync(currentLevel,request.UserId,cancellationToken);
@@ -214,14 +224,27 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 foreach(var branch in currentLevel)
                 {
                     var grounded=await GroundBranchAsync(branch,ephRequest,capabilities,request.MaximumResults,branchEvidenceKeys,evidence,cancellationToken);
-                    // Candidate elimination: grounded-but-empty with weak confidence, or below the confidence floor.
-                    var eliminated=false;string? eliminationReason=null;
-                    if(branch.Confidence<configuration.MinimumBranchConfidence){eliminated=true;eliminationReason=$"Confidence {branch.Confidence:P0} below minimum {configuration.MinimumBranchConfidence:P0}.";}
-                    else if(grounded.StatusCode=="GROUNDED"&&grounded.EvidenceCount==0&&branch.Confidence<configuration.TargetConfidence){eliminated=true;eliminationReason="Grounded capability search returned no enterprise evidence.";}
-                    var updated=branch with{GroundingStatusCode=grounded.StatusCode,EvidenceCount=grounded.EvidenceCount,IsEliminated=eliminated,EliminationReason=eliminationReason};
+                    // V2.1 branch lifecycle: the LLM percentage is an Interpretation Prior controlling retrieval
+                    // allocation, NOT truth. Low priors demote to SECONDARY/DORMANT instead of eliminating;
+                    // PRUNED is reserved for branches that are overwhelmingly unsupported by evidence.
+                    var state=branch.Confidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
+                        :branch.Confidence>=configuration.DormantBranchThreshold?WideBranchStates.Secondary
+                        :WideBranchStates.Dormant;
+                    string? eliminationReason=null;
+                    if(grounded.StatusCode=="GROUNDED"&&grounded.EvidenceCount==0&&branch.Confidence<configuration.TargetConfidence)
+                    {
+                        state=WideBranchStates.Pruned;
+                        eliminationReason="Grounded capability search returned no enterprise evidence.";
+                    }
+                    else if(state==WideBranchStates.Secondary)eliminationReason=$"Interpretation prior {branch.Confidence:P0} below {configuration.SecondaryBranchThreshold:P0}: reduced retrieval budget, not eliminated.";
+                    else if(state==WideBranchStates.Dormant)eliminationReason=$"Interpretation prior {branch.Confidence:P0} below {configuration.DormantBranchThreshold:P0}: dormant, reactivatable if evidence supports it.";
+                    var eliminated=state==WideBranchStates.Pruned;
+                    var updated=branch with{GroundingStatusCode=grounded.StatusCode,EvidenceCount=grounded.EvidenceCount,IsEliminated=eliminated,EliminationReason=eliminationReason,BranchStateCode=state,InterpretationPrior=branch.Confidence};
                     await wideRepository.UpdateWideBranchOutcomeAsync(request.TenantId,branch.WideBranchId,updated.GroundingStatusCode,updated.EvidenceCount,updated.IsEliminated,updated.EliminationReason,cancellationToken);
                     allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=updated;
-                    if(!eliminated)survivors.Add(updated);
+                    // ACTIVE and SECONDARY branches keep narrowing; DORMANT branches stay in the answer path
+                    // with a smaller footprint but do not spawn deeper levels; PRUNED branches stop entirely.
+                    if(state is WideBranchStates.Active or WideBranchStates.Secondary)survivors.Add(updated);
                 }
                 if(survivors.Count==0){terminationReason="NO_SURVIVORS";break;}
 
@@ -264,14 +287,34 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Stage 3: verified answer composed from surviving paths + enterprise evidence.
             var survivorsFinal=allBranches.Where(branch=>!branch.IsEliminated).ToArray();
             if(aggregateConfidence==0m&&survivorsFinal.Length>0)aggregateConfidence=ComputeAggregateConfidence(survivorsFinal);
-            WideAnswerProposal answer;
-            var answerStatus="COMPLETED";
             // Live external grounding (fail-soft): retrieve fresh web snippets for interpretive paths so
             // time-sensitive figures come from current sources instead of stale model memory.
             var externalKnowledge=await GatherExternalKnowledgeAsync(request,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),cancellationToken);
+            // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
+            // enterprise evidence and matched external snippets), EPH Confidence (weighted combination).
+            survivorsFinal=survivorsFinal.Select(branch=>
+            {
+                var support=ComputeEvidenceSupport(branch,evidence,externalKnowledge);
+                var ephConfidence=Math.Clamp(configuration.PriorWeight*branch.Confidence+configuration.EvidenceWeight*support,0,1);
+                // V2.1 REWEIGHT: evidence revises the branch state — a DORMANT branch with strong evidence
+                // support is reactivated, and a high-prior branch without support is demoted. PRUNED
+                // (constraint violation / evidence-void) is terminal and never reactivated here.
+                var state=branch.BranchStateCode==WideBranchStates.Pruned?WideBranchStates.Pruned
+                    :ephConfidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
+                    :ephConfidence>=configuration.DormantBranchThreshold?WideBranchStates.Secondary
+                    :WideBranchStates.Dormant;
+                return branch with{InterpretationPrior=branch.Confidence,EvidenceSupport=support,EphConfidence=ephConfidence,BranchStateCode=state};
+            }).ToArray();
+            foreach(var branch in survivorsFinal)
+            {
+                await wideRepository.UpdateWideBranchScoresAsync(request.TenantId,branch.WideBranchId,branch.BranchStateCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.EphConfidence,cancellationToken);
+                allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
+            }
+            WideAnswerProposal answer;
+            var answerStatus="COMPLETED";
             try
             {
-                answer=await ComposeAnswerAsync(request,survivorsFinal,ranked,aggregateConfidence,externalKnowledge,cancellationToken);
+                answer=await ComposeAnswerAsync(request,survivorsFinal,ranked,aggregateConfidence,externalKnowledge,queryContract,cancellationToken);
                 llmCalls++;
             }
             catch(Exception exception) when(exception is AiProviderUnavailableException or TimeoutException)
@@ -285,9 +328,23 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var relevantNumbers=(answer.RelevantEvidenceNumbers??[]).ToHashSet();
             var relevantEvidence=ranked.Where(item=>relevantNumbers.Contains(item.RankNumber)).ToArray();
             if(answer.VerificationCode=="INTERPRETIVE"||relevantEvidence.Length==0)aggregateConfidence=Math.Min(aggregateConfidence,Math.Clamp(answer.Confidence,0,1));
+            // V2.1 Candidate x Branch competition: extract candidates from the interpretive result sets,
+            // enforce hard constraints (PRUNED with a reason, never silently dropped), and compute a
+            // composite ranking weighted by branch EPH confidence. Fail-soft: empty on LLM failure.
+            var interpretiveResults=MapInterpretiveResults(answer,survivorsFinal,externalKnowledge);
+            IReadOnlyCollection<WideCandidateDto> candidates=[];
+            if(interpretiveResults.Length>0&&llmCalls<configuration.MaximumTotalLlmCalls)
+            {
+                candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,configuration,cancellationToken);
+                if(candidates.Count>0)llmCalls++;
+            }
+            // V2.1 evidence metrics: coverage = share of surviving branches supported by any evidence.
+            var coveredBranches=survivorsFinal.Count(branch=>branch.EvidenceSupport>0);
+            var evidenceCoverage=survivorsFinal.Length==0?0m:Math.Clamp((decimal)coveredBranches/survivorsFinal.Length,0,1);
+            await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,queryContract is null?null:JsonSerializer.Serialize(queryContract,JsonOptions),evidenceCoverage,externalKnowledge.Count,relevantEvidence.Length,candidates.Count,cancellationToken);
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,timer.ElapsedMilliseconds,cancellationToken);
-            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=MapInterpretiveResults(answer,survivorsFinal,externalKnowledge),ExternalKnowledge=externalKnowledge};
+            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,Candidates=candidates,EvidenceCoverage=evidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length};
         }
         catch
         {
@@ -340,12 +397,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return("GROUNDED",branchEvidence.Count);
     }
 
-    private async Task<WideIntentProposal> ProposeIntentAsync(WideSearchRequest request,IReadOnlyCollection<EphCapabilityDto> capabilities,WideConfiguration configuration,CancellationToken cancellationToken)
+    private async Task<WideIntentProposal> ProposeIntentAsync(WideSearchRequest request,IReadOnlyCollection<EphCapabilityDto> capabilities,WideConfiguration configuration,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         var catalog=BuildCatalog(capabilities);
+        // V2.1: when a query contract exists, the LLM branches ONLY the ambiguous concepts; hard
+        // constraints and output requirements are fixed by the user and must never be reinterpreted.
+        var contractContext=queryContract is null?string.Empty:
+            $"\nQuery contract (FIXED, do not reinterpret): entity type: {queryContract.EntityType??"(unspecified)"}; hard constraints: {(queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints))}; output requirements: {(queryContract.OutputRequirements.Count==0?"(none)":string.Join("; ",queryContract.OutputRequirements))}\nAmbiguous concepts to disambiguate (branch ONLY these): {(queryContract.AmbiguousConcepts.Count==0?"(whole question)":string.Join("; ",queryContract.AmbiguousConcepts))}";
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
             "You disambiguate an ambiguous enterprise question by dynamically constructing a problem-specific hierarchy. Propose the top level: distinct, mutually exclusive interpretation branches of the question. Branches are NOT limited to the supplied capability catalog — general, industry, and conceptual interpretations are allowed. Map capabilityCode only when the catalog can genuinely ground the branch against enterprise data; otherwise use null. For each branch set continueNarrowing=true when a meaningfully narrower sub-level exists, otherwise false with a stopReason of FULLY_DISAMBIGUATED, NO_FURTHER_RELEVANT_SUBDIVISION, EVIDENCE_SUFFICIENT, or INTERPRETATION_EXHAUSTED. Confidence per branch must be CALIBRATED, not defaulted: it expresses how likely this interpretation matches what the user actually meant, so branches must be differentiated - the most plausible mainstream interpretation scores highest and niche or speculative interpretations score lower. Never assign the same confidence to every branch and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. Never claim records exist and never produce SQL.",
-            $"Ambiguous question: {request.Query}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
+            $"Ambiguous question: {request.Query}{contractContext}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
             IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
@@ -394,20 +455,44 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }
     }
 
-    private async Task<WideAnswerProposal> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<EphEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
+    private async Task<WideAnswerProposal> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<EphEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
-        var paths=string.Join('\n',survivors.OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder).Select(branch=>$"- L{branch.LevelNumber} {branch.DisplayName} ({branch.GroundingStatusCode}, evidence: {branch.EvidenceCount}, confidence: {branch.Confidence:P0}): {branch.Interpretation}"));
+        // V2.1: hard constraints from the query contract are non-negotiable in the final answer.
+        var contractContext=queryContract is null||queryContract.HardConstraints.Count==0?string.Empty:
+            $"\nHARD CONSTRAINTS (every named item in the answer MUST satisfy these; exclude any item that does not): {string.Join("; ",queryContract.HardConstraints)}";
+        // Input budget: the tenant AI safety guard (Intelligence.Safety.MaximumInputCharacters) blocks
+        // prompts over the configured limit. The answer system prompt is large and the survivor/evidence
+        // sections grow with depth, so every variable section is clamped and, if the assembled user prompt
+        // still exceeds the budget, the sections are progressively shrunk instead of failing the search.
+        const int userPromptBudget=12000;
+        var orderedSurvivors=survivors.OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder).ToArray();
         // All interpretive narrowing paths (Level 1 first, then highest confidence) drive real-world reference
         // and interpretive result-set generation; the branch sub-header (Interpretation) is fed to the LLM.
-        var topInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
-        var topInterpretive=string.Join('\n',topInterpretiveBranches.Select((branch,index)=>$"{index+1}. [L{branch.LevelNumber}] {branch.DisplayName} ({branch.Confidence:P0}): {branch.Interpretation}"));
-        var grounding=ranked.Count==0?"(no enterprise evidence)":string.Join('\n',ranked.Take(12).Select(item=>$"[{item.RankNumber}] {item.Title} ({item.EntityTypeCode}): {item.Excerpt}"));
-        // Clamp each live snippet so external grounding cannot blow the answer prompt past the
-        // feature-policy input budget (Tavily content blocks can be several thousand characters).
-        var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(10).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,900)}"));
+        var allInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
+        var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,10);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
+        WideBranchRecord[] topInterpretiveBranches;string userPrompt;
+        while(true)
+        {
+            var paths=string.Join('\n',orderedSurvivors.Take(pathCount).Select(branch=>$"- L{branch.LevelNumber} {branch.DisplayName} ({branch.GroundingStatusCode}, evidence: {branch.EvidenceCount}, confidence: {branch.Confidence:P0}): {Truncate(branch.Interpretation,300)}"));
+            topInterpretiveBranches=allInterpretiveBranches.Take(interpretiveCount).ToArray();
+            var topInterpretive=string.Join('\n',topInterpretiveBranches.Select((branch,index)=>$"{index+1}. [L{branch.LevelNumber}] {branch.DisplayName} ({branch.Confidence:P0}): {Truncate(branch.Interpretation,300)}"));
+            var grounding=ranked.Count==0?"(no enterprise evidence)":string.Join('\n',ranked.Take(evidenceCount).Select(item=>$"[{item.RankNumber}] {Truncate(item.Title,150)} ({item.EntityTypeCode}): {Truncate(item.Excerpt,300)}"));
+            // Clamp each live snippet so external grounding cannot blow the answer prompt past the
+            // feature-policy input budget (Tavily content blocks can be several thousand characters).
+            var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(snippetCount).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,snippetLength)}"));
+            userPrompt=$"Question: {request.Query}{contractContext}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
+            if(userPrompt.Length<=userPromptBudget)break;
+            // Shrink in evidence-preserving order: snippet length, snippet count, path list, then interpretive paths.
+            if(snippetLength>400){snippetLength=400;continue;}
+            if(snippetCount>4){snippetCount=4;continue;}
+            if(pathCount>12){pathCount=12;continue;}
+            if(evidenceCount>6){evidenceCount=6;continue;}
+            if(interpretiveCount>4){interpretiveCount=4;continue;}
+            break;
+        }
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
             "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and a one-sentence detail explaining why it holds that rank. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources.",
-            $"Question: {request.Query}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}",
+            userPrompt,
             AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty.");
     }
@@ -435,7 +520,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return Math.Clamp(weighted.Max(),0,1);
     }
 
-    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder);
+    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,EphConfidence=branch.EphConfidence};
 
     // Accept only well-formed absolute https URLs so hallucinated or unsafe links never reach the UI.
     private static WideExternalReferenceDto[] MapExternalReferences(WideAnswerProposal answer)=>
@@ -464,6 +549,101 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     }
 
     private static string BuildCatalog(IReadOnlyCollection<EphCapabilityDto> capabilities)=>capabilities.Count==0?"(none — knowledge-only mode; capabilityCode must always be null)":string.Join('\n',capabilities.Select(capability=>$"{capability.CapabilityCode}: {capability.Description}; approved terms: {string.Join(", ",capability.ApprovedTerms)}; entity: {capability.EntityTypeCode}"));
+
+    // -----------------------------------------------------------------------------------------------
+    // V2.1 Query Contract Engine: separate what the query FIXES (hard constraints, entity type, output
+    // requirements) from what actually needs disambiguation (ambiguous concepts). Fail-soft: any LLM
+    // failure returns null and the pipeline degrades to V2 whole-query branching.
+    // -----------------------------------------------------------------------------------------------
+    private async Task<WideQueryContract?> ExtractQueryContractAsync(WideSearchRequest request,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
+                "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
+                $"Question: {request.Query}",
+                QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
+            if(proposal is null)return null;
+            return new(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]);
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    // V2.1 Evidence Support: deterministic, EPH-owned score derived from actual retrieved evidence,
+    // never invented by the LLM. Enterprise evidence dominates; matched external snippets contribute
+    // with their provider relevance score; unsupported branches score 0.
+    private static decimal ComputeEvidenceSupport(WideBranchRecord branch,IReadOnlyCollection<EphEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    {
+        var enterpriseCount=evidence.Count(item=>item.HierarchyBranchId==branch.WideBranchId);
+        // Saturating enterprise contribution: 1 item = .5, 3+ items ~ .9.
+        var enterpriseSupport=enterpriseCount==0?0m:Math.Min(.9m,.5m+.2m*(enterpriseCount-1));
+        // External snippets match a branch when the retrieval query included the branch display name.
+        var matchedSnippets=externalKnowledge.Where(snippet=>snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)).ToArray();
+        var externalSupport=matchedSnippets.Length==0?0m:Math.Clamp(matchedSnippets.Max(snippet=>snippet.Score),0,1)*Math.Min(1m,.6m+.1m*matchedSnippets.Length);
+        return Math.Clamp(Math.Max(enterpriseSupport,externalSupport),0,1);
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // V2.1 Candidate Engine: build the candidate universe from the interpretive result sets, apply the
+    // hard-constraint filter (violators are kept but flagged PRUNED, never silently dropped), score
+    // each candidate against each surviving branch, and rank by the branch-importance-weighted
+    // composite. Fail-soft: any LLM failure returns an empty collection.
+    // -----------------------------------------------------------------------------------------------
+    private async Task<IReadOnlyCollection<WideCandidateDto>> CompeteCandidatesAsync(WideSearchRequest request,Guid executionId,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,WideConfiguration configuration,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var branches=survivors.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).OrderByDescending(branch=>branch.EphConfidence).Take(8).ToArray();
+            if(branches.Length==0)return [];
+            var candidateNames=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).GroupBy(item=>item.Name,StringComparer.OrdinalIgnoreCase).Select(group=>group.First()).Take(configuration.MaximumCandidates*2).ToArray();
+            if(candidateNames.Length==0)return [];
+            var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
+            var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
+            var constraints=queryContract is null||queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints);
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
+                "Score each supplied candidate against each supplied interpretation branch. For every candidate return: name (echo exactly), detail (echo or improve, one sentence), violatesConstraint=true with constraintViolationReason when the candidate does NOT satisfy ALL hard constraints (for example a city outside the required geography); otherwise false with null reason. branchScores: one entry per supplied branch with branchDisplayName echoed exactly and evidenceScore between 0 and 1 expressing how strongly that candidate performs on that interpretation dimension based on your knowledge. Scores must be differentiated per candidate and branch; never assign identical scores across the board.",
+                $"Question: {request.Query}\nHard constraints: {constraints}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
+                CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
+            if(proposal?.Candidates is not{Count:>0})return [];
+            var branchWeightTotal=branches.Sum(branch=>branch.EphConfidence);
+            if(branchWeightTotal<=0)branchWeightTotal=1;
+            var branchesByName=branches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
+            var records=new List<WideCandidateRecord>();
+            foreach(var candidate in proposal.Candidates)
+            {
+                var candidateId=Guid.NewGuid();
+                var scores=new List<WideCandidateBranchScoreRecord>();
+                var composite=0m;
+                foreach(var score in candidate.BranchScores??[])
+                {
+                    if(!branchesByName.TryGetValue(score.BranchDisplayName.Trim(),out var branch))continue;
+                    var clamped=Math.Clamp(score.EvidenceScore,0,1);
+                    scores.Add(new(Guid.NewGuid(),candidateId,branch.WideBranchId,request.TenantId,branch.DisplayName,clamped));
+                    composite+=branch.EphConfidence/branchWeightTotal*clamped;
+                }
+                // V2.1 Candidate Evidence Coverage: a candidate scored on only a fraction of the surviving
+                // dimensions must not compete equally with fully-covered candidates — missing data is not
+                // strength. Coverage scales the composite so gaps pull the ranking down, never up.
+                var coverage=branches.Length==0?0m:Math.Clamp((decimal)scores.Count/branches.Length,0,1);
+                composite*=coverage;
+                // Constraint Engine: violators score 0 and carry the reason; they remain visible as PRUNED.
+                var violates=candidate.ViolatesConstraint;
+                records.Add(new(candidateId,executionId,request.TenantId,Truncate(candidate.Name.Trim(),300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(candidate.ConstraintViolationReason?.Trim(),400),scores));
+            }
+            var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(configuration.MaximumCandidates).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
+            await wideRepository.SaveWideCandidatesAsync(ranked,request.UserId,cancellationToken);
+            return ranked.Select(record=>new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,record.BranchScores.Select(score=>new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)record.BranchScores.Count/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation}).ToArray();
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
+    }
 
     private static readonly JsonSerializerOptions JsonOptions=new(){PropertyNameCaseInsensitive=true};
 
@@ -513,6 +693,61 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     "branches": { "type": "array", "maxItems": 24, "items": { "$ref": "#/$defs/branch" } }
   },
   "required": ["branches"],
+  "additionalProperties": false
+}
+""";
+
+    private const string QueryContractSchema="""
+{
+  "type": "object",
+  "properties": {
+    "entityType": { "type": ["string", "null"] },
+    "geographicConstraint": { "type": ["string", "null"] },
+    "requestedCount": { "type": ["integer", "null"] },
+    "rankingConcept": { "type": ["string", "null"] },
+    "hardConstraints": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "ambiguousConcepts": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
+    "outputRequirements": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
+  },
+  "required": ["entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
+  "additionalProperties": false
+}
+""";
+
+    private const string CandidateScoringSchema="""
+{
+  "type": "object",
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "detail": { "type": ["string", "null"] },
+          "violatesConstraint": { "type": "boolean" },
+          "constraintViolationReason": { "type": ["string", "null"] },
+          "branchScores": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "properties": {
+                "branchDisplayName": { "type": "string" },
+                "evidenceScore": { "type": "number" }
+              },
+              "required": ["branchDisplayName", "evidenceScore"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["name", "detail", "violatesConstraint", "constraintViolationReason", "branchScores"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["candidates"],
   "additionalProperties": false
 }
 """;
