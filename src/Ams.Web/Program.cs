@@ -136,6 +136,9 @@ builder.Services.AddTransient<ActingUserHeaderHandler>();
 builder.Services.AddHttpClient<ApiClient>(client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
+    // Long-running intelligence searches (EPH Wide progressive disambiguation) can exceed the
+    // 100-second HttpClient default; the pipeline governs its own budgets via AI.FeaturePolicy.
+    client.Timeout = TimeSpan.FromSeconds(300);
 }).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
 var app = builder.Build();

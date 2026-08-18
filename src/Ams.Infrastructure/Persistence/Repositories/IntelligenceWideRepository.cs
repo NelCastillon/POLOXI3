@@ -21,7 +21,9 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.PriorWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.30) PriorWeight,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidenceWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.70) EvidenceWeight,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumCandidates' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),10) MaximumCandidates,
-COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableQueryContract' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableQueryContract;
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableQueryContract' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableQueryContract,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GroundingConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) GroundingConcurrency,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalRetrievalConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) ExternalRetrievalConcurrency;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var row=await connection.QuerySingleAsync<WideConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
@@ -32,7 +34,9 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
             PriorWeight=Math.Clamp(row.PriorWeight,0,1),
             EvidenceWeight=Math.Clamp(row.EvidenceWeight,0,1),
             MaximumCandidates=Math.Clamp(row.MaximumCandidates,1,50),
-            EnableQueryContract=string.Equals(row.EnableQueryContract,"true",StringComparison.OrdinalIgnoreCase)
+            EnableQueryContract=string.Equals(row.EnableQueryContract,"true",StringComparison.OrdinalIgnoreCase),
+            GroundingConcurrency=Math.Clamp(row.GroundingConcurrency,1,16),
+            ExternalRetrievalConcurrency=Math.Clamp(row.ExternalRetrievalConcurrency,1,16)
         };
     }
 
@@ -70,6 +74,17 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
         await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,GroundingStatusCode=groundingStatusCode,EvidenceCount=evidenceCount,IsEliminated=isEliminated,EliminationReason=eliminationReason},cancellationToken:cancellationToken));
     }
 
+    public async Task UpdateWideBranchOutcomesAsync(Guid tenantId,IReadOnlyCollection<WideBranchOutcomeUpdate> outcomes,CancellationToken cancellationToken=default)
+    {
+        if(outcomes.Count==0)return;
+        const string sql="""
+UPDATE EPH.WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,outcomes.Select(o=>new{TenantId=tenantId,o.WideBranchId,o.GroundingStatusCode,o.EvidenceCount,o.IsEliminated,o.EliminationReason}),cancellationToken:cancellationToken));
+    }
+
     public async Task CompleteWideExecutionAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string statusCode,string terminationReasonCode,int depthReached,int llmCallCount,decimal finalConfidence,string answerVerificationCode,string? finalAnswer,long durationMilliseconds,CancellationToken cancellationToken=default)
     {
         const string sql="""
@@ -88,6 +103,17 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,BranchStateCode=branchStateCode,InterpretationPrior=interpretationPrior,EvidenceSupport=evidenceSupport,EphConfidence=ephConfidence},cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideBranchScoresAsync(Guid tenantId,IReadOnlyCollection<WideBranchScoreUpdate> scores,CancellationToken cancellationToken=default)
+    {
+        if(scores.Count==0)return;
+        const string sql="""
+UPDATE EPH.WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,EphConfidence=@EphConfidence,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,scores.Select(s=>new{TenantId=tenantId,s.WideBranchId,s.BranchStateCode,s.InterpretationPrior,s.EvidenceSupport,s.EphConfidence}),cancellationToken:cancellationToken));
     }
 
     public async Task SaveWideCandidatesAsync(IReadOnlyCollection<WideCandidateRecord> candidates,Guid userId,CancellationToken cancellationToken=default)
@@ -120,7 +146,7 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,QueryContractJson=queryContractJson,EvidenceCoverage=evidenceCoverage,ExternalEvidenceCount=externalEvidenceCount,EnterpriseEvidenceCount=enterpriseEvidenceCount,CandidateCount=candidateCount},cancellationToken:cancellationToken));
     }
 
-    private sealed record WideConfigurationRow(decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls,decimal SecondaryBranchThreshold,decimal DormantBranchThreshold,decimal PriorWeight,decimal EvidenceWeight,int MaximumCandidates,string EnableQueryContract);
+    private sealed record WideConfigurationRow(decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls,decimal SecondaryBranchThreshold,decimal DormantBranchThreshold,decimal PriorWeight,decimal EvidenceWeight,int MaximumCandidates,string EnableQueryContract,int GroundingConcurrency,int ExternalRetrievalConcurrency);
 
     public async Task<WideExternalGroundingConfiguration> GetExternalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {

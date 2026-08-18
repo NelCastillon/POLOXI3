@@ -24,8 +24,9 @@ public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,in
     public decimal EphConfidence{get;init;}
 }
 
-// V2.1 branch lifecycle states. PRUNED is reserved for constraint violations or overwhelming lack of support;
-// low interpretation priors demote branches to SECONDARY/DORMANT instead of eliminating them.
+// V2.1 branch lifecycle states. PRUNED is reserved for hard-constraint violations, explicit
+// contradictions, or structurally invalid branches; lacking enterprise evidence or a low
+// interpretation prior demotes a branch to SECONDARY/DORMANT instead of eliminating it.
 public static class WideBranchStates
 {
     public const string Active="ACTIVE";
@@ -94,6 +95,9 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal EvidenceWeight{get;init;}=.70m;
     public int MaximumCandidates{get;init;}=10;
     public bool EnableQueryContract{get;init;}=true;
+    // Bounded parallelism (DB-seeded; see migration 0147). 1 disables parallel execution.
+    public int GroundingConcurrency{get;init;}=4;
+    public int ExternalRetrievalConcurrency{get;init;}=3;
 }
 
 // Stage 2.5 external grounding configuration loaded from Core.ConfigurationSetting (DB is the source of truth).
@@ -150,3 +154,8 @@ public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Gui
 public sealed record WideCandidateRecord(Guid WideCandidateId,Guid WideExecutionId,Guid TenantId,string DisplayName,string? Detail,decimal CompositeScore,int RankNumber,bool IsConstraintViolation,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchScoreRecord> BranchScores);
 
 public sealed record WideCandidateBranchScoreRecord(Guid WideCandidateBranchScoreId,Guid WideCandidateId,Guid WideBranchId,Guid TenantId,string BranchDisplayName,decimal EvidenceScore);
+
+// Batch persistence rows (one round trip per level/phase instead of per branch).
+public sealed record WideBranchOutcomeUpdate(Guid WideBranchId,string GroundingStatusCode,int EvidenceCount,bool IsEliminated,string? EliminationReason);
+
+public sealed record WideBranchScoreUpdate(Guid WideBranchId,string BranchStateCode,decimal InterpretationPrior,decimal EvidenceSupport,decimal EphConfidence);

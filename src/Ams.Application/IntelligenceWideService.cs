@@ -221,31 +221,53 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 depth++;
                 var survivors=new List<WideBranchRecord>();
-                foreach(var branch in currentLevel)
+                // Bounded parallel grounding: branches within a level are independent (they only read the
+                // previous level's evidence keys), so retrieval waits overlap. Results are merged
+                // sequentially in branch order so evidence, keys, and audit output stay deterministic.
+                var groundingResults=new (string StatusCode,IReadOnlyCollection<EphEvidenceDto> Evidence,HashSet<string> Keys)[currentLevel.Length];
+                using(var groundingGate=new SemaphoreSlim(Math.Max(1,configuration.GroundingConcurrency)))
+                    await Task.WhenAll(currentLevel.Select(async(branch,index)=>
+                    {
+                        await groundingGate.WaitAsync(cancellationToken);
+                        try{groundingResults[index]=await GroundBranchAsync(branch,ephRequest,capabilities,request.MaximumResults,branchEvidenceKeys,cancellationToken);}
+                        finally{groundingGate.Release();}
+                    }));
+                var levelOutcomes=new List<WideBranchOutcomeUpdate>(currentLevel.Length);
+                for(var index=0;index<currentLevel.Length;index++)
                 {
-                    var grounded=await GroundBranchAsync(branch,ephRequest,capabilities,request.MaximumResults,branchEvidenceKeys,evidence,cancellationToken);
+                    var branch=currentLevel[index];
+                    var grounded=groundingResults[index];
+                    branchEvidenceKeys[branch.WideBranchId]=grounded.Keys;
+                    evidence.AddRange(grounded.Evidence);
                     // V2.1 branch lifecycle: the LLM percentage is an Interpretation Prior controlling retrieval
-                    // allocation, NOT truth. Low priors demote to SECONDARY/DORMANT instead of eliminating;
-                    // PRUNED is reserved for branches that are overwhelmingly unsupported by evidence.
+                    // allocation, NOT truth. Low priors demote to SECONDARY/DORMANT instead of eliminating.
+                    // PRUNED is reserved for hard-constraint violations, explicit contradictions, or
+                    // structurally invalid branches — NEVER for merely lacking enterprise evidence, because
+                    // Wide search is knowledge-oriented and many valid branches are interpretive-only.
                     var state=branch.Confidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
                         :branch.Confidence>=configuration.DormantBranchThreshold?WideBranchStates.Secondary
                         :WideBranchStates.Dormant;
                     string? eliminationReason=null;
-                    if(grounded.StatusCode=="GROUNDED"&&grounded.EvidenceCount==0&&branch.Confidence<configuration.TargetConfidence)
+                    if(grounded.StatusCode=="GROUNDED"&&grounded.Evidence.Count==0&&branch.Confidence<configuration.TargetConfidence)
                     {
-                        state=WideBranchStates.Pruned;
-                        eliminationReason="Grounded capability search returned no enterprise evidence.";
+                        // Evidence-void grounding demotes to DORMANT: the branch stays in the answer path with
+                        // a reduced footprint and can be reactivated by the V2.1 reweight if external evidence
+                        // supports it. It is not pruned — absence of enterprise evidence is not a contradiction.
+                        state=WideBranchStates.Dormant;
+                        eliminationReason="Grounded capability search returned no enterprise evidence: dormant, reactivatable if evidence supports it.";
                     }
                     else if(state==WideBranchStates.Secondary)eliminationReason=$"Interpretation prior {branch.Confidence:P0} below {configuration.SecondaryBranchThreshold:P0}: reduced retrieval budget, not eliminated.";
                     else if(state==WideBranchStates.Dormant)eliminationReason=$"Interpretation prior {branch.Confidence:P0} below {configuration.DormantBranchThreshold:P0}: dormant, reactivatable if evidence supports it.";
                     var eliminated=state==WideBranchStates.Pruned;
-                    var updated=branch with{GroundingStatusCode=grounded.StatusCode,EvidenceCount=grounded.EvidenceCount,IsEliminated=eliminated,EliminationReason=eliminationReason,BranchStateCode=state,InterpretationPrior=branch.Confidence};
-                    await wideRepository.UpdateWideBranchOutcomeAsync(request.TenantId,branch.WideBranchId,updated.GroundingStatusCode,updated.EvidenceCount,updated.IsEliminated,updated.EliminationReason,cancellationToken);
+                    var updated=branch with{GroundingStatusCode=grounded.StatusCode,EvidenceCount=grounded.Evidence.Count,IsEliminated=eliminated,EliminationReason=eliminationReason,BranchStateCode=state,InterpretationPrior=branch.Confidence};
+                    levelOutcomes.Add(new(updated.WideBranchId,updated.GroundingStatusCode,updated.EvidenceCount,updated.IsEliminated,updated.EliminationReason));
                     allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=updated;
                     // ACTIVE and SECONDARY branches keep narrowing; DORMANT branches stay in the answer path
                     // with a smaller footprint but do not spawn deeper levels; PRUNED branches stop entirely.
                     if(state is WideBranchStates.Active or WideBranchStates.Secondary)survivors.Add(updated);
                 }
+                // One round trip persists the whole level's grounding outcomes (same audit data as before).
+                await wideRepository.UpdateWideBranchOutcomesAsync(request.TenantId,levelOutcomes,cancellationToken);
                 if(survivors.Count==0){terminationReason="NO_SURVIVORS";break;}
 
                 // Confidence: evidence-weighted aggregate over surviving paths.
@@ -289,7 +311,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(aggregateConfidence==0m&&survivorsFinal.Length>0)aggregateConfidence=ComputeAggregateConfidence(survivorsFinal);
             // Live external grounding (fail-soft): retrieve fresh web snippets for interpretive paths so
             // time-sensitive figures come from current sources instead of stale model memory.
-            var externalKnowledge=await GatherExternalKnowledgeAsync(request,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),cancellationToken);
+            var externalKnowledge=await GatherExternalKnowledgeAsync(request,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,cancellationToken);
             // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
             // enterprise evidence and matched external snippets), EPH Confidence (weighted combination).
             survivorsFinal=survivorsFinal.Select(branch=>
@@ -306,10 +328,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 return branch with{InterpretationPrior=branch.Confidence,EvidenceSupport=support,EphConfidence=ephConfidence,BranchStateCode=state};
             }).ToArray();
             foreach(var branch in survivorsFinal)
-            {
-                await wideRepository.UpdateWideBranchScoresAsync(request.TenantId,branch.WideBranchId,branch.BranchStateCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.EphConfidence,cancellationToken);
                 allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
-            }
+            // One round trip persists all final branch scores/states (same audit data as before).
+            // Started here and awaited after answer composition so the SQL write overlaps the LLM call.
+            var scorePersistTask=wideRepository.UpdateWideBranchScoresAsync(request.TenantId,survivorsFinal.Select(branch=>new WideBranchScoreUpdate(branch.WideBranchId,branch.BranchStateCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.EphConfidence)).ToArray(),cancellationToken);
             WideAnswerProposal answer;
             var answerStatus="COMPLETED";
             try
@@ -322,6 +344,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 answerStatus="UNAVAILABLE";
                 answer=new(string.Empty,ranked.Length>0?"PARTIALLY_VERIFIED":"INTERPRETIVE",aggregateConfidence,[],ranked.Select(item=>item.RankNumber).ToArray());
             }
+            await scorePersistTask;
             // Relevance validation: keep only evidence the answer LLM judged relevant to the question.
             // Keyword grounding can match superficially (for example a name token matching unrelated
             // records); such evidence must not surface or inflate confidence.
@@ -383,18 +406,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Enterprise grounding: a branch mapped to an approved capability executes a deterministic authorized
     // search; child evidence is intersected with the parent's evidence (progressive narrowing of the same
     // entity type). Unmapped branches survive as INTERPRETIVE reasoning paths.
-    private async Task<(string StatusCode,int EvidenceCount)> GroundBranchAsync(WideBranchRecord branch,EphSearchRequest ephRequest,IReadOnlyCollection<EphCapabilityDto> capabilities,int maximumResults,Dictionary<Guid,HashSet<string>> branchEvidenceKeys,List<EphEvidenceDto> evidence,CancellationToken cancellationToken)
+    // Pure grounding: reads parent evidence keys but never mutates shared state, so branches within a
+    // level can be grounded concurrently. The caller merges results sequentially in branch order.
+    private async Task<(string StatusCode,IReadOnlyCollection<EphEvidenceDto> Evidence,HashSet<string> Keys)> GroundBranchAsync(WideBranchRecord branch,EphSearchRequest ephRequest,IReadOnlyCollection<EphCapabilityDto> capabilities,int maximumResults,Dictionary<Guid,HashSet<string>> branchEvidenceKeys,CancellationToken cancellationToken)
     {
         var capability=branch.CapabilityCode is null?null:capabilities.FirstOrDefault(item=>item.CapabilityCode.Equals(branch.CapabilityCode,StringComparison.OrdinalIgnoreCase)&&item.ExecutionHandlerCode.Equals("AUTHORIZED_SEARCH_DOCUMENT",StringComparison.OrdinalIgnoreCase));
-        if(capability is null)return("INTERPRETIVE",0);
+        if(capability is null)return("INTERPRETIVE",[],new(StringComparer.OrdinalIgnoreCase));
         var searchText=NormalizeEphSearchText(branch.SearchText??branch.DisplayName,capability);
         var ephBranch=new EphBranchRecord(branch.WideBranchId,branch.ParentWideBranchId,branch.BranchCode,branch.DisplayName,branch.Interpretation,capability.CapabilityCode,"VALID","Wide dynamic grounding.",searchText,capability.SupportsRecency,branch.Confidence,branch.SortOrder);
         var branchEvidence=await repository.ExecuteEphBranchAsync(ephRequest,ephBranch,capability,maximumResults,cancellationToken);
         if(branch.ParentWideBranchId is{}parentId&&branchEvidenceKeys.TryGetValue(parentId,out var parentKeys)&&parentKeys.Any(key=>key.StartsWith($"{capability.EntityTypeCode}:",StringComparison.OrdinalIgnoreCase)))
             branchEvidence=branchEvidence.Where(item=>parentKeys.Contains($"{item.EntityTypeCode}:{item.EntityId:D}")).ToArray();
-        branchEvidenceKeys[branch.WideBranchId]=branchEvidence.Select(item=>$"{item.EntityTypeCode}:{item.EntityId:D}").ToHashSet(StringComparer.OrdinalIgnoreCase);
-        evidence.AddRange(branchEvidence);
-        return("GROUNDED",branchEvidence.Count);
+        var keys=branchEvidence.Select(item=>$"{item.EntityTypeCode}:{item.EntityId:D}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return("GROUNDED",branchEvidence,keys);
     }
 
     private async Task<WideIntentProposal> ProposeIntentAsync(WideSearchRequest request,IReadOnlyCollection<EphCapabilityDto> capabilities,WideConfiguration configuration,WideQueryContract? queryContract,CancellationToken cancellationToken)
@@ -428,26 +452,39 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.
-    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,CancellationToken cancellationToken)
+    // Retrievals run concurrently under a bounded gate; results merge in branch-priority order.
+    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,CancellationToken cancellationToken)
     {
         if(interpretiveBranches.Count==0)return [];
         try
         {
             var configuration=await wideRepository.GetExternalGroundingConfigurationAsync(request.TenantId,cancellationToken);
             if(!configuration.Enabled||string.IsNullOrWhiteSpace(configuration.ApiKey))return [];
-            var snippets=new List<WideExternalKnowledgeSnippet>();
             var notBeforeUtc=DateTime.UtcNow.AddHours(-configuration.CacheHours);
-            foreach(var branch in interpretiveBranches.OrderBy(item=>item.LevelNumber).ThenByDescending(item=>item.Confidence).Take(configuration.MaximumQueriesPerExecution))
+            var targets=interpretiveBranches.OrderBy(item=>item.LevelNumber).ThenByDescending(item=>item.Confidence).Take(configuration.MaximumQueriesPerExecution).ToArray();
+            var results=new IReadOnlyCollection<WideExternalKnowledgeSnippet>[targets.Length];
+            using var retrievalGate=new SemaphoreSlim(Math.Max(1,retrievalConcurrency));
+            await Task.WhenAll(targets.Select(async(branch,index)=>
             {
-                var query=NormalizeQuery($"{request.Query} {branch.DisplayName}").ToLowerInvariant();
-                var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
-                if(cached.Count>0){snippets.AddRange(cached.Take(configuration.MaximumSnippetsPerQuery));continue;}
-                var retrieved=await externalKnowledgeProvider.SearchAsync(query,configuration,cancellationToken);
-                if(retrieved.Count==0)continue;
-                await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,cancellationToken);
-                snippets.AddRange(retrieved);
-            }
-            return snippets;
+                await retrievalGate.WaitAsync(cancellationToken);
+                try
+                {
+                    var query=NormalizeQuery($"{request.Query} {branch.DisplayName}").ToLowerInvariant();
+                    var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
+                    if(cached.Count>0){results[index]=cached.Take(configuration.MaximumSnippetsPerQuery).ToArray();return;}
+                    var retrieved=await externalKnowledgeProvider.SearchAsync(query,configuration,cancellationToken);
+                    if(retrieved.Count==0){results[index]=[];return;}
+                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,cancellationToken);
+                    results[index]=retrieved;
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested)
+                {
+                    // Fail-soft per branch: one provider failure never discards the other branches' snippets.
+                    results[index]=[];
+                }
+                finally{retrievalGate.Release();}
+            }));
+            return results.SelectMany(item=>item??[]).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {

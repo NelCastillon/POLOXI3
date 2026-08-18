@@ -390,6 +390,8 @@ public sealed partial class DatabaseMigrator
         new("0334_Intelligence_Wide_External_Knowledge", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0144_IntelligenceWideExternalKnowledge.sql")),
         new("0335_Intelligence_Wide_Answer_Input_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0145_IntelligenceWideAnswerInputBudget.sql")),
         new("0336_Intelligence_Wide_V21", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0146_IntelligenceWideV21.sql")),
+        new("0337_Intelligence_Wide_Concurrency", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0147_IntelligenceWideConcurrency.sql")),
+        new("0338_Intelligence_Wide_Hierarchy_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0148_IntelligenceWideHierarchyOutputBudget.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

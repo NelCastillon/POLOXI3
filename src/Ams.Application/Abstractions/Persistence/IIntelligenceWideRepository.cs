@@ -9,8 +9,12 @@ public interface IIntelligenceWideRepository
     Task<Guid> StartWideExecutionAsync(WideExecutionStart start,CancellationToken cancellationToken=default);
     Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default);
     Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default);
+    // Batch variant: persists a whole level's grounding outcomes in one round trip.
+    Task UpdateWideBranchOutcomesAsync(Guid tenantId,IReadOnlyCollection<WideBranchOutcomeUpdate> outcomes,CancellationToken cancellationToken=default);
     // V2.1: persists branch lifecycle state and the three-score model (prior, evidence support, EPH confidence).
     Task UpdateWideBranchScoresAsync(Guid tenantId,Guid wideBranchId,string branchStateCode,decimal interpretationPrior,decimal evidenceSupport,decimal ephConfidence,CancellationToken cancellationToken=default);
+    // Batch variant: persists all branch scores/states in one round trip.
+    Task UpdateWideBranchScoresAsync(Guid tenantId,IReadOnlyCollection<WideBranchScoreUpdate> scores,CancellationToken cancellationToken=default);
     // V2.1: persists the candidate universe and candidate-by-branch evidence matrix (never deleted).
     Task SaveWideCandidatesAsync(IReadOnlyCollection<WideCandidateRecord> candidates,Guid userId,CancellationToken cancellationToken=default);
     // V2.1: persists the extracted query contract and evidence coverage metrics on the execution.
