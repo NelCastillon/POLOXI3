@@ -23,4 +23,17 @@ public interface IIntelligenceWideRepository
     Task<WideExternalGroundingConfiguration> GetExternalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GetCachedExternalKnowledgeAsync(Guid tenantId,string normalizedQuery,DateTime notBeforeUtc,CancellationToken cancellationToken=default);
     Task SaveExternalKnowledgeAsync(Guid tenantId,Guid userId,string normalizedQuery,IReadOnlyCollection<WideExternalKnowledgeSnippet> snippets,CancellationToken cancellationToken=default);
+    // V2.2: persists one information-directed exploration round (entropy before; completed later).
+    Task SaveInformationRoundAsync(WideInformationRoundRecord round,Guid userId,CancellationToken cancellationToken=default);
+    // V2.2: writes the measured after-entropy, actual information gain, and raw delta for a round.
+    // V2.5: also records the after max entropy (bits) and measured population size for auditability.
+    Task CompleteInformationRoundAsync(Guid tenantId,Guid userId,Guid wideInformationRoundId,decimal entropyAfter,decimal normalizedEntropyAfter,decimal actualInformationGain,decimal rawEntropyDelta,int selectedTargetCount,decimal maxEntropyAfter,int populationCountAfter,CancellationToken cancellationToken=default);
+    // V2.2: persists all evaluated targets for a round in one batch (selected and unselected, never deleted).
+    Task SaveInformationTargetsAsync(IReadOnlyCollection<WideInformationTargetRecord> targets,Guid userId,CancellationToken cancellationToken=default);
+    // V2.2: persists falsifiable per-candidate ranking predictions made by the estimator.
+    Task SaveInformationPredictionsAsync(IReadOnlyCollection<WideInformationPredictionRecord> predictions,Guid userId,CancellationToken cancellationToken=default);
+    // V2.2: scores predictions against reality after reranking (direction/magnitude accuracy).
+    Task UpdateInformationPredictionOutcomesAsync(Guid tenantId,IReadOnlyCollection<WideInformationPredictionRecord> outcomes,CancellationToken cancellationToken=default);
+    // V2.2: persists execution-level entropy summary and information-round counters.
+    Task UpdateWideExecutionEntropyAsync(Guid tenantId,Guid userId,WideExecutionEntropyUpdate update,CancellationToken cancellationToken=default);
 }

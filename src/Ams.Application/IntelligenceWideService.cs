@@ -268,7 +268,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 }
                 // One round trip persists the whole level's grounding outcomes (same audit data as before).
                 await wideRepository.UpdateWideBranchOutcomesAsync(request.TenantId,levelOutcomes,cancellationToken);
-                if(survivors.Count==0){terminationReason="NO_SURVIVORS";break;}
+                if(survivors.Count==0)
+                {
+                    // V2.3 termination-code fix: NO_SURVIVORS is reserved for the case where NOTHING remains
+                    // in the answer path (everything pruned). When only this level's branches went DORMANT,
+                    // earlier levels and dormant branches still participate in the answer — that is a settled
+                    // hierarchy, not an empty one.
+                    terminationReason=allBranches.Any(branch=>!branch.IsEliminated)?"HIERARCHY_SETTLED":"NO_SURVIVORS";
+                    break;
+                }
 
                 // Confidence: evidence-weighted aggregate over surviving paths.
                 // Minimum depth of 2: confidence/LLM-complete exits are honored only after Level 2
@@ -282,6 +290,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // Circuit breakers (never functional limits; audited when reached).
                 if(depth>=configuration.AbsoluteDepthCeiling){terminationReason="DEPTH_CEILING_REACHED";break;}
                 if(llmCalls+2>configuration.MaximumTotalLlmCalls){terminationReason="LLM_CALL_CEILING_REACHED";break;}
+
+                // V2.3 evidence-priority expansion guard: when the hierarchy is already deep but most
+                // surviving branches still lack ANY evidence, the weakness is evidence coverage, not
+                // semantic understanding — stop generating deeper branches and let the V2.2 information
+                // rounds investigate what was already discovered instead.
+                if(depth>=configuration.EvidencePriorityMinimumDepth)
+                {
+                    var supportedShare=survivors.Count==0?0m:(decimal)survivors.Count(branch=>branch.EvidenceCount>0)/survivors.Count;
+                    if(supportedShare<configuration.EvidencePriorityCoverageFloor){terminationReason="EVIDENCE_COVERAGE_PRIORITY";break;}
+                }
 
                 // Progressive narrowing: propose the next level from surviving branches AND their grounding outcomes.
                 // When forcing the minimum depth of 2, narrow all survivors even if none opted to continue.
@@ -329,6 +347,217 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }).ToArray();
             foreach(var branch in survivorsFinal)
                 allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
+
+            // ── V2.2 Information-Directed Exploration ─────────────────────────────────
+            // "Don't explore everything. Explore what will teach you the most."
+            // Deterministic Shannon entropy decides WHETHER more information is needed; a single
+            // batched LLM call ESTIMATES which branches are most valuable to investigate
+            // (EstimatedInformationValue); EPH deterministically adjusts, selects, retrieves in
+            // parallel, reweights, and MEASURES ActualInformationGain = EntropyBefore - EntropyAfter.
+            // Fail-soft: any estimator/entropy failure skips the round and continues V2.1 behavior.
+            var totalActualInformationGain=0m;
+            var informationRounds=new List<WideInformationRoundDto>();
+            var informationTargetCount=0;
+            var informationRetrievalCount=0;
+            var externalKnowledgeAll=externalKnowledge.ToList();
+            // V2.3: candidate universe accumulated across rounds — the falsifiable candidate names the
+            // estimator predicts. When the hierarchy is dimension-dominated, entropy is measured over
+            // this candidate competition instead of complementary dimensions.
+            var candidateUniverse=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // V2.4 Early Candidate Harvest: deterministically extract candidate names from the external
+            // result sets already retrieved (proper-noun phrases recurring across independent snippets).
+            // No LLM call — this gives the information rounds a real candidate universe up front so
+            // Information Gain targets "which candidate wins" from round 1, not after competition.
+            candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
+            var initialEntropy=ComputeUncertainty(survivorsFinal,candidateUniverse,evidence,externalKnowledgeAll,queryContract);
+            var finalEntropy=initialEntropy;
+            if(configuration.EnableInformationValue&&survivorsFinal.Length>0)
+            {
+                var weakRounds=0;
+                // V2.5 Marginal Information Value state: which branches were already investigated and
+                // how effective the previous round actually was. A good player never asks the same
+                // question twice unless the first answer demonstrably helped.
+                var investigationCounts=new Dictionary<Guid,int>();
+                var priorRoundEffectiveness=1m;
+                for(var round=1;round<=configuration.MaximumInformationRounds;round++)
+                {
+                    // V2.5: freeze the candidate population for this round. EntropyBefore and EntropyAfter
+                    // MUST be measured over the IDENTICAL candidate set, otherwise Hmax=log2(N) shifts and
+                    // ActualInformationGain compares incomparable distributions. Names discovered during
+                    // this round join the NEXT round's basis instead.
+                    var roundCandidateBasis=candidateUniverse.ToArray();
+                    var entropyBefore=ComputeUncertainty(survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
+                    finalEntropy=entropyBefore;
+                    if(entropyBefore.NormalizedEntropy<configuration.InformationValueTriggerEntropy)break;
+                    if(llmCalls+2>configuration.MaximumTotalLlmCalls)break;
+                    try
+                    {
+                        // One batched estimate for all eligible (ACTIVE/SECONDARY) branches.
+                        var eligible=survivorsFinal.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).ToArray();
+                        if(eligible.Length<2)break;
+                        var proposal=await EstimateInformationValueAsync(request,eligible,entropyBefore,queryContract,cancellationToken);
+                        llmCalls++;
+                        if(proposal is null||proposal.Targets.Count==0)break;
+                        var branchesByCode=eligible.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
+                        var maxConfidence=Math.Max(eligible.Max(branch=>branch.EphConfidence),.0001m);
+                        // Candidate discrimination need is high when eligible branch scores are tightly packed.
+                        var orderedConfidences=eligible.Select(branch=>branch.EphConfidence).OrderByDescending(value=>value).ToArray();
+                        var topMargin=orderedConfidences.Length>1?orderedConfidences[0]-orderedConfidences[1]:1m;
+                        var candidateNeed=Math.Clamp(1m-topMargin*5m,0,1);
+                        var roundId=Guid.NewGuid();
+                        var targetRecords=new List<WideInformationTargetRecord>();
+                        var targetDtos=new List<WideInformationTargetDto>();
+                        var predictionRecords=new List<WideInformationPredictionRecord>();
+                        var scored=new List<(WideBranchRecord Branch,WideInformationTargetProposal Target,decimal Raw,decimal Adjusted)>();
+                        foreach(var target in proposal.Targets)
+                        {
+                            if(!branchesByCode.TryGetValue(target.BranchCode,out var branch))continue;
+                            if(!ValidateCategories(target))continue;
+                            // Deterministic conversion of categorical judgments; redundancy penalizes.
+                            var raw=Math.Clamp(
+                                .20m*CategoryValue(configuration,target.Uncertainty)
+                                +.25m*CategoryValue(configuration,target.RankingImpact)
+                                +.25m*CategoryValue(configuration,target.CandidateDiscrimination)
+                                +.15m*CategoryValue(configuration,target.EvidenceAvailability)
+                                +.10m*CategoryValue(configuration,target.Novelty)
+                                -.05m*CategoryValue(configuration,target.Redundancy),0,1);
+                            // Adjust with facts EPH already knows: evidence gap, branch importance, candidate closeness.
+                            var evidenceGap=Math.Clamp(1m-branch.EvidenceSupport,0,1);
+                            var branchImportance=Math.Clamp(branch.EphConfidence/maxConfidence,0,1);
+                            var adjusted=Math.Clamp(
+                                configuration.InformationValueLlmWeight*raw
+                                +configuration.InformationValueEvidenceGapWeight*evidenceGap
+                                +configuration.InformationValueBranchWeight*branchImportance
+                                +configuration.InformationValueCandidateNeedWeight*candidateNeed,0,1);
+                            // V2.5 Marginal Information Value: EPH already KNOWS whether this branch was
+                            // investigated before and whether the prior round actually reduced uncertainty.
+                            // Repeats are deterministically discounted — novelty halves per prior
+                            // investigation, further scaled by measured prior-round effectiveness — so
+                            // AdjustedIV = EstimatedIV × Novelty × PriorRoundEffectiveness on repeats.
+                            var priorInvestigations=investigationCounts.GetValueOrDefault(branch.WideBranchId);
+                            if(priorInvestigations>0)
+                            {
+                                var noveltyFactor=Math.Clamp(1m/(1m+priorInvestigations),0,1);
+                                adjusted=Math.Clamp(adjusted*noveltyFactor*Math.Clamp(priorRoundEffectiveness,.10m,1m),0,1);
+                            }
+                            scored.Add((branch,target,raw,adjusted));
+                        }
+                        if(scored.Count==0)break;
+                        var selected=scored.Where(item=>item.Adjusted>=configuration.MinimumInformationValue)
+                            .OrderByDescending(item=>item.Adjusted)
+                            .Take(configuration.MaximumInformationTargetsPerRound)
+                            .ToArray();
+                        // Persist the round and ALL evaluated targets (selected and unselected) for auditability.
+                        await wideRepository.SaveInformationRoundAsync(new(roundId,executionId,request.TenantId,round,entropyBefore.Entropy,entropyBefore.NormalizedEntropy,DateTime.UtcNow){EntropyBasisCode=entropyBefore.EntropyBasisCode,MaxEntropyBefore=entropyBefore.MaximumEntropy,PopulationCountBefore=entropyBefore.EligibleBranchCount},request.UserId,cancellationToken);
+                        // Deterministic pre-retrieval baseline for every predicted candidate: the mention-weighted
+                        // evidence signal BEFORE this round's targeted retrieval. Makes ranking predictions verifiable.
+                        var predictedCandidates=scored.SelectMany(item=>item.Target.PredictedRankingChanges.Select(prediction=>prediction.Candidate.Trim()))
+                            .Where(name=>!string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                        candidateUniverse.UnionWith(predictedCandidates);
+                        var baselineSignals=ComputeCandidateSignals(predictedCandidates,evidence,externalKnowledgeAll);
+                        var baselineRanks=RankSignals(baselineSignals);
+                        var selectionRank=0;
+                        foreach(var item in scored.OrderByDescending(entry=>entry.Adjusted))
+                        {
+                            var isSelected=selected.Contains(item);
+                            var rank=isSelected?++selectionRank:(int?)null;
+                            var targetId=Guid.NewGuid();
+                            targetRecords.Add(new(targetId,roundId,item.Branch.WideBranchId,request.TenantId,item.Target.Uncertainty,item.Target.RankingImpact,item.Target.CandidateDiscrimination,item.Target.EvidenceAvailability,item.Target.Novelty,item.Target.Redundancy,item.Raw,item.Adjusted,isSelected,rank,Truncate(item.Target.EvidenceTarget,1000),Truncate(item.Target.Rationale,1000))
+                            {
+                                PredictedRankingImpactCount=item.Target.PredictedRankingChanges.Count,
+                                PredictedUpCount=item.Target.PredictedRankingChanges.Count(prediction=>prediction.Direction.Equals("UP",StringComparison.OrdinalIgnoreCase)),
+                                PredictedDownCount=item.Target.PredictedRankingChanges.Count(prediction=>prediction.Direction.Equals("DOWN",StringComparison.OrdinalIgnoreCase))
+                            });
+                            targetDtos.Add(new(item.Branch.DisplayName,item.Target.Uncertainty,item.Target.RankingImpact,item.Target.CandidateDiscrimination,item.Target.EvidenceAvailability,item.Target.Novelty,item.Target.Redundancy,item.Raw,item.Adjusted,isSelected,rank,item.Target.EvidenceTarget,item.Target.Rationale));
+                            // Falsifiable per-candidate ranking predictions from the same batched call, stamped with
+                            // the deterministic pre-retrieval baseline so EPH can verify them after the round.
+                            foreach(var prediction in item.Target.PredictedRankingChanges)
+                            {
+                                var candidateKey=prediction.Candidate.Trim();
+                                predictionRecords.Add(new(Guid.NewGuid(),targetId,request.TenantId,Truncate(candidateKey,300)!,prediction.Direction.ToUpperInvariant(),prediction.Magnitude.ToUpperInvariant())
+                                {
+                                    ScoreBefore=baselineSignals.GetValueOrDefault(candidateKey),
+                                    RankBefore=baselineRanks.TryGetValue(candidateKey,out var rankBefore)?rankBefore:null
+                                });
+                            }
+                        }
+                        await wideRepository.SaveInformationTargetsAsync(targetRecords,request.UserId,cancellationToken);
+                        await wideRepository.SaveInformationPredictionsAsync(predictionRecords,request.UserId,cancellationToken);
+                        informationTargetCount+=targetRecords.Count;
+                        if(selected.Length==0)
+                        {
+                            informationRounds.Add(new(round,entropyBefore.Entropy,entropyBefore.NormalizedEntropy,null,null,null,null,targetDtos){EntropyBasisCode=entropyBefore.EntropyBasisCode,MaxEntropyBefore=entropyBefore.MaximumEntropy,PopulationCountBefore=entropyBefore.EligibleBranchCount});
+                            break; // NO_HIGH_VALUE_INVESTIGATION: nothing worth retrieving.
+                        }
+                        // Targeted parallel retrieval: evidence target text focuses the query per branch.
+                        var retrievalBranches=selected.Select(item=>string.IsNullOrWhiteSpace(item.Target.EvidenceTarget)?item.Branch:item.Branch with{SearchText=Truncate(item.Target.EvidenceTarget,400)}).ToArray();
+                        var newKnowledge=await GatherExternalKnowledgeAsync(request,retrievalBranches,configuration.ExternalRetrievalConcurrency,cancellationToken);
+                        informationRetrievalCount+=newKnowledge.Count;
+                        externalKnowledgeAll.AddRange(newKnowledge);
+                        // V2.4: newly retrieved snippets may name candidates not yet in the universe.
+                        candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
+                        // Normal EPH scoring/reweighting on the enriched evidence pool (never LLM-calculated).
+                        survivorsFinal=survivorsFinal.Select(branch=>
+                        {
+                            var support=ComputeEvidenceSupport(branch,evidence,externalKnowledgeAll);
+                            var ephConfidence=Math.Clamp(configuration.PriorWeight*branch.InterpretationPrior+configuration.EvidenceWeight*support,0,1);
+                            var state=branch.BranchStateCode==WideBranchStates.Pruned?WideBranchStates.Pruned
+                                :ephConfidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
+                                :ephConfidence>=configuration.DormantBranchThreshold?WideBranchStates.Secondary
+                                :WideBranchStates.Dormant;
+                            return branch with{EvidenceSupport=support,EphConfidence=ephConfidence,BranchStateCode=state};
+                        }).ToArray();
+                        foreach(var branch in survivorsFinal)
+                            allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
+                        // Measure ActualInformationGain mathematically on the SAME basis AND the SAME frozen
+                        // candidate population the round started with; preserve negative deltas for
+                        // diagnostics — evidence can legitimately INCREASE uncertainty (it revealed
+                        // overconfidence). Fractional bits are preserved at 4-decimal precision.
+                        var entropyAfter=ComputeUncertainty(survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
+                        var rawDelta=entropyBefore.Entropy-entropyAfter.Entropy;
+                        var actualGain=Math.Max(0,rawDelta);
+                        totalActualInformationGain+=actualGain;
+                        // V2.5: record which branches were actually investigated this round and how effective
+                        // the round was, so the next round's marginal IV can discount unproductive repeats.
+                        foreach(var item in selected)investigationCounts[item.Branch.WideBranchId]=investigationCounts.GetValueOrDefault(item.Branch.WideBranchId)+1;
+                        priorRoundEffectiveness=entropyBefore.Entropy<=0?0m:Math.Clamp(actualGain/entropyBefore.Entropy*4m,0,1);
+                        finalEntropy=entropyAfter;
+                        await wideRepository.CompleteInformationRoundAsync(request.TenantId,request.UserId,roundId,entropyAfter.Entropy,entropyAfter.NormalizedEntropy,actualGain,rawDelta,selected.Length,entropyAfter.MaximumEntropy,entropyAfter.EligibleBranchCount,cancellationToken);
+                        // V2.2 prediction verification: re-measure the SAME deterministic candidate signal on the
+                        // enriched evidence pool and grade each LLM ranking prediction (DirectionCorrect /
+                        // MagnitudeCorrect). Calibration data — the LLM predicted; EPH measured.
+                        if(predictionRecords.Count>0)
+                        {
+                            var afterSignals=ComputeCandidateSignals(predictedCandidates,evidence,externalKnowledgeAll);
+                            var afterRanks=RankSignals(afterSignals);
+                            var outcomes=predictionRecords.Select(record=>
+                            {
+                                var before=record.ScoreBefore??0m;
+                                var after=afterSignals.GetValueOrDefault(record.CandidateName);
+                                var delta=after-before;
+                                var relative=before<=0m?(delta>0m?1m:0m):Math.Abs(delta)/before;
+                                var actualMagnitude=delta==0m?"NONE":relative<.15m?"LOW":relative<.5m?"MEDIUM":"HIGH";
+                                var actualDirection=delta>0m?"UP":delta<0m?"DOWN":null;
+                                var directionCorrect=actualDirection is null
+                                    ?record.PredictedMagnitude.Equals("NONE",StringComparison.OrdinalIgnoreCase)
+                                    :record.PredictedDirection.Equals(actualDirection,StringComparison.OrdinalIgnoreCase);
+                                var magnitudeCorrect=record.PredictedMagnitude.Equals(actualMagnitude,StringComparison.OrdinalIgnoreCase);
+                                return record with{ScoreAfter=after,RankAfter=afterRanks.TryGetValue(record.CandidateName,out var rankAfter)?rankAfter:null,ActualDirection=actualDirection,ActualMagnitude=actualMagnitude,DirectionCorrect=directionCorrect,MagnitudeCorrect=magnitudeCorrect};
+                            }).ToArray();
+                            await wideRepository.UpdateInformationPredictionOutcomesAsync(request.TenantId,outcomes,cancellationToken);
+                        }
+                        informationRounds.Add(new(round,entropyBefore.Entropy,entropyBefore.NormalizedEntropy,entropyAfter.Entropy,entropyAfter.NormalizedEntropy,actualGain,rawDelta,targetDtos){EntropyBasisCode=entropyBefore.EntropyBasisCode,MaxEntropyBefore=entropyBefore.MaximumEntropy,PopulationCountBefore=entropyBefore.EligibleBranchCount,MaxEntropyAfter=entropyAfter.MaximumEntropy,PopulationCountAfter=entropyAfter.EligibleBranchCount});
+                        // Stall detection: stop after consecutive weak rounds (INFORMATION_GAIN_STALLED).
+                        weakRounds=actualGain<configuration.MinimumActualInformationGain?weakRounds+1:0;
+                        if(weakRounds>=configuration.InformationNoProgressRounds)break;
+                    }
+                    catch(Exception exception) when(exception is AiProviderUnavailableException or TimeoutException or JsonException)
+                    {
+                        break; // Fail-soft: continue the stable V2.1 pipeline without information targeting.
+                    }
+                }
+            }
+            externalKnowledge=externalKnowledgeAll;
             // One round trip persists all final branch scores/states (same audit data as before).
             // Started here and awaited after answer composition so the SQL write overlaps the LLM call.
             var scorePersistTask=wideRepository.UpdateWideBranchScoresAsync(request.TenantId,survivorsFinal.Select(branch=>new WideBranchScoreUpdate(branch.WideBranchId,branch.BranchStateCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.EphConfidence)).ToArray(),cancellationToken);
@@ -358,16 +587,25 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             IReadOnlyCollection<WideCandidateDto> candidates=[];
             if(interpretiveResults.Length>0&&llmCalls<configuration.MaximumTotalLlmCalls)
             {
-                candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,configuration,cancellationToken);
+                candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,externalKnowledgeAll,configuration,cancellationToken);
                 if(candidates.Count>0)llmCalls++;
             }
             // V2.1 evidence metrics: coverage = share of surviving branches supported by any evidence.
             var coveredBranches=survivorsFinal.Count(branch=>branch.EvidenceSupport>0);
             var evidenceCoverage=survivorsFinal.Length==0?0m:Math.Clamp((decimal)coveredBranches/survivorsFinal.Length,0,1);
+            // V2.5 Decision Evidence Coverage: measured only over the branches that participated in the
+            // final Candidate × Branch competition — the dimensions the ANSWER actually rests on.
+            var decisionBranchIds=candidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>score.BranchDisplayName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var decisionBranches=survivorsFinal.Where(branch=>decisionBranchIds.Contains(branch.DisplayName)).ToArray();
+            var decisionEvidenceCoverage=decisionBranches.Length==0?evidenceCoverage:Math.Clamp((decimal)decisionBranches.Count(branch=>branch.EvidenceSupport>0)/decisionBranches.Length,0,1);
             await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,queryContract is null?null:JsonSerializer.Serialize(queryContract,JsonOptions),evidenceCoverage,externalKnowledge.Count,relevantEvidence.Length,candidates.Count,cancellationToken);
+            // V2.2: persist execution-level entropy summary and information-round counters (fail-soft).
+            try{await wideRepository.UpdateWideExecutionEntropyAsync(request.TenantId,request.UserId,new(executionId,initialEntropy.Entropy,finalEntropy.Entropy,initialEntropy.NormalizedEntropy,finalEntropy.NormalizedEntropy,totalActualInformationGain,informationRounds.Count,informationTargetCount,informationRetrievalCount){EntropyBasisCode=finalEntropy.EntropyBasisCode},cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,timer.ElapsedMilliseconds,cancellationToken);
-            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,Candidates=candidates,EvidenceCoverage=evidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length};
+            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
+            Candidates=candidates,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
+            InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds};
         }
         catch
         {
@@ -429,7 +667,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var contractContext=queryContract is null?string.Empty:
             $"\nQuery contract (FIXED, do not reinterpret): entity type: {queryContract.EntityType??"(unspecified)"}; hard constraints: {(queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints))}; output requirements: {(queryContract.OutputRequirements.Count==0?"(none)":string.Join("; ",queryContract.OutputRequirements))}\nAmbiguous concepts to disambiguate (branch ONLY these): {(queryContract.AmbiguousConcepts.Count==0?"(whole question)":string.Join("; ",queryContract.AmbiguousConcepts))}";
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
-            "You disambiguate an ambiguous enterprise question by dynamically constructing a problem-specific hierarchy. Propose the top level: distinct, mutually exclusive interpretation branches of the question. Branches are NOT limited to the supplied capability catalog — general, industry, and conceptual interpretations are allowed. Map capabilityCode only when the catalog can genuinely ground the branch against enterprise data; otherwise use null. For each branch set continueNarrowing=true when a meaningfully narrower sub-level exists, otherwise false with a stopReason of FULLY_DISAMBIGUATED, NO_FURTHER_RELEVANT_SUBDIVISION, EVIDENCE_SUFFICIENT, or INTERPRETATION_EXHAUSTED. Confidence per branch must be CALIBRATED, not defaulted: it expresses how likely this interpretation matches what the user actually meant, so branches must be differentiated - the most plausible mainstream interpretation scores highest and niche or speculative interpretations score lower. Never assign the same confidence to every branch and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. Never claim records exist and never produce SQL.",
+            "You disambiguate an ambiguous enterprise question by dynamically constructing a problem-specific hierarchy. Propose the top level: distinct interpretation branches of the question. Branches are NOT limited to the supplied capability catalog - general, industry, and conceptual interpretations are allowed. Map capabilityCode only when the catalog can genuinely ground the branch against enterprise data; otherwise use null. For each branch set continueNarrowing=true when a meaningfully narrower sub-level exists, otherwise false with a stopReason of FULLY_DISAMBIGUATED, NO_FURTHER_RELEVANT_SUBDIVISION, EVIDENCE_SUFFICIENT, or INTERPRETATION_EXHAUSTED. Confidence per branch must be CALIBRATED, not defaulted: it expresses how likely this interpretation matches what the user actually meant, so branches must be differentiated - the most plausible mainstream interpretation scores highest and niche or speculative interpretations score lower. Never assign the same confidence to every branch and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. For each branch also set semanticType using this strict test: could TWO sibling branches BOTH be true/relevant to the final answer at the same time? If yes, they are DIMENSION (jointly valid evaluation criteria - for example quality of life AND affordability AND jobs AND education for a best-city question; there does not need to be a winner among them). Only when selecting one branch makes its siblings incorrect interpretations of the same unknown (for example an incoming document is a claim OR renewal OR endorsement OR cancellation) are they ALTERNATIVE. When in doubt for ranking, comparison, or best-of questions, prefer DIMENSION. Never claim records exist and never produce SQL.",
             $"Ambiguous question: {request.Query}{contractContext}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
             IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
@@ -444,7 +682,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
         }));
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
-            "Continue a dynamic problem-specific disambiguation hierarchy. For each surviving parent branch, propose narrower child branches that progressively move toward a more specific subset of the parent interpretation, informed by the parent's enterprise grounding outcome (evidence counts and samples supplied). Set parentBranchCode to the exact parent branchCode. Children of grounded parents should stay in the same entity type so evidence can be intersected. Branches are not limited to the capability catalog; map capabilityCode only when the catalog genuinely grounds the child, otherwise null. Set continueNarrowing=false with a stopReason when no meaningfully narrower relevant subdivision remains — do not invent depth for its own sake. Confidence per child must be CALIBRATED, not defaulted: it expresses how likely this narrower interpretation matches the user's actual intent given the parent, so siblings must be differentiated - the most plausible subdivision scores highest and speculative ones score lower. A child may not exceed its parent's confidence, never assign the same confidence to every sibling, and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. Never claim records exist and never produce SQL.",
+            "Continue a dynamic problem-specific disambiguation hierarchy. For each surviving parent branch, propose narrower child branches that progressively move toward a more specific subset of the parent interpretation, informed by the parent's enterprise grounding outcome (evidence counts and samples supplied). Set parentBranchCode to the exact parent branchCode. Children of grounded parents should stay in the same entity type so evidence can be intersected. Branches are not limited to the capability catalog; map capabilityCode only when the catalog genuinely grounds the child, otherwise null. Set continueNarrowing=false with a stopReason when no meaningfully narrower relevant subdivision remains - do not invent depth for its own sake. Confidence per child must be CALIBRATED, not defaulted: it expresses how likely this narrower interpretation matches the user's actual intent given the parent, so siblings must be differentiated - the most plausible subdivision scores highest and speculative ones score lower. A child may not exceed its parent's confidence, never assign the same confidence to every sibling, and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. For each child also set semanticType using this strict test: could TWO sibling children BOTH be true/relevant to the final answer at the same time? If yes, they are DIMENSION (jointly valid evaluation criteria such as affordability, safety, healthcare, or quality of life - there does not need to be a winner among them). Only when selecting one child makes its siblings incorrect interpretations of the same unknown are they ALTERNATIVE. When in doubt for ranking, comparison, or best-of questions, prefer DIMENSION. Never claim records exist and never produce SQL.",
             $"Original question: {request.Query}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {configuration.MaximumBranchesPerLevel}\nSurviving parent branches with grounding outcomes:\n{parentSummary}\nApproved capability catalog (for optional grounding):\n{catalog}",
             LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
@@ -544,7 +782,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var parentRecord=branch.ParentBranchCode is not null&&parentsByCode.TryGetValue(NormalizeCode(branch.ParentBranchCode),out var parentForConfidence)?parentForConfidence:null;
             var confidence=Math.Clamp(branch.Confidence,0,Math.Min(ceiling,parentRecord?.Confidence??ceiling));
             // Clamp LLM free text to EPH.WideBranch column lengths (DB is the source of truth).
-            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120),Truncate(branch.DisplayName.Trim(),300),Truncate(branch.Interpretation.Trim(),1000),Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1);
+            // V2.3: semantic type defaults to ALTERNATIVE (backward compatible) unless the LLM
+            // explicitly classified the branch as a DIMENSION (jointly valid evaluation criterion).
+            var semanticType=string.Equals(branch.SemanticType?.Trim(),WideBranchSemanticTypes.Dimension,StringComparison.OrdinalIgnoreCase)?WideBranchSemanticTypes.Dimension:WideBranchSemanticTypes.Alternative;
+            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120),Truncate(branch.DisplayName.Trim(),300),Truncate(branch.Interpretation.Trim(),1000),Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1){SemanticTypeCode=semanticType};
         }).ToArray();
 
     private static string? Truncate(string? value,int maximumLength)=>value is null||value.Length<=maximumLength?value:value[..maximumLength];
@@ -557,7 +798,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return Math.Clamp(weighted.Max(),0,1);
     }
 
-    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,EphConfidence=branch.EphConfidence};
+    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,EphConfidence=branch.EphConfidence,SemanticTypeCode=branch.SemanticTypeCode};
 
     // Accept only well-formed absolute https URLs so hallucinated or unsafe links never reach the UI.
     private static WideExternalReferenceDto[] MapExternalReferences(WideAnswerProposal answer)=>
@@ -610,7 +851,205 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }
     }
 
-    // V2.1 Evidence Support: deterministic, EPH-owned score derived from actual retrieved evidence,
+    // -----------------------------------------------------------------------------------------------
+    // V2.2 Information-Directed Exploration helpers.
+    // The LLM proposes. Evidence informs. EPH decides — entropy and information gain are always
+    // calculated deterministically in EPH code, never by the LLM.
+    // -----------------------------------------------------------------------------------------------
+
+    // Deterministic Shannon entropy over the eligible (ACTIVE/SECONDARY) ALTERNATIVE branch belief
+    // distribution. V2.3: DIMENSION branches are jointly valid criteria, NOT competing hypotheses —
+    // they never participate in winner-take-all entropy. PRUNED and DORMANT never inflate entropy.
+    private static WideEntropyResult ComputeEntropy(IReadOnlyCollection<WideBranchRecord> branches)
+    {
+        var eligible=branches.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary
+                &&branch.SemanticTypeCode==WideBranchSemanticTypes.Alternative)
+            .Select(branch=>Math.Max(branch.EphConfidence,.0001m)).ToArray();
+        return EntropyFromValues(eligible,WideEntropyBases.Branch);
+    }
+
+    // V2.3 candidate-signal entropy: when the hierarchy is dimension-dominated, uncertainty means
+    // "which candidate wins", so entropy is measured over the deterministic candidate-signal
+    // distribution (mention-weighted evidence support), never over complementary dimensions.
+    private static WideEntropyResult ComputeCandidateEntropy(IReadOnlyCollection<string> candidateNames,IReadOnlyCollection<EphEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        var signals=ComputeCandidateSignals(candidateNames,evidence,knowledge).Values.Select(value=>Math.Max(value,.0001m)).ToArray();
+        return EntropyFromValues(signals,WideEntropyBases.Candidate);
+    }
+
+    // V2.3 basis selection: competing ALTERNATIVE branches use branch entropy; a dimension-dominated
+    // hierarchy (fewer than 2 competing alternatives) switches to candidate-competition entropy.
+    // V2.5 regression fix: ranking/recommendation queries (the contract fixes a rankingConcept or a
+    // requestedCount) are ALWAYS a "which candidate wins" problem — their root branches are
+    // complementary dimensions even when the proposer mislabels them ALTERNATIVE — so the CANDIDATE
+    // basis takes precedence whenever a competitive candidate universe exists.
+    // Before any candidates are known, uncertainty is reported as maximal on the CANDIDATE basis so
+    // information rounds keep investigating instead of falsely reporting resolution.
+    private static WideEntropyResult ComputeUncertainty(IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyCollection<string> candidateNames,IReadOnlyCollection<EphEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge,WideQueryContract? queryContract)
+    {
+        var isRankingQuery=queryContract is not null&&(!string.IsNullOrWhiteSpace(queryContract.RankingConcept)||queryContract.RequestedCount is >1);
+        if(isRankingQuery&&candidateNames.Count>=2)return ComputeCandidateEntropy(candidateNames,evidence,knowledge);
+        var alternativeCount=branches.Count(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary
+            &&branch.SemanticTypeCode==WideBranchSemanticTypes.Alternative);
+        if(alternativeCount>=2&&!isRankingQuery)return ComputeEntropy(branches);
+        if(candidateNames.Count>=2)return ComputeCandidateEntropy(candidateNames,evidence,knowledge);
+        return new(0m,0m,1m,0){EntropyBasisCode=WideEntropyBases.Candidate};
+    }
+
+    private static WideEntropyResult EntropyFromValues(IReadOnlyCollection<decimal> values,string basisCode)
+    {
+        if(values.Count<2)return new(0m,0m,0m,values.Count){EntropyBasisCode=basisCode};
+        var total=values.Sum();
+        var entropy=0d;
+        foreach(var value in values)
+        {
+            var p=(double)(value/total);
+            entropy-=p*Math.Log2(p);
+        }
+        var maxEntropy=Math.Log2(values.Count);
+        var normalized=maxEntropy<=0?0m:Math.Clamp((decimal)(entropy/maxEntropy),0,1);
+        return new(Math.Round((decimal)entropy,4),Math.Round((decimal)maxEntropy,4),Math.Round(normalized,4),values.Count){EntropyBasisCode=basisCode};
+    }
+
+    // Deterministic conversion of an LLM categorical judgment (VERY_LOW..VERY_HIGH) to a configured value.
+    private static decimal CategoryValue(WideConfiguration configuration,string category)=>category.Trim().ToUpperInvariant() switch
+    {
+        WideInformationCategories.VeryLow=>configuration.VeryLowInformationValue,
+        WideInformationCategories.Low=>configuration.LowInformationValue,
+        WideInformationCategories.Medium=>configuration.MediumInformationValue,
+        WideInformationCategories.High=>configuration.HighInformationValue,
+        WideInformationCategories.VeryHigh=>configuration.VeryHighInformationValue,
+        _=>configuration.MediumInformationValue
+    };
+
+    // Reject malformed estimator output: every category must be an allowed value.
+    private static bool ValidateCategories(WideInformationTargetProposal target)
+    {
+        static bool Valid(string value)=>WideInformationCategories.All.Contains(value.Trim().ToUpperInvariant());
+        return Valid(target.Uncertainty)&&Valid(target.RankingImpact)&&Valid(target.CandidateDiscrimination)
+            &&Valid(target.EvidenceAvailability)&&Valid(target.Novelty)&&Valid(target.Redundancy)
+            &&target.PredictedRankingChanges.All(prediction=>
+                prediction.Direction.Trim().ToUpperInvariant() is "UP" or "DOWN"
+                &&prediction.Magnitude.Trim().ToUpperInvariant() is "NONE" or "LOW" or "MEDIUM" or "HIGH");
+    }
+
+    // Deterministic candidate signal: how strongly a candidate name is currently supported by the
+    // evidence pool — the sum of relevance scores of enterprise evidence items and external snippets
+    // that mention the candidate, saturated into 0..1 (raw/(1+raw)) so it always fits the
+    // DECIMAL(5,4) ScoreBefore/ScoreAfter columns while preserving ordering and relative change.
+    // Purely mechanical; used to verify LLM ranking-change predictions (baseline before targeted
+    // retrieval, re-measured after). Never produced by the LLM.
+    private static Dictionary<string,decimal> ComputeCandidateSignals(IReadOnlyCollection<string> candidates,IReadOnlyCollection<EphEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        var signals=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach(var candidate in candidates)
+        {
+            var raw=evidence.Where(item=>Mentions(item.Title,candidate)||Mentions(item.Excerpt,candidate)).Sum(item=>item.RelevanceScore)
+                +knowledge.Where(item=>Mentions(item.Title,candidate)||Mentions(item.Snippet,candidate)).Sum(item=>item.Score);
+            signals[candidate]=Math.Round(raw/(1m+raw),4);
+        }
+        return signals;
+        static bool Mentions(string? text,string candidate)=>text?.Contains(candidate,StringComparison.OrdinalIgnoreCase)==true;
+    }
+
+    // Dense rank of candidate signals (1 = strongest). Ranks are relative to the round's predicted
+    // candidates only — enough to grade predicted UP/DOWN movement deterministically.
+    private static Dictionary<string,int> RankSignals(Dictionary<string,decimal> signals)
+    {
+        var ranks=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
+        var rank=0;
+        foreach(var entry in signals.OrderByDescending(item=>item.Value))ranks[entry.Key]=++rank;
+        return ranks;
+    }
+
+    // V2.5 Independent Evidence Diversity: number of DISTINCT source hosts whose title or snippet
+    // mentions the candidate. Deterministic and zero-LLM. One article claiming a candidate excels
+    // across many dimensions is weaker support than independent sources agreeing.
+    private static int CountDistinctSourceHosts(string candidate,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        var hosts=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var snippet in knowledge)
+        {
+            if(snippet.Title?.Contains(candidate,StringComparison.OrdinalIgnoreCase)!=true
+                &&snippet.Snippet?.Contains(candidate,StringComparison.OrdinalIgnoreCase)!=true)continue;
+            var host=Uri.TryCreate(snippet.Url,UriKind.Absolute,out var uri)?uri.Host:snippet.Url??string.Empty;
+            if(!string.IsNullOrWhiteSpace(host))hosts.Add(host);
+        }
+        return hosts.Count;
+    }
+
+    // V2.4 Early Candidate Harvest: deterministic, zero-LLM extraction of candidate names from external
+    // result sets. A candidate is a capitalized proper-noun phrase (1-3 words) that appears in at least
+    // two DISTINCT snippets (cross-source repetition filters out one-off article words). Common leading
+    // sentence words and generic terms are excluded via a small stopword set.
+    private static readonly HashSet<string> HarvestStopwords=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "The","A","An","This","That","These","Those","It","Its","In","On","At","Of","For","From","With","And","Or","But","As","By","To","Is","Are","Was","Were","Be","Best","Top","New","Most","More","How","What","Why","When","Where","Which","Who","US","USA","United","States","America","American","City","Cities","State","County","Guide","List","Ranking","Rankings","Report","Study","Index","Overview","According","Based","Living","Life","Cost","Quality","Family","Families","Home","Homes","Housing","Job","Jobs","School","Schools","Education","Safety","Healthcare","January","February","March","April","May","June","July","August","September","October","November","December"
+    };
+
+    private static IReadOnlyCollection<string> HarvestCandidateNames(IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        if(knowledge.Count<2)return [];
+        var occurrences=new Dictionary<string,HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+        var index=0;
+        foreach(var snippet in knowledge)
+        {
+            index++;
+            foreach(var phrase in ExtractProperPhrases($"{snippet.Title}. {snippet.Snippet}"))
+            {
+                if(!occurrences.TryGetValue(phrase,out var set))occurrences[phrase]=set=[];
+                set.Add(index);
+            }
+        }
+        // Cross-source repetition: a real candidate is named by at least two distinct snippets.
+        return occurrences.Where(entry=>entry.Value.Count>=2)
+            .OrderByDescending(entry=>entry.Value.Count)
+            .Take(24)
+            .Select(entry=>entry.Key)
+            .ToArray();
+    }
+
+    private static IEnumerable<string> ExtractProperPhrases(string text)
+    {
+        var tokens=text.Split([' ','\t','\n','\r'],StringSplitOptions.RemoveEmptyEntries);
+        var current=new List<string>();
+        foreach(var raw in tokens)
+        {
+            var word=raw.Trim('.',',',';',':','!','?','(',')','[',']','"','\'','’','“','”','—','-','·');
+            var isProper=word.Length>1&&char.IsUpper(word[0])&&word.Skip(1).All(c=>char.IsLetter(c)&&char.IsLower(c));
+            if(isProper&&!HarvestStopwords.Contains(word))
+            {
+                current.Add(word);
+                if(current.Count==3){yield return string.Join(' ',current);current.Clear();}
+            }
+            else
+            {
+                if(current.Count>0)yield return string.Join(' ',current);
+                current.Clear();
+            }
+        }
+        if(current.Count>0)yield return string.Join(' ',current);
+    }
+
+    // One BATCHED call estimates information value for all eligible branches, including falsifiable
+    // candidate ranking-change predictions EPH can later verify. Fail-soft: returns null on any failure.
+    private async Task<WideInformationValueProposal?> EstimateInformationValueAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> eligible,WideEntropyResult entropy,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var branchContext=string.Join('\n',eligible.Select(branch=>$"- branchCode: {branch.BranchCode} | name: {branch.DisplayName} | interpretation: {Truncate(branch.Interpretation,200)} | state: {branch.BranchStateCode} | ephConfidence: {branch.EphConfidence:F2} | evidenceSupport: {branch.EvidenceSupport:F2} | evidenceCount: {branch.EvidenceCount}"));
+            var contractContext=queryContract is null?"(none)":$"entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
+                "You are the EPH Information Value estimator. For EVERY listed branch, assess how valuable investigating it next is likely to be. This is a PREDICTION of usefulness, never a measurement. For each branch return: uncertainty (how unresolved this dimension is), rankingImpact (how likely new evidence changes the final answer ranking), candidateDiscrimination (how well evidence here separates currently close candidates), evidenceAvailability (how likely useful public evidence exists), novelty (how different from evidence already retrieved), redundancy (overlap with evidence already retrieved). Allowed values for all six: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH — no other values. evidenceTarget: one concrete sentence describing exactly what evidence to retrieve for this branch. rationale: one sentence why. predictedRankingChanges: which current candidates are most likely to move up or down if this branch is investigated — candidate (exact name), direction (UP or DOWN), magnitude (NONE, LOW, MEDIUM, or HIGH). Make these predictions falsifiable and specific; return an empty array when no candidate movement is expected. Return every branch exactly once.",
+                $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nBranches:\n{branchContext}",
+                InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            return JsonSerializer.Deserialize<WideInformationValueProposal>(result.Content,JsonOptions);
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
     // never invented by the LLM. Enterprise evidence dominates; matched external snippets contribute
     // with their provider relevance score; unsupported branches score 0.
     private static decimal ComputeEvidenceSupport(WideBranchRecord branch,IReadOnlyCollection<EphEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
@@ -630,13 +1069,35 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // each candidate against each surviving branch, and rank by the branch-importance-weighted
     // composite. Fail-soft: any LLM failure returns an empty collection.
     // -----------------------------------------------------------------------------------------------
-    private async Task<IReadOnlyCollection<WideCandidateDto>> CompeteCandidatesAsync(WideSearchRequest request,Guid executionId,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,WideConfiguration configuration,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<WideCandidateDto>> CompeteCandidatesAsync(WideSearchRequest request,Guid executionId,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration,CancellationToken cancellationToken)
     {
         try
         {
-            var branches=survivors.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).OrderByDescending(branch=>branch.EphConfidence).Take(8).ToArray();
+            // V2.5: the final Candidate × Branch matrix must include EVERY primary (root-level,
+            // non-pruned) DIMENSION branch EPH itself discovered — a top-level criterion like
+            // "overall quality of life" must not silently drop out because deeper branches
+            // out-scored it. Root dimensions are unioned with the top-confidence survivors.
+            var topSurvivors=survivors.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).OrderByDescending(branch=>branch.EphConfidence).Take(8);
+            var rootDimensions=survivors.Where(branch=>branch.LevelNumber==1
+                &&branch.SemanticTypeCode==WideBranchSemanticTypes.Dimension
+                &&branch.BranchStateCode!=WideBranchStates.Pruned);
+            var branches=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.EphConfidence).Take(10).ToArray();
             if(branches.Length==0)return [];
-            var candidateNames=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).GroupBy(item=>item.Name,StringComparer.OrdinalIgnoreCase).Select(group=>group.First()).Take(configuration.MaximumCandidates*2).ToArray();
+            // V2.3 candidate admission: a candidate must appear in enough distinct interpretive
+            // dimensions to compete for the OVERALL answer. Appearing in a single interpretive list
+            // (for example an affordability-only ranking) is not cross-dimensional support; such
+            // candidates are flagged as exclusions with a reason \u2014 kept visible, never silently dropped.
+            var dimensionSupport=interpretiveResults
+                .SelectMany(result=>result.Items.Select(item=>(result.BranchDisplayName,item.Name)))
+                .Distinct(new CandidateDimensionComparer())
+                .GroupBy(entry=>entry.Name,StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group=>group.Key,group=>group.Count(),StringComparer.OrdinalIgnoreCase);
+            var requiredSupport=interpretiveResults.Count<=1?1:Math.Min(configuration.MinimumCandidateDimensionSupport,interpretiveResults.Count);
+            // V2.5 cardinality: an explicit requested count ("top 10") widens both the scored candidate
+            // harvest and the final ranking size so the answer can actually satisfy the query contract.
+            var requestedCount=queryContract?.RequestedCount??0;
+            var targetCount=Math.Max(configuration.MaximumCandidates,requestedCount);
+            var candidateNames=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).GroupBy(item=>item.Name,StringComparer.OrdinalIgnoreCase).Select(group=>group.First()).Take(targetCount*2).ToArray();
             if(candidateNames.Length==0)return [];
             var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
@@ -650,7 +1111,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var branchWeightTotal=branches.Sum(branch=>branch.EphConfidence);
             if(branchWeightTotal<=0)branchWeightTotal=1;
             var branchesByName=branches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
-            var records=new List<WideCandidateRecord>();
+            var entries=new List<(WideCandidateRecord Record,bool SupportExcluded,decimal RawComposite)>();
             foreach(var candidate in proposal.Candidates)
             {
                 var candidateId=Guid.NewGuid();
@@ -668,11 +1129,47 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // strength. Coverage scales the composite so gaps pull the ranking down, never up.
                 var coverage=branches.Length==0?0m:Math.Clamp((decimal)scores.Count/branches.Length,0,1);
                 composite*=coverage;
+                // V2.5 Independent Evidence Diversity: appearing in four dimensions supported by four
+                // independent sources must beat four claims recycled from one article. The composite is
+                // mildly scaled by how many DISTINCT source hosts mention the candidate — a single-source
+                // candidate keeps 70% of its score; each additional independent host recovers the rest.
+                var distinctHosts=CountDistinctSourceHosts(candidate.Name,externalKnowledge);
+                var diversityFactor=distinctHosts<=1?.70m:Math.Min(1m,.70m+.15m*(distinctHosts-1));
+                composite*=diversityFactor;
                 // Constraint Engine: violators score 0 and carry the reason; they remain visible as PRUNED.
                 var violates=candidate.ViolatesConstraint;
-                records.Add(new(candidateId,executionId,request.TenantId,Truncate(candidate.Name.Trim(),300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(candidate.ConstraintViolationReason?.Trim(),400),scores));
+                var violationReason=candidate.ConstraintViolationReason?.Trim();
+                // V2.3 candidate admission: insufficient cross-dimensional support is treated as a
+                // constraint-style exclusion so single-dimension list appearances (for example a
+                // cheapest-places ranking) cannot win the overall competition.
+                var support=dimensionSupport.GetValueOrDefault(candidate.Name.Trim());
+                var supportExcluded=false;
+                if(!violates&&support<requiredSupport)
+                {
+                    supportExcluded=true;
+                    violates=true;
+                    violationReason=$"Insufficient cross-dimensional support: appears in {support} of {interpretiveResults.Count} interpretation dimensions (minimum {requiredSupport}).";
+                }
+                entries.Add((new(candidateId,executionId,request.TenantId,Truncate(candidate.Name.Trim(),300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(violationReason,400),scores),supportExcluded,Math.Clamp(composite,0,1)));
             }
-            var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(configuration.MaximumCandidates).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
+            // V2.5 cardinality rule: when the query explicitly requests N results and fewer than N
+            // candidates were admitted, re-admit the strongest support-excluded candidates (NEVER hard
+            // constraint violators) to fill the shortfall — visibly annotated, never silent.
+            if(requestedCount>0)
+            {
+                var shortfall=requestedCount-entries.Count(entry=>!entry.Record.IsConstraintViolation);
+                if(shortfall>0)
+                    for(var index=0;index<entries.Count;index++)
+                    {
+                        if(shortfall<=0)break;
+                        var entry=entries[index];
+                        if(!entry.SupportExcluded)continue;
+                        entries[index]=(entry.Record with{CompositeScore=entry.RawComposite,IsConstraintViolation=false,ConstraintViolationReason=null,Detail=Truncate($"{entry.Record.Detail} (Re-admitted to satisfy the requested count of {requestedCount}; limited cross-dimensional support.)",1000)},false,entry.RawComposite);
+                        shortfall--;
+                    }
+            }
+            var records=entries.Select(entry=>entry.Record).ToList();
+            var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(targetCount).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
             await wideRepository.SaveWideCandidatesAsync(ranked,request.UserId,cancellationToken);
             return ranked.Select(record=>new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,record.BranchScores.Select(score=>new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)record.BranchScores.Count/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation}).ToArray();
         }
@@ -684,6 +1181,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static readonly JsonSerializerOptions JsonOptions=new(){PropertyNameCaseInsensitive=true};
 
+    // V2.3: case-insensitive (dimension, candidate) pair comparer for candidate-admission counting.
+    private sealed class CandidateDimensionComparer:IEqualityComparer<(string BranchDisplayName,string Name)>
+    {
+        public bool Equals((string BranchDisplayName,string Name)x,(string BranchDisplayName,string Name)y)=>
+            string.Equals(x.BranchDisplayName,y.BranchDisplayName,StringComparison.OrdinalIgnoreCase)&&string.Equals(x.Name,y.Name,StringComparison.OrdinalIgnoreCase);
+        public int GetHashCode((string BranchDisplayName,string Name)obj)=>
+            HashCode.Combine(obj.BranchDisplayName.ToUpperInvariant(),obj.Name.ToUpperInvariant());
+    }
+
     private const string BranchSchemaFragment="""
     "branch": {
       "type": "object",
@@ -694,11 +1200,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         "capabilityCode": { "type": ["string", "null"] },
         "searchText": { "type": ["string", "null"] },
         "confidence": { "type": "number" },
+        "semanticType": { "type": "string", "enum": ["ALTERNATIVE", "DIMENSION"] },
         "continueNarrowing": { "type": "boolean" },
         "stopReason": { "type": ["string", "null"] },
         "parentBranchCode": { "type": ["string", "null"] }
       },
-      "required": ["branchCode", "displayName", "interpretation", "capabilityCode", "searchText", "confidence", "continueNarrowing", "stopReason", "parentBranchCode"],
+      "required": ["branchCode", "displayName", "interpretation", "capabilityCode", "searchText", "confidence", "semanticType", "continueNarrowing", "stopReason", "parentBranchCode"],
       "additionalProperties": false
     }
 """;
@@ -747,6 +1254,52 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     "outputRequirements": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
   },
   "required": ["entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
+  "additionalProperties": false
+}
+""";
+
+    // V2.2 batched Information Value estimation: categorical judgments plus falsifiable candidate
+    // ranking predictions, in ONE call for all eligible branches. Categories are strictly enumerated.
+    private const string InformationValueSchema="""
+{
+  "type": "object",
+  "properties": {
+    "targets": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "branchCode": { "type": "string" },
+          "uncertainty": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "rankingImpact": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "candidateDiscrimination": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "evidenceAvailability": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "novelty": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "redundancy": { "type": "string", "enum": ["VERY_LOW", "LOW", "MEDIUM", "HIGH", "VERY_HIGH"] },
+          "evidenceTarget": { "type": ["string", "null"] },
+          "rationale": { "type": "string" },
+          "predictedRankingChanges": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "properties": {
+                "candidate": { "type": "string" },
+                "direction": { "type": "string", "enum": ["UP", "DOWN"] },
+                "magnitude": { "type": "string", "enum": ["NONE", "LOW", "MEDIUM", "HIGH"] }
+              },
+              "required": ["candidate", "direction", "magnitude"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["branchCode", "uncertainty", "rankingImpact", "candidateDiscrimination", "evidenceAvailability", "novelty", "redundancy", "evidenceTarget", "rationale", "predictedRankingChanges"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["targets"],
   "additionalProperties": false
 }
 """;
