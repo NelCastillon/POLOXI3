@@ -12,6 +12,17 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // 'EPH Engine' filter: true runs the full dynamic disambiguation + enterprise grounding pipeline;
     // false returns a pure LLM answer without hierarchy, grounding, or elimination.
     public bool UseEphEngine{get;init;}=true;
+    // V2.8 Clarification continuation: when the previous execution ended USER_CLARIFICATION_REQUIRED,
+    // the follow-up request carries the user's clarification answer plus the target it answers.
+    // The pipeline treats the answer as an added hard constraint and reweights — it never restarts blind.
+    [StringLength(500)]public string? ClarificationAnswer{get;init;}
+    [StringLength(300)]public string? ClarificationTarget{get;init;}
+    // V2.8.5 Clarification Calibration: the continuation carries which ask/answer round this is
+    // (0 = original question) and the intent entropy measured BEFORE the user's answer, so the
+    // service can compute ClarificationGain = prior − current and enforce the round cap and gain
+    // floor deterministically without server-side session state.
+    [Range(0,10)]public int ClarificationRound{get;init;}
+    [Range(0,1)]public decimal? PriorIntentEntropy{get;init;}
 }
 
 public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,int LevelNumber,string BranchCode,string DisplayName,string Interpretation,string? CapabilityCode,string? SearchText,string GroundingStatusCode,int EvidenceCount,decimal Confidence,bool ContinueNarrowing,string? StopReason,bool IsEliminated,string? EliminationReason,int SortOrder)
@@ -92,7 +103,47 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public string EntropyBasisCode{get;init;}=WideEntropyBases.Branch;
     // V2.2: audit of every information-directed exploration round executed.
     public IReadOnlyCollection<WideInformationRoundDto> InformationRounds{get;init;}=[];
+    // V2.6 Candidate Stability: deterministic convergence signals measured across information rounds.
+    // WinnerStability = share of measurement points where the same candidate led the deterministic
+    // signal ranking; TopKStability = average overlap of the top-K set between consecutive rounds.
+    // 1.0 when fewer than two measurement points exist (neutral, never penalizing).
+    public decimal? WinnerStability{get;init;}
+    public decimal? TopKStability{get;init;}
+    // V2.6 Decision Confidence: how confident EPH is in the FINAL RANKING — blends decision evidence
+    // coverage, top-candidate separation, winner stability, and answer confidence. Replaces
+    // hierarchy-coverage-dominated confidence as the user-facing confidence for wide searches.
+    public decimal? DecisionConfidence{get;init;}
+    // V2.8 Clarification Gate: when EPH cannot responsibly resolve the ambiguity (compound gate:
+    // low decision confidence AND unstable winner AND thin candidate margin AND a high-value
+    // unresolved information target), it returns USER_CLARIFICATION_REQUIRED with a deterministic
+    // clarification question instead of pretending certainty. Options are rendered from the top
+    // competing candidates — no extra LLM call.
+    public string? ClarificationQuestion{get;init;}
+    public string? ClarificationTarget{get;init;}
+    public IReadOnlyCollection<string> ClarificationOptions{get;init;}=[];
+    // V2.8.4 Clarification Intelligence: recognition-based structured choices — the user recognizes
+    // a DESCRIPTION ("business banking / fintech for startups") instead of recalling a legal name.
+    // Includes an OTHER escape hatch. Rendered as clickable options; natural-language answers remain
+    // fully supported through ClarificationAnswer.
+    public IReadOnlyCollection<WideClarificationOptionDto> ClarificationOptionItems{get;init;}=[];
+    // V2.8.4 intent telemetry: Shannon entropy (normalized 0..1) over the top candidates' composite
+    // scores — the measurable "which one does the USER mean?" uncertainty. Clarification Gain =
+    // IntentEntropy(before question) − IntentEntropy(after answer), diffable across the two
+    // executions of a clarification round.
+    public decimal? IntentEntropy{get;init;}
+    // V2.8.4: the winning ClarificationValue (separation × answerability) behind the selected target.
+    public decimal? BestClarificationValue{get;init;}
+    // V2.8.5 Clarification Gain: PriorIntentEntropy − IntentEntropy — the measured intent-side
+    // uncertainty reduction produced by the user's clarification answer. Null on first executions.
+    public decimal? ClarificationGain{get;init;}
+    // V2.8.5: which ask/answer round produced this execution (0 = original question).
+    public int ClarificationRound{get;init;}
 }
+
+// V2.8.4 Clarification Intelligence: one recognition-based clarification choice. Label is
+// description-first (candidate's evidence-backed detail) because users searching a bare name
+// often do not recognize the legal name — recognition beats recall.
+public sealed record WideClarificationOptionDto(string Key,string Label);
 
 // V2.1 Query Contract: separates hard constraints from ambiguous concepts so EPH only branches ambiguity.
 public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
@@ -105,6 +156,12 @@ public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string
     public decimal EvidenceCoverage{get;init;}
     // True when the candidate failed a hard query constraint and was ruled out (kept visible, never hidden).
     public bool IsConstraintViolation{get;init;}
+    // V2.6 Candidate Quality: coverage-scaled dimension performance — "how good is this candidate?".
+    // Never reduced by evidence weakness; weak evidence lowers EvidenceConfidence instead.
+    public decimal QualityScore{get;init;}
+    // V2.6 Evidence Confidence: "how well can we support that quality claim?" — deterministic, driven
+    // by independent-source diversity and mention support. Affects confidence, never quality.
+    public decimal EvidenceConfidence{get;init;}
 }
 
 public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore);
@@ -140,6 +197,17 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // estimator/entropy failure skips the information round and continues V2.1 narrowing.
     public bool EnableInformationValue{get;init;}=true;
     public decimal InformationValueTriggerEntropy{get;init;}=.45m;
+    // V2.8 Clarification Gate thresholds (DB-seeded; see migration 0152). ALL conditions must hold
+    // for EPH to ask instead of answer — a single low metric never triggers a question.
+    public bool EnableClarificationGate{get;init;}=true;
+    public decimal ClarificationConfidenceThreshold{get;init;}=.60m;
+    public decimal ClarificationWinnerStabilityThreshold{get;init;}=.50m;
+    public decimal ClarificationMarginThreshold{get;init;}=.10m;
+    // V2.8.5 Clarification Calibration (DB-seeded; see migration 0153): clarification must converge.
+    // The round cap stops endless questioning; the gain floor stops follow-up questions when the
+    // previous answer measurably failed to reduce intent uncertainty.
+    public int MaximumClarificationRounds{get;init;}=2;
+    public decimal MinimumClarificationGain{get;init;}=.10m;
     public int MaximumInformationRounds{get;init;}=3;
     public int MaximumInformationTargetsPerRound{get;init;}=2;
     public decimal MinimumInformationValue{get;init;}=.55m;
@@ -321,4 +389,9 @@ public sealed record WideInformationPredictionRecord(Guid WideInformationPredict
 public sealed record WideExecutionEntropyUpdate(Guid WideExecutionId,decimal? InitialEntropy,decimal? FinalEntropy,decimal? InitialNormalizedEntropy,decimal? FinalNormalizedEntropy,decimal? TotalActualInformationGain,int InformationRoundCount,int InformationTargetCount,int InformationRetrievalCount)
 {
     public string? EntropyBasisCode{get;init;}
+    // V2.8 clarification state (EPH.WideExecution columns; see migration 0152). Persisted so a
+    // follow-up user answer continues the same reasoning context instead of restarting blind.
+    public decimal? DecisionConfidence{get;init;}
+    public string? ClarificationTarget{get;init;}
+    public string? ClarificationQuestion{get;init;}
 }

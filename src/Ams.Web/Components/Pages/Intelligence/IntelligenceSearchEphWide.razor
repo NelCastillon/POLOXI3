@@ -43,6 +43,44 @@
         }
         else if (_response is not null)
         {
+            @if (_response.StatusCode == "USER_CLARIFICATION_REQUIRED" && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
+            {
+                <section class="eph-explanation">
+                    <div class="eph-explanation-icon"><i class="bi bi-question-circle"></i></div>
+                    <div class="eph-explanation-body">
+                        <div class="eph-panel-header"><div><span>EPH needs one more detail before it can answer responsibly</span><h2>Clarification needed</h2></div><span class="eph-status">@(_response.ClarificationTarget ?? "AMBIGUOUS")</span></div>
+                        <p>@_response.ClarificationQuestion</p>
+                        @if (_response.ClarificationOptionItems.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small title="EPH already researched the possibilities — recognize the description instead of recalling a name, or type your own answer below.">Which sounds like the one you mean?</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var option in _response.ClarificationOptionItems)
+                                    {
+                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option.Label)">@option.Label</button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        else if (_response.ClarificationOptions.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small title="Top competing candidates — pick the one you mean, or type your own answer below.">Top competing candidates:</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var option in _response.ClarificationOptions)
+                                    {
+                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option)">@option</button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        <div class="um-search-box" style="margin-top:.75rem;">
+                            <input class="um-search-input" placeholder="Or describe what you mean in your own words…" @bind="_clarificationAnswer" @bind:event="oninput" @onkeydown="ClarificationKeyDown" />
+                            <button class="um-btn um-btn-primary" disabled="@(_loading || string.IsNullOrWhiteSpace(_clarificationAnswer))" @onclick="() => SubmitClarificationAsync(_clarificationAnswer)"><i class="bi bi-arrow-return-right"></i> Continue</button>
+                        </div>
+                    </div>
+                </section>
+            }
             @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
             {
                 <section class="eph-explanation">
@@ -116,7 +154,11 @@
                 <article><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external · @_response.EnterpriseEvidenceCount enterprise</small></article>
                 <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence. Deep leaf branches without evidence lower this without necessarily weakening the answer."><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
                 <article title="Decision coverage: share of the dimensions that actually drive the final Candidate × Branch ranking that are supported by evidence — the most meaningful grounding measure for the answer itself."><span>Decision coverage</span><strong>@_response.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
-                <article><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>EPH conclusion</small></article>
+                <article title="Confidence in the final ranking decision itself: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage."><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>decision confidence</small></article>
+                @if (_response.WinnerStability is { } winnerStability)
+                {
+                    <article title="Deterministic ranking stability across information rounds. Winner: share of consecutive measurements where the #1 candidate did not change. Top-3: average overlap of the top-3 set between consecutive measurements. High stability means additional evidence is not changing the answer — a convergence signal."><span>Ranking stability</span><strong>@winnerStability.ToString("P0")</strong><small>winner · top-3 @(_response.TopKStability?.ToString("P0") ?? "—")</small></article>
+                }
                 @if (_response.InformationRounds.Count > 0)
                 {
                     <article title="Deterministic Shannon entropy — 0% = fully resolved, 100% = maximal uncertainty. Measured by EPH math, never the LLM. Basis: BRANCH = competing ALTERNATIVE interpretations; CANDIDATE = deterministic candidate-signal distribution (which candidate wins)."><span>Uncertainty</span><strong>@_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0")</strong><small>@_response.TotalActualInformationGain.ToString("0.###") bits gained · @(_response.EntropyBasisCode ?? "BRANCH") basis</small></article>
@@ -138,7 +180,12 @@
                                 {
                                     <span class="um-badge um-badge-warning" title="The measured population changed between the before and after measurements, so normalized percentages compare different distributions. Judge this round on raw bits.">POPULATION CHANGED</span>
                                 }
-                                @if (round.ActualInformationGain is { } gain)
+                                @if (round.RawEntropyDelta is { } rawDelta)
+                                {
+                                    <span class="um-badge um-badge-neutral" title="Raw measured entropy change (EntropyBefore − EntropyAfter) — the single measured fact for this round, before any clamping. Measured by EPH math, never the LLM.">Information change: @((rawDelta >= 0m ? "+" : "\u2212") + Math.Abs(rawDelta).ToString("0.###")) bits</span>
+                                    <span class="um-badge @(rawDelta > 0m ? "um-badge-success" : rawDelta < 0m ? "um-badge-warning" : "um-badge-neutral")" title="@(rawDelta < 0m ? "The new evidence INCREASED measured uncertainty. This is meaningful — it revealed prior overconfidence — and is not the same as no information." : rawDelta > 0m ? "The new evidence reduced measured uncertainty." : "The measured uncertainty did not change.")">Outcome: @(rawDelta > 0m ? "Uncertainty reduced" : rawDelta < 0m ? "Uncertainty increased" : "No measurable change")@(rawDelta != 0m && Math.Abs(rawDelta) < .05m ? " slightly" : null)</span>
+                                }
+                                else if (round.ActualInformationGain is { } gain)
                                 {
                                     <span class="um-badge @(gain > 0m ? "um-badge-success" : "um-badge-neutral")" title="Actual information gain measured by EPH after targeted retrieval — never estimated by the LLM.">@gain.ToString("0.###") bits</span>
                                 }
@@ -193,7 +240,8 @@
                                     }
                                 </div>
                             </div>
-                            <div class="eph-score"><strong>@candidate.CompositeScore.ToString("P0")</strong><small>Composite</small></div>
+                            <div class="eph-score"><strong>@candidate.QualityScore.ToString("P0")</strong><small>Quality</small></div>
+                            <div class="eph-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage. Weak evidence lowers this confidence, never the quality itself."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
                         </article>
                     }
                 </section>
@@ -319,6 +367,7 @@
 
 @code {
     private string _query = "";
+    private string _clarificationAnswer = "";
     private bool _loading, _useEphEngine = true;
     private string? _error;
     private WideSearchResponse? _response;
@@ -368,6 +417,7 @@
     private async Task SearchAsync()
     {
         if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
+        _clarificationAnswer = "";
         _loading = true;
         _error = null;
         try
@@ -382,6 +432,34 @@
         {
             _loading = false;
         }
+    }
+
+    // V2.8: submitting a clarification answer continues the SAME reasoning context — the answer is
+    // sent as an added constraint alongside the original query, so EPH reweights instead of restarting.
+    private async Task SubmitClarificationAsync(string answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer) || _response is null) return;
+        var target = _response.ClarificationTarget;
+        _loading = true;
+        _error = null;
+        try
+        {
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UseEphEngine = _useEphEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target });
+            _clarificationAnswer = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ClarificationKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await SubmitClarificationAsync(_clarificationAnswer);
     }
 
     private async Task KeyDown(KeyboardEventArgs args)
