@@ -185,10 +185,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // V2.8 clarification continuation: a follow-up answer is appended as an added constraint so the
         // pipeline reweights interpretations instead of restarting blind. The clarified query flows through
         // the query contract, hierarchy, grounding, and candidate competition like any hard constraint.
+        // V2.8.5: the round counter is normalized here so a continuation execution is ALWAYS at least
+        // round 1 even when the caller forgot to increment — round math must never trust the client alone.
         if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer))
         {
             var clarificationConstraint=string.IsNullOrWhiteSpace(request.ClarificationTarget)?NormalizeQuery(request.ClarificationAnswer):$"{request.ClarificationTarget.Trim()}: {NormalizeQuery(request.ClarificationAnswer)}";
-            request=request with{Query=$"{request.Query} ({clarificationConstraint})"};
+            request=request with{Query=$"{request.Query} ({clarificationConstraint})",ClarificationRound=Math.Max(request.ClarificationRound,1)};
         }
         // 'EPH Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UseEphEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
@@ -607,11 +609,27 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,cancellationToken);
                 if(candidates.Count>0)llmCalls++;
             }
+            // V2.8.6 post-competition identity dedup: the LLM competition can still echo the same entity
+            // under two name forms ("Overland Park, Kansas" and "Overland Park"). Same canonical tokens =
+            // same entity = one ranking position. Keep the stronger-scored instance, drop the echo, and
+            // re-rank so the next candidate moves up — scores are NEVER altered, only duplicates removed.
+            if(candidates.Count>1)candidates=DeduplicateCandidatesByCanonicalTokens(candidates);
+            // V2.8.5 answer→candidate reweighting: a clarification answer is DIRECT intent evidence about
+            // the candidates themselves, not just a query constraint. Candidates whose name/detail overlap
+            // the user's answer get a deterministic composite boost and are re-ranked — zero-LLM, so the
+            // user's choice reliably moves the ranking even when the re-executed evidence run was noisy.
+            if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&candidates.Count>1)
+                candidates=ReweightCandidatesByClarificationAnswer(candidates,request.ClarificationAnswer);
             // V2.1 evidence metrics: coverage = share of surviving branches supported by any evidence.
             var coveredBranches=survivorsFinal.Count(branch=>branch.EvidenceSupport>0);
             var evidenceCoverage=survivorsFinal.Length==0?0m:Math.Clamp((decimal)coveredBranches/survivorsFinal.Length,0,1);
             // V2.5 Decision Evidence Coverage: measured only over the branches that participated in the
             // final Candidate × Branch competition — the dimensions the ANSWER actually rests on.
+            // NOTE (verified V2.8.6): a candidate BranchScore is NOT evidence coverage. Branch scores come
+            // from the LLM competition and exist for every dimension; EvidenceSupport counts branches
+            // backed by RETRIEVED external evidence. All five dimensions scored with 60% coverage means
+            // two dimensions were scored from model knowledge without retrieval backing — intentionally
+            // reported lower, never inflated to match the score matrix.
             var decisionBranchIds=candidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>score.BranchDisplayName)).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var decisionBranches=survivorsFinal.Where(branch=>decisionBranchIds.Contains(branch.DisplayName)).ToArray();
             var decisionEvidenceCoverage=decisionBranches.Length==0?evidenceCoverage:Math.Clamp((decimal)decisionBranches.Count(branch=>branch.EvidenceSupport>0)/decisionBranches.Length,0,1);
@@ -662,7 +680,39 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 }
                 intentEntropy=Math.Clamp((decimal)(entropySum/Math.Log2(intentCandidates.Length)),0,1);
             }
-            if(configuration.EnableClarificationGate&&string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&topCandidates.Length>1&&decisionConfidence is not null)
+            else if(intentCandidates.Length==1)intentEntropy=0m;
+            // V2.8.5 Clarification Gain: prior intent entropy (carried from the execution that ASKED)
+            // minus this execution's intent entropy — the MEASURED uncertainty reduction the user's
+            // answer produced. Persisted for calibration: which clarification targets actually work.
+            decimal? clarificationGain=null;
+            if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&request.PriorIntentEntropy is not null&&intentEntropy is not null)
+                clarificationGain=Math.Clamp(request.PriorIntentEntropy.Value-intentEntropy.Value,-1,1);
+            // V2.8.5 multi-round stop rules: EPH may ask again after an answer, but ONLY when (a) the
+            // round cap is not exhausted and (b) the PREVIOUS answer measurably reduced intent entropy
+            // by at least the configured floor — clarification must converge, never loop. When either
+            // rule fails, EPH answers with the best available candidate instead of asking again.
+            var clarificationRoundBudgetAvailable=request.ClarificationRound<configuration.MaximumClarificationRounds;
+            var previousAnswerHelped=string.IsNullOrWhiteSpace(request.ClarificationAnswer)
+                ||(clarificationGain is not null&&clarificationGain.Value>=configuration.MinimumClarificationGain);
+            // V2.8.6 Uncertainty Router: low confidence + instability is NOT automatically an intent gap.
+            //   EVIDENCE GAP    → retrieve (handled upstream by Information Value rounds).
+            //   INTENT GAP      → ask (candidates are semantically DISTINCT interpretations — "which
+            //                     Mercury?" — the identity discriminator is missing from the query).
+            //   DECISION UNCERTAINTY → rank + disclose (candidates are legitimately close on SHARED,
+            //                     user-defined criteria — "best city for a family" — asking is wrong).
+            // Deterministic, zero-LLM signal: the semantic type of the branches the decision rests on.
+            // ALTERNATIVE branches are mutually exclusive interpretations (identity competition → intent
+            // gap); DIMENSION branches are jointly valid evaluation criteria (close scores → decision
+            // uncertainty). The gate may only fire when the decision predominantly rests on ALTERNATIVEs.
+            var decisionBranchTypes=topCandidates.Take(4)
+                .SelectMany(candidate=>candidate.BranchScores.Select(score=>score.BranchDisplayName))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(name=>survivorsFinal.FirstOrDefault(branch=>string.Equals(branch.DisplayName,name,StringComparison.OrdinalIgnoreCase))?.SemanticTypeCode)
+                .Where(type=>type is not null)
+                .ToArray();
+            var alternativeShare=decisionBranchTypes.Length==0?0m:Math.Clamp((decimal)decisionBranchTypes.Count(type=>string.Equals(type,WideBranchSemanticTypes.Alternative,StringComparison.OrdinalIgnoreCase))/decisionBranchTypes.Length,0,1);
+            var isIntentGap=alternativeShare>=.5m;
+            if(configuration.EnableClarificationGate&&isIntentGap&&clarificationRoundBudgetAvailable&&previousAnswerHelped&&topCandidates.Length>1&&decisionConfidence is not null)
             {
                 var winner=topCandidates[0];
                 var margin=Math.Clamp((winner.CompositeScore-topCandidates[1].CompositeScore)/Math.Max(winner.CompositeScore,.0001m),0,1);
@@ -682,6 +732,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var comparisonCandidates=topCandidates.Take(4).ToArray();
                 string? clarificationValueTarget=null;var bestClarificationValue=0m;
                 var dimensionNames=comparisonCandidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>score.BranchDisplayName)).Distinct(StringComparer.OrdinalIgnoreCase);
+                // V2.8.5 full 5-factor CV — all deterministic, zero-LLM:
+                //   Separation:       max−min evidence score across candidates (discrimination power).
+                //   Answerability:    mean evidence score (how well candidates are characterized).
+                //   UserAnswerability: share of candidates scored on the dimension — the user can only
+                //                      recognize an option that EPH could describe for every candidate.
+                //   IntentRelevance:  dimension overlaps the query contract's ambiguous concepts (the
+                //                      user's OWN words) → full weight; otherwise a discounted baseline.
+                //   AnswerSimplicity: fewer competing options on the dimension → simpler question.
+                var ambiguousConcepts=queryContract?.AmbiguousConcepts??[];
                 foreach(var dimensionName in dimensionNames)
                 {
                     var scores=comparisonCandidates
@@ -690,7 +749,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     if(scores.Length<2)continue;
                     var separation=scores.Max()-scores.Min();
                     var answerability=scores.Average();
-                    var clarificationValue=separation*answerability;
+                    var userAnswerability=Math.Clamp((decimal)scores.Length/comparisonCandidates.Length,0,1);
+                    var intentRelevance=ambiguousConcepts.Any(concept=>dimensionName.Contains(concept,StringComparison.OrdinalIgnoreCase)||concept.Contains(dimensionName,StringComparison.OrdinalIgnoreCase))?1m:.70m;
+                    var answerSimplicity=Math.Clamp(1m-.10m*(scores.Length-2),.50m,1m);
+                    var clarificationValue=separation*answerability*userAnswerability*intentRelevance*answerSimplicity;
                     if(clarificationValue>bestClarificationValue){bestClarificationValue=clarificationValue;clarificationValueTarget=dimensionName;}
                 }
                 var unresolvedTarget=informationRounds.SelectMany(round=>round.Targets)
@@ -723,8 +785,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 }
             }
             await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,queryContract is null?null:JsonSerializer.Serialize(queryContract,JsonOptions),evidenceCoverage,externalKnowledge.Count,relevantEvidence.Length,candidates.Count,cancellationToken);
+            // V2.9 Answer Composer: derive the presentation contract deterministically from the final
+            // Candidate × Branch outcome — zero-LLM, computed AFTER the gate so response mode reflects it.
+            var answerContext=ComposeAnswerContext(answerStatus,topCandidates,decisionConfidence,winnerStability,decisionEvidenceCoverage,isIntentGap);
             // V2.2: persist execution-level entropy summary and information-round counters (fail-soft).
-            try{await wideRepository.UpdateWideExecutionEntropyAsync(request.TenantId,request.UserId,new(executionId,initialEntropy.Entropy,finalEntropy.Entropy,initialEntropy.NormalizedEntropy,finalEntropy.NormalizedEntropy,totalActualInformationGain,informationRounds.Count,informationTargetCount,informationRetrievalCount){EntropyBasisCode=finalEntropy.EntropyBasisCode,DecisionConfidence=decisionConfidence,ClarificationTarget=clarificationTarget,ClarificationQuestion=clarificationQuestion},cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
+            try{await wideRepository.UpdateWideExecutionEntropyAsync(request.TenantId,request.UserId,new(executionId,initialEntropy.Entropy,finalEntropy.Entropy,initialEntropy.NormalizedEntropy,finalEntropy.NormalizedEntropy,totalActualInformationGain,informationRounds.Count,informationTargetCount,informationRetrievalCount){EntropyBasisCode=finalEntropy.EntropyBasisCode,DecisionConfidence=decisionConfidence,ClarificationTarget=clarificationTarget,ClarificationQuestion=clarificationQuestion,IntentEntropy=intentEntropy,PriorIntentEntropy=request.PriorIntentEntropy,ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound},cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,timer.ElapsedMilliseconds,cancellationToken);
             return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
@@ -732,7 +797,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,
             ClarificationQuestion=clarificationQuestion,ClarificationTarget=clarificationTarget,ClarificationOptions=clarificationOptions,
-            ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut};
+            ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
+            ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext};
         }
         catch
         {
@@ -870,7 +936,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var orderedSurvivors=survivors.OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder).ToArray();
         // All interpretive narrowing paths (Level 1 first, then highest confidence) drive real-world reference
         // and interpretive result-set generation; the branch sub-header (Interpretation) is fed to the LLM.
-        var allInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
+        // Not-prioritized (DORMANT) branches are included so their interpretations still receive full
+        // result sets — they render as secondary-importance results, never disappear from the surface.
+        var allInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
         var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,10);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
         WideBranchRecord[] topInterpretiveBranches;string userPrompt;
         while(true)
@@ -893,7 +961,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             break;
         }
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-            "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and a one-sentence detail explaining why it holds that rank. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources.",
+            "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and detail: a rich 2-3 sentence explanation covering WHY the item holds that rank, its most distinguishing attributes or specifications, and its main strength plus one notable trade-off or limitation compared to adjacent ranks. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources.",
             userPrompt,
             AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty.");
@@ -923,6 +991,127 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         var firstSentence=detail.Split(['.','!','?'],2)[0].Trim();
         return firstSentence.Length<=120?firstSentence:firstSentence[..117]+"...";
+    }
+
+    // V2.8.5 answer→candidate reweighting: the user's clarification answer is direct intent evidence.
+    // Token overlap between the answer and each candidate's name/detail produces a deterministic
+    // composite boost (up to +35% relative), then candidates are re-ranked. Zero-LLM by design so the
+    // user's stated choice reliably moves the ranking even when the re-executed evidence run is noisy.
+    // V2.9 Answer Composer: translate the Candidate × Branch outcome into a presentation contract.
+    // Everything is computed deterministically from data the engine already produced — the composer
+    // NEVER reranks, invents evidence, or resolves uncertainty EPH did not resolve. The presentation
+    // layer's job narrows to: communicate EPH's decision clearly and faithfully.
+    private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap)
+    {
+        if(topCandidates.Length==0)return null;
+        // Response mode routes the UX: intent gap → candidate choice; weak grounding → evidence
+        // warning; close ranking → ranking + optional preference; decisive winner → direct answer.
+        var margin=topCandidates.Length<2?1m:Math.Clamp((topCandidates[0].CompositeScore-topCandidates[1].CompositeScore)/Math.Max(topCandidates[0].CompositeScore,.0001m),0,1);
+        var responseMode=answerStatus=="USER_CLARIFICATION_REQUIRED"?WideResponseModes.ClarificationRequired
+            :decisionEvidenceCoverage<.35m?WideResponseModes.LimitedEvidence
+            :topCandidates.Length>1&&(margin<.15m||(winnerStability??1m)<.75m)?WideResponseModes.AnswerWithRefinement
+            :WideResponseModes.Answer;
+        // Human confidence: translate the metric bundle into language an ordinary user understands.
+        var confidence=decisionConfidence??0m;
+        var confidenceLabel=confidence>=.75m?"High":confidence>=.5m?"Moderate":"Low";
+        var winner=topCandidates[0];
+        var confidenceNarrative=responseMode switch
+        {
+            WideResponseModes.ClarificationRequired=>"Several distinct matches are possible — one detail from you resolves which one is meant.",
+            WideResponseModes.LimitedEvidence=>$"{winner.DisplayName} leads this analysis, but fewer of the deciding factors are backed by retrieved evidence than EPH prefers — treat the ranking as directional.",
+            WideResponseModes.AnswerWithRefinement=>$"{winner.DisplayName} leads this analysis, but several candidates scored closely and the ranking could change depending on how the deciding factors are weighted.",
+            _=>$"{winner.DisplayName} leads this analysis with clear separation from the alternatives.",
+        };
+        // Winner strengths and weaknesses: the candidate's best and worst decision dimensions.
+        var winnerScores=winner.BranchScores.OrderByDescending(score=>score.EvidenceScore).ToArray();
+        var strengths=winnerScores.Take(3).Select(score=>new WideDimensionScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray();
+        var weaknesses=winnerScores.Reverse().Take(2).Where(score=>score.EvidenceScore<winnerScores[0].EvidenceScore).Select(score=>new WideDimensionScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray();
+        // Ranking-card summaries: each candidate's best dimension and its weakest (main trade-off).
+        var summaries=topCandidates.Take(10).Select(candidate=>
+        {
+            var ordered=candidate.BranchScores.OrderByDescending(score=>score.EvidenceScore).ToArray();
+            return new WideCandidateSummaryDto(candidate.DisplayName,candidate.CompositeScore,
+                ordered.Length>0?ordered[0].BranchDisplayName:null,
+                ordered.Length>1?ordered[^1].BranchDisplayName:null);
+        }).ToArray();
+        // Winner-vs-alternative contrasts: dimensions each side leads on, from the same score matrix.
+        var contrasts=topCandidates.Skip(1).Take(3).Select(alternative=>
+        {
+            var winnerLeads=new List<string>();var alternativeLeads=new List<string>();
+            foreach(var winnerScore in winner.BranchScores)
+            {
+                var alternativeScore=alternative.BranchScores.FirstOrDefault(score=>string.Equals(score.BranchDisplayName,winnerScore.BranchDisplayName,StringComparison.OrdinalIgnoreCase));
+                if(alternativeScore is null)continue;
+                if(winnerScore.EvidenceScore>alternativeScore.EvidenceScore+.02m)winnerLeads.Add(winnerScore.BranchDisplayName);
+                else if(alternativeScore.EvidenceScore>winnerScore.EvidenceScore+.02m)alternativeLeads.Add(winnerScore.BranchDisplayName);
+            }
+            return new WideCandidateContrastDto(alternative.DisplayName,alternative.CompositeScore,winnerLeads,alternativeLeads);
+        }).ToArray();
+        // Changeable dimensions: highest cross-candidate separation — reweighting these could flip
+        // the ranking, so they become the personalization/"could change if" chips. Intent-gap runs
+        // skip this: personalization applies to decision uncertainty, not identity ambiguity.
+        var changeable=isIntentGap?[]:topCandidates.Take(4)
+            .SelectMany(candidate=>candidate.BranchScores)
+            .GroupBy(score=>score.BranchDisplayName,StringComparer.OrdinalIgnoreCase)
+            .Where(group=>group.Count()>1)
+            .Select(group=>(Dimension:group.Key,Separation:group.Max(score=>score.EvidenceScore)-group.Min(score=>score.EvidenceScore)))
+            .Where(item=>item.Separation>=.05m)
+            .OrderByDescending(item=>item.Separation)
+            .Take(5)
+            .Select(item=>item.Dimension)
+            .ToArray();
+        return new(responseMode,confidenceLabel,confidenceNarrative)
+        {
+            WinnerDisplayName=responseMode==WideResponseModes.ClarificationRequired?null:winner.DisplayName,
+            WinnerStrengths=strengths,WinnerWeaknesses=weaknesses,
+            CandidateSummaries=summaries,CandidateContrasts=contrasts,ChangeableDimensions=changeable,
+        };
+    }
+
+    // V2.8.6 post-competition identity dedup: two ranked candidates whose CORE tokens are identical
+    // ("Overland Park, Kansas" / "Overland Park") are one entity and must hold one ranking position.
+    // The stronger instance (better rank; richer name on ties) survives; scores are never altered.
+    private static IReadOnlyCollection<WideCandidateDto> DeduplicateCandidatesByCanonicalTokens(IReadOnlyCollection<WideCandidateDto> candidates)
+    {
+        var survivors=new List<WideCandidateDto>();
+        var seen=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
+        foreach(var candidate in candidates.OrderBy(candidate=>candidate.IsConstraintViolation).ThenBy(candidate=>candidate.RankNumber))
+        {
+            var key=string.Join(' ',CanonicalTokens(candidate.DisplayName));
+            if(key.Length==0)key=candidate.DisplayName.Trim();
+            if(seen.TryGetValue(key,out var existingIndex))
+            {
+                // Same entity: keep the earlier (better-ranked) instance but prefer the richer name form.
+                if(candidate.DisplayName.Length>survivors[existingIndex].DisplayName.Length)
+                    survivors[existingIndex]=survivors[existingIndex] with{DisplayName=candidate.DisplayName,Detail=survivors[existingIndex].Detail??candidate.Detail};
+                continue;
+            }
+            seen[key]=survivors.Count;
+            survivors.Add(candidate);
+        }
+        return survivors.Select((candidate,index)=>candidate with{RankNumber=index+1}).ToArray();
+    }
+
+    private static IReadOnlyCollection<WideCandidateDto> ReweightCandidatesByClarificationAnswer(IReadOnlyCollection<WideCandidateDto> candidates,string answer)
+    {
+        var answerTokens=answer.Split([' ',',',';','/','(',')','-','—',':','.'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Where(token=>token.Length>2).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if(answerTokens.Count==0)return candidates;
+        var reweighted=candidates.Select(candidate=>
+        {
+            if(candidate.IsConstraintViolation)return(Candidate:candidate,Score:candidate.CompositeScore);
+            var candidateText=$"{candidate.DisplayName} {candidate.Detail}";
+            var candidateTokens=candidateText.Split([' ',',',';','/','(',')','-','—',':','.'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+                .Where(token=>token.Length>2).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if(candidateTokens.Count==0)return(Candidate:candidate,Score:candidate.CompositeScore);
+            var overlap=Math.Clamp((decimal)answerTokens.Count(candidateTokens.Contains)/answerTokens.Count,0,1);
+            return(Candidate:candidate,Score:Math.Clamp(candidate.CompositeScore*(1m+.35m*overlap),0,1));
+        }).ToArray();
+        return reweighted
+            .OrderBy(entry=>entry.Candidate.IsConstraintViolation)
+            .ThenByDescending(entry=>entry.Score)
+            .Select((entry,index)=>entry.Candidate with{CompositeScore=entry.Score,RankNumber=index+1})
+            .ToArray();
     }
 
     private static decimal ComputeAggregateConfidence(IReadOnlyCollection<WideBranchRecord> survivors)
@@ -963,11 +1152,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Level 1 branches first, then by interpretive scoring (branch confidence, highest first).
     private static WideInterpretiveResultDto[] MapInterpretiveResults(WideAnswerProposal answer,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
     {
-        var interpretive=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>(Level:group.Min(branch=>branch.LevelNumber),Confidence:group.Max(branch=>branch.Confidence)),StringComparer.OrdinalIgnoreCase);
+        var interpretive=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>(Level:group.Min(branch=>branch.LevelNumber),Confidence:group.Max(branch=>branch.Confidence),StateCode:group.OrderByDescending(branch=>branch.Confidence).First().BranchStateCode),StringComparer.OrdinalIgnoreCase);
         // The answer LLM may echo a slightly different display name than the stored branch name; without a
         // tolerant lookup every card silently falls back to the single shared answer confidence, which makes
         // all interpretive scores identical. Exact match first, then containment either way.
-        (int Level,decimal Confidence)? Resolve(string displayName)
+        (int Level,decimal Confidence,string StateCode)? Resolve(string displayName)
         {
             if(interpretive.TryGetValue(displayName,out var exact))return exact;
             var partial=interpretive.FirstOrDefault(entry=>entry.Key.Contains(displayName,StringComparison.OrdinalIgnoreCase)||displayName.Contains(entry.Key,StringComparison.OrdinalIgnoreCase));
@@ -975,7 +1164,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }
         var externallyGrounded=externalKnowledge.Count>0;
         return (answer.InterpretiveResults??[]).Where(result=>result.Items is{Count:>0})
-            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim())).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded})
+            .Select(result=>new WideInterpretiveResultDto(result.BranchDisplayName.Trim(),result.Interpretation.Trim(),Resolve(result.BranchDisplayName.Trim())?.Confidence??Math.Clamp(answer.Confidence,0,1),result.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim())).ToArray()){DataVolatility=result.DataVolatility?.Trim().ToUpperInvariant()=="TIME_SENSITIVE"?"TIME_SENSITIVE":"STABLE",IsExternallyGrounded=externallyGrounded,BranchStateCode=Resolve(result.BranchDisplayName.Trim())?.StateCode??WideBranchStates.Active,LevelNumber=Resolve(result.BranchDisplayName.Trim())?.Level??0})
             .OrderBy(result=>Resolve(result.BranchDisplayName)?.Level??int.MaxValue)
             .ThenByDescending(result=>result.Confidence).ToArray();
     }
@@ -1367,10 +1556,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(prefixMatches.Length==1)
             {
                 var existing=prefixMatches[0];
+                // V2.8.6 identity merge: EXACTLY equal core tokens ("Overland Park, Kansas" vs
+                // "Overland Park" — both tokenize to [Overland, Park] after the comma/paren strip) are
+                // the SAME name, not a prefix hypothesis — merge unconditionally. Host evidence is only
+                // required for genuine prefix relations where the shorter form might be a different entity.
+                var identicalTokens=item.Tokens.Length==existing.Tokens.Length;
                 // Merge hypothesis — confirm with evidence identity: the specific form is attested by at
                 // least one host, and the alias shares at least one host with it.
                 var specificHosts=existing.Tokens.Length>=item.Tokens.Length?existing.Hosts:itemHosts;
-                if(specificHosts.Count>0&&(itemHosts.Overlaps(existing.Hosts)||itemHosts.Count==0))
+                if(identicalTokens||(specificHosts.Count>0&&(itemHosts.Overlaps(existing.Hosts)||itemHosts.Count==0)))
                 {
                     aliasTarget[item.Name]=existing.Name;
                     existing.Hosts.UnionWith(itemHosts);

@@ -138,7 +138,50 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public decimal? ClarificationGain{get;init;}
     // V2.8.5: which ask/answer round produced this execution (0 = original question).
     public int ClarificationRound{get;init;}
+    // V2.9 Answer Composer: presentation contract derived DETERMINISTICALLY from the Candidate ×
+    // Branch outcome — the UI renders this instead of rediscovering the reasoning. Null when no
+    // candidate competition ran (LLM-only mode or zero candidates).
+    public WideAnswerContext? AnswerContext{get;init;}
 }
+
+// V2.9 response modes: the Uncertainty Router controls PRESENTATION, not only reasoning.
+public static class WideResponseModes
+{
+    public const string Answer="ANSWER";                              // decisive winner → direct answer UX
+    public const string AnswerWithRefinement="ANSWER_WITH_REFINEMENT";// close ranking → ranking + optional preference UX
+    public const string ClarificationRequired="CLARIFICATION_REQUIRED";// intent gap → candidate-choice UX
+    public const string LimitedEvidence="LIMITED_EVIDENCE";           // weak grounding → answer + evidence warning UX
+}
+
+// V2.9 Answer Composer contract: the structured EPH outcome the presentation layer communicates.
+// Everything here is computed deterministically from candidates, branch scores, and telemetry —
+// the presentation layer never reranks, invents evidence, or resolves uncertainty EPH did not.
+public sealed record WideAnswerContext(string ResponseMode,string ConfidenceLabel,string ConfidenceNarrative)
+{
+    // The winning candidate's name (deterministic final ranking #1). Null in clarification mode.
+    public string? WinnerDisplayName{get;init;}
+    // Winner's strongest decision dimensions with scores, best first (why it won).
+    public IReadOnlyCollection<WideDimensionScoreDto> WinnerStrengths{get;init;}=[];
+    // Winner's weakest decision dimensions with scores (honest trade-offs).
+    public IReadOnlyCollection<WideDimensionScoreDto> WinnerWeaknesses{get;init;}=[];
+    // Per-candidate ranking-card summaries: best-for dimension and main trade-off dimension.
+    public IReadOnlyCollection<WideCandidateSummaryDto> CandidateSummaries{get;init;}=[];
+    // Deterministic winner-vs-runner-up contrasts ("why Raleigh beat Charlotte").
+    public IReadOnlyCollection<WideCandidateContrastDto> CandidateContrasts{get;init;}=[];
+    // Dimensions whose weighting could change the ranking (highest cross-candidate separation) —
+    // rendered as "This ranking could change if..." personalization chips.
+    public IReadOnlyCollection<string> ChangeableDimensions{get;init;}=[];
+}
+
+// V2.9: one decision dimension with the candidate's evidence score on it.
+public sealed record WideDimensionScoreDto(string DimensionName,decimal Score);
+
+// V2.9: ranking-card summary — the candidate's best dimension and its weakest (main trade-off).
+public sealed record WideCandidateSummaryDto(string DisplayName,decimal CompositeScore,string? BestForDimension,string? TradeOffDimension);
+
+// V2.9: deterministic contrast between the winner and a close alternative — the dimensions where
+// the winner led and where the alternative led, from the same Candidate × Branch matrix.
+public sealed record WideCandidateContrastDto(string AlternativeDisplayName,decimal AlternativeScore,IReadOnlyCollection<string> WinnerLeadsOn,IReadOnlyCollection<string> AlternativeLeadsOn);
 
 // V2.8.4 Clarification Intelligence: one recognition-based clarification choice. Label is
 // description-first (candidate's evidence-backed detail) because users searching a bare name
@@ -174,6 +217,11 @@ public sealed record WideInterpretiveResultDto(string BranchDisplayName,string I
     public string DataVolatility{get;init;}="STABLE";
     // True when the result set was composed from live external retrieval (Stage 2.5), not LLM recall.
     public bool IsExternallyGrounded{get;init;}
+    // Branch lifecycle state of the source branch (ACTIVE/SECONDARY/DORMANT) so the UI can render
+    // not-prioritized interpretations as secondary-importance results instead of hiding them.
+    public string BranchStateCode{get;init;}=WideBranchStates.Active;
+    // Hierarchy level of the source branch (0 when the branch could not be resolved).
+    public int LevelNumber{get;init;}
 }
 
 public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail);
@@ -394,4 +442,10 @@ public sealed record WideExecutionEntropyUpdate(Guid WideExecutionId,decimal? In
     public decimal? DecisionConfidence{get;init;}
     public string? ClarificationTarget{get;init;}
     public string? ClarificationQuestion{get;init;}
+    // V2.8.5 Clarification Calibration (EPH.WideExecution columns; see migration 0153). Persisted
+    // per execution so calibration queries can measure which clarification targets actually work.
+    public decimal? IntentEntropy{get;init;}
+    public decimal? PriorIntentEntropy{get;init;}
+    public decimal? ClarificationGain{get;init;}
+    public int ClarificationRound{get;init;}
 }
