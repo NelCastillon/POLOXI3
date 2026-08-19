@@ -81,13 +81,6 @@
                     </div>
                 </section>
             }
-            @if (_response.AnswerContext is not null && _response.StatusCode != "USER_CLARIFICATION_REQUIRED")
-            {
-                <div class="eph-view-toggle" role="tablist" aria-label="Result view">
-                    <button type="button" role="tab" class="@(_showAnswerView ? "eph-view-tab eph-view-tab--active" : "eph-view-tab")" @onclick="() => _showAnswerView = true"><i class="bi bi-chat-square-text"></i> Answer</button>
-                    <button type="button" role="tab" class="@(!_showAnswerView ? "eph-view-tab eph-view-tab--active" : "eph-view-tab")" @onclick="() => _showAnswerView = false"><i class="bi bi-diagram-3"></i> EPH Analysis</button>
-                </div>
-            }
             @if (ShowAnswerView && _response.AnswerContext is { } answerContext)
             {
                 <section class="eph-answer-card eph-reveal">
@@ -112,6 +105,10 @@
                     {
                         <div class="eph-evidence-warning"><i class="bi bi-exclamation-triangle"></i> Fewer deciding factors are evidence-backed than usual — verify before acting on this ranking.</div>
                     }
+                    @if (answerContext.OutputContract is { IsSatisfied: false } contractResult)
+                    {
+                        <div class="eph-evidence-warning"><i class="bi bi-list-ol"></i> You asked for @contractResult.RequestedCount results, but only @contractResult.DeliveredCount candidates passed EPH's evidence and constraint checks@(contractResult.RecoveryAttempted ? " (a wider candidate recovery pass was attempted)" : "") — the ranking below is complete but shorter than requested.</div>
+                    }
                     @if (answerContext.CandidateSummaries.Count > 0)
                     {
                         <div class="eph-rank-table">
@@ -121,19 +118,54 @@
                                     <span class="eph-rank-medal @(index == 0 ? "eph-rank-medal--gold" : index == 1 ? "eph-rank-medal--silver" : index == 2 ? "eph-rank-medal--bronze" : null)">@(index switch { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => (index + 1).ToString() })</span>
                                     <div class="eph-rank-main">
                                         <strong>@summary.DisplayName</strong>
-                                        <small>
-                                            @if (summary.BestForDimension is not null)
-                                            {
-                                                <span>Best for: @summary.BestForDimension</span>
-                                            }
-                                            @if (summary.TradeOffDimension is not null)
-                                            {
-                                                <span> · Trade-off: @summary.TradeOffDimension</span>
-                                            }
-                                        </small>
+                                        @if (summary.SupportTierCode != "STRONG")
+                                        {
+                                            <span class="eph-tier-badge @(summary.SupportTierCode == "MODERATE" ? "eph-tier-badge--moderate" : "eph-tier-badge--limited")" title="@(summary.SupportTierCode == "MODERATE" ? "Moderate support — backed by fewer independent evidence signals than the top results" : "Limited support — provisional result backed by a single credible evidence signal")">@(summary.SupportTierCode == "MODERATE" ? "Moderate support" : "Limited support")</span>
+                                        }
+                                        @{ var hasInsights = summary.BestFor is not null || summary.PraisedFor.Count > 0 || summary.WatchOutFor.Count > 0; }
+                                        @if (hasInsights)
+                                        {
+                                            <div class="eph-rank-facts">
+                                                @if (summary.BestFor is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--bestfor" title="What this candidate is genuinely best for, based on retrieved evidence@(summary.BestForDimension is not null && summary.BestForScore is { } bfs ? $" — strongest decision dimension: {summary.BestForDimension} ({bfs:P0})" : "")">
+                                                        🎯 Best for: @summary.BestFor
+                                                    </span>
+                                                }
+                                                @if (summary.PraisedFor.Count > 0)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--praise" title="Recurring strength themes the retrieved evidence actually supports">
+                                                        👍 Praised for: @string.Join(" · ", summary.PraisedFor)
+                                                    </span>
+                                                }
+                                                @if (summary.WatchOutFor.Count > 0)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--watch" title="Recurring complaint or limitation themes the retrieved evidence actually supports">
+                                                        ⚠ Watch out: @string.Join(" · ", summary.WatchOutFor)
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
+                                        else if (summary.BestForDimension is not null || summary.TradeOffDimension is not null)
+                                        {
+                                            <div class="eph-rank-facts">
+                                                @if (summary.BestForDimension is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--strength" title="Strongest evidence-scored dimension for this candidate@(summary.BestForScore is { } bs ? $" — scored {bs:P0} on {summary.BestForDimension}" : "")">
+                                                        <i class="bi bi-arrow-up-circle-fill"></i> Strongest: @summary.BestForDimension@(summary.BestForScore is { } bestScore ? $" · {bestScore:P0}" : "")
+                                                    </span>
+                                                }
+                                                @if (summary.TradeOffDimension is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--tradeoff" title="Weakest evidence-scored dimension — the honest trade-off of choosing this candidate@(summary.TradeOffScore is { } ts ? $" — scored {ts:P0} on {summary.TradeOffDimension}" : "")">
+                                                        <i class="bi bi-arrow-down-circle-fill"></i> Trade-off: @summary.TradeOffDimension@(summary.TradeOffScore is { } tradeScore ? $" · {tradeScore:P0}" : "")
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
                                         <div class="eph-score-track"><span class="eph-score-fill" style="--score:@summary.CompositeScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
                                     </div>
-                                    <span class="eph-rank-score">@summary.CompositeScore.ToString("P0")</span>
+                                    <span class="eph-rank-score" title="Match score — how well this candidate fits the decision criteria relative to the alternatives; not a probability that it is objectively the best">@summary.CompositeScore.ToString("P0")<small class="eph-rank-score-label">match</small></span>
                                 </div>
                             }
                         </div>
@@ -142,7 +174,7 @@
                     {
                         <div class="eph-answer-section eph-reveal">
                             <h3><i class="bi bi-trophy"></i> Why @answerContext.WinnerDisplayName won</h3>
-                            <p>Its advantage was balance — it performed strongly across the criteria that drove this decision@(answerContext.WinnerWeaknesses.Count > 0 ? $", with {string.Join(" and ", answerContext.WinnerWeaknesses.Select(weakness => weakness.DimensionName.ToLowerInvariant()))} as the honest trade-off{(answerContext.WinnerWeaknesses.Count > 1 ? "s" : "")}" : "").</p>
+                            <p>@(answerContext.WinnerStrengths.Count > 0 ? $"Its {string.Join(" and ", answerContext.WinnerStrengths.Take(2).Select(strength => $"{strength.Score:P0} {strength.DimensionName.ToLowerInvariant()}"))} score{(answerContext.WinnerStrengths.Take(2).Count() > 1 ? "s" : "")} created its largest advantages." : "It performed strongly across the criteria that drove this decision.")@(answerContext.WinnerWeaknesses.Count > 0 ? $" {string.Join(" and ", answerContext.WinnerWeaknesses.Select(weakness => $"{weakness.DimensionName} ({weakness.Score:P0})"))} {(answerContext.WinnerWeaknesses.Count > 1 ? "were" : "was")} comparatively weaker." : "")</p>
                             <div class="eph-dimension-bars">
                                 @foreach (var strength in answerContext.WinnerStrengths)
                                 {
@@ -204,11 +236,53 @@
                             </div>
                         </div>
                     }
+                    @if (answerContext.RankingChangeDriver is { } changeDriver && answerContext.WinnerDisplayName is not null)
+                    {
+                        <div class="eph-answer-section eph-reveal eph-change-driver">
+                            <h3><i class="bi bi-arrow-left-right"></i> Most likely to change this ranking</h3>
+                            <p>
+                                <strong>@changeDriver.DimensionName</strong> — @answerContext.WinnerDisplayName currently leads by @changeDriver.MarginPoints.ToString("P0"), but <strong>@changeDriver.ChallengerDisplayName</strong> scores higher on this dimension@(changeDriver.ChallengerScore is { } cs && changeDriver.WinnerScore is { } ws ? $" ({cs:P0} vs {ws:P0})" : "").
+                                If @changeDriver.DimensionName.ToLowerInvariant() resolves against the current leader, @changeDriver.ChallengerDisplayName is the most likely new #1.
+                            </p>
+                        </div>
+                    }
                     @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
                     {
                         <div class="eph-answer-section eph-reveal">
                             <h3><i class="bi bi-card-text"></i> Full answer</h3>
                             <p>@_response.FinalAnswer</p>
+                        </div>
+                    }
+                    @if (_response.QueryContract is { } answerCardContract && (answerCardContract.HardConstraints.Count > 0 || answerCardContract.AmbiguousConcepts.Count > 0))
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-file-earmark-check"></i> Query contract</h3>
+                            <div class="eph-grounded-branches">
+                                <div class="eph-branch-level">
+                                    @foreach (var constraint in answerCardContract.HardConstraints)
+                                    {
+                                        <span class="eph-branch-chip" title="Hard constraint — fixed by your query, never reinterpreted."><i class="bi bi-lock"></i>@constraint<em>FIXED</em></span>
+                                    }
+                                    @foreach (var concept in answerCardContract.AmbiguousConcepts)
+                                    {
+                                        <span class="eph-branch-chip" title="Ambiguous concept — the only part EPH disambiguated."><i class="bi bi-question-circle"></i>@concept<em>DISAMBIGUATED</em></span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    @if (_response.SuggestedActions.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-arrow-right-circle"></i> Suggested actions</h3>
+                            <div class="eph-grounded-branches">
+                                <div class="eph-branch-level">
+                                    @foreach (var action in _response.SuggestedActions)
+                                    {
+                                        <span class="eph-branch-chip eph-action-chip" title="@action.Rationale" @onclick="() => OpenRoute(action.NavigationRoute)"><i class="bi bi-arrow-right-circle"></i>@action.DisplayName</span>
+                                    }
+                                </div>
+                            </div>
                         </div>
                     }
                     @if (_response.InterpretiveResults.Count > 0)
@@ -296,16 +370,40 @@
                             }
                         </div>
                     }
+                    @if (_response.ExternalReferences.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-globe2"></i> External sources <small class="eph-section-note">Real-world references · LLM knowledge (not enterprise-verified)</small></h3>
+                            @foreach (var reference in _response.ExternalReferences)
+                            {
+                                <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
+                                    <span class="eph-rank"><i class="bi bi-globe2"></i></span>
+                                    <div class="eph-evidence-main">
+                                        <strong>@reference.Title</strong>
+                                        <small>@reference.Source</small>
+                                        <p>@reference.Summary</p>
+                                        <div><span class="um-badge um-badge-neutral">@reference.BranchDisplayName</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
                     @if (_response.ExternalKnowledge.Count > 0)
                     {
                         <div class="eph-answer-section eph-reveal">
-                            <h3><i class="bi bi-link-45deg"></i> Sources</h3>
-                            <div class="eph-source-list">
-                                @foreach (var snippet in _response.ExternalKnowledge.Take(6))
-                                {
-                                    <a class="eph-source-pill" href="@snippet.Url" target="_blank" rel="noopener noreferrer" title="@snippet.Title"><i class="bi bi-globe2"></i> @snippet.Title</a>
-                                }
-                            </div>
+                            <h3><i class="bi bi-broadcast"></i> Live grounding sources <small class="eph-section-note">Live web sources · retrieved for time-sensitive grounding</small></h3>
+                            @foreach (var snippet in _response.ExternalKnowledge)
+                            {
+                                <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(snippet.Url)" title="Double-click to open @snippet.Url in a new tab.">
+                                    <span class="eph-rank"><i class="bi bi-broadcast"></i></span>
+                                    <div class="eph-evidence-main">
+                                        <strong>@snippet.Title</strong>
+                                        <small>Retrieved @snippet.RetrievedDateUtc.ToString("yyyy-MM-dd HH:mm") UTC</small>
+                                        <p>@snippet.Snippet</p>
+                                        <div><span class="um-badge um-badge-success"><i class="bi bi-globe2"></i> LIVE</span> <a href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@snippet.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                    </div>
+                                </article>
+                            }
                         </div>
                     }
                     <button type="button" class="eph-reasoning-toggle" @onclick="() => _showReasoning = !_showReasoning">
@@ -325,14 +423,11 @@
                                     </div>
                                 }
                             </div>
-                            <button type="button" class="eph-reasoning-toggle" @onclick="() => _showAnswerView = false"><i class="bi bi-diagram-3"></i> Open the full EPH Intelligence Analysis</button>
-                        </div>
-                    }
-                </section>
-            }
-            @if (!ShowAnswerView)
-            {
-            @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
+                                        </div>
+                                    }
+                                </section>
+                            }
+                            @if (!ShowAnswerView && !string.IsNullOrWhiteSpace(_response.FinalAnswer))
             {
                 <section class="eph-explanation">
                     <div class="eph-explanation-icon"><i class="bi bi-chat-square-quote"></i></div>
@@ -618,7 +713,7 @@
                             </div>
                         }
                     }
-                    @if (_response.ExternalReferences.Count > 0)
+                    @if (_response.ExternalReferences.Count > 0 && _response.AnswerContext is null)
                     {
                         <div class="eph-panel-header"><div><span>Real-world references · LLM knowledge (not enterprise-verified)</span><h2>External sources</h2></div></div>
                         @foreach (var reference in _response.ExternalReferences)
@@ -634,7 +729,7 @@
                             </article>
                         }
                     }
-                    @if (_response.ExternalKnowledge.Count > 0)
+                    @if (_response.ExternalKnowledge.Count > 0 && _response.AnswerContext is null)
                     {
                         <div class="eph-panel-header"><div><span>Live web sources &middot; retrieved for time-sensitive grounding</span><h2>Live grounding sources</h2></div></div>
                         @foreach (var snippet in _response.ExternalKnowledge)
@@ -652,7 +747,6 @@
                     }
                 </section>
             </div>
-            }
             }
         }
     </div>

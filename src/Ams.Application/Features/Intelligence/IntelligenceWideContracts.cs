@@ -171,13 +171,58 @@ public sealed record WideAnswerContext(string ResponseMode,string ConfidenceLabe
     // Dimensions whose weighting could change the ranking (highest cross-candidate separation) —
     // rendered as "This ranking could change if..." personalization chips.
     public IReadOnlyCollection<string> ChangeableDimensions{get;init;}=[];
+    // V2.9.2 Output Contract Validation: deterministic post-competition check that the delivered
+    // ranking satisfies the query contract (requested count, entity list size). Never hidden —
+    // a shortfall is disclosed instead of silently under-delivering.
+    public WideOutputContractResultDto? OutputContract{get;init;}
+    // V2.9.2 Single Ranking-Changing Uncertainty: the ONE unresolved decision dimension most
+    // likely to change #1, with the candidate most likely to replace it. Zero-LLM, computed from
+    // the Candidate × Branch matrix; null when the winner's lead is decisive.
+    public WideRankingChangeDriverDto? RankingChangeDriver{get;init;}
+}
+
+// V2.9.2: deterministic output-contract compliance result. RequestedCount is the explicit count
+// from the query contract ("top 10"); DeliveredCount is the number of non-violating ranked
+// candidates actually produced. IsSatisfied is false on any shortfall so the UI can disclose it.
+public sealed record WideOutputContractResultDto(int RequestedCount,int DeliveredCount,bool IsSatisfied)
+{
+    // True when a relaxed-discovery recovery competition was attempted to close the shortfall.
+    public bool RecoveryAttempted{get;init;}
+}
+
+// V2.9.2: the single highest-impact unresolved dimension. DimensionName is the decision dimension
+// where the runner-up most out-scores (or is least behind) the winner relative to the winner's
+// composite lead; ChallengerDisplayName is the candidate most likely to become #1 if that
+// dimension resolves against the winner. MarginPoints is the winner-vs-challenger composite gap.
+public sealed record WideRankingChangeDriverDto(string DimensionName,string ChallengerDisplayName,decimal MarginPoints)
+{
+    // Winner's and challenger's evidence scores on the driving dimension (UI context).
+    public decimal? WinnerScore{get;init;}
+    public decimal? ChallengerScore{get;init;}
 }
 
 // V2.9: one decision dimension with the candidate's evidence score on it.
 public sealed record WideDimensionScoreDto(string DimensionName,decimal Score);
 
 // V2.9: ranking-card summary — the candidate's best dimension and its weakest (main trade-off).
-public sealed record WideCandidateSummaryDto(string DisplayName,decimal CompositeScore,string? BestForDimension,string? TradeOffDimension);
+public sealed record WideCandidateSummaryDto(string DisplayName,decimal CompositeScore,string? BestForDimension,string? TradeOffDimension)
+{
+    // Evidence scores behind the best-for / trade-off dimensions so the UI can show the actual
+    // data value ("Quality of life 92%"), not just the dimension name.
+    public decimal? BestForScore{get;init;}
+    public decimal? TradeOffScore{get;init;}
+    // V2.9.1 human-facing signals derived from retrieved evidence (never invented): a short
+    // buyer-facing "best for" phrase, praise themes, and complaint/watch-out themes. The raw
+    // dimension names/scores above remain the deterministic fallback and tooltip layer — the
+    // lowest branch score is NOT automatically a negative, so themes replace "Trade-off" text
+    // whenever grounded insight exists.
+    public string? BestFor{get;init;}
+    public IReadOnlyCollection<string> PraisedFor{get;init;}=[];
+    public IReadOnlyCollection<string> WatchOutFor{get;init;}=[];
+    // V2.9.4 support tier (STRONG/MODERATE/LIMITED) so the ranking card discloses which results
+    // are strongly supported versus provisional — completeness with transparency.
+    public string SupportTierCode{get;init;}="STRONG";
+}
 
 // V2.9: deterministic contrast between the winner and a close alternative — the dimensions where
 // the winner led and where the alternative led, from the same Candidate × Branch matrix.
@@ -205,6 +250,30 @@ public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string
     // V2.6 Evidence Confidence: "how well can we support that quality claim?" — deterministic, driven
     // by independent-source diversity and mention support. Affects confidence, never quality.
     public decimal EvidenceConfidence{get;init;}
+    // V2.9.3 admission provenance: NORMAL = passed the standard cross-dimensional support gate;
+    // RECOVERY = qualified only through the recovery-pass support calculation (interpretive
+    // dimensions + independent evidence hosts, both distinct). requiredSupport itself is NEVER
+    // lowered — recovery only recognizes additional independent support the normal discovery
+    // path did not fully credit.
+    public string AdmissionModeCode{get;init;}="NORMAL";
+    // V2.9.4 tiered admission: the requested result count is honored whenever enough plausible,
+    // evidence-backed candidates exist — weaker-but-valid candidates are ADMITTED with a lower
+    // support tier instead of being silently dropped. The invariant is transparency, not exclusion:
+    // never hide weaker evidence just to satisfy Top N, and never invent unsupported candidates.
+    //   STRONG   = passes the standard cross-dimensional support gate (>=2 interpretation dimensions
+    //              or equivalent host-attested support).
+    //   MODERATE = combined distinct interpretive dimensions + distinct independent evidence hosts
+    //              meets the required support (e.g., 1 dimension + >=1 independent host, or >=2 hosts).
+    //   LIMITED  = at least one credible support signal (one dimension or one host) and passes
+    //              all hard constraints.
+    // Zero-support names are still excluded — tiers disclose weakness, they never admit inventions.
+    public string SupportTierCode{get;init;}="STRONG";
+    // Distinct interpretive dimensions naming this candidate (repeats within one branch count once).
+    public int InterpretiveSupportCount{get;init;}
+    // Distinct independent evidence hosts attesting this candidate (repeat articles from one host count once).
+    public int EvidenceHostSupportCount{get;init;}
+    // Total support credited at admission time (interpretive + hosts in recovery; capped host/interpretive rule in normal).
+    public int TotalSupportCount{get;init;}
 }
 
 public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore);
@@ -299,7 +368,13 @@ public sealed record WideAnswerProposal(string Answer,string VerificationCode,de
 {
     public IReadOnlyCollection<WideExternalReference> ExternalReferences{get;init;}=[];
     public IReadOnlyCollection<WideInterpretiveResult> InterpretiveResults{get;init;}=[];
+    // V2.9.1: evidence-grounded per-candidate insight themes (best-for phrase, praise themes,
+    // complaint themes). The LLM may only echo themes present in the supplied evidence/snippets.
+    public IReadOnlyCollection<WideCandidateInsight> CandidateInsights{get;init;}=[];
 }
+
+// V2.9.1: one candidate's grounded human-facing insight themes.
+public sealed record WideCandidateInsight(string CandidateName,string? BestFor,IReadOnlyCollection<string> PraisedFor,IReadOnlyCollection<string> WatchOutFor);
 
 public sealed record WideExternalReference(string Title,string Url,string Source,string Summary,string BranchDisplayName);
 

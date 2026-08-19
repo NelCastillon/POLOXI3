@@ -620,6 +620,36 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // user's choice reliably moves the ranking even when the re-executed evidence run was noisy.
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&candidates.Count>1)
                 candidates=ReweightCandidatesByClarificationAnswer(candidates,request.ClarificationAnswer);
+            // V2.9.2 Output Contract Validation: the delivered ranking must mechanically satisfy the
+            // query contract. Requested 10 cities → 10 valid candidates; a shortfall is a validation
+            // failure, not a composition style choice. One recovery pass re-runs the competition with
+            // relaxed candidate discovery (single-source evidence names admitted) to widen the pool;
+            // any remaining shortfall is DISCLOSED via the answer contract, never silently accepted.
+            WideOutputContractResultDto? outputContract=null;
+            if(queryContract?.RequestedCount is int contractCount&&contractCount>0&&candidates.Count>0)
+            {
+                var deliveredCount=candidates.Count(candidate=>!candidate.IsConstraintViolation);
+                var recoveryAttempted=false;
+                if(deliveredCount<contractCount&&llmCalls<configuration.MaximumTotalLlmCalls)
+                {
+                    recoveryAttempted=true;
+                    var recovered=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,cancellationToken,isRecoveryPass:true);
+                    if(recovered.Count>0)
+                    {
+                        llmCalls++;
+                        if(recovered.Count>1)recovered=DeduplicateCandidatesByCanonicalTokens(recovered);
+                        if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&recovered.Count>1)
+                            recovered=ReweightCandidatesByClarificationAnswer(recovered,request.ClarificationAnswer);
+                        // Keep the recovery only when it actually improved contract compliance.
+                        if(recovered.Count(candidate=>!candidate.IsConstraintViolation)>deliveredCount)
+                        {
+                            candidates=recovered;
+                            deliveredCount=candidates.Count(candidate=>!candidate.IsConstraintViolation);
+                        }
+                    }
+                }
+                outputContract=new(contractCount,deliveredCount,deliveredCount>=contractCount){RecoveryAttempted=recoveryAttempted};
+            }
             // V2.1 evidence metrics: coverage = share of surviving branches supported by any evidence.
             var coveredBranches=survivorsFinal.Count(branch=>branch.EvidenceSupport>0);
             var evidenceCoverage=survivorsFinal.Length==0?0m:Math.Clamp((decimal)coveredBranches/survivorsFinal.Length,0,1);
@@ -787,12 +817,38 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,queryContract is null?null:JsonSerializer.Serialize(queryContract,JsonOptions),evidenceCoverage,externalKnowledge.Count,relevantEvidence.Length,candidates.Count,cancellationToken);
             // V2.9 Answer Composer: derive the presentation contract deterministically from the final
             // Candidate × Branch outcome — zero-LLM, computed AFTER the gate so response mode reflects it.
-            var answerContext=ComposeAnswerContext(answerStatus,topCandidates,decisionConfidence,winnerStability,decisionEvidenceCoverage,isIntentGap);
+            var answerContext=ComposeAnswerContext(answerStatus,topCandidates,decisionConfidence,winnerStability,decisionEvidenceCoverage,isIntentGap,answer.CandidateInsights,outputContract);
             // V2.2: persist execution-level entropy summary and information-round counters (fail-soft).
             try{await wideRepository.UpdateWideExecutionEntropyAsync(request.TenantId,request.UserId,new(executionId,initialEntropy.Entropy,finalEntropy.Entropy,initialEntropy.NormalizedEntropy,finalEntropy.NormalizedEntropy,totalActualInformationGain,informationRounds.Count,informationTargetCount,informationRetrievalCount){EntropyBasisCode=finalEntropy.EntropyBasisCode,DecisionConfidence=decisionConfidence,ClarificationTarget=clarificationTarget,ClarificationQuestion=clarificationQuestion,IntentEntropy=intentEntropy,PriorIntentEntropy=request.PriorIntentEntropy,ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound},cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
+            // V2.9.2 Ranking Lock: the LLM interprets, EPH decides. When a deterministic Candidate ×
+            // Branch competition produced a ranking, that ranking is authoritative — the composed prose
+            // must never contradict it. The locked ordered ranking is prepended to the final answer text
+            // so the Full Answer and the ranking cards can never disagree, regardless of LLM output.
+            var finalAnswerText=string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer;
+            if(finalAnswerText is not null&&topCandidates.Length>0&&answerStatus!="USER_CLARIFICATION_REQUIRED")
+            {
+                var lockedRanking=string.Join(" ",topCandidates.Take(Math.Max(queryContract?.RequestedCount??0,10)).Select((candidate,index)=>$"{index+1}. {candidate.DisplayName} ({candidate.CompositeScore:P0})."));
+                // V2.9.5 candidate-leakage guard: the prose is composed BEFORE the competition, so it
+                // can mention interpretive/discovered candidates that did not make the final ranking
+                // as though they were winners (FinalAnswerCandidates ⊄ FinalRankedCandidates). The
+                // guard is deterministic and zero-LLM: any competed-but-unranked candidate name found
+                // in the prose is explicitly disclosed as considered-but-not-selected, so the narrative
+                // can never silently promote an unranked candidate.
+                var rankedNames=candidates.Where(candidate=>!candidate.IsConstraintViolation).Select(candidate=>candidate.DisplayName).ToArray();
+                var leakedNames=candidates.Where(candidate=>candidate.IsConstraintViolation).Select(candidate=>candidate.DisplayName)
+                    .Concat(interpretiveResults.SelectMany(result=>result.Items.Select(item=>item.Name)))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Where(name=>IsValidCandidateName(name)
+                        &&!rankedNames.Any(ranked=>ranked.Contains(name,StringComparison.OrdinalIgnoreCase)||name.Contains(ranked,StringComparison.OrdinalIgnoreCase))
+                        &&finalAnswerText.Contains(name,StringComparison.OrdinalIgnoreCase))
+                    .Take(6)
+                    .ToArray();
+                var leakageNote=leakedNames.Length==0?string.Empty:$"\n\nAlso considered but not selected for the final ranking: {string.Join(", ",leakedNames)}.";
+                finalAnswerText=$"Final ranking (deterministic): {lockedRanking}\n\n{finalAnswerText}{leakageNote}";
+            }
             timer.Stop();
-            await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,timer.ElapsedMilliseconds,cancellationToken);
-            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
+            await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
+            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
             Candidates=candidates,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,
@@ -961,7 +1017,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             break;
         }
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-            "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and detail: a rich 2-3 sentence explanation covering WHY the item holds that rank, its most distinguishing attributes or specifications, and its main strength plus one notable trade-off or limitation compared to adjacent ranks. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources.",
+            "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and detail: a rich 2-3 sentence explanation covering WHY the item holds that rank, its most distinguishing attributes or specifications, and its main strength plus one notable trade-off or limitation compared to adjacent ranks. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources. Finally provide candidateInsights: one entry per ranked candidate entity discussed in the answer, with candidateName echoing the candidate's name, bestFor (one short buyer-facing phrase describing what the candidate is genuinely best for based on the supplied material, or null), praisedFor (up to 4 short recurring strength themes such as 'Performance' or 'Build quality' that the supplied evidence, snippets, or result-set details actually support), and watchOutFor (up to 4 short recurring complaint or limitation themes the supplied material actually supports, such as 'Battery life' or 'Fan noise'). These themes are GROUNDED summaries, never inventions: only include a theme when the supplied enterprise evidence, external snippets, or interpretive result details genuinely mention or support it, and never present a low ranking score as a product flaw. Return empty arrays and a null bestFor when nothing in the supplied material supports themes for a candidate; return an empty candidateInsights array when there are no ranked candidate entities. RANKING LOCK: you do NOT decide the final ranking. The final ordered ranking of candidate entities is computed deterministically by the engine after your response and is authoritative. In the answer text NEVER output your own numbered or ordered ranking of candidate entities, never declare a #1/winner/best overall candidate, and never state that one candidate ranks above another; instead explain the evidence, criteria, and characteristics in prose. Interpretive result sets for the numbered narrowing paths are exempt: return their items as instructed.",
             userPrompt,
             AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
         return JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty.");
@@ -1001,7 +1057,22 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Everything is computed deterministically from data the engine already produced — the composer
     // NEVER reranks, invents evidence, or resolves uncertainty EPH did not resolve. The presentation
     // layer's job narrows to: communicate EPH's decision clearly and faithfully.
-    private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap)
+    // Branch display names are phrased for the reasoning hierarchy ("Best by Quality of Life",
+    // "Best in terms of affordability and cost of living"). On ranking cards those prefixes read
+    // as noise ("Best for: Best by Quality of Life"), so strip the leading qualifier phrasing and
+    // title-shape the remainder into a clean dimension label ("Quality of Life").
+    private static string HumanizeDimensionName(string displayName)
+    {
+        var name=displayName.Trim();
+        string[] prefixes=["best in terms of ","best by ","best for ","best on ","ranked by ","evaluated by ","evaluated on ","based on "];
+        foreach(var prefix in prefixes)
+        {
+            if(name.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)){name=name[prefix.Length..].Trim();break;}
+        }
+        return name.Length==0?displayName.Trim():char.ToUpperInvariant(name[0])+name[1..];
+    }
+
+    private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap,IReadOnlyCollection<WideCandidateInsight>? candidateInsights=null,WideOutputContractResultDto? outputContract=null)
     {
         if(topCandidates.Length==0)return null;
         // Response mode routes the UX: intent gap → candidate choice; weak grounding → evidence
@@ -1023,16 +1094,46 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             _=>$"{winner.DisplayName} leads this analysis with clear separation from the alternatives.",
         };
         // Winner strengths and weaknesses: the candidate's best and worst decision dimensions.
-        var winnerScores=winner.BranchScores.OrderByDescending(score=>score.EvidenceScore).ToArray();
-        var strengths=winnerScores.Take(3).Select(score=>new WideDimensionScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray();
-        var weaknesses=winnerScores.Reverse().Take(2).Where(score=>score.EvidenceScore<winnerScores[0].EvidenceScore).Select(score=>new WideDimensionScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray();
-        // Ranking-card summaries: each candidate's best dimension and its weakest (main trade-off).
+        // V2.9.5: dimensions are DEDUPLICATED by humanized name and a dimension can never appear in
+        // both lists (with few dimensions, top-3 and bottom-2 windows can overlap — "Quality of Life"
+        // must not render as a strength and a weakness simultaneously). Names are humanized here so
+        // the presentation layer never shows raw "Best by X" branch labels in winner explanations.
+        var winnerScores=winner.BranchScores
+            .GroupBy(score=>HumanizeDimensionName(score.BranchDisplayName),StringComparer.OrdinalIgnoreCase)
+            .Select(group=>new WideDimensionScoreDto(group.Key,group.Max(score=>score.EvidenceScore)))
+            .OrderByDescending(score=>score.Score)
+            .ToArray();
+        var strengths=winnerScores.Take(3).ToArray();
+        var strengthNames=strengths.Select(score=>score.DimensionName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var weaknesses=winnerScores.Reverse().Take(2)
+            .Where(score=>!strengthNames.Contains(score.DimensionName)&&score.Score<winnerScores[0].Score)
+            .ToArray();
+        // Ranking-card summaries: each candidate's best dimension and its weakest (main trade-off),
+        // with their evidence scores and human-friendly dimension names ("Best by Quality of Life"
+        // → "Quality of Life"). The trade-off is only surfaced when it is meaningfully weaker than
+        // the best dimension — a flat profile has no honest trade-off to report.
         var summaries=topCandidates.Take(10).Select(candidate=>
         {
             var ordered=candidate.BranchScores.OrderByDescending(score=>score.EvidenceScore).ToArray();
+            var best=ordered.Length>0?ordered[0]:null;
+            var worst=ordered.Length>1?ordered[^1]:null;
+            var hasTradeOff=best is not null&&worst is not null&&best.EvidenceScore-worst.EvidenceScore>=.05m;
+            // V2.9.1: grounded human-facing themes (from the answer LLM, constrained to supplied
+            // evidence) take presentation priority over raw dimension chips; the dimension data is
+            // kept as fallback and tooltip context. Matching is by candidate name, tolerant of the
+            // LLM using a shorter or longer form of the same entity name.
+            var insight=candidateInsights?.FirstOrDefault(item=>!string.IsNullOrWhiteSpace(item.CandidateName)
+                &&(string.Equals(item.CandidateName.Trim(),candidate.DisplayName.Trim(),StringComparison.OrdinalIgnoreCase)
+                ||candidate.DisplayName.Contains(item.CandidateName.Trim(),StringComparison.OrdinalIgnoreCase)
+                ||item.CandidateName.Contains(candidate.DisplayName.Trim(),StringComparison.OrdinalIgnoreCase)));
             return new WideCandidateSummaryDto(candidate.DisplayName,candidate.CompositeScore,
-                ordered.Length>0?ordered[0].BranchDisplayName:null,
-                ordered.Length>1?ordered[^1].BranchDisplayName:null);
+                best is null?null:HumanizeDimensionName(best.BranchDisplayName),
+                hasTradeOff?HumanizeDimensionName(worst!.BranchDisplayName):null)
+            {BestForScore=best?.EvidenceScore,TradeOffScore=hasTradeOff?worst!.EvidenceScore:null,
+             BestFor=string.IsNullOrWhiteSpace(insight?.BestFor)?null:insight!.BestFor!.Trim(),
+             PraisedFor=insight?.PraisedFor?.Where(theme=>!string.IsNullOrWhiteSpace(theme)).Select(theme=>theme.Trim()).Take(4).ToArray()??[],
+             WatchOutFor=insight?.WatchOutFor?.Where(theme=>!string.IsNullOrWhiteSpace(theme)).Select(theme=>theme.Trim()).Take(4).ToArray()??[],
+             SupportTierCode=candidate.SupportTierCode};
         }).ToArray();
         // Winner-vs-alternative contrasts: dimensions each side leads on, from the same score matrix.
         var contrasts=topCandidates.Skip(1).Take(3).Select(alternative=>
@@ -1060,11 +1161,36 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             .Take(5)
             .Select(item=>item.Dimension)
             .ToArray();
+        // V2.9.2 Single Ranking-Changing Uncertainty: identify the ONE unresolved dimension most
+        // likely to change #1 and the candidate most likely to replace it. Deterministic, zero-LLM:
+        // for each non-violating challenger, the driving dimension is where the challenger most
+        // out-scores the winner; the challenger with the smallest composite gap AND at least one
+        // dimension advantage is the likely replacement. Only surfaced when the decision is not
+        // decisive (thin margin, low confidence, or unstable winner) and not an intent gap.
+        WideRankingChangeDriverDto? rankingChangeDriver=null;
+        var rankingUnsettled=margin<.15m||(decisionConfidence??1m)<.75m||(winnerStability??1m)<.75m;
+        if(!isIntentGap&&rankingUnsettled&&topCandidates.Length>1)
+        {
+            foreach(var challenger in topCandidates.Skip(1).Take(3))
+            {
+                var bestAdvantage=challenger.BranchScores
+                    .Select(challengerScore=>(ChallengerScore:challengerScore,WinnerScore:winner.BranchScores.FirstOrDefault(score=>string.Equals(score.BranchDisplayName,challengerScore.BranchDisplayName,StringComparison.OrdinalIgnoreCase))))
+                    .Where(pair=>pair.WinnerScore is not null)
+                    .Select(pair=>(pair.ChallengerScore,pair.WinnerScore,Advantage:pair.ChallengerScore.EvidenceScore-pair.WinnerScore!.EvidenceScore))
+                    .OrderByDescending(pair=>pair.Advantage)
+                    .FirstOrDefault();
+                if(bestAdvantage.ChallengerScore is null||bestAdvantage.Advantage<=0)continue;
+                rankingChangeDriver=new(HumanizeDimensionName(bestAdvantage.ChallengerScore.BranchDisplayName),challenger.DisplayName,Math.Clamp(winner.CompositeScore-challenger.CompositeScore,0,1))
+                {WinnerScore=bestAdvantage.WinnerScore!.EvidenceScore,ChallengerScore=bestAdvantage.ChallengerScore.EvidenceScore};
+                break;
+            }
+        }
         return new(responseMode,confidenceLabel,confidenceNarrative)
         {
             WinnerDisplayName=responseMode==WideResponseModes.ClarificationRequired?null:winner.DisplayName,
             WinnerStrengths=strengths,WinnerWeaknesses=weaknesses,
             CandidateSummaries=summaries,CandidateContrasts=contrasts,ChangeableDimensions=changeable,
+            OutputContract=outputContract,RankingChangeDriver=rankingChangeDriver,
         };
     }
 
@@ -1582,8 +1708,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return canonical.Select(item=>(item.Name,item.Detail)).ToList();
     }
 
-    private async Task<IReadOnlyCollection<WideCandidateDto>> CompeteCandidatesAsync(WideSearchRequest request,Guid executionId,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<string> discoveredCandidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<WideCandidateDto>> CompeteCandidatesAsync(WideSearchRequest request,Guid executionId,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<string> discoveredCandidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration,CancellationToken cancellationToken,bool isRecoveryPass=false)
     {
+        // V2.9.3 Recovery Pass invariant: EPH never relaxes evidence requirements to fill Top N;
+        // recovery only recognizes additional INDEPENDENT support that the normal candidate-discovery
+        // path did not fully credit. requiredSupport is NEVER lowered. In recovery mode:
+        //   - discovery admits single-host evidence names into the SCORED pool (they still face the gate),
+        //   - the admission gate credits RecoverySupport = DistinctInterpretiveDimensions +
+        //     DistinctEvidenceHosts (repeat mentions within one branch and repeat articles from one
+        //     host each count once — support is signal diversity, never raw mention count).
+        var minimumDiscoverySourceHosts=isRecoveryPass?1:2;
         try
         {
             // V2.5: the final Candidate × Branch matrix must include EVERY primary (root-level,
@@ -1622,7 +1756,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var evidenceCandidates=discoveredCandidates
                 .Where(name=>IsValidCandidateName(name)&&!knownNames.Contains(name))
                 .Select(name=>(Name:name,Hosts:CountDistinctSourceHosts(name,externalKnowledge)))
-                .Where(item=>item.Hosts>=2)
+                .Where(item=>item.Hosts>=minimumDiscoverySourceHosts)
                 .OrderByDescending(item=>item.Hosts)
                 .Take(targetCount)
                 .Select(item=>(item.Name,Detail:(string?)$"Discovered from retrieved evidence ({item.Hosts} independent sources)."))
@@ -1642,6 +1776,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var evidenceSupport=Math.Min(mentionHosts,interpretiveResults.Count);
                 if(evidenceSupport>dimensionSupport.GetValueOrDefault(name))dimensionSupport[name]=evidenceSupport;
             }
+            // V2.9.3: pure interpretive-dimension support per candidate (distinct dimensions only —
+            // the (dimension, candidate) pairs above are already deduplicated, so repeated mentions
+            // inside one interpretive branch count as ONE branch-support signal). Kept separate from
+            // the host-augmented dimensionSupport so recovery support and audit provenance are exact.
+            var interpretiveSupport=interpretiveResults
+                .SelectMany(result=>result.Items.Select(item=>(result.BranchDisplayName,item.Name)))
+                .Distinct(new CandidateDimensionComparer())
+                .GroupBy(entry=>entry.Name,StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group=>group.Key,group=>group.Count(),StringComparer.OrdinalIgnoreCase);
             if(candidateNames.Length==0)return [];
             var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
@@ -1674,6 +1817,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             var entries=new List<(WideCandidateRecord Record,bool SupportExcluded,decimal RawComposite)>();
             var evidenceConfidences=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
+            // V2.9.3 admission provenance per candidate: mode, interpretive-dimension support,
+            // independent-host support, and the total support credited at admission time.
+            var admissionInfo=new Dictionary<string,(string Mode,int Interpretive,int Hosts,int Total)>(StringComparer.OrdinalIgnoreCase);
+            // V2.9.4 support tier per candidate (STRONG/MODERATE/LIMITED) for transparent disclosure.
+            var supportTiers=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
             // V2.8.2 Candidate Identity Resolution on echo: candidates are prompted as "C<n>. Name:
             // Detail" — the echoed name may carry the label or detail. Resolve back to the SUPPLIED
             // canonical name so dimension-support admission and evidence lookups key on the same
@@ -1719,29 +1867,39 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // Constraint Engine: violators score 0 and carry the reason; they remain visible as PRUNED.
                 var violates=candidate.ViolatesConstraint;
                 var violationReason=candidate.ConstraintViolationReason?.Trim();
-                // V2.3 candidate admission: insufficient cross-dimensional support is treated as a
-                // constraint-style exclusion so single-dimension list appearances (for example a
-                // cheapest-places ranking) cannot win the overall competition.
+                // V2.3 candidate admission, upgraded to V2.9.4 TIERED admission: the requested result
+                // count is honored whenever enough plausible, evidence-backed candidates exist. Weaker-
+                // but-valid candidates are admitted with a disclosed lower support tier instead of being
+                // silently dropped. The rule is "never hide weaker evidence just to satisfy Top N" — not
+                // "never admit it". Zero-support names are still excluded; nothing is ever invented.
                 var support=dimensionSupport.GetValueOrDefault(resolvedName);
+                var interpretiveCount=interpretiveSupport.GetValueOrDefault(resolvedName);
+                var combinedSupport=interpretiveCount+distinctHosts;
+                var admissionMode=support>=requiredSupport?"NORMAL":"RECOVERY";
+                var supportTier=support>=requiredSupport?"STRONG"
+                    :combinedSupport>=requiredSupport?"MODERATE"
+                    :combinedSupport>=1?"LIMITED"
+                    :null;
                 var supportExcluded=false;
-                if(!violates&&support<requiredSupport)
+                if(!violates&&supportTier is null)
                 {
                     supportExcluded=true;
                     violates=true;
-                    violationReason=$"Insufficient cross-dimensional support: appears in {support} of {interpretiveResults.Count} interpretation dimensions (minimum {requiredSupport}).";
+                    violationReason=$"No credible support: appears in {interpretiveCount} of {interpretiveResults.Count} interpretation dimensions and {distinctHosts} independent evidence hosts.";
                 }
                 entries.Add((new(candidateId,executionId,request.TenantId,Truncate(resolvedName,300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(violationReason,400),scores),supportExcluded,Math.Clamp(composite,0,1)));
                 evidenceConfidences[resolvedName]=evidenceConfidence;
+                admissionInfo[resolvedName]=(supportTier is null?"EXCLUDED":admissionMode,interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
+                supportTiers[resolvedName]=supportTier??"LIMITED";
             }
-            // V2.7 hard rule: EPH never re-admits an invalid or weak candidate merely to satisfy a
-            // requested Top N. If fewer candidates than requested survive the evidence requirements,
-            // the answer honestly returns fewer — support-excluded candidates stay visible with their
-            // exclusion reasons. Candidate Discovery (evidence-harvested merge above) is the correct
-            // mechanism for filling shortfalls, not weakening admission standards.
+            // V2.9.4 rule: EPH honors the requested Top N whenever enough plausible, evidence-backed
+            // candidates exist — weaker-but-valid candidates compete with a disclosed lower support
+            // tier. Only zero-support names and constraint violators are excluded; EPH never invents
+            // candidates and never hides evidence weakness to fill a count.
             var records=entries.Select(entry=>entry.Record).ToList();
             var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(targetCount).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
             await wideRepository.SaveWideCandidatesAsync(ranked,request.UserId,cancellationToken);
-            return ranked.Select(record=>new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,record.BranchScores.Select(score=>new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)record.BranchScores.Count/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName)}).ToArray();
+            return ranked.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("NORMAL",0,0,0));return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,record.BranchScores.Select(score=>new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)record.BranchScores.Count/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"STRONG")};}).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {
@@ -1977,9 +2135,24 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         "required": ["branchDisplayName", "interpretation", "dataVolatility", "items"],
         "additionalProperties": false
       }
+    },
+    "candidateInsights": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidateName": { "type": "string" },
+          "bestFor": { "type": ["string", "null"] },
+          "praisedFor": { "type": "array", "maxItems": 4, "items": { "type": "string" } },
+          "watchOutFor": { "type": "array", "maxItems": 4, "items": { "type": "string" } }
+        },
+        "required": ["candidateName", "bestFor", "praisedFor", "watchOutFor"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["answer", "verificationCode", "confidence", "relevantEvidenceNumbers", "externalReferences", "suggestedActions", "interpretiveResults"],
+  "required": ["answer", "verificationCode", "confidence", "relevantEvidenceNumbers", "externalReferences", "suggestedActions", "interpretiveResults", "candidateInsights"],
   "additionalProperties": false
 }
 """;
