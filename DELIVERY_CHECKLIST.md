@@ -140,8 +140,8 @@
   - [x] Queue sorting
 
 - [x] **Data Display**
-  - [x] SfGrid rendering
-  - [x] SfKanban rendering (Producer)
+  - [x] AppGrid rendering
+  - [x] enterprise kanban board rendering (Producer)
   - [x] Paging
   - [x] Row height configuration
   - [x] Column configuration

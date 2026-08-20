@@ -163,34 +163,7 @@ BEGIN
     IF COL_LENGTH(N'Commission.CommissionClawback', N'IsDeleted') IS NULL ALTER TABLE Commission.CommissionClawback ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionClawback_IsDeleted DEFAULT 0;
 END;
 
-IF @TenantId IS NOT NULL AND @TenantId <> '00000000-0000-0000-0000-000000000000'
-BEGIN
-    EXEC sp_executesql N'
-    IF NOT EXISTS (SELECT 1 FROM Commission.CommissionClawback WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
-    BEGIN
-        DECLARE @SeedPayee UNIQUEIDENTIFIER = (SELECT TOP 1 PayeeId FROM Commission.CommissionPayee WHERE TenantId = @SeedTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
-        DECLARE @SeedTx UNIQUEIDENTIFIER = (SELECT TOP 1 TransactionId FROM Commission.CommissionTransaction WHERE TenantId = @SeedTenantId AND IsDeleted = 0 ORDER BY CreatedDateUtc);
-        DECLARE @SeedResult UNIQUEIDENTIFIER = (SELECT TOP 1 CalculationResultId FROM Commission.CommissionCalculationResult WHERE TenantId = @SeedTenantId AND TransactionId = @SeedTx AND PayeeId = @SeedPayee AND IsDeleted = 0 ORDER BY CreatedDateUtc);
-        IF @SeedPayee IS NOT NULL AND @SeedTx IS NOT NULL
-        BEGIN
-            IF @SeedResult IS NULL
-            BEGIN
-                SET @SeedResult = NEWID();
-                INSERT INTO Commission.CommissionCalculationResult (CalculationResultId, TenantId, TransactionId, PayeeId, CommissionPlanId, BaseAmount, RatePct, SplitPct, CalculatedAmount, AdjustedAmount, StatusCode, CalculatedDateUtc, CreatedDateUtc, IsDeleted)
-                SELECT TOP 1 @SeedResult, @SeedTenantId, TransactionId, PayeeId, CommissionPlanId, GrossAmount, CommissionRate, 100, CommissionAmount, NULL, N''Calculated'', SYSUTCDATETIME(), SYSUTCDATETIME(), 0
-                FROM Commission.CommissionTransaction
-                WHERE TenantId = @SeedTenantId AND TransactionId = @SeedTx AND IsDeleted = 0;
-            END;
-
-            INSERT INTO Commission.CommissionClawback (ClawbackId, TenantId, PayeeId, CommissionResultId, OriginalTransactionId, ClawbackDate, Amount, ReasonCode, Notes, StatusCode, ApprovedDateUtc, CreatedDateUtc, IsDeleted)
-            VALUES
-            (NEWID(), @SeedTenantId, @SeedPayee, @SeedResult, @SeedTx, CONVERT(date, SYSUTCDATETIME()), 1250, N''Policy Cancellation'', N''Seed clawback synchronized from canceled policy commission transaction.'', N''Pending'', NULL, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, @SeedPayee, @SeedResult, @SeedTx, DATEADD(day, -7, CONVERT(date, SYSUTCDATETIME())), 640, N''Non-Sufficient Funds'', N''Client payment reversal requires commission recovery review.'', N''Approved'', DATEADD(day, -3, SYSUTCDATETIME()), SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, @SeedPayee, @SeedResult, @SeedTx, DATEADD(day, -14, CONVERT(date, SYSUTCDATETIME())), 425, N''Calculation Error'', N''Overpayment corrected after commission statement reconciliation.'', N''Denied'', NULL, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, @SeedPayee, @SeedResult, @SeedTx, DATEADD(day, -21, CONVERT(date, SYSUTCDATETIME())), 980, N''Carrier Chargeback'', N''Carrier chargeback queued for payout batch offset.'', N''Reversed'', NULL, SYSUTCDATETIME(), 0);
-        END
-    END', N'@SeedTenantId UNIQUEIDENTIFIER', @SeedTenantId = @TenantId;
-END;";
+";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: cancellationToken));

@@ -31,6 +31,15 @@ public interface IOpportunityStageRepository
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
 
+public interface IOpportunityForecastCategoryRepository
+{
+    Task<OpportunityForecastCategoryDto?> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<PagedResult<OpportunityForecastCategoryDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<Guid> CreateAsync(CreateOpportunityForecastCategoryRequest request, CancellationToken ct = default);
+    Task UpdateAsync(Guid id, UpdateOpportunityForecastCategoryRequest request, CancellationToken ct = default);
+    Task DeleteAsync(Guid id, CancellationToken ct = default);
+}
+
 public interface IPipelineSettingRepository
 {
     Task<List<PipelineSettingDto>> GetAllAsync(Guid tenantId, CancellationToken ct = default);

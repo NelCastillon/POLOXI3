@@ -50,13 +50,18 @@
         </div>
     }
 
-    <section class="sd-kpi-strip" aria-label="Decline KPIs">
-        @KpiCard("all", "Total Declines", ActiveDeclineCount.ToString(), "Active declined or withdrawn submissions", "bi-stack", "red")
-        @KpiCard("priority", "Priority", PriorityDeclineCount.ToString(), "High-value, recent, or remarketing-ready declines", "bi-exclamation-octagon", "orange")
-        @KpiCard("carrier", "Carrier", CarrierDeclineCount.ToString(), "Declines from carrier or market response", "bi-building-x", "amber")
-        @KpiCard("remarket", "Remarketing", RemarketingCount.ToString(), "Declines pending or in remarketing", "bi-arrow-repeat", "cyan")
-        @KpiCard("trend30", "30-Day Trend", Trend30Count.ToString(), "Declines received in the last 30 days", "bi-graph-down-arrow", "blue")
-        @KpiCard("lost", "Lost Premium", LostPremium.ToString("C0"), "Total target premium attached to declines", "bi-cash-stack", "emerald")
+    <section class="decline-kpi-strip" aria-label="Decline KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="() => SetKpi(metric.Filter)">
+                <span class="decline-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="decline-kpi__body">
+                    <span class="decline-kpi__val">@metric.Value</span>
+                    <span class="decline-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
     </section>
 
     <section class="sd-workflows" aria-label="Decline workflows">
@@ -82,10 +87,12 @@
         </button>
     </section>
 
-    <section class="sd-filter-panel" aria-label="Decline filters">
-        <div class="sd-search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input @bind="SearchText" @bind:event="oninput" placeholder="Search submission, account, LOB, carrier, type, reason, producer, premium, date, priority..." />
+    <section class="sd-search-row" aria-label="Decline filters">
+        <div class="sd-search-wrap">
+            <span class="sd-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="sd-search-body">
+                <input class="sd-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search submission, account, LOB, carrier, type, reason, producer, premium, date, priority..." aria-label="Search declines" />
+            </div>
         </div>
         <div class="sd-filter-grid">
             <label>
@@ -129,9 +136,6 @@
                 </select>
             </label>
         </div>
-        <button type="button" class="sd-btn sd-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
-            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-        </button>
     </section>
 
     <nav class="sd-tabs" aria-label="Decline views">
@@ -505,6 +509,15 @@
     int RemarketingCount => _rows.Count(r => !r.Archived && r.RemarketingStatus is "Pending" or "In Progress");
     int Trend30Count => _rows.Count(r => !r.Archived && r.DeclineDate >= DateTime.Today.AddDays(-30));
     decimal LostPremium => _rows.Where(r => !r.Archived).Sum(r => r.LostPremium);
+    IEnumerable<DeclineMetric> Metrics =>
+    [
+        new("red", "all", "bi-stack", "Total Declines", ActiveDeclineCount.ToString(), "Active declines", "Active declined or withdrawn submissions"),
+        new("orange", "priority", "bi-exclamation-octagon", "Priority", PriorityDeclineCount.ToString(), "Recovery focus", "High-value, recent, or remarketing-ready declines"),
+        new("amber", "carrier", "bi-building-x", "Carrier", CarrierDeclineCount.ToString(), "Market response", "Declines from carrier or market response"),
+        new("cyan", "remarket", "bi-arrow-repeat", "Remarketing", RemarketingCount.ToString(), "In recovery", "Declines pending or in remarketing"),
+        new("blue", "trend30", "bi-graph-down-arrow", "30-Day Trend", Trend30Count.ToString(), "Recent declines", "Declines received in the last 30 days"),
+        new("green", "lost", "bi-cash-stack", "Lost Premium", LostPremium.ToString("C0"), "Target premium", "Total target premium attached to declines")
+    ];
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_typeFilter) || !string.IsNullOrWhiteSpace(_remarketingFilter) || !string.IsNullOrWhiteSpace(_producerFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
     string ConfirmIconClass => _pendingAction == "Archive" ? "sd-confirm-icon sd-confirm-icon--danger" : "sd-confirm-icon";
@@ -1039,20 +1052,9 @@
 
     string TabClass(string key) => _activeTab == key ? "sd-tab sd-tab--active" : "sd-tab";
     string RowClass(DeclineRow row) => _selected?.DeclineId == row.DeclineId ? "sd-row sd-row--selected" : "sd-row";
+    string MetricCardClass(DeclineMetric metric) => $"decline-kpi decline-kpi--{metric.Tone} {(_activeKpi == metric.Filter ? "decline-kpi--active" : string.Empty)}";
     static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "sd-menu-item sd-menu-item--danger" : "sd-menu-item";
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
-
-    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
-    {
-        var active = _activeKpi == key;
-        var cardClass = active ? $"sd-kpi sd-kpi--{tone} sd-kpi--active" : $"sd-kpi sd-kpi--{tone}";
-        var title = active ? "Clear KPI filter" : subtitle;
-        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
-            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
-            <strong>@value</strong>
-            <small>@subtitle</small>
-        </button>;
-    }
 
     RenderFragment TypeBadge(string type) => @<span class="sd-type sd-type--@Slug(type)">@type</span>;
     RenderFragment RemarketingBadge(string status) => @<span class="sd-remarket sd-remarket--@Slug(status)">@status</span>;
@@ -1151,6 +1153,7 @@
         }
     }
 
+    sealed record DeclineMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
     sealed record GroupSummary(string Name, int Count, decimal Premium, int Priority, int Remarketing, int Percent);

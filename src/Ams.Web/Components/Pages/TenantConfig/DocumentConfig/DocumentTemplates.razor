@@ -4,6 +4,7 @@
 @using System.Text.Json
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.DocumentConfig
+@using Ams.Application.Features.PolicyCertificates
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject BreadcrumbService Breadcrumbs
@@ -201,14 +202,57 @@
                         <div><span>Packet</span><strong>@(IsPacketReady(_selected) ? "Ready" : "Standalone")</strong></div>
                     </div>
                     <div class="dt-config-card"><span>Configuration JSON</span><code>@DisplayConfig(_selected)</code></div>
+                    @if (SelectedWorkflowTemplate is { } workflowTemplate)
+                    {
+                        <div class="dt-config-card">
+                            <span>Versioned generation template</span>
+                            <code>@workflowTemplate.TemplateCode · Current version @workflowTemplate.CurrentVersionNumber · @workflowTemplate.Versions.Count persisted version(s)</code>
+                            @foreach (var version in workflowTemplate.Versions.Take(5))
+                            {
+                                <small>v@version.VersionNumber · @version.StatusCode · @(version.EditionCode ?? "No edition") · @version.CreatedDateUtc.ToLocalTime().ToString("g")</small>
+                            }
+                        </div>
+                    }
                     <div class="dt-detail-actions">
                         <button type="button" class="um-btn um-btn-primary" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit Template</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick="DuplicateSelected"><i class="bi bi-files" aria-hidden="true"></i> Duplicate</button>
                         <button type="button" class="um-btn um-btn-ghost" @onclick="ToggleSelectedStatus"><i class="bi bi-power" aria-hidden="true"></i> @(_selected.IsActive ? "Deactivate" : "Activate")</button>
                         <button type="button" class="um-btn um-btn-ghost text-danger" @onclick="() => ConfirmDelete(_selected)"><i class="bi bi-trash" aria-hidden="true"></i> Delete</button>
+                        @if (SelectedWorkflowTemplate is not null)
+                        {
+                            <button type="button" class="um-btn um-btn-secondary" @onclick="OpenVersionForm"><i class="bi bi-layers" aria-hidden="true"></i> New Version</button>
+                        }
                     </div>
                 </div>
             }
+
+@if (_showVersionForm && SelectedWorkflowTemplate is { } versionTemplate)
+{
+    <div class="dt-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dt-version-title">
+        <div class="dt-modal">
+            <div class="dt-modal-header"><div class="dt-modal-title"><span class="dt-modal-icon"><i class="bi bi-layers" aria-hidden="true"></i></span><div><h2 id="dt-version-title">New Template Version</h2><p>@versionTemplate.TemplateName · next immutable version</p></div></div><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="CloseVersionForm" aria-label="Close"><i class="bi bi-x-lg" aria-hidden="true"></i></button></div>
+            <EditForm Model="_versionForm" OnValidSubmit="SaveVersionAsync">
+                <DataAnnotationsValidator />
+                <div class="dt-modal-body">
+                    <div class="dt-form-grid">
+                        <div class="dt-field"><label>Edition Code</label><InputText @bind-Value="_versionForm.EditionCode" class="dt-input" /></div>
+                        <div class="dt-field"><label>Content Format <span>*</span></label><InputText @bind-Value="_versionForm.ContentFormatCode" class="dt-input" /></div>
+                        <div class="dt-field"><label>Status <span>*</span></label><InputSelect @bind-Value="_versionForm.StatusCode" class="dt-input"><option value="Draft">Draft</option><option value="Published">Published</option></InputSelect></div>
+                        <div class="dt-field"><label>Effective Date</label><InputDate @bind-Value="_versionForm.EffectiveDateUtc" class="dt-input" /></div>
+                        <div class="dt-field dt-field-wide"><label>Template Content</label><InputTextArea @bind-Value="_versionForm.TemplateContent" class="dt-input dt-code-input" rows="9" /></div>
+                        @if (versionTemplate.IsLicensedContent)
+                        {
+                            <div class="dt-field dt-field-wide"><label>Licensed Storage Path</label><InputText @bind-Value="_versionForm.StoragePath" class="dt-input" /><small>Licensed forms require approved artwork in managed storage. Content is never synthesized.</small></div>
+                        }
+                        <div class="dt-field dt-field-wide"><label>Merge Field Schema JSON <span>*</span></label><InputTextArea @bind-Value="_versionForm.MergeFieldSchemaJson" class="dt-input dt-code-input" rows="6" /></div>
+                        <div class="dt-field dt-field-wide"><label>Change Summary</label><InputTextArea @bind-Value="_versionForm.ChangeSummary" class="dt-input" rows="3" /></div>
+                    </div>
+                </div>
+                <div class="dt-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseVersionForm">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving"><i class="bi bi-check2" aria-hidden="true"></i> Create Version</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
         </aside>
     </section>
 </div>
@@ -253,10 +297,12 @@
 @code {
     private const string ConfigKind = "DocumentTemplate";
     private Guid _tenantId;
+    private Guid? _userId;
     private bool _loading;
     private bool _saving;
     private bool _showForm;
     private bool _showDelete;
+    private bool _showVersionForm;
     private bool _toastVisible;
     private string _search = string.Empty;
     private string _statusFilter = "all";
@@ -273,6 +319,12 @@
     private List<DocumentConfigItemDto> _items = [];
     private List<DocumentConfigItemDto> _filtered = [];
     private FormModel _form = new();
+    private TemplateVersionFormModel _versionForm = new();
+    private CertificateWorkflowWorkspaceDto? _workflowWorkspace;
+
+    private DocumentTemplateDefinitionDto? SelectedWorkflowTemplate => _selected is null
+        ? null
+        : (_workflowWorkspace?.Templates ?? []).FirstOrDefault(template => string.Equals(template.TemplateCode, NormalizeTemplateCode(_selected.Code), StringComparison.OrdinalIgnoreCase));
 
     private int ActiveCount => _items.Count(x => x.IsActive);
     private int MergeReadyCount => _items.Count(IsMergeReady);
@@ -302,6 +354,7 @@
     {
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
+        _userId = context.UserId;
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents & Forms", null), new("Document Templates", "/tenant/documents/templates"));
         _search = GetQueryValue("searchTerm") ?? string.Empty;
         await LoadAsync();
@@ -314,6 +367,7 @@
         try
         {
             var result = await Api.SearchDocumentConfigItemsAsync(_tenantId, ConfigKind, _search, pageSize: 500);
+            _workflowWorkspace = await Api.GetCertificateWorkflowWorkspaceAsync(_tenantId);
             _items = result?.Items.OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
             ApplyFilter();
             _selected ??= _filtered.FirstOrDefault();
@@ -362,6 +416,56 @@
         _editId = null;
         _form = new() { ConfigurationJson = "{}", IsActive = true, SortOrder = NextSortOrder };
         _showForm = true;
+    }
+
+    private void OpenVersionForm()
+    {
+        var latest = SelectedWorkflowTemplate?.Versions.OrderByDescending(version => version.VersionNumber).FirstOrDefault();
+        if (SelectedWorkflowTemplate is null) return;
+        _versionForm = new()
+        {
+            EditionCode = latest?.EditionCode,
+            ContentFormatCode = latest?.ContentFormatCode ?? "Html",
+            TemplateContent = latest?.TemplateContent,
+            MergeFieldSchemaJson = latest?.MergeFieldSchemaJson ?? "{}",
+            StatusCode = "Draft",
+            EffectiveDateUtc = DateTime.Today,
+        };
+        _showVersionForm = true;
+    }
+
+    private async Task SaveVersionAsync()
+    {
+        var template = SelectedWorkflowTemplate;
+        if (template is null) return;
+        _saving = true;
+        try
+        {
+            var schema = NormalizeJson(_versionForm.MergeFieldSchemaJson);
+            await Api.CreateDocumentTemplateVersionAsync(template.DocumentTemplateDefinitionId, new CreateDocumentTemplateVersionRequest(
+                _tenantId,
+                template.DocumentTemplateDefinitionId,
+                Clean(_versionForm.EditionCode),
+                _versionForm.ContentFormatCode.Trim(),
+                Clean(_versionForm.TemplateContent),
+                Clean(_versionForm.StoragePath),
+                schema,
+                Clean(_versionForm.ChangeSummary),
+                _versionForm.StatusCode,
+                _versionForm.EffectiveDateUtc,
+                _userId));
+            _showVersionForm = false;
+            await LoadAsync();
+            ShowToast("Immutable template version created.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast($"Version creation failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private void OpenEdit(DocumentConfigItemDto item)
@@ -482,6 +586,7 @@
     }
 
     private void CloseForm() { _showForm = false; _form = new(); _editId = null; }
+    private void CloseVersionForm() { _showVersionForm = false; _versionForm = new(); }
     private void CancelDelete() { _showDelete = false; _deleteTarget = null; }
     private void HideToast() => _toastVisible = false;
     private void ShowToast(string message, string kind = "success") { _toastMessage = message; _toastKind = kind; _toastVisible = true; }
@@ -541,6 +646,7 @@
         return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant() : name.Length > 0 ? name[..1].ToUpperInvariant() : "?";
     }
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string NormalizeTemplateCode(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
     private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
     private static string NormalizeJson(string? value)
     {
@@ -571,5 +677,17 @@
         [StringLength(4000)] public string? ConfigurationJson { get; set; } = "{}";
         [Range(0, 9999)] public int SortOrder { get; set; }
         public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class TemplateVersionFormModel
+    {
+        [StringLength(50)] public string? EditionCode { get; set; }
+        [Required, StringLength(50)] public string ContentFormatCode { get; set; } = "Html";
+        public string? TemplateContent { get; set; }
+        [StringLength(1000)] public string? StoragePath { get; set; }
+        [Required] public string MergeFieldSchemaJson { get; set; } = "{}";
+        [StringLength(1000)] public string? ChangeSummary { get; set; }
+        [Required, StringLength(40)] public string StatusCode { get; set; } = "Draft";
+        public DateTime? EffectiveDateUtc { get; set; }
     }
 }

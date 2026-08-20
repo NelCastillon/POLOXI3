@@ -21,6 +21,9 @@ public sealed class LeadService : ILeadService
     public Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetByIdAsync(id, cancellationToken);
 
+    public Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default)
+        => _repository.ConvertAsync(request, cancellationToken);
+
     public Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default)
         => _repository.GetScoreFactorsAsync(leadId, cancellationToken);
 
@@ -29,6 +32,9 @@ public sealed class LeadService : ILeadService
 
     public Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default)
         => _repository.GetEngagementOptionsAsync(tenantId, optionType, cancellationToken);
+
+    public Task<IReadOnlyList<LeadTypeDto>> GetLeadTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetLeadTypesAsync(tenantId, cancellationToken);
 
     public Task<IReadOnlyList<LeadCampaignOptionDto>> GetCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _repository.GetCampaignOptionsAsync(tenantId, cancellationToken);
@@ -125,4 +131,34 @@ public sealed class LeadService : ILeadService
 
     public Task DeleteEngagementFactorAsync(Guid engagementFactorId, CancellationToken cancellationToken = default)
         => _repository.DeleteEngagementFactorAsync(engagementFactorId, cancellationToken);
+
+    public Task<IReadOnlyList<PhoneComplianceReferenceDto>> GetPhoneComplianceReferencesAsync(Guid tenantId, string? referenceTypeCode = null, CancellationToken cancellationToken = default)
+        => _repository.GetPhoneComplianceReferencesAsync(tenantId, referenceTypeCode, cancellationToken);
+
+    public Task<PhoneComplianceWorkspaceDto> GetPhoneComplianceWorkspaceAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetPhoneComplianceWorkspaceAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<LeadPhoneComplianceDto>> GetPhoneComplianceAsync(Guid leadId, CancellationToken cancellationToken = default)
+        => _repository.GetPhoneComplianceAsync(leadId, cancellationToken);
+
+    public Task<Guid> CreatePhoneSuppressionAsync(CreatePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreatePhoneSuppressionAsync(request, cancellationToken);
+
+    public Task RevokePhoneSuppressionAsync(RevokePhoneSuppressionRequest request, CancellationToken cancellationToken = default)
+        => _repository.RevokePhoneSuppressionAsync(request, cancellationToken);
+
+    public Task<Guid> CreatePhoneConsentAsync(CreatePhoneConsentRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreatePhoneConsentAsync(request, cancellationToken);
+
+    public Task RevokePhoneConsentAsync(RevokePhoneConsentRequest request, CancellationToken cancellationToken = default)
+        => _repository.RevokePhoneConsentAsync(request, cancellationToken);
+
+    public Task<PhoneContactEligibilityDto> EvaluatePhoneContactAsync(EvaluatePhoneContactRequest request, CancellationToken cancellationToken = default)
+        => _repository.EvaluatePhoneContactAsync(request, cancellationToken);
+
+    public Task<IReadOnlyList<DuePhoneScreeningDto>> GetDuePhoneScreeningsAsync(int batchSize, CancellationToken cancellationToken = default)
+        => _repository.GetDuePhoneScreeningsAsync(batchSize, cancellationToken);
+
+    public Task<Guid> RecordPhoneScreeningAsync(RecordPhoneScreeningRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordPhoneScreeningAsync(request, cancellationToken);
 }

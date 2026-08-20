@@ -16,6 +16,17 @@ public sealed class RenewalRetentionController : ControllerBase
     public async Task<IActionResult> GetCenter([FromQuery] Guid tenantId, CancellationToken cancellationToken)
         => Ok(await _service.GetCenterAsync(tenantId, cancellationToken));
 
+    [HttpPost("initiate-eligible")]
+    public async Task<IActionResult> InitiateEligible([FromBody] InitiateEligibleRenewalsRequest request, CancellationToken cancellationToken)
+        => Ok(await _service.InitiateEligibleAsync(request, cancellationToken));
+
+    [HttpPost("cases/{id:guid}/launch-placement")]
+    public async Task<IActionResult> LaunchPlacement(Guid id, [FromBody] LaunchRenewalPlacementRequest request, CancellationToken cancellationToken)
+    {
+        await _service.LaunchPlacementAsync(id, request, cancellationToken);
+        return NoContent();
+    }
+
     [HttpGet("cases/{id:guid}")]
     public async Task<IActionResult> GetDetail(Guid id, CancellationToken cancellationToken)
     {

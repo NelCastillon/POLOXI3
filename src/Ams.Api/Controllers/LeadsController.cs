@@ -1,12 +1,14 @@
 using Ams.Api.Hubs;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Leads;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public sealed class LeadsController : ControllerBase
 {
@@ -55,6 +57,13 @@ public sealed class LeadsController : ControllerBase
         return Ok(items);
     }
 
+    [HttpGet("types")]
+    public async Task<IActionResult> GetLeadTypes([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var items = await _service.GetLeadTypesAsync(tenantId, cancellationToken);
+        return Ok(items);
+    }
+
     [HttpGet("campaign-options")]
     public async Task<IActionResult> GetCampaignOptions([FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
@@ -75,6 +84,14 @@ public sealed class LeadsController : ControllerBase
         request.LeadId = id;
         await _service.UpdateAsync(request, cancellationToken);
         return NoContent();
+    }
+
+    [HttpPost("{id:guid}/convert")]
+    public async Task<IActionResult> Convert(Guid id, [FromBody] ConvertLeadRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = id;
+        var result = await _service.ConvertAsync(request, cancellationToken);
+        return Ok(result);
     }
 
     [HttpGet("{leadId:guid}/contacts")]
@@ -277,6 +294,70 @@ public sealed class LeadsController : ControllerBase
     {
         await _service.DeleteEngagementFactorAsync(engagementFactorId, cancellationToken);
         return NoContent();
+    }
+
+    [HttpGet("phone-compliance/references")]
+    public async Task<IActionResult> GetPhoneComplianceReferences([FromQuery] Guid tenantId, [FromQuery] string? referenceTypeCode, CancellationToken cancellationToken)
+        => Ok(await _service.GetPhoneComplianceReferencesAsync(tenantId, referenceTypeCode, cancellationToken));
+
+    [HttpGet("phone-compliance/workspace")]
+    public async Task<IActionResult> GetPhoneComplianceWorkspace([FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => Ok(await _service.GetPhoneComplianceWorkspaceAsync(tenantId, cancellationToken));
+
+    [HttpGet("{leadId:guid}/phone-compliance")]
+    public async Task<IActionResult> GetPhoneCompliance(Guid leadId, CancellationToken cancellationToken)
+        => Ok(await _service.GetPhoneComplianceAsync(leadId, cancellationToken));
+
+    [HttpPost("{leadId:guid}/phone-compliance/suppressions")]
+    public async Task<IActionResult> CreatePhoneSuppression(Guid leadId, [FromBody] CreatePhoneSuppressionRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = leadId;
+        var id = await _service.CreatePhoneSuppressionAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetPhoneCompliance), new { leadId }, id);
+    }
+
+    [HttpPost("{leadId:guid}/phone-compliance/suppressions/{phoneSuppressionId:guid}/revoke")]
+    public async Task<IActionResult> RevokePhoneSuppression(Guid leadId, Guid phoneSuppressionId, [FromBody] RevokePhoneSuppressionRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = leadId;
+        request.PhoneSuppressionId = phoneSuppressionId;
+        await _service.RevokePhoneSuppressionAsync(request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{leadId:guid}/phone-compliance/consents")]
+    public async Task<IActionResult> CreatePhoneConsent(Guid leadId, [FromBody] CreatePhoneConsentRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = leadId;
+        var id = await _service.CreatePhoneConsentAsync(request, cancellationToken);
+        return CreatedAtAction(nameof(GetPhoneCompliance), new { leadId }, id);
+    }
+
+    [HttpPost("{leadId:guid}/phone-compliance/consents/{phoneConsentId:guid}/revoke")]
+    public async Task<IActionResult> RevokePhoneConsent(Guid leadId, Guid phoneConsentId, [FromBody] RevokePhoneConsentRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = leadId;
+        request.PhoneConsentId = phoneConsentId;
+        await _service.RevokePhoneConsentAsync(request, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("{leadId:guid}/phone-compliance/evaluate")]
+    public async Task<IActionResult> EvaluatePhoneContact(Guid leadId, [FromBody] EvaluatePhoneContactRequest request, CancellationToken cancellationToken)
+    {
+        request.LeadId = leadId;
+        return Ok(await _service.EvaluatePhoneContactAsync(request, cancellationToken));
+    }
+
+    [HttpGet("phone-compliance/screening/due")]
+    public async Task<IActionResult> GetDuePhoneScreenings([FromQuery] int batchSize = 100, CancellationToken cancellationToken = default)
+        => Ok(await _service.GetDuePhoneScreeningsAsync(batchSize, cancellationToken));
+
+    [HttpPost("phone-compliance/screening/results")]
+    public async Task<IActionResult> RecordPhoneScreening([FromBody] RecordPhoneScreeningRequest request, CancellationToken cancellationToken)
+    {
+        var id = await _service.RecordPhoneScreeningAsync(request, cancellationToken);
+        return Ok(id);
     }
 
     private Task NotifyLeadScoresChangedAsync(Guid tenantId, CancellationToken cancellationToken)

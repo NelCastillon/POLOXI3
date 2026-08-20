@@ -1,0 +1,230 @@
+@page "/operations/document-intake/ai-processing"
+@attribute [Authorize(Policy=Ams.Web.Security.DocumentIntakePolicies.Read)]
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Document Intake AI Processing</PageTitle>
+
+<DocumentIntakeWorkspace>
+    <div class="ai-guide">
+        <header class="ai-guide__hero">
+            <div>
+                <span class="ai-guide__eyebrow"><i class="bi bi-shield-check"></i> Governed AI processing</span>
+                <h1>Prompt Governance and AI Processing</h1>
+                <p>See how approved database prompts, retained OCR evidence, and strict output schemas produce reviewable draft data without allowing AI to update AMS records directly.</p>
+            </div>
+            <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Admin">
+                <a class="um-btn um-btn-secondary" href="/operations/document-intake/operations"><i class="bi bi-activity"></i> View live controls</a>
+            </AuthorizeView>
+        </header>
+
+        <section class="ai-guide__flow" aria-label="AI document processing flow">
+            <article><span>1</span><i class="bi bi-file-earmark-text"></i><strong>OCR evidence</strong><small>The retained, tenant-scoped OCR JSON is loaded from governed payload storage.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>2</span><i class="bi bi-database-check"></i><strong>Approved prompt</strong><small>The active tenant override or global prompt and schema are loaded from the database.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>3</span><i class="bi bi-cpu"></i><strong>Azure OpenAI</strong><small>The prompt, OCR evidence, and strict JSON schema are sent through the configured provider route.</small></article>
+            <i class="bi bi-arrow-right ai-guide__arrow"></i>
+            <article><span>4</span><i class="bi bi-ui-checks-grid"></i><strong>Reviewed draft</strong><small>Structured fields are normalized and validated before a user can approve or promote them.</small></article>
+        </section>
+
+        <div class="ai-guide__grid">
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-database"></i> Database prompt source</h2>
+                <p>The operational Document Intake worker reads from <code>DMS.AiPromptDefinition</code>. Each definition stores the prompt code, category, version, system prompt, output schema, status, approval metadata, effective dates, tenant scope, and row version.</p>
+                <div class="ai-guide__facts">
+                    <span><strong>Tenant override</strong>Preferred when its TenantId matches the intake session.</span>
+                    <span><strong>Global fallback</strong>Used when TenantId is null and no active tenant override exists.</span>
+                    <span><strong>Runtime gate</strong>Only approved, currently effective, non-expired versions are eligible.</span>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-braces"></i> Runtime prompt selection</h2>
+                <p>Classification uses <code>DOCUMENT.CLASSIFICATION</code>. Extraction resolves the module-specific code <code>{ModuleCode}.EXTRACTION</code>, such as <code>SUBMISSION.EXTRACTION</code> or <code>POLICY.EXTRACTION</code>.</p>
+                <div class="ai-guide__callout">
+                    <i class="bi bi-exclamation-circle"></i>
+                    <span>If no approved active prompt exists, processing stops with <strong>APPROVED_PROMPT_MISSING</strong>. It does not silently fall back to an unapproved prompt.</span>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-chat-square-text"></i> What the model receives</h2>
+                <div class="ai-guide__message">
+                    <span>System message</span>
+                    <p>The approved <code>SystemPrompt</code> from the database, including instructions to return structured evidence and never mutate AMS records.</p>
+                </div>
+                <div class="ai-guide__message">
+                    <span>User message</span>
+                    <p>The module code, correlation identifier, and retained OCR JSON for the current tenant-scoped intake session.</p>
+                </div>
+                <div class="ai-guide__message">
+                    <span>Response format</span>
+                    <p>The database-stored <code>OutputSchemaJson</code>, submitted as a strict JSON schema response format.</p>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-journal-check"></i> Evidence and audit trail</h2>
+                <p>Interpretation output is retained as governed payload evidence. <code>DMS.AiExecution</code> records the provider, model, prompt code and version, input/output references and hashes, confidence, duration, token usage, work item, document, session, and tenant.</p>
+                <ul>
+                    <li>Raw payload access is audited and tenant scoped.</li>
+                    <li>Extracted values remain draft data until reviewed.</li>
+                    <li>Promotion uses backend validation and application services.</li>
+                    <li>AI never creates or updates the target business record directly.</li>
+                </ul>
+            </section>
+        </div>
+
+        <section class="ai-guide__panel ai-guide__governance">
+            <div>
+                <h2><i class="bi bi-clipboard2-check"></i> Evaluation and approval gates</h2>
+                <p>Prompt evaluation runs use the same interpretation provider as production. Test inputs are processed, actual outputs are retained, expected and actual results are scored, and the run records pass rate and average score.</p>
+            </div>
+            <div class="ai-guide__governance-steps">
+                <span><i class="bi bi-collection"></i><strong>Evaluation suite</strong>DB-backed cases and thresholds</span>
+                <span><i class="bi bi-play-circle"></i><strong>Evaluation run</strong>Real provider, prompt, model, and schema</span>
+                <span><i class="bi bi-check2-circle"></i><strong>Approval</strong>Passing run required when configured</span>
+                <span><i class="bi bi-clock-history"></i><strong>Effective version</strong>Approved dates and row-version concurrency</span>
+            </div>
+        </section>
+
+        <section class="ai-guide__panel ai-guide__mapping">
+            <div class="ai-guide__section-heading">
+                <span><i class="bi bi-signpost-split"></i></span>
+                <div>
+                    <h2>How OpenAI fields become Submission data</h2>
+                    <p>The AI response is evidence-backed draft data. It passes through persistence, normalization, validation, human review, and backend promotion before any official Account, Opportunity, or Submission is created.</p>
+                </div>
+            </div>
+
+            <div class="ai-guide__mapping-flow" aria-label="OpenAI field mapping workflow">
+                <article>
+                    <span>1</span>
+                    <i class="bi bi-braces-asterisk"></i>
+                    <div><strong>Structured fields returned</strong><small><code>AzureOpenAiDocumentInterpretationProvider.InterpretAsync</code> parses the strict JSON response into <code>List&lt;ExtractedDocumentField&gt;</code>.</small></div>
+                </article>
+                <article>
+                    <span>2</span>
+                    <i class="bi bi-database-add"></i>
+                    <div><strong>Draft fields persisted</strong><small><code>DocumentIntakeProcessor.InterpretAsync</code> calls <code>SaveInterpretationAsync</code>, which upserts tenant-scoped rows in <code>DMS.IntakeDraftField</code>.</small></div>
+                </article>
+                <article>
+                    <span>3</span>
+                    <i class="bi bi-diagram-2"></i>
+                    <div><strong>Normalized and validated</strong><small>Knowledge mapping stores canonical values and concepts. Deterministic validation creates actionable issues for missing or low-confidence data.</small></div>
+                </article>
+                <article>
+                    <span>4</span>
+                    <i class="bi bi-person-check"></i>
+                    <div><strong>Human reviewed</strong><small>A reviewer approves, corrects, or rejects each field. Promotion only uses approved or corrected values.</small></div>
+                </article>
+                <article>
+                    <span>5</span>
+                    <i class="bi bi-table"></i>
+                    <div><strong>Submission draft mapped</strong><small><code>BuildReviewedSubmissionDraftAsync</code> converts stable field paths into a typed <code>SubmissionIntakeDraft</code>.</small></div>
+                </article>
+                <article>
+                    <span>6</span>
+                    <i class="bi bi-box-arrow-up-right"></i>
+                    <div><strong>Business records promoted</strong><small>The application services stage <code>Submissions.SubmissionIntake</code>, then match or create an Account and create the Opportunity, Opportunity Line, Submission, and Submission Lines.</small></div>
+                </article>
+            </div>
+        </section>
+
+        <div class="ai-guide__grid">
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-braces"></i> 1. OpenAI response contract</h2>
+                <p>The model returns a <code>fields</code> collection constrained by the approved database-backed <code>OutputSchemaJson</code>. Each field carries its business path, value type, confidence, and source evidence.</p>
+                <div class="ai-guide__field-tags" aria-label="Extracted field properties">
+                    <code>entityTypeCode</code><code>entityKey</code><code>path</code><code>value</code><code>valueTypeCode</code><code>confidence</code><code>sourcePage</code><code>boundingBoxJson</code>
+                </div>
+                <div class="ai-guide__example">
+                    <span>Submission path examples</span>
+                    <code>submission.businessName</code>
+                    <code>submission.applicantName</code>
+                    <code>submission.lineOfBusiness</code>
+                    <code>submission.requestedEffectiveDate</code>
+                    <code>submission.estimatedPremium</code>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-database-check"></i> 2. Intake draft persistence</h2>
+                <p><code>DocumentIntakeRepository.SaveInterpretationAsync</code> retains the complete interpretation payload, records <code>DMS.AiExecution</code>, and maps every parsed field into <code>DMS.IntakeDraftField</code>.</p>
+                <div class="ai-guide__table-wrap">
+                    <table class="ai-guide__table">
+                        <thead><tr><th>OpenAI field</th><th>Draft column</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>entityTypeCode</code></td><td>EntityTypeCode</td></tr>
+                            <tr><td><code>entityKey</code></td><td>EntityKey</td></tr>
+                            <tr><td><code>path</code></td><td>FieldPath</td></tr>
+                            <tr><td><code>value</code></td><td>ExtractedValue</td></tr>
+                            <tr><td><code>valueTypeCode</code></td><td>ValueTypeCode</td></tr>
+                            <tr><td><code>confidence</code></td><td>Confidence</td></tr>
+                            <tr><td><code>sourcePage</code></td><td>SourcePageNumber</td></tr>
+                            <tr><td><code>boundingBoxJson</code></td><td>SourceBoundingBoxJson</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-ui-checks"></i> 3. Canonical review value</h2>
+                <p>Knowledge mapping can add a canonical <code>NormalizedValue</code>. Review can add a user-confirmed <code>ReviewedValue</code>. Promotion selects the value in this order:</p>
+                <div class="ai-guide__value-order">
+                    <span><strong>1</strong> ReviewedValue</span><i class="bi bi-chevron-right"></i>
+                    <span><strong>2</strong> NormalizedValue</span><i class="bi bi-chevron-right"></i>
+                    <span><strong>3</strong> ExtractedValue</span>
+                </div>
+                <div class="ai-guide__callout"><i class="bi bi-shield-lock"></i><span>Only fields with an <strong>APPROVED</strong> or <strong>CORRECTED</strong> review status can enter the Submission promotion mapping.</span></div>
+            </section>
+
+            <section class="ai-guide__panel">
+                <h2><i class="bi bi-arrow-left-right"></i> 4. Submission field-path mapping</h2>
+                <p><code>DocumentIntakeRepository.BuildReviewedSubmissionDraftAsync</code> is the explicit mapping boundary. It converts reviewed field paths to typed properties and parses date and decimal values using invariant formats.</p>
+                <div class="ai-guide__table-wrap">
+                    <table class="ai-guide__table">
+                        <thead><tr><th>Reviewed field path</th><th>Draft property</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>submission.businessName</code></td><td>BusinessName</td></tr>
+                            <tr><td><code>submission.applicantName</code></td><td>ApplicantName</td></tr>
+                            <tr><td><code>submission.lineOfBusiness</code></td><td>LineOfBusiness</td></tr>
+                            <tr><td><code>submission.requestedEffectiveDate</code></td><td>RequestedEffectiveDate</td></tr>
+                            <tr><td><code>submission.estimatedPremium</code></td><td>EstimatedPremium</td></tr>
+                            <tr><td><code>submission.email</code> / <code>submission.phone</code></td><td>Email / Phone</td></tr>
+                            <tr><td><code>submission.state</code></td><td>State</td></tr>
+                            <tr><td><code>submission.notes</code></td><td>Notes</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <section class="ai-guide__panel ai-guide__promotion">
+            <div>
+                <h2><i class="bi bi-building-add"></i> 5. Staging and official record creation</h2>
+                <p><code>DocumentIntakeService.PromoteAsync</code> first creates an idempotent <code>Submissions.SubmissionIntake</code> staging record. <code>SubmissionIntakeService.PromoteAsync</code> then performs tenant-scoped matching and creates official records through their owning repositories.</p>
+            </div>
+            <div class="ai-guide__promotion-records">
+                <span><i class="bi bi-person-vcard"></i><strong>Account</strong>Match an existing account or create a Prospect.</span>
+                <span><i class="bi bi-bullseye"></i><strong>Opportunity</strong>Create the sales/work container.</span>
+                <span><i class="bi bi-list-check"></i><strong>Opportunity Line</strong>Use the canonical tenant Line of Business.</span>
+                <span><i class="bi bi-file-earmark-richtext"></i><strong>Submission</strong>Create a Draft with configured priority, dates, premium, risk state, and assignment.</span>
+            </div>
+            <div class="ai-guide__callout ai-guide__callout--success"><i class="bi bi-check2-shield"></i><span>OpenAI never writes to <code>Submissions.Submission</code>. Official records are created only after review and backend readiness validation.</span></div>
+        </section>
+
+        <section class="ai-guide__panel ai-guide__source-note">
+            <i class="bi bi-diagram-3"></i>
+            <div>
+                <h2>Document Intake and the Intelligence Platform</h2>
+                <p>The broader Intelligence Platform also has centralized prompt definitions. The current Document Intake runtime remains sourced from <code>DMS.AiPromptDefinition</code>; later synchronization supports broader governance, but it does not change the worker's operational source of truth.</p>
+            </div>
+        </section>
+    </div>
+</DocumentIntakeWorkspace>
+
+@code {
+    protected override void OnInitialized()
+        => Breadcrumbs.SetCrumbs(new("Home", "/"), new("Documents", "/documents"), new("Document Intake", "/operations/document-intake"), new("AI Processing", "/operations/document-intake/ai-processing"));
+}

@@ -20,6 +20,21 @@ public sealed class LineOfBusinessRepository : ILineOfBusinessRepository
         return await cn.QuerySingleOrDefaultAsync<LineOfBusinessDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyList<LineOfBusinessDto>> FindExactAsync(Guid tenantId, string value, CancellationToken cancellationToken = default)
+    {
+        const string sql = $@"
+SELECT {SelectColumns}
+FROM Agency.LineOfBusiness
+WHERE TenantId = @TenantId
+  AND IsActive = 1
+  AND IsDeleted = 0
+  AND (UPPER(LTRIM(RTRIM(LobCode))) = UPPER(LTRIM(RTRIM(@Value)))
+       OR UPPER(LTRIM(RTRIM(LobName))) = UPPER(LTRIM(RTRIM(@Value))));
+";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await cn.QueryAsync<LineOfBusinessDto>(new CommandDefinition(sql, new { TenantId = tenantId, Value = value }, cancellationToken: cancellationToken))).AsList();
+    }
+
     public async Task<PagedResult<LineOfBusinessDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var sql = RepositorySql.BuildPagedSearchSql(

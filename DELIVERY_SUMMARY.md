@@ -164,7 +164,7 @@ Successfully created **4 professional-grade account management pages** for the A
 ### Technology Stack
 - **Framework:** Blazor (Server-side)
 - **.NET Version:** 9
-- **UI Framework:** Syncfusion Blazor Components
+- **UI Framework:** enterprise native Blazor components
 - **Styling:** Component-scoped CSS
 - **Icons:** Bootstrap Icons
 - **Data:** DTOs with async API calls

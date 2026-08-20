@@ -134,26 +134,26 @@
 │  │ Content Panel (switches based on queue)    │     │
 │  │                                            │     │
 │  │ IF queue == "leads":                       │     │
-│  │  ├─ <SfGrid>                              │     │
+│  │  ├─ <AppGrid>                              │     │
 │  │  │  ├─ Heat | Lead Name | LoB | Source   │     │
 │  │  │  ├─ Est.Prem | LastContact | Action   │     │
 │  │  │  └─ Due | [>]                          │     │
-│  │  └─ </SfGrid>                             │     │
+│  │  └─ </AppGrid>                             │     │
 │  │                                            │     │
 │  │ IF queue == "opportunities":                │     │
 │  │  ├─ [Board view] [Grid view] toggle       │     │
 │  │  │                                         │     │
 │  │  │ IF oppView == "kanban":                │     │
-│  │  │  └─ <SfKanban>                         │     │
+│  │  │  └─ <enterprise kanban board>                         │     │
 │  │  │     ├─ Prospect | Qualified | ...      │     │
 │  │  │     └─ [Cards draggable]               │     │
 │  │  │                                        │     │
 │  │  │ IF oppView == "grid":                  │     │
-│  │  │  └─ <SfGrid>                           │     │
+│  │  │  └─ <AppGrid>                           │     │
 │  │  │     ├─ Stage | Opportunity | Account   │     │
 │  │  │     └─ WinProb | Amount | CloseDate    │     │
 │  │  │                                        │     │
-│  │  └─ </SfGrid or SfKanban>                 │     │
+│  │  └─ </AppGrid or enterprise kanban board>                 │     │
 │  │                                            │     │
 │  │ ... other queue templates                 │     │
 │  └────────────────────────────────────────────┘     │
@@ -323,7 +323,7 @@ Component re-renders
         ↓
 Conditional check: @if (_activeQueue == "endorsements")
         ├─ TRUE: Render endorsements grid
-        │        └─ <SfGrid DataSource="@Filtered(_endorsements)" />
+        │        └─ <AppGrid DataSource="@Filtered(_endorsements)" />
         │           ├─ Apply search filter
         │           ├─ Apply priority filter
         │           ├─ Apply SLA filter
@@ -405,9 +405,9 @@ Grid displays matching items only
 ├─────────────────┼──────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
 │ Queues          │ 6        │ 6        │ Multi      │ 6         │ 6         │ 7           │
 ├─────────────────┼──────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
-│ Primary Grid    │ SfGrid   │ SfGrid   │ SfGrid     │ SfGrid    │ SfGrid    │ SfGrid      │
+│ Primary Grid    │ AppGrid   │ AppGrid   │ AppGrid     │ AppGrid    │ AppGrid    │ AppGrid      │
 ├─────────────────┼──────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
-│ Alt View        │ SfKanban │ None     │ None       │ None      │ None      │ None        │
+│ Alt View        │ enterprise kanban board │ None     │ None       │ None      │ None      │ None        │
 ├─────────────────┼──────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
 │ Detail Panel    │ RenderFrag│RenderFrag│RenderFrag │ RenderFrag│RenderFrag │ RenderFrag  │
 ├─────────────────┼──────────┼──────────┼────────────┼───────────┼───────────┼─────────────┤
@@ -557,7 +557,7 @@ Workbench Main Container
         │   │
         │   └─ .wb-grid-card
         │       ├─ app-datagrid
-        │       ├─ [SfGrid rendered here]
+        │       ├─ [AppGrid rendered here]
         │       │   ├─ .wb-pri (Priority badge)
         │       │   │   ├─ .wb-pri--critical
         │       │   │   ├─ .wb-pri--urgent

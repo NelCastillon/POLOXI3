@@ -6,6 +6,15 @@ const kpiAllLabels = ['all', 'total', 'total users', 'total documents', 'total e
 let _initialized = false;
 let _modalObserver = null;
 
+function applyRouteClasses() {
+    const path = window.location.pathname || '';
+    const lowerPath = path.toLowerCase();
+    document.documentElement.classList.toggle('ams-crm-route', lowerPath.startsWith('/crm'));
+    document.documentElement.classList.toggle('ams-client-route', lowerPath.startsWith('/client'));
+    document.documentElement.classList.toggle('ams-policy-route', lowerPath.startsWith('/policies'));
+    document.documentElement.classList.toggle('ams-tenant-route', lowerPath.startsWith('/tenant'));
+}
+
 function norm(value) {
     return (value || '').toString().trim().toLowerCase();
 }
@@ -148,10 +157,12 @@ export function init() {
     if (_initialized) return;
     _initialized = true;
 
+    applyRouteClasses();
     document.addEventListener('click', onDocumentClick);
     document.addEventListener('keydown', onDocumentKeydown);
+    window.addEventListener('popstate', applyRouteClasses);
 
-    // Keep body scrolling locked while any modal backdrop / Syncfusion dialog is visible.
+    // Keep body scrolling locked while any modal backdrop / native dialog is visible.
     _modalObserver = new MutationObserver(lockBodyForModals);
     _modalObserver.observe(document.body, { childList: true, subtree: true });
     lockBodyForModals();
@@ -161,6 +172,7 @@ export function init() {
 export function applyTheme(dark) {
     const theme = dark ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', theme);
+    applyRouteClasses();
     try {
         document.cookie = 'ams-theme=' + theme + ';path=/;max-age=31536000;samesite=lax';
     } catch (e) { /* cookies unavailable */ }

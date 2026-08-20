@@ -153,7 +153,7 @@
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Blazor Server (.NET 9) |
-| UI Framework | Syncfusion Blazor |
+| UI Framework | enterprise native Blazor |
 | Icons | Bootstrap Icons 1.11.3 |
 | Backend | ASP.NET Core Web API |
 | ORM | Dapper |

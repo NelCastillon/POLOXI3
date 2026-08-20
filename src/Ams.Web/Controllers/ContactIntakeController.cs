@@ -78,6 +78,7 @@ public sealed class ContactIntakeController : ControllerBase
     }
 
     [HttpGet("options")]
+    [EnableRateLimiting("ContactIntake")]
     [ProducesResponseType(typeof(IReadOnlyList<ContactIntakeOptionDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetOptions(CancellationToken cancellationToken)
     {

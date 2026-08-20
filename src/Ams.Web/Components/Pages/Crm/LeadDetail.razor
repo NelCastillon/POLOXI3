@@ -10,6 +10,7 @@
 @using Ams.Application.Features.Leads
 @using Ams.Application.Features.Opportunities
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject CurrentUserContext CurrentUser
@@ -26,7 +27,29 @@
     </div>
 }
 
+        @if (SuppressedPhoneCount > 0)
+        {
+            <div class="ldd-dnc-alert" role="alert">
+                <i class="bi bi-telephone-x-fill" aria-hidden="true"></i>
+                <div><strong>Do Not Call restriction active</strong><span>@SuppressedPhoneCount phone number(s) are suppressed. Outbound calls, SMS, and campaign actions are enforced by the backend.</span></div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => SetTab(6)">Review compliance</button>
+            </div>
+        }
+
 <EnterpriseDocumentPreview @ref="_documentPreview" />
+
+<EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_currentUserId"
+                          EntityName="CRM.Lead"
+                          EntityId="LeadId"
+                          Title="Upload Lead Document"
+                          IntroText="Upload and classify applications, statements, loss runs, and other supporting lead documents."
+                          DefaultDocumentTypeCode="LEAD"
+                          DefaultCategoryCode="CRM"
+                          DefaultTags="Lead"
+                          OnUploaded="HandleLeadDocumentUploadedAsync"
+                          OnUploadFailed="HandleLeadDocumentUploadFailed" />
 
 @if (_showEdit)
 {
@@ -46,8 +69,8 @@
                         <div class="um-field um-field-wide"><label>Company</label><InputText class="um-input" @bind-Value="_editForm.AccountName" /></div>
                         <div class="um-field"><label>Email</label><InputText class="um-input" type="email" @bind-Value="_editForm.Email" /><ValidationMessage For="() => _editForm.Email" class="text-danger" /></div>
                         <div class="um-field"><label>Phone</label><InputText class="um-input" type="tel" @bind-Value="_editForm.Phone" /><ValidationMessage For="() => _editForm.Phone" class="text-danger" /></div>
-                        <div class="um-field"><label>Source</label><InputSelect class="um-input" @bind-Value="_editForm.SourceCode"><option value="">Select source</option>@foreach (var source in LeadSourceOptions) { <option value="@source.Code">@source.Label</option> }</InputSelect></div>
-                        <div class="um-field"><label>Stage</label><InputSelect class="um-input" @bind-Value="_editForm.NurturingStageCode"><option value="">Select stage</option>@foreach (var stage in LeadStageOptions) { <option value="@stage.Code">@stage.Label</option> }</InputSelect></div>
+                        <div class="um-field"><label>Source</label><InputSelect class="um-input" @bind-Value="_editForm.SourceCode"><option value="">Select source</option>@foreach (var source in LeadSourceOptions) { <option value="@source.SourceCode">@source.SourceName</option> }</InputSelect></div>
+                        <div class="um-field"><label>Stage</label><InputSelect class="um-input" @bind-Value="_editForm.NurturingStageCode"><option value="">Select stage</option>@foreach (var stage in LeadStageOptions) { <option value="@stage.StatusCode">@stage.StatusName</option> }</InputSelect></div>
                         <div class="um-field"><label>Priority</label><InputSelect class="um-input" @bind-Value="_editForm.PriorityCode"><option value="">Select priority</option>@foreach (var priority in LeadPriorityOptions) { <option value="@priority.Code">@priority.Label</option> }</InputSelect></div>
                         <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_editForm.AnnualRevenue" /></div>
                         <div class="um-field"><label>Score</label><InputNumber class="um-input" @bind-Value="_editForm.Score" /></div>
@@ -89,11 +112,178 @@
     </div>
 }
 
+@if (_showConvert)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseConvert">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="leadConvertTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_convertForm" OnValidSubmit="ConvertAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-arrow-up-right-circle" aria-hidden="true"></i>
+                    <span id="leadConvertTitle">Convert lead to Account + Opportunity</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConvert" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="ldd-convert-flow" aria-label="Enterprise conversion path">
+                        <span><i class="bi bi-person-lines-fill" aria-hidden="true"></i> Lead</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-building" aria-hidden="true"></i> Account</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity</span>
+                        <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                        <span><i class="bi bi-send" aria-hidden="true"></i> Submission</span>
+                    </div>
+                    <div class="um-form-grid">
+                        <div class="ldd-convert-section um-field-wide">
+                            <div class="ldd-convert-section-head">
+                                <span><i class="bi bi-building-gear" aria-hidden="true"></i> Account destination</span>
+                                <small>Choose whether AMS creates a new account or links this lead to a persisted account.</small>
+                            </div>
+                            <div class="ldd-convert-mode-toggle" role="radiogroup" aria-label="Account handling">
+                                <label class="ldd-convert-mode @( _convertForm.AccountMode == "Create" ? "ldd-convert-mode--active" : string.Empty )">
+                                    <input type="radio" name="convertAccountMode" value="Create" checked="@(_convertForm.AccountMode == "Create")" @onchange="OnConvertAccountModeSelected" disabled="@_busy" />
+                                    <span><i class="bi bi-plus-circle" aria-hidden="true"></i> Create new account</span>
+                                    <small>Use the lead company and contact details.</small>
+                                </label>
+                                <label class="ldd-convert-mode @( _convertForm.AccountMode == "Link" ? "ldd-convert-mode--active" : string.Empty )">
+                                    <input type="radio" name="convertAccountMode" value="Link" checked="@(_convertForm.AccountMode == "Link")" @onchange="OnConvertAccountModeSelected" disabled="@_busy" />
+                                    <span><i class="bi bi-link-45deg" aria-hidden="true"></i> Link existing account</span>
+                                    <small>Search DB accounts and convert under the selected account.</small>
+                                </label>
+                            </div>
+                        </div>
+                        @if (_convertForm.AccountMode == "Link")
+                        {
+                            <div class="ldd-account-picker um-field um-field-wide">
+                                <label for="convertAccountPicker">Existing account</label>
+                                <div class="ldd-account-combobox">
+                                    <i class="bi bi-search" aria-hidden="true"></i>
+                                    <input id="convertAccountPicker"
+                                           @ref="_convertAccountPickerRef"
+                                           class="um-input"
+                                           value="@_convertAccountSearch"
+                                           placeholder="Search DB accounts by name, number, or email"
+                                           role="combobox"
+                                           aria-expanded="@_showConvertAccountPicker"
+                                           aria-controls="convertAccountPickerResults"
+                                           autocomplete="off"
+                                           disabled="@_busy"
+                                           @onfocus="ShowConvertAccountPicker"
+                                           @oninput="OnConvertAccountSearchInput" />
+                                    @if (_convertForm.ExistingAccountGuid.HasValue)
+                                    {
+                                        <button type="button" class="ldd-account-clear" title="Clear selected account" @onclick="ClearConvertAccountSelection" disabled="@_busy"><i class="bi bi-x-lg" aria-hidden="true"></i></button>
+                                    }
+                                </div>
+                                <span class="ldd-field-hint @ConvertAccountPickerStatusClass">@ConvertAccountPickerStatus</span>
+                                @if (_showConvertAccountPicker)
+                                {
+                                    <div id="convertAccountPickerResults" class="ldd-account-picker-menu" role="listbox">
+                                        @if (_accountCandidates.Count == 0)
+                                        {
+                                            <div class="ldd-account-picker-empty">
+                                                <i class="bi bi-database-exclamation" aria-hidden="true"></i>
+                                                <span>No DB accounts found. Refine the search or create a new account.</span>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var account in _accountCandidates)
+                                            {
+                                                <button type="button" class="ldd-account-option @(account.AccountId == _convertForm.ExistingAccountGuid ? "ldd-account-option--selected" : string.Empty)" role="option" aria-selected="@(account.AccountId == _convertForm.ExistingAccountGuid)" @onclick="() => SelectConvertAccount(account)" disabled="@_busy">
+                                                    <span class="ldd-account-option-icon"><i class="bi bi-building" aria-hidden="true"></i></span>
+                                                    <span class="ldd-account-option-main">
+                                                        <strong>@Safe(account.AccountName, "Unnamed account")</strong>
+                                                        <small>@ConvertAccountSubtitle(account)</small>
+                                                    </span>
+                                                    @if (account.AccountId == _convertForm.ExistingAccountGuid)
+                                                    {
+                                                        <i class="bi bi-check2-circle ldd-account-option-check" aria-hidden="true"></i>
+                                                    }
+                                                </button>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            @if (SelectedConvertAccount is not null)
+                            {
+                                <div class="ldd-selected-account um-field-wide">
+                                    <span class="ldd-selected-account-icon"><i class="bi bi-building-check" aria-hidden="true"></i></span>
+                                    <span>
+                                        <strong>@Safe(SelectedConvertAccount.AccountName, "Selected account")</strong>
+                                        <small>@ConvertAccountSubtitle(SelectedConvertAccount)</small>
+                                    </span>
+                                </div>
+                            }
+                            <div class="validation-message-placeholder d-none">
+                                <ValidationMessage For="() => _convertForm.ExistingAccountId" class="text-danger" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="um-field um-field-wide"><label>New account name</label><InputText class="um-input" @bind-Value="_convertForm.AccountName" /></div>
+                        }
+                        <div class="ldd-convert-section um-field-wide">
+                            <div class="ldd-convert-section-head">
+                                <span><i class="bi bi-trophy" aria-hidden="true"></i> Opportunity setup</span>
+                                <small>Confirm the opportunity details that will be persisted during conversion.</small>
+                            </div>
+                            <div class="um-form-grid ldd-convert-inner-grid">
+                                <div class="um-field um-field-wide"><label>Opportunity name</label><InputText class="um-input" @bind-Value="_convertForm.OpportunityName" /></div>
+                                @if (_interestLines.Count > 0)
+                                {
+                                    <div class="um-field um-field-wide">
+                                        <div class="ldd-convert-lines-head">
+                                            <label>Lines of business</label>
+                                            <span>@_interestLines.Count line@(_interestLines.Count == 1 ? string.Empty : "s")</span>
+                                        </div>
+                                        <div class="ldd-convert-lines">
+                                            @foreach (var line in _interestLines.OrderByDescending(line => line.EstPremium).ThenBy(line => line.LineOfBusiness))
+                                            {
+                                                <div class="ldd-convert-line">
+                                                    <span class="ldd-convert-line-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                                                    <span class="ldd-convert-line-main">
+                                                        <strong>@line.LineOfBusiness</strong>
+                                                        <small>@Safe(line.Carrier, "Carrier not selected") · @Safe(line.Priority, "Medium") priority</small>
+                                                    </span>
+                                                    <span class="ldd-convert-line-premium">@line.EstPremium.ToString("C0", CultureInfo.CurrentCulture)</span>
+                                                </div>
+                                            }
+                                        </div>
+                                        <span class="ldd-field-help">All persisted lead lines will be copied to the opportunity@(_convertForm.CreateSubmissionDraft ? " and draft submission" : string.Empty).</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="um-field"><label>Line of business</label><InputSelect TValue="string" class="um-input" Value="@_convertForm.LineOfBusiness" ValueChanged="@OnConvertLineOfBusinessChanged" ValueExpression="@(() => _convertForm.LineOfBusiness)"><option value="">Select line</option>@foreach (var line in _lineOfBusinessOptions) { <option value="@line.LobName">@line.LobName</option> }</InputSelect></div>
+                                }
+                                <div class="um-field"><label>Estimated premium</label><InputNumber class="um-input" @bind-Value="_convertForm.EstimatedAmount" /></div>
+                                <div class="um-field"><label>Target close date</label><InputDate class="um-input" @bind-Value="_convertForm.CloseDate" /></div>
+                                <div class="um-field"><label>Owner</label><InputSelect class="um-input" @bind-Value="_convertForm.OwnerUserId"><option value="">Use current owner</option>@foreach (var owner in _ownerOptions) { <option value="@owner.Value">@owner.Label</option> }</InputSelect></div>
+                            </div>
+                        </div>
+                        <div class="ldd-convert-section um-field-wide">
+                            <label class="ldd-convert-checkbox"><InputCheckbox @bind-Value="_convertForm.CreateSubmissionDraft" /> <span>Create draft submission during conversion</span></label>
+                            <span class="ldd-text-muted">AMS creates the account, opportunity, and draft submission in one backend transaction, then opens the persisted submission.</span>
+                            <div class="um-field ldd-convert-notes"><label>Conversion notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_convertForm.Notes" /></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseConvert" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2-circle" aria-hidden="true"></i> Convert to Account + Opportunity</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
 @if (_showTabForm)
 {
     <div class="ldd-modal-backdrop" role="presentation">
         <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="leadTabFormTitle" @onclick:stopPropagation="true">
-            <EditForm Model="_tabForm" OnValidSubmit="SaveTabItemAsync">
+            <EditForm Model="_tabForm" OnValidSubmit="SaveTabItemAsync" OnInvalidSubmit="HandleInvalidTabItemSubmit">
                 <DataAnnotationsValidator />
                 <div class="um-modal-header">
                     <i class="bi @TabFormIcon" aria-hidden="true"></i>
@@ -101,14 +291,21 @@
                     <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseTabForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
                 </div>
                 <div class="um-modal-body">
+                    @if (!string.IsNullOrWhiteSpace(_tabValidationError))
+                    {
+                        <div class="login-alert login-alert-danger" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            @_tabValidationError
+                        </div>
+                    }
                     <div class="um-form-grid">
                         @if (_tabForm.Kind == LeadTabItemKind.Contact)
                         {
-                            <div class="um-field"><label>First name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.FirstName" /></div>
-                            <div class="um-field"><label>Last name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.LastName" /></div>
-                            <div class="um-field"><label>Title</label><InputText class="um-input" @bind-Value="_tabForm.Title" /></div>
-                            <div class="um-field"><label>Email</label><InputText class="um-input" type="email" @bind-Value="_tabForm.Email" /><ValidationMessage For="() => _tabForm.Email" class="text-danger" /></div>
-                            <div class="um-field"><label>Phone</label><InputText class="um-input" type="tel" @bind-Value="_tabForm.Phone" @bind-Value:after="OnTabContactPhoneChanged" /><ValidationMessage For="() => _tabForm.Phone" class="text-danger" />@if (!string.IsNullOrWhiteSpace(_tabForm.Phone)) { <span class="@TabContactPhoneHintClass">@TabContactPhoneStatusText</span> }</div>
+                            <div class="um-field"><label for="leadContactFirstName">First name <span class="text-danger">*</span></label><InputText id="leadContactFirstName" class="um-input" @bind-Value="_tabForm.FirstName" maxlength="150" autocomplete="given-name" /></div>
+                            <div class="um-field"><label for="leadContactLastName">Last name <span class="text-danger">*</span></label><InputText id="leadContactLastName" class="um-input" @bind-Value="_tabForm.LastName" maxlength="150" autocomplete="family-name" /></div>
+                            <div class="um-field"><label for="leadContactTitle">Title</label><InputText id="leadContactTitle" class="um-input" @bind-Value="_tabForm.Title" maxlength="200" autocomplete="organization-title" /><ValidationMessage For="() => _tabForm.Title" class="text-danger" /></div>
+                            <div class="um-field"><label for="leadContactEmail">Email</label><InputText id="leadContactEmail" class="um-input" type="email" @bind-Value="_tabForm.Email" maxlength="300" autocomplete="email" /><ValidationMessage For="() => _tabForm.Email" class="text-danger" /></div>
+                            <div class="um-field"><label for="leadContactPhone">Phone</label><InputText id="leadContactPhone" class="um-input" type="tel" @bind-Value="_tabForm.Phone" @bind-Value:after="OnTabContactPhoneChanged" maxlength="50" autocomplete="tel" /><ValidationMessage For="() => _tabForm.Phone" class="text-danger" />@if (!string.IsNullOrWhiteSpace(_tabForm.Phone)) { <span class="@TabContactPhoneHintClass">@TabContactPhoneStatusText</span> }</div>
                             <div class="um-field"><label><InputCheckbox @bind-Value="_tabForm.IsPrimary" /> Primary contact</label></div>
                         }
                         else if (_tabForm.Kind == LeadTabItemKind.InterestLine)
@@ -167,7 +364,7 @@
                                 <div class="um-field um-field-wide"><label>Document file <span class="text-danger">*</span></label><InputFile class="um-input" OnChange="OnLeadDocumentSelected" accept="@DocumentAcceptExtensions" />@if (_selectedDocumentFile is not null) { <small class="ldd-text-muted">@_selectedDocumentFile.Name (@SizeText((int)Math.Ceiling(_selectedDocumentFile.Size / 1024m))) selected</small> }</div>
                             }
                             <div class="um-field um-field-wide"><label>File name <span class="text-danger">*</span></label><InputText class="um-input" @bind-Value="_tabForm.FileName" /></div>
-                            <div class="um-field"><label>Extension <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Extension"><option value="">Select type</option>@foreach (var extension in DocumentExtensionOptions) { <option value="@extension.Code">@extension.Label</option> }</InputSelect></div>
+                            <div class="um-field"><label>Extension <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Extension"><option value="">Select type</option>@foreach (var extension in Enum.GetValues<DocumentFileExtension>()) { <option value="@DocumentFileExtensionValue(extension)">@DocumentFileExtensionLabel(extension)</option> }</InputSelect></div>
                             <div class="um-field"><label>Category <span class="text-danger">*</span></label><InputSelect class="um-input" @bind-Value="_tabForm.Category"><option value="">Select category</option>@foreach (var category in DocumentCategoryOptions) { <option value="@Safe(category.Name, category.Code)">@Safe(category.Name, category.Code)</option> }</InputSelect></div>
                             <div class="um-field"><label>Size KB</label><InputNumber class="um-input" @bind-Value="_tabForm.SizeKb" disabled="@(_selectedDocumentFile is not null)" /></div>
                             <div class="um-field"><label>Uploaded at <span class="text-danger">*</span></label><InputDate class="um-input" @bind-Value="_tabForm.UploadedAt" /></div>
@@ -178,6 +375,63 @@
                     <button type="button" class="um-btn um-btn-ghost" @onclick="CloseTabForm" disabled="@_busy">Cancel</button>
                     <button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2" aria-hidden="true"></i> @(_editingTabItemId.HasValue ? "Save item" : "Create item")</button>
                 </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showSuppressionForm && _selectedCompliancePhone is not null)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseSuppressionForm">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="suppressionTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_suppressionForm" OnValidSubmit="SaveSuppressionAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-telephone-x" aria-hidden="true"></i>
+                    <span id="suppressionTitle">Add phone suppression</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseSuppressionForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field um-field-wide"><label>Phone</label><InputText class="um-input" @bind-Value="_suppressionForm.PhoneNumber" disabled /></div>
+                    <div class="um-field"><label>Source</label><InputSelect class="um-input" @bind-Value="_suppressionForm.SourceCode"><option value="">Select source</option>@foreach (var option in ComplianceOptions("SuppressionSource")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Reason</label><InputSelect class="um-input" @bind-Value="_suppressionForm.ReasonCode"><option value="">Select reason</option>@foreach (var option in ComplianceOptions("SuppressionReason")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Channel</label><InputSelect class="um-input" @bind-Value="_suppressionForm.ChannelCode"><option value="">Select channel</option>@foreach (var option in ComplianceOptions("Channel")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Purpose</label><InputSelect class="um-input" @bind-Value="_suppressionForm.PurposeCode"><option value="">All purposes</option>@foreach (var option in ComplianceOptions("Purpose")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Effective date</label><InputDate class="um-input" Type="InputDateType.DateTimeLocal" @bind-Value="_suppressionForm.EffectiveDateUtc" /></div>
+                    <div class="um-field"><label>Expiration date</label><InputDate class="um-input" Type="InputDateType.DateTimeLocal" @bind-Value="_suppressionForm.ExpirationDateUtc" /></div>
+                    <div class="um-field um-field-wide"><label>Evidence reference</label><InputText class="um-input" @bind-Value="_suppressionForm.EvidenceReference" /></div>
+                    <div class="um-field um-field-wide"><label>Notes</label><InputTextArea class="um-input" rows="3" @bind-Value="_suppressionForm.Notes" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseSuppressionForm" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-danger" disabled="@_busy"><i class="bi bi-shield-x"></i> Apply suppression</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_showConsentForm && _selectedCompliancePhone is not null)
+{
+    <div class="ldd-modal-backdrop" role="presentation" @onclick="CloseConsentForm">
+        <div class="ldd-enterprise-modal ldd-enterprise-modal--wide" role="dialog" aria-modal="true" aria-labelledby="consentTitle" @onclick:stopPropagation="true">
+            <EditForm Model="_consentForm" OnValidSubmit="SaveConsentAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-header">
+                    <i class="bi bi-file-earmark-check" aria-hidden="true"></i>
+                    <span id="consentTitle">Record documented consent</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseConsentForm" disabled="@_busy"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body"><div class="um-form-grid">
+                    <div class="um-field um-field-wide"><label>Phone</label><InputText class="um-input" @bind-Value="_consentForm.PhoneNumber" disabled /></div>
+                    <div class="um-field"><label>Consent type</label><InputSelect class="um-input" @bind-Value="_consentForm.ConsentTypeCode"><option value="">Select consent type</option>@foreach (var option in ComplianceOptions("ConsentType")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Channel</label><InputSelect class="um-input" @bind-Value="_consentForm.ChannelCode"><option value="">Select channel</option>@foreach (var option in ComplianceOptions("Channel")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Purpose</label><InputSelect class="um-input" @bind-Value="_consentForm.PurposeCode"><option value="">Select purpose</option>@foreach (var option in ComplianceOptions("Purpose")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Legal basis</label><InputSelect class="um-input" @bind-Value="_consentForm.LegalBasisCode"><option value="">Select legal basis</option>@foreach (var option in ComplianceOptions("LegalBasis")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Evidence type</label><InputSelect class="um-input" @bind-Value="_consentForm.EvidenceTypeCode"><option value="">Select evidence</option>@foreach (var option in ComplianceOptions("EvidenceType")) { <option value="@option.Code">@option.Name</option> }</InputSelect></div>
+                    <div class="um-field"><label>Evidence reference</label><InputText class="um-input" @bind-Value="_consentForm.EvidenceReference" /></div>
+                    <div class="um-field"><label>Captured date</label><InputDate class="um-input" Type="InputDateType.DateTimeLocal" @bind-Value="_consentForm.CapturedDateUtc" /></div>
+                    <div class="um-field"><label>Expiration date</label><InputDate class="um-input" Type="InputDateType.DateTimeLocal" @bind-Value="_consentForm.ExpirationDateUtc" /></div>
+                    <div class="um-field um-field-wide"><label>Consent text / evidence notes</label><InputTextArea class="um-input" rows="4" @bind-Value="_consentForm.ConsentText" /></div>
+                </div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseConsentForm" disabled="@_busy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_busy"><i class="bi bi-check2-circle"></i> Record consent</button></div>
             </EditForm>
         </div>
     </div>
@@ -278,6 +532,7 @@ else
             <button type="button" class="@KpiClass(3)" title="Show activities" @onclick="() => SetTab(3)"><span class="ldd-kpi-icon ldd-kpi-icon--amber"><i class="bi bi-lightning-charge" aria-hidden="true"></i></span><span class="ldd-kpi-label">Activity</span><strong>@_activities.Count</strong><small>@CompletedActivityText</small></button>
             <button type="button" class="@KpiClass(4)" title="Show communications and campaigns" @onclick="() => SetTab(4)"><span class="ldd-kpi-icon ldd-kpi-icon--teal"><i class="bi bi-broadcast" aria-hidden="true"></i></span><span class="ldd-kpi-label">Engagement</span><strong>@EngagementScoreDisplay</strong><small>@EngagementLevel</small></button>
             <button type="button" class="@KpiClass(5)" title="Show documents" @onclick="() => SetTab(5)"><span class="ldd-kpi-icon ldd-kpi-icon--slate"><i class="bi bi-folder2-open" aria-hidden="true"></i></span><span class="ldd-kpi-label">Documents</span><strong>@_documents.Count</strong><small>@DocumentSizeText</small></button>
+            <button type="button" class="@KpiClass(6)" title="Show phone compliance" @onclick="() => SetTab(6)"><span class="ldd-kpi-icon ldd-kpi-icon--danger"><i class="bi bi-shield-lock" aria-hidden="true"></i></span><span class="ldd-kpi-label">Phone Compliance</span><strong>@SuppressedPhoneCount</strong><small>@(SuppressedPhoneCount == 0 ? "No active DNC" : "Suppressed")</small></button>
         </section>
 
         <div class="ldd-layout">
@@ -468,7 +723,7 @@ else
                     else if (_activeTab == 5)
                     {
                         <div class="ldd-tab-body">
-                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_documents.Count document(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenCreateTabItem(LeadTabItemKind.Document)"><i class="bi bi-folder-plus" aria-hidden="true"></i> Add document</button></div>
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_documents.Count document(s)</span><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="OpenDocumentUpload"><i class="bi bi-folder-plus" aria-hidden="true"></i> Add document</button></div>
                             @if (_documents.Count == 0)
                             {
                                 @EmptyState("bi-folder2-open", "No documents", "Applications, statements, loss runs, and supporting lead documents will appear here.")
@@ -478,9 +733,48 @@ else
                                 <div class="ldd-table-wrap"><table class="ldd-enterprise-table"><thead><tr><th>File</th><th>Category</th><th>Uploaded by</th><th>Uploaded</th><th class="ldd-text-end">Size</th><th class="ldd-text-end">Actions</th></tr></thead><tbody>
                                     @foreach (var doc in _documents.OrderByDescending(d => d.UploadedAt))
                                     {
-                                        <tr><td><span class="ldd-doc-name"><i class="bi @DocumentIcon(doc.Extension)" aria-hidden="true"></i><strong>@doc.FileName</strong></span><div class="ldd-text-muted">@doc.Extension.ToUpperInvariant()</div></td><td>@doc.Category</td><td>@Safe(doc.UploadedByName, "System")</td><td>@doc.UploadedAt.ToLocalTime().ToString("g")</td><td class="ldd-text-end ldd-mono">@SizeText(doc.SizeKb)</td><td class="ldd-text-end"><div class="ldd-doc-actions">@if (IsImageDocument(doc)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Preview image" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download file" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit metadata" @onclick="() => OpenEditTabItem(doc)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Document, doc.DocumentId, doc.FileName)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
+                                        <tr><td><span class="ldd-doc-name"><i class="bi @DocumentIcon(doc.Extension)" aria-hidden="true"></i><strong>@doc.FileName</strong></span><div class="ldd-text-muted">@doc.Extension.ToUpperInvariant()</div></td><td>@doc.Category</td><td>@Safe(doc.UploadedByName, "System")</td><td>@doc.UploadedAt.ToLocalTime().ToString("g")</td><td class="ldd-text-end ldd-mono">@SizeText(doc.SizeKb)</td><td class="ldd-text-end"><div class="ldd-doc-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Open document details" @onclick="() => OpenDocumentAsync(doc)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i><span>Open</span></button>@if (IsImageDocument(doc)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Preview image" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Download file" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Edit metadata" @onclick="() => OpenEditTabItem(doc)"><i class="bi bi-pencil" aria-hidden="true"></i></button><button type="button" class="um-btn um-btn-ghost um-btn-sm text-danger" title="Delete document" @onclick="() => ConfirmDeleteTabItem(LeadTabItemKind.Document, doc.DocumentId, doc.FileName)"><i class="bi bi-trash" aria-hidden="true"></i></button></div></td></tr>
                                     }
                                 </tbody></table></div>
+                            }
+                        </div>
+                    }
+                    else if (_activeTab == 6)
+                    {
+                        <div class="ldd-tab-body">
+                            <div class="ldd-tab-toolbar"><span class="ldd-tab-count">@_phoneCompliance.Count linked phone record(s)</span></div>
+                            @if (_phoneCompliance.Count == 0)
+                            {
+                                @EmptyState("bi-telephone", "No phone records", "Add a valid phone to the lead or a lead contact to initialize compliance screening.")
+                            }
+                            else
+                            {
+                                <div class="ldd-compliance-list">
+                                    @foreach (var phone in _phoneCompliance.OrderByDescending(p => p.IsPrimary).ThenBy(p => p.EntityDisplayName))
+                                    {
+                                        <article class="ldd-compliance-card">
+                                            <div class="ldd-compliance-head">
+                                                <div><span class="ldd-field-lbl">@phone.EntityTypeCode</span><h3>@phone.EntityDisplayName</h3><span class="ldd-mono">@phone.DisplayPhoneNumber</span></div>
+                                                <span class="@(phone.IsCallAllowed || phone.IsSmsAllowed ? "ldd-dnc-status ldd-dnc-status--allowed" : "ldd-dnc-status ldd-dnc-status--blocked")"><i class="bi @(phone.IsCallAllowed || phone.IsSmsAllowed ? "bi-telephone-check-fill" : "bi-telephone-x-fill")"></i> @phone.OverallStatusCode</span>
+                                            </div>
+                                            <div class="ldd-compliance-metrics"><span><strong>Calls</strong>@(phone.IsCallAllowed ? "Allowed" : "Blocked")</span><span><strong>SMS</strong>@(phone.IsSmsAllowed ? "Allowed" : "Blocked")</span><span><strong>Last evaluated</strong>@DateOrDash(phone.LastEvaluatedDateUtc)</span><span><strong>Screening due</strong>@DateOrDash(phone.NextScreeningDueDateUtc)</span></div>
+                                            <div class="ldd-compliance-actions"><button type="button" class="um-btn um-btn-danger um-btn-sm" @onclick="() => OpenSuppressionForm(phone)"><i class="bi bi-telephone-x"></i> Add suppression</button><button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenConsentForm(phone)"><i class="bi bi-file-earmark-check"></i> Record consent</button></div>
+
+                                            <details class="ldd-compliance-history" open="@(phone.Suppressions.Any(s => s.StatusCode == "Active"))"><summary>Suppressions (@phone.Suppressions.Count)</summary>
+                                                @if (phone.Suppressions.Count == 0) { <p>No suppression history.</p> }
+                                                else { @foreach (var item in phone.Suppressions) { <div class="ldd-history-row"><div><strong>@ReferenceName("SuppressionSource", item.SourceCode)</strong><span>@ReferenceName("SuppressionReason", item.ReasonCode) • @ReferenceName("Channel", item.ChannelCode) • @item.EffectiveDateUtc.ToLocalTime().ToString("g")</span><small>@Safe(item.Notes, Safe(item.EvidenceReference, "No notes"))</small></div><span class="ldd-dnc-status @(item.StatusCode == "Active" ? "ldd-dnc-status--blocked" : "ldd-dnc-status--neutral")">@item.StatusCode</span>@if (item.StatusCode == "Active") { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmRevokeSuppression(phone, item)">Revoke</button> }</div> } }
+                                            </details>
+                                            <details class="ldd-compliance-history"><summary>Consent evidence (@phone.Consents.Count)</summary>
+                                                @if (phone.Consents.Count == 0) { <p>No consent evidence.</p> }
+                                                else { @foreach (var item in phone.Consents) { <div class="ldd-history-row"><div><strong>@ReferenceName("ConsentType", item.ConsentTypeCode)</strong><span>@ReferenceName("Purpose", item.PurposeCode) • @ReferenceName("LegalBasis", item.LegalBasisCode)</span><small>@item.EvidenceReference</small></div><span class="ldd-dnc-status @(item.StatusCode == "Granted" ? "ldd-dnc-status--allowed" : "ldd-dnc-status--neutral")">@item.StatusCode</span>@if (item.StatusCode == "Granted") { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ConfirmRevokeConsent(phone, item)">Revoke</button> }</div> } }
+                                            </details>
+                                            <details class="ldd-compliance-history"><summary>Registry screenings (@phone.ScreeningResults.Count)</summary>
+                                                @if (phone.ScreeningResults.Count == 0) { <p>No screening results have been recorded.</p> }
+                                                else { @foreach (var item in phone.ScreeningResults) { <div class="ldd-history-row"><div><strong>@item.RegistryCode</strong><span>@item.ProviderCode • @item.ScreenedDateUtc.ToLocalTime().ToString("g")</span><small>@Safe(item.ProviderReference, Safe(item.ErrorDetails, "No provider detail"))</small></div><span class="ldd-dnc-status @(item.ResultCode == "Matched" ? "ldd-dnc-status--blocked" : "ldd-dnc-status--allowed")">@item.ResultCode</span></div> } }
+                                            </details>
+                                        </article>
+                                    }
+                                </div>
                             }
                         </div>
                     }
@@ -550,10 +844,14 @@ else
     private List<LeadCommunicationDto> _communications = [];
     private List<LeadCampaignEnrollmentDto> _campaigns = [];
     private List<LeadDocumentDto> _documents = [];
+    private List<LeadPhoneComplianceDto> _phoneCompliance = [];
+    private List<PhoneComplianceReferenceDto> _complianceReferences = [];
     private List<LeadScoreFactorDto> _scoreFactors = [];
     private List<LeadActivityTypeDto> _activityTypes = [];
     private List<LeadActivityOutcomeDto> _activityOutcomes = [];
     private List<LeadEngagementOptionDto> _engagementOptions = [];
+    private List<LeadSourceDto> _leadSources = [];
+    private List<LeadStatusDto> _leadStatuses = [];
     private List<LeadCampaignOptionDto> _campaignOptions = [];
     private List<CarrierDto> _carrierOptions = [];
     private List<LineOfBusinessDto> _lineOfBusinessOptions = [];
@@ -565,8 +863,13 @@ else
     private bool _busy;
     private bool _showEdit;
     private bool _showAssign;
+    private bool _showConvert;
     private bool _showTabForm;
+    private bool _showDocumentUpload;
+    private bool _showSuppressionForm;
+    private bool _showConsentForm;
     private string? _loadError;
+    private string? _tabValidationError;
     private int _activeTab;
     private bool _toastVisible;
     private string _toastKind = "success";
@@ -575,10 +878,19 @@ else
     private EnterpriseDocumentPreview? _documentPreview;
     private LeadEditForm _editForm = new();
     private LeadAssignForm _assignForm = new();
+    private LeadConvertForm _convertForm = new();
     private LeadTabItemForm _tabForm = new();
+    private PhoneSuppressionForm _suppressionForm = new();
+    private PhoneConsentForm _consentForm = new();
+    private LeadPhoneComplianceDto? _selectedCompliancePhone;
     private IBrowserFile? _selectedDocumentFile;
     private Guid? _editingTabItemId;
     private List<OwnerOption> _ownerOptions = [];
+    private List<AccountDto> _accountCandidates = [];
+    private string _convertAccountSearch = string.Empty;
+    private bool _showConvertAccountPicker;
+    private bool _focusConvertAccountPicker;
+    private ElementReference _convertAccountPickerRef;
 
     private readonly TabDefinition[] _tabs =
     [
@@ -587,13 +899,22 @@ else
         new(2, "interest", "Interest", "bi-shield-plus"),
         new(3, "activities", "Activities", "bi-lightning-charge"),
         new(4, "engagement", "Engagement", "bi-broadcast"),
-        new(5, "documents", "Documents", "bi-folder2-open")
+        new(5, "documents", "Documents", "bi-folder2-open"),
+        new(6, "compliance", "Phone Compliance", "bi-shield-lock")
     ];
 
     protected override async Task OnParametersSetAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("Leads", "/crm/leads"), new("Lead Detail", $"/crm/leads/{LeadId}"));
         await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusConvertAccountPicker) return;
+
+        _focusConvertAccountPicker = false;
+        await _convertAccountPickerRef.FocusAsync();
     }
 
     private async Task LoadAsync()
@@ -630,12 +951,16 @@ else
             var activityTypesTask = Api.SearchLeadActivityTypesAsync(leadTenantId, pageSize: 1000);
             var activityOutcomesTask = Api.GetLeadActivityOutcomesAsync(leadTenantId);
             var engagementOptionsTask = Api.GetLeadEngagementOptionsAsync(leadTenantId);
+            var leadSourcesTask = Api.SearchLeadSourcesAsync(leadTenantId, pageSize: 1000);
+            var leadStatusesTask = Api.SearchLeadStatusesAsync(leadTenantId, pageSize: 1000);
             var campaignOptionsTask = Api.GetLeadCampaignOptionsAsync(leadTenantId);
             var carriersTask = Api.SearchCarriersAsync(leadTenantId, pageSize: 1000);
             var linesOfBusinessTask = Api.SearchLobsAsync(leadTenantId, pageSize: 1000);
             var documentCategoriesTask = Api.SearchDocumentConfigItemsAsync(leadTenantId, "DocumentCategory", pageSize: 1000);
+            var phoneComplianceTask = Api.GetLeadPhoneComplianceAsync(LeadId);
+            var complianceReferencesTask = Api.GetPhoneComplianceReferencesAsync(leadTenantId);
 
-            await Task.WhenAll(usersTask, contactsTask, interestTask, activitiesTask, communicationsTask, campaignsTask, documentsTask, scoresTask, engagementTask, activityTypesTask, activityOutcomesTask, engagementOptionsTask, campaignOptionsTask, carriersTask, linesOfBusinessTask, documentCategoriesTask);
+            await Task.WhenAll(usersTask, contactsTask, interestTask, activitiesTask, communicationsTask, campaignsTask, documentsTask, scoresTask, engagementTask, activityTypesTask, activityOutcomesTask, engagementOptionsTask, leadSourcesTask, leadStatusesTask, campaignOptionsTask, carriersTask, linesOfBusinessTask, documentCategoriesTask, phoneComplianceTask, complianceReferencesTask);
 
             _ownerOptions = usersTask.Result?.Items?
                 .Where(u => string.Equals(u.StatusCode, "Active", StringComparison.OrdinalIgnoreCase))
@@ -654,10 +979,14 @@ else
             _activityTypes = activityTypesTask.Result?.Items.Where(t => t.IsActive).OrderBy(t => t.SortOrder).ThenBy(t => t.ActivityTypeName).ToList() ?? [];
             _activityOutcomes = activityOutcomesTask.Result?.Where(o => o.IsActive).ToList() ?? [];
             _engagementOptions = engagementOptionsTask.Result?.Where(o => o.IsActive).OrderBy(o => o.SortOrder).ThenBy(o => o.Label).ToList() ?? [];
+            _leadSources = leadSourcesTask.Result?.Items.Where(s => s.IsActive).OrderBy(s => s.SourceName).ToList() ?? [];
+            _leadStatuses = leadStatusesTask.Result?.Items.Where(s => s.IsActive).OrderBy(s => s.SortOrder).ThenBy(s => s.StatusName).ToList() ?? [];
             _campaignOptions = campaignOptionsTask.Result?.OrderBy(c => c.Name).ToList() ?? [];
             _carrierOptions = carriersTask.Result?.Items.Where(c => c.IsActive).OrderBy(c => c.CarrierName).ToList() ?? [];
             _lineOfBusinessOptions = linesOfBusinessTask.Result?.Items.Where(l => l.IsActive).OrderBy(l => l.LobName).ToList() ?? [];
             _documentCategories = documentCategoriesTask.Result?.Items.Where(c => c.IsActive).OrderBy(c => c.SortOrder).ThenBy(c => c.Name).ToList() ?? [];
+            _phoneCompliance = phoneComplianceTask.Result?.ToList() ?? [];
+            _complianceReferences = complianceReferencesTask.Result?.OrderBy(r => r.ReferenceTypeCode).ThenBy(r => r.SortOrder).ThenBy(r => r.Name).ToList() ?? [];
         }
         catch (Exception ex)
         {
@@ -678,11 +1007,15 @@ else
         _communications = [];
         _campaigns = [];
         _documents = [];
+        _phoneCompliance = [];
+        _complianceReferences = [];
         _scoreFactors = [];
         _documentCategories = [];
         _activityTypes = [];
         _activityOutcomes = [];
         _engagementOptions = [];
+        _leadSources = [];
+        _leadStatuses = [];
         _campaignOptions = [];
         _carrierOptions = [];
         _lineOfBusinessOptions = [];
@@ -737,18 +1070,26 @@ else
     private string DefaultCommunicationDeliveryStatus => DefaultEngagementOption("CommunicationDeliveryStatus");
     private string DefaultCommunicationStatus => DefaultEngagementOption("CommunicationStatus");
     private string DefaultCampaignStatus => DefaultEngagementOption("CampaignStatus");
-    private IEnumerable<LeadEngagementOptionDto> LeadSourceOptions => EngagementOptions("LeadSource");
-    private IEnumerable<LeadEngagementOptionDto> LeadStageOptions => EngagementOptions("LeadStage");
+    private IEnumerable<LeadSourceDto> LeadSourceOptions => _leadSources;
+    private IEnumerable<LeadStatusDto> LeadStageOptions => _leadStatuses;
     private IEnumerable<LeadEngagementOptionDto> LeadPriorityOptions => EngagementOptions("LeadPriority");
-    private IEnumerable<LeadEngagementOptionDto> DocumentExtensionOptions => EngagementOptions("DocumentExtension");
     private IEnumerable<CarrierDto> CarrierOptions => _carrierOptions;
     private IEnumerable<LineOfBusinessDto> LineOfBusinessOptions => _lineOfBusinessOptions;
-    private string DefaultLeadSource => DefaultEngagementOption("LeadSource");
-    private string DefaultLeadStage => DefaultEngagementOption("LeadStage");
-    private string DefaultLeadPriority => DefaultEngagementOption("LeadPriority");
-    private string DefaultDocumentCategory => DocumentCategoryOptions.FirstOrDefault() is { } category ? Safe(category.Name, category.Code) : string.Empty;
-    private string DefaultDocumentExtension => DefaultEngagementOption("DocumentExtension");
-    private string DocumentAcceptExtensions => string.Join(',', DocumentExtensionOptions.Select(o => o.Code).Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string DefaultLeadSource => LeadSourceOptions.FirstOrDefault()?.SourceCode ?? string.Empty;
+    private string DefaultLeadStage => LeadStageOptions.FirstOrDefault(s => s.IsDefault)?.StatusCode
+        ?? LeadStageOptions.FirstOrDefault()?.StatusCode
+        ?? string.Empty;
+    private string DefaultLeadPriority => LeadPriorityOptions
+        .FirstOrDefault(priority => string.Equals(priority.Code, "Medium", StringComparison.OrdinalIgnoreCase))?.Code
+        ?? DefaultEngagementOption("LeadPriority");
+    private AccountDto? SelectedConvertAccount => _convertForm.ExistingAccountGuid is { } accountId ? _accountCandidates.FirstOrDefault(a => a.AccountId == accountId) : null;
+    private string ConvertAccountPickerStatus => SelectedConvertAccount is { } account
+        ? $"Selected DB account: {Safe(account.AccountName, account.AccountNumber)}"
+        : _accountCandidates.Count > 0
+            ? $"{_accountCandidates.Count} DB account match{(_accountCandidates.Count == 1 ? string.Empty : "es")} available."
+            : "Start typing to search DB accounts.";
+    private string ConvertAccountPickerStatusClass => SelectedConvertAccount is not null ? "ldd-hint-good" : "";
+    private static string DocumentAcceptExtensions => string.Join(',', Enum.GetValues<DocumentFileExtension>().Select(DocumentFileExtensionValue));
     private string TabFormIcon => _tabForm.Kind switch
     {
         LeadTabItemKind.Contact => "bi-person-plus",
@@ -774,15 +1115,48 @@ else
 
     private void SetTab(int index) => _activeTab = index;
     private void HideToast() => _toastVisible = false;
+    private void OpenDocumentUpload() => _showDocumentUpload = true;
+
+    private async Task HandleLeadDocumentUploadedAsync(Guid documentId)
+    {
+        var document = await Api.GetDocumentByIdAsync(documentId);
+        if (document is null)
+        {
+            ShowToast("danger", "The document was uploaded, but its lead record could not be created.");
+            return;
+        }
+
+        var extension = Path.GetExtension(document.FileName).TrimStart('.').ToLowerInvariant();
+        await Api.CreateLeadDocumentAsync(LeadId, new CreateLeadDocumentRequest
+        {
+            DocumentId = documentId,
+            TenantId = _lead?.TenantId ?? _tenantId,
+            LeadId = LeadId,
+            FileName = document.FileName,
+            Extension = extension,
+            Category = document.CategoryCode,
+            SizeKb = Math.Max(1, (int)Math.Ceiling((document.FileSizeBytes ?? 0) / 1024m)),
+            UploadedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
+            UploadedAt = document.CreatedDateUtc
+        });
+
+        await LoadAsync();
+        ShowToast("success", "Lead document uploaded successfully.");
+    }
+
+    private void HandleLeadDocumentUploadFailed(string message) => ShowToast("danger", message);
+
     private void CloseTabForm()
     {
         _showTabForm = false;
+        _tabValidationError = null;
         _selectedDocumentFile = null;
     }
 
     private void OpenCreateTabItem(LeadTabItemKind kind)
     {
         _editingTabItemId = null;
+        _tabValidationError = null;
         _selectedDocumentFile = null;
         _tabForm = new LeadTabItemForm
         {
@@ -797,8 +1171,8 @@ else
             SentAt = DateTime.UtcNow,
             CampaignStatus = kind == LeadTabItemKind.Campaign ? DefaultCampaignStatus : string.Empty,
             EnrolledAt = DateTime.UtcNow,
-            Category = kind == LeadTabItemKind.Document ? DefaultDocumentCategory : string.Empty,
-            Extension = kind == LeadTabItemKind.Document ? DefaultDocumentExtension : string.Empty,
+            Category = string.Empty,
+            Extension = string.Empty,
             UploadedAt = DateTime.UtcNow
         };
         OnActivityTypeChanged();
@@ -890,7 +1264,10 @@ else
         if (_selectedDocumentFile is null) return;
 
         _tabForm.FileName = _selectedDocumentFile.Name;
-        _tabForm.Extension = NormalizeExtension(Path.GetExtension(_selectedDocumentFile.Name));
+        if (TryGetDocumentFileExtension(_selectedDocumentFile.Name, out var extension))
+        {
+            _tabForm.Extension = DocumentFileExtensionValue(extension);
+        }
         _tabForm.SizeKb = Math.Max(1, (int)Math.Ceiling(_selectedDocumentFile.Size / 1024m));
         _tabForm.UploadedAt = DateTime.UtcNow;
     }
@@ -911,6 +1288,7 @@ else
     private async Task SaveTabItemAsync()
     {
         if (_lead is null) return;
+        _tabValidationError = null;
         _busy = true;
         try
         {
@@ -935,6 +1313,13 @@ else
         {
             _busy = false;
         }
+    }
+
+    private void HandleInvalidTabItemSubmit(EditContext _)
+    {
+        _tabValidationError = _tabForm.Kind == LeadTabItemKind.Document
+            ? null
+            : $"Review the highlighted {TabItemLabel(_tabForm.Kind)} fields and try again.";
     }
 
     private async Task CreateTabItemAsync()
@@ -1300,6 +1685,7 @@ else
             TenantId = _lead?.TenantId ?? _tenantId,
             DocumentTypeCode = "Lead",
             CategoryCode = _tabForm.Category,
+            FileExtension = _tabForm.Extension,
             FileName = _tabForm.FileName.Trim(),
             OriginalFileName = _selectedDocumentFile.Name,
             EntityName = "CRM.Lead",
@@ -1331,6 +1717,25 @@ else
         catch (Exception ex)
         {
             ShowToast("danger", $"Preview failed: {ex.Message}");
+        }
+    }
+
+    private async Task OpenDocumentAsync(LeadDocumentDto document)
+    {
+        try
+        {
+            var documentId = await ResolveStoredDocumentIdAsync(document);
+            if (!documentId.HasValue)
+            {
+                ShowToast("warning", "Open is unavailable because the stored file could not be found.");
+                return;
+            }
+
+            Nav.NavigateTo($"/documents/{documentId.Value:D}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Open failed: {ex.Message}");
         }
     }
 
@@ -1386,9 +1791,188 @@ else
         return normalized.StartsWith('.') ? normalized : $".{normalized}";
     }
 
+    private static string DocumentFileExtensionLabel(DocumentFileExtension extension) => DocumentFileExtensionValue(extension).ToUpperInvariant();
+
+    private static string DocumentFileExtensionValue(DocumentFileExtension extension) => extension switch
+    {
+        DocumentFileExtension.Pdf => ".pdf",
+        DocumentFileExtension.Doc => ".doc",
+        DocumentFileExtension.Docx => ".docx",
+        DocumentFileExtension.Xls => ".xls",
+        DocumentFileExtension.Xlsx => ".xlsx",
+        DocumentFileExtension.Csv => ".csv",
+        DocumentFileExtension.Txt => ".txt",
+        DocumentFileExtension.Png => ".png",
+        DocumentFileExtension.Jpg => ".jpg",
+        DocumentFileExtension.Jpeg => ".jpeg",
+        _ => string.Empty
+    };
+
+    private static bool TryGetDocumentFileExtension(string fileName, out DocumentFileExtension extension)
+    {
+        var value = NormalizeExtension(Path.GetExtension(fileName));
+        extension = Enum.GetValues<DocumentFileExtension>()
+            .FirstOrDefault(option => string.Equals(DocumentFileExtensionValue(option), value, StringComparison.OrdinalIgnoreCase));
+
+        return !string.IsNullOrWhiteSpace(value) && DocumentFileExtensionValue(extension).Length > 0;
+    }
+
     private static string? TrimOrNull(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
     private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
+
+    private int SuppressedPhoneCount => _phoneCompliance.Where(p => p.OverallStatusCode == "Suppressed").Select(p => p.PhoneComplianceProfileId).Distinct().Count();
+    private IEnumerable<PhoneComplianceReferenceDto> ComplianceOptions(string referenceTypeCode) => _complianceReferences.Where(r => r.ReferenceTypeCode == referenceTypeCode);
+    private string FirstReferenceCode(string referenceTypeCode) => ComplianceOptions(referenceTypeCode).FirstOrDefault()?.Code ?? string.Empty;
+    private string ReferenceName(string referenceTypeCode, string? code) => ComplianceOptions(referenceTypeCode).FirstOrDefault(r => string.Equals(r.Code, code, StringComparison.OrdinalIgnoreCase))?.Name ?? Safe(code, "-");
+
+    private void OpenSuppressionForm(LeadPhoneComplianceDto phone)
+    {
+        _selectedCompliancePhone = phone;
+        _suppressionForm = new()
+        {
+            PhoneNumber = phone.DisplayPhoneNumber,
+            SourceCode = FirstReferenceCode("SuppressionSource"),
+            ReasonCode = FirstReferenceCode("SuppressionReason"),
+            ChannelCode = FirstReferenceCode("Channel"),
+            EffectiveDateUtc = DateTime.Now
+        };
+        _showSuppressionForm = true;
+    }
+
+    private void CloseSuppressionForm()
+    {
+        _showSuppressionForm = false;
+        _selectedCompliancePhone = null;
+    }
+
+    private async Task SaveSuppressionAsync()
+    {
+        if (_lead is null || _selectedCompliancePhone is null) return;
+        _busy = true;
+        try
+        {
+            await Api.CreateLeadPhoneSuppressionAsync(LeadId, new CreatePhoneSuppressionRequest
+            {
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                LeadContactId = _selectedCompliancePhone.LeadContactId,
+                PhoneNumber = _suppressionForm.PhoneNumber,
+                SourceCode = _suppressionForm.SourceCode,
+                ReasonCode = _suppressionForm.ReasonCode,
+                ChannelCode = _suppressionForm.ChannelCode,
+                PurposeCode = TrimOrNull(_suppressionForm.PurposeCode),
+                EffectiveDateUtc = _suppressionForm.EffectiveDateUtc.ToUniversalTime(),
+                ExpirationDateUtc = _suppressionForm.ExpirationDateUtc?.ToUniversalTime(),
+                RequestedDateUtc = DateTime.UtcNow,
+                EvidenceReference = TrimOrNull(_suppressionForm.EvidenceReference),
+                Notes = TrimOrNull(_suppressionForm.Notes),
+                CreatedByUserId = _currentUserId
+            });
+            CloseSuppressionForm();
+            await LoadAsync();
+            _activeTab = 6;
+            ShowToast("success", "Phone suppression recorded and enforcement updated.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Suppression save failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenConsentForm(LeadPhoneComplianceDto phone)
+    {
+        _selectedCompliancePhone = phone;
+        _consentForm = new()
+        {
+            PhoneNumber = phone.DisplayPhoneNumber,
+            ConsentTypeCode = FirstReferenceCode("ConsentType"),
+            ChannelCode = FirstReferenceCode("Channel"),
+            PurposeCode = FirstReferenceCode("Purpose"),
+            LegalBasisCode = FirstReferenceCode("LegalBasis"),
+            EvidenceTypeCode = FirstReferenceCode("EvidenceType"),
+            CapturedDateUtc = DateTime.Now
+        };
+        _showConsentForm = true;
+    }
+
+    private void CloseConsentForm()
+    {
+        _showConsentForm = false;
+        _selectedCompliancePhone = null;
+    }
+
+    private async Task SaveConsentAsync()
+    {
+        if (_lead is null || _selectedCompliancePhone is null) return;
+        _busy = true;
+        try
+        {
+            var capturedUtc = _consentForm.CapturedDateUtc.ToUniversalTime();
+            await Api.CreateLeadPhoneConsentAsync(LeadId, new CreatePhoneConsentRequest
+            {
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                LeadContactId = _selectedCompliancePhone.LeadContactId,
+                PhoneNumber = _consentForm.PhoneNumber,
+                ConsentTypeCode = _consentForm.ConsentTypeCode,
+                ChannelCode = _consentForm.ChannelCode,
+                PurposeCode = _consentForm.PurposeCode,
+                LegalBasisCode = _consentForm.LegalBasisCode,
+                CapturedDateUtc = capturedUtc,
+                EffectiveDateUtc = capturedUtc,
+                ExpirationDateUtc = _consentForm.ExpirationDateUtc?.ToUniversalTime(),
+                EvidenceTypeCode = _consentForm.EvidenceTypeCode,
+                EvidenceReference = _consentForm.EvidenceReference.Trim(),
+                ConsentText = TrimOrNull(_consentForm.ConsentText),
+                ApprovedByUserId = _currentUserId,
+                ApprovedDateUtc = DateTime.UtcNow,
+                CreatedByUserId = _currentUserId
+            });
+            CloseConsentForm();
+            await LoadAsync();
+            _activeTab = 6;
+            ShowToast("success", "Consent evidence recorded.");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Consent save failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void ConfirmRevokeSuppression(LeadPhoneComplianceDto phone, PhoneSuppressionDto suppression)
+        => _confirmAction = new("Revoke phone suppression", $"Revoke the active suppression for {phone.DisplayPhoneNumber}? The decision will remain in compliance history.", "Revoke", "um-btn-danger", "bi-shield-x", () => RevokeSuppressionAsync(suppression));
+
+    private async Task RevokeSuppressionAsync(PhoneSuppressionDto suppression)
+    {
+        if (_lead is null) return;
+        await Api.RevokeLeadPhoneSuppressionAsync(LeadId, suppression.PhoneSuppressionId, new RevokePhoneSuppressionRequest { TenantId = _lead.TenantId, LeadId = LeadId, PhoneSuppressionId = suppression.PhoneSuppressionId, RevocationReason = "Authorized revocation recorded from Lead Detail.", RevokedByUserId = _currentUserId });
+        _confirmAction = null;
+        await LoadAsync();
+        _activeTab = 6;
+        ShowToast("success", "Phone suppression revoked.");
+    }
+
+    private void ConfirmRevokeConsent(LeadPhoneComplianceDto phone, PhoneConsentDto consent)
+        => _confirmAction = new("Revoke phone consent", $"Revoke consent for {phone.DisplayPhoneNumber}? Revocation will create an enforceable suppression for this channel.", "Revoke", "um-btn-danger", "bi-file-earmark-x", () => RevokeConsentAsync(consent));
+
+    private async Task RevokeConsentAsync(PhoneConsentDto consent)
+    {
+        if (_lead is null) return;
+        await Api.RevokeLeadPhoneConsentAsync(LeadId, consent.PhoneConsentId, new RevokePhoneConsentRequest { TenantId = _lead.TenantId, LeadId = LeadId, PhoneConsentId = consent.PhoneConsentId, RevocationReason = "Consent revocation recorded from Lead Detail.", RevokedByUserId = _currentUserId });
+        _confirmAction = null;
+        await LoadAsync();
+        _activeTab = 6;
+        ShowToast("success", "Consent revoked and channel suppression applied.");
+    }
 
     private void OpenEdit()
     {
@@ -1512,72 +2096,200 @@ else
 
     private void OpenConvertWorkflow()
     {
-        _confirmAction = new("Convert lead", $"Convert {LeadDisplayName} to a Prospect account and opportunity?", "Convert", "um-btn-primary", "bi-trophy", ConvertAsync);
+        if (_lead is null) return;
+        var accountName = Safe(_lead.AccountName, LeadDisplayName);
+        var lob = _interestLines.OrderByDescending(l => l.EstPremium).FirstOrDefault()?.LineOfBusiness
+            ?? _lineOfBusinessOptions.FirstOrDefault(l => string.Equals(l.LobName, _lead.InterestedService, StringComparison.OrdinalIgnoreCase))?.LobName
+            ?? _lineOfBusinessOptions.FirstOrDefault()?.LobName
+            ?? string.Empty;
+        var estimatedAmount = _interestLines.Count > 0 ? _interestLines.Sum(l => l.EstPremium) : _lead.AnnualRevenue;
+        var opportunityDescriptor = _interestLines.Count > 1 ? "Multi-Line Opportunity" : Safe(lob, "Opportunity");
+        _convertForm = new LeadConvertForm
+        {
+            AccountMode = _lead.AccountId.HasValue ? "Link" : "Create",
+            ExistingAccountId = _lead.AccountId?.ToString() ?? string.Empty,
+            AccountName = accountName,
+            OpportunityName = $"{accountName} - {opportunityDescriptor}",
+            LineOfBusiness = lob,
+            EstimatedAmount = estimatedAmount,
+            CloseDate = DateTime.Today.AddDays(45),
+            OwnerUserId = _lead.AssignedToUserId?.ToString() ?? string.Empty,
+            Notes = $"Converted from lead {Safe(_lead.LeadNumber, LeadId.ToString())}."
+        };
+        _convertAccountSearch = accountName;
+        _showConvertAccountPicker = false;
+        _showConvert = true;
+        _ = LoadConvertAccountCandidatesAsync();
     }
 
     private async Task ConvertAsync()
     {
         if (_lead is null) return;
-        var tenantId = _lead.TenantId;
-        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
-        var accountName = Safe(_lead.AccountName, LeadDisplayName);
-        var accountId = _lead.AccountId;
-
-        if (!accountId.HasValue)
+        _busy = true;
+        try
         {
-            accountId = await Api.CreateAccountAsync(new CreateAccountRequest
+            var result = await Api.ConvertLeadAsync(LeadId, new ConvertLeadRequest
             {
-                TenantId = tenantId,
-                AccountNumber = $"ACC-{stamp}",
-                AccountName = accountName,
-                AccountTypeCode = "Prospect",
-                MainEmail = string.IsNullOrWhiteSpace(_lead.Email) ? null : _lead.Email,
-                MainPhone = string.IsNullOrWhiteSpace(_lead.Phone) ? null : _lead.Phone,
-                StatusCode = "Active",
-                LifecycleStageCode = "Prospect",
-                AnnualRevenue = _lead.AnnualRevenue,
-                OwnerUserId = _lead.AssignedToUserId,
-                CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
+                TenantId = _lead.TenantId,
+                LeadId = LeadId,
+                ExistingAccountId = _convertForm.ExistingAccountGuid,
+                AccountName = _convertForm.AccountMode == "Create" ? TrimOrNull(_convertForm.AccountName) : null,
+                OpportunityName = _convertForm.OpportunityName,
+                LineOfBusiness = TrimOrNull(_convertForm.LineOfBusiness),
+                EstimatedAmount = _convertForm.EstimatedAmount,
+                CloseDate = _convertForm.CloseDate,
+                OwnerUserId = _convertForm.OwnerGuid ?? _lead.AssignedToUserId,
+                ConvertedByUserId = _currentUserId,
+                CreateSubmissionDraft = _convertForm.CreateSubmissionDraft,
+                Notes = TrimOrNull(_convertForm.Notes)
             });
+
+            _showConvert = false;
+            var draftText = result.SubmissionDraftCreated && result.SubmissionNumber is not null ? $" Draft submission {result.SubmissionNumber} was created." : string.Empty;
+            ShowToast("success", $"Lead converted to {result.AccountName} and {result.OpportunityName}.{draftText}");
+            Nav.NavigateTo($"/crm/opportunities/{result.OpportunityId}?from=lead-conversion&conversionId={result.LeadConversionId}&submissionId={result.SubmissionId}");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Convert failed: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void CloseConvert()
+    {
+        _showConvert = false;
+        _showConvertAccountPicker = false;
+    }
+
+    private async Task OnConvertAccountModeSelected(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        _convertForm.AccountMode = args.Value?.ToString() == "Link" ? "Link" : "Create";
+        if (_convertForm.AccountMode == "Link")
+        {
+            _convertForm.ExistingAccountId = string.Empty;
+            _convertAccountSearch = string.Empty;
+            _showConvertAccountPicker = true;
+            _focusConvertAccountPicker = true;
+            await LoadConvertAccountCandidatesAsync();
+        }
+        else
+        {
+            _convertForm.ExistingAccountId = string.Empty;
+            _showConvertAccountPicker = false;
+        }
+    }
+
+    private async Task OnConvertAccountSearchInput(Microsoft.AspNetCore.Components.ChangeEventArgs args)
+    {
+        _convertAccountSearch = args.Value?.ToString() ?? string.Empty;
+        _convertForm.ExistingAccountId = string.Empty;
+        _showConvertAccountPicker = true;
+        await LoadConvertAccountCandidatesAsync();
+    }
+
+    private void ShowConvertAccountPicker()
+    {
+        if (_convertForm.AccountMode == "Link")
+        {
+            _showConvertAccountPicker = true;
+        }
+    }
+
+    private void SelectConvertAccount(AccountDto account)
+    {
+        _convertForm.ExistingAccountId = account.AccountId.ToString();
+        _convertAccountSearch = ConvertAccountDisplay(account);
+        _convertForm.OpportunityName = BuildConvertOpportunityName(Safe(account.AccountName, LeadDisplayName));
+        _showConvertAccountPicker = false;
+    }
+
+    private void OnConvertLineOfBusinessChanged(string value)
+    {
+        var oldLineOfBusiness = _convertForm.LineOfBusiness;
+        _convertForm.LineOfBusiness = value;
+        _convertForm.OpportunityName = ReplaceConvertOpportunityLineOfBusiness(_convertForm.OpportunityName, oldLineOfBusiness, value);
+    }
+
+    private void ClearConvertAccountSelection()
+    {
+        _convertForm.ExistingAccountId = string.Empty;
+        _convertAccountSearch = string.Empty;
+        _showConvertAccountPicker = true;
+    }
+
+    private async Task LoadConvertAccountCandidatesAsync()
+    {
+        if (_lead is null) return;
+        try
+        {
+            var search = TrimOrNull(_convertAccountSearch) ?? TrimOrNull(_lead.AccountName) ?? TrimOrNull(_lead.Email) ?? LeadDisplayName;
+            var result = await Api.SearchAccountsAsync(_lead.TenantId, search, pageSize: 25);
+            _accountCandidates = result?.Items?.ToList() ?? [];
+            if (_lead.AccountId.HasValue && !_accountCandidates.Any(a => a.AccountId == _lead.AccountId.Value))
+            {
+                var account = await Api.GetAccountByIdAsync(_lead.AccountId.Value);
+                if (account is not null)
+                {
+                    _accountCandidates.Insert(0, account);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowToast("danger", $"Account search failed: {ex.Message}");
+        }
+    }
+
+    private static string ConvertAccountDisplay(AccountDto account)
+    {
+        var number = TrimOrNull(account.AccountNumber);
+        return number is null ? Safe(account.AccountName, "Unnamed account") : $"{Safe(account.AccountName, "Unnamed account")} ({number})";
+    }
+
+    private static string ConvertAccountSubtitle(AccountDto account)
+    {
+        var parts = new[]
+        {
+            TrimOrNull(account.AccountNumber),
+            TrimOrNull(account.MainEmail),
+            TrimOrNull(account.MainPhone),
+            TrimOrNull(account.StatusCode)
+        }.Where(p => !string.IsNullOrWhiteSpace(p));
+
+        return string.Join(" • ", parts);
+    }
+
+    private string BuildConvertOpportunityName(string accountName)
+    {
+        var lob = TrimOrNull(_convertForm.LineOfBusiness)
+            ?? _interestLines.OrderByDescending(l => l.EstPremium).FirstOrDefault()?.LineOfBusiness
+            ?? TrimOrNull(_lead?.InterestedService)
+            ?? "Opportunity";
+
+        return $"{Safe(accountName, "Account")} - {Safe(lob, "Opportunity")}";
+    }
+
+    private static string ReplaceConvertOpportunityLineOfBusiness(string opportunityName, string? oldLineOfBusiness, string? newLineOfBusiness)
+    {
+        var name = Safe(opportunityName, "Opportunity").Trim();
+        var oldSuffix = TrimOrNull(oldLineOfBusiness);
+        var newSuffix = TrimOrNull(newLineOfBusiness) ?? "Opportunity";
+        var baseName = name;
+
+        if (!string.IsNullOrWhiteSpace(oldSuffix) && name.EndsWith($" - {oldSuffix}", StringComparison.OrdinalIgnoreCase))
+        {
+            baseName = name[..^(oldSuffix.Length + 3)].Trim();
+        }
+        else if (name.EndsWith(" - Opportunity", StringComparison.OrdinalIgnoreCase))
+        {
+            baseName = name[..^14].Trim();
         }
 
-        var opportunityId = await Api.CreateOpportunityAsync(new CreateOpportunityRequest
-        {
-            TenantId = tenantId,
-            OpportunityNumber = $"OPP-{stamp}",
-            AccountId = accountId.Value,
-            OpportunityName = $"{accountName} Opportunity",
-            EstimatedAmount = _lead.AnnualRevenue ?? _interestLines.Sum(l => l.EstPremium),
-            OwnerUserId = _lead.AssignedToUserId,
-            CloseDate = DateTime.UtcNow.Date.AddDays(30),
-            LeadId = LeadId,
-            WinProbability = 50,
-            ForecastCategoryCode = "Pipeline",
-            CreatedByUserId = _currentUserId == Guid.Empty ? null : _currentUserId
-        });
-
-        foreach (var contact in _contacts)
-        {
-            await SyncLeadContactToAccountAsync(contact, accountId.Value);
-        }
-
-        await Api.UpdateLeadAsync(LeadId, BuildUpdateRequest(_lead.AssignedToUserId, "Converted", 4, "Hot", Math.Max(_lead.Score ?? 0, 85), DateTime.UtcNow, accountId));
-        await Api.CreateLeadCommunicationAsync(LeadId, new CreateLeadCommunicationRequest
-        {
-            TenantId = tenantId,
-            LeadId = LeadId,
-            Channel = "Workflow",
-            Subject = "Lead converted",
-            Preview = "Lead converted to Prospect account and opportunity from Lead Detail.",
-            SentByUserId = _currentUserId == Guid.Empty ? null : _currentUserId,
-            SentAt = DateTime.UtcNow,
-            Opened = true,
-            Clicked = false
-        });
-
-        _confirmAction = null;
-        ShowToast("success", "Lead converted.");
-        Nav.NavigateTo($"/crm/opportunities/{opportunityId}");
+        return $"{Safe(baseName, "Opportunity")} - {newSuffix}";
     }
 
     private async Task ExecuteConfirmedAsync()
@@ -1633,12 +2345,13 @@ else
         "activities" => _activities.Count,
         "engagement" => _communications.Count + _campaigns.Count,
         "documents" => _documents.Count,
+        "compliance" => _phoneCompliance.Count,
         _ => ReadinessPercent
     };
 
     private string KpiClass(int index) => _activeTab == index ? "ldd-kpi-card ldd-kpi-card--active" : "ldd-kpi-card";
     private string TabClass(int index) => _activeTab == index ? "ldd-native-tab ldd-native-tab--active" : "ldd-native-tab";
-    private string StatusLabel(int statusCode) => statusCode switch { 1 => "Open", 2 => "Qualified", 3 => "Converted", 4 => "Lost", 5 => "Disqualified", _ => "Open" };
+    private string StatusLabel(int statusCode) => statusCode switch { 1 => "Open", 2 => "Contacted", 3 => "Qualified", 4 => "Converted", 5 => "Disqualified", _ => "Open" };
     private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     private static string Money(decimal? value) => value.HasValue ? value.Value.ToString("C0", CultureInfo.CurrentCulture) : "-";
     private static string DateOrDash(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy") : "-";
@@ -1680,6 +2393,63 @@ else
         LeadTabItemKind.Document => "document",
         _ => "item"
     };
+
+    private sealed class PhoneSuppressionForm
+    {
+        [Required, AmsPhone, StringLength(50)]
+        public string PhoneNumber { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string SourceCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string ReasonCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string ChannelCode { get; set; } = string.Empty;
+
+        [StringLength(50)]
+        public string? PurposeCode { get; set; }
+
+        public DateTime EffectiveDateUtc { get; set; }
+        public DateTime? ExpirationDateUtc { get; set; }
+
+        [StringLength(500)]
+        public string? EvidenceReference { get; set; }
+
+        [StringLength(1000)]
+        public string? Notes { get; set; }
+    }
+
+    private sealed class PhoneConsentForm
+    {
+        [Required, AmsPhone, StringLength(50)]
+        public string PhoneNumber { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string ConsentTypeCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string ChannelCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string PurposeCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string LegalBasisCode { get; set; } = string.Empty;
+
+        [Required, StringLength(50)]
+        public string EvidenceTypeCode { get; set; } = string.Empty;
+
+        [Required, StringLength(500)]
+        public string EvidenceReference { get; set; } = string.Empty;
+
+        public DateTime CapturedDateUtc { get; set; }
+        public DateTime? ExpirationDateUtc { get; set; }
+
+        [StringLength(2000)]
+        public string? ConsentText { get; set; }
+    }
 
     private sealed class LeadAssignForm
     {
@@ -1729,76 +2499,99 @@ else
         public Guid? AssignedGuid => Guid.TryParse(AssignedToUserId, out var id) ? id : null;
     }
 
-    private sealed class LeadTabItemForm : IValidatableObject
+    private sealed class LeadConvertForm : IValidatableObject
     {
-        public LeadTabItemKind Kind { get; set; }
+        [Required, StringLength(20)]
+        public string AccountMode { get; set; } = "Create";
 
-        [StringLength(150)]
-        public string FirstName { get; set; } = string.Empty;
-
-        [StringLength(150)]
-        public string LastName { get; set; } = string.Empty;
+        public string ExistingAccountId { get; set; } = string.Empty;
 
         [StringLength(200)]
-        public string? Title { get; set; }
+        public string AccountName { get; set; } = string.Empty;
 
-        [AmsEmailAddress, StringLength(300)]
-        public string? Email { get; set; }
-
-        [AmsPhone, StringLength(50)]
-        public string? Phone { get; set; }
-
-        public bool IsPrimary { get; set; }
+        [Required, StringLength(200)]
+        public string OpportunityName { get; set; } = string.Empty;
 
         [StringLength(100)]
         public string LineOfBusiness { get; set; } = string.Empty;
 
-        [StringLength(200)]
+        [Range(0, 999999999999)]
+        public decimal? EstimatedAmount { get; set; }
+
+        public DateTime? CloseDate { get; set; }
+        public string OwnerUserId { get; set; } = string.Empty;
+        public bool CreateSubmissionDraft { get; set; }
+
+        [StringLength(1000)]
+        public string? Notes { get; set; }
+
+        public Guid? ExistingAccountGuid => Guid.TryParse(ExistingAccountId, out var id) ? id : null;
+        public Guid? OwnerGuid => Guid.TryParse(OwnerUserId, out var id) ? id : null;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (AccountMode == "Link" && ExistingAccountGuid is null)
+            {
+                yield return new ValidationResult("Select an existing account to link.", [nameof(ExistingAccountId)]);
+            }
+
+            if (AccountMode == "Create" && string.IsNullOrWhiteSpace(AccountName))
+            {
+                yield return new ValidationResult("Account name is required when creating a new account.", [nameof(AccountName)]);
+            }
+        }
+    }
+
+    private sealed class LeadTabItemForm : IValidatableObject
+    {
+        public LeadTabItemKind Kind { get; set; }
+
+        public string FirstName { get; set; } = string.Empty;
+
+        public string LastName { get; set; } = string.Empty;
+
+        public string? Title { get; set; }
+
+        public string? Email { get; set; }
+
+        public string? Phone { get; set; }
+
+        public bool IsPrimary { get; set; }
+
+        public string LineOfBusiness { get; set; } = string.Empty;
+
         public string? Carrier { get; set; }
 
-        [StringLength(200)]
         public string? CurrentCarrier { get; set; }
 
-        [Range(0, 999999999)]
         public decimal EstPremium { get; set; }
 
         public DateTime? ExpiryDate { get; set; }
 
-        [StringLength(50)]
         public string Priority { get; set; } = string.Empty;
 
-        [StringLength(2000)]
         public string? Notes { get; set; }
 
-        [StringLength(50)]
         public string ActivityTypeCode { get; set; } = "Note";
 
-        [StringLength(200)]
         public string Subject { get; set; } = string.Empty;
 
         public DateTime ActivityDate { get; set; } = DateTime.UtcNow;
 
-        [Range(0, 1440)]
         public int? DurationMinutes { get; set; }
 
-        [StringLength(50)]
         public string? OutcomeCode { get; set; }
 
         public bool IsCompleted { get; set; }
 
-        [StringLength(50)]
         public string Channel { get; set; } = string.Empty;
 
-        [StringLength(50)]
         public string Direction { get; set; } = string.Empty;
 
-        [StringLength(50)]
         public string DeliveryStatus { get; set; } = string.Empty;
 
-        [StringLength(50)]
         public string EngagementStatus { get; set; } = string.Empty;
 
-        [StringLength(2000)]
         public string Preview { get; set; } = string.Empty;
 
         public DateTime SentAt { get; set; } = DateTime.UtcNow;
@@ -1808,93 +2601,148 @@ else
 
         public Guid? CampaignId { get; set; }
 
-        [StringLength(200)]
         public string CampaignName { get; set; } = string.Empty;
 
-        [StringLength(50)]
         public string? CampaignType { get; set; }
 
-        [StringLength(150)]
         public string? Segment { get; set; }
 
-        [StringLength(50)]
         public string CampaignStatus { get; set; } = string.Empty;
 
         public DateTime EnrolledAt { get; set; } = DateTime.UtcNow;
 
-        [Range(0, int.MaxValue)]
         public int EmailsSent { get; set; }
 
-        [Range(0, int.MaxValue)]
         public int EmailsOpen { get; set; }
 
-        [Range(0, int.MaxValue)]
         public int Clicks { get; set; }
 
-        [Range(0, 100)]
         public decimal OpenRate { get; set; }
 
-        [Range(0, int.MaxValue)]
         public int Conversions { get; set; }
 
-        [Range(0, 999999999)]
         public decimal Revenue { get; set; }
 
         public DateTime? LastTouch { get; set; }
 
-        [StringLength(260)]
         public string FileName { get; set; } = string.Empty;
 
-        [StringLength(20)]
         public string Extension { get; set; } = string.Empty;
 
-        [StringLength(100)]
         public string Category { get; set; } = string.Empty;
 
-        [Range(0, int.MaxValue)]
         public int SizeKb { get; set; }
 
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
-            if (Kind == LeadTabItemKind.Contact)
+            return Kind switch
             {
-                if (string.IsNullOrWhiteSpace(FirstName)) yield return new("First name is required.", [nameof(FirstName)]);
-                if (string.IsNullOrWhiteSpace(LastName)) yield return new("Last name is required.", [nameof(LastName)]);
-            }
-            else if (Kind == LeadTabItemKind.InterestLine)
+                LeadTabItemKind.Contact => ValidateContactPopup(),
+                LeadTabItemKind.InterestLine => ValidateInterestLinePopup(),
+                LeadTabItemKind.Activity => ValidateActivityPopup(),
+                LeadTabItemKind.Communication => ValidateCommunicationPopup(),
+                LeadTabItemKind.Campaign => ValidateCampaignPopup(),
+                LeadTabItemKind.Document => ValidateDocumentPopup(),
+                _ => []
+            };
+        }
+
+        private IEnumerable<ValidationResult> ValidateContactPopup()
+            => ValidatePopupModel(new CreateLeadContactRequest
             {
-                if (string.IsNullOrWhiteSpace(LineOfBusiness)) yield return new("Line of business is required.", [nameof(LineOfBusiness)]);
-                if (string.IsNullOrWhiteSpace(Priority)) yield return new("Priority is required.", [nameof(Priority)]);
-            }
-            else if (Kind == LeadTabItemKind.Activity)
+                FirstName = FirstName,
+                LastName = LastName,
+                Title = Title,
+                Email = Email,
+                Phone = Phone,
+                IsPrimary = IsPrimary
+            });
+
+        private IEnumerable<ValidationResult> ValidateInterestLinePopup()
+            => ValidatePopupModel(new CreateLeadInterestLineRequest
             {
-                if (string.IsNullOrWhiteSpace(ActivityTypeCode)) yield return new("Activity type is required.", [nameof(ActivityTypeCode)]);
-                if (string.IsNullOrWhiteSpace(Subject)) yield return new("Subject is required.", [nameof(Subject)]);
-            }
-            else if (Kind == LeadTabItemKind.Communication)
+                LineOfBusiness = LineOfBusiness,
+                Carrier = Carrier,
+                CurrentCarrier = CurrentCarrier,
+                EstPremium = EstPremium,
+                ExpiryDate = ExpiryDate,
+                Priority = Priority,
+                Notes = Notes
+            });
+
+        private IEnumerable<ValidationResult> ValidateActivityPopup()
+            => ValidatePopupModel(new CreateLeadActivityRequest
             {
-                if (string.IsNullOrWhiteSpace(Channel)) yield return new("Channel is required.", [nameof(Channel)]);
-                if (string.IsNullOrWhiteSpace(Direction)) yield return new("Direction is required.", [nameof(Direction)]);
-                if (string.IsNullOrWhiteSpace(DeliveryStatus)) yield return new("Delivery status is required.", [nameof(DeliveryStatus)]);
-                if (string.IsNullOrWhiteSpace(EngagementStatus)) yield return new("Engagement status is required.", [nameof(EngagementStatus)]);
-                if (string.IsNullOrWhiteSpace(Subject)) yield return new("Subject is required.", [nameof(Subject)]);
-                if (string.IsNullOrWhiteSpace(Preview)) yield return new("Preview is required.", [nameof(Preview)]);
-            }
-            else if (Kind == LeadTabItemKind.Campaign)
+                ActivityTypeCode = ActivityTypeCode,
+                Subject = Subject,
+                Notes = Notes,
+                ActivityDate = ActivityDate,
+                DurationMinutes = DurationMinutes,
+                OutcomeCode = OutcomeCode
+            });
+
+        private IEnumerable<ValidationResult> ValidateCommunicationPopup()
+            => ValidatePopupModel(new CreateLeadCommunicationRequest
             {
-                if (string.IsNullOrWhiteSpace(CampaignName)) yield return new("Campaign name is required.", [nameof(CampaignName)]);
-                if (string.IsNullOrWhiteSpace(CampaignType)) yield return new("Campaign type is required.", [nameof(CampaignType)]);
-                if (string.IsNullOrWhiteSpace(Segment)) yield return new("Segment is required.", [nameof(Segment)]);
-                if (string.IsNullOrWhiteSpace(CampaignStatus)) yield return new("Status is required.", [nameof(CampaignStatus)]);
-            }
-            else if (Kind == LeadTabItemKind.Document)
+                Channel = Channel,
+                Subject = Subject,
+                Preview = Preview,
+                Direction = Direction,
+                DeliveryStatus = DeliveryStatus,
+                EngagementStatus = EngagementStatus,
+                SentAt = SentAt,
+                Opened = Opened,
+                Clicked = Clicked,
+                IsAutomated = IsAutomated
+            });
+
+        private IEnumerable<ValidationResult> ValidateCampaignPopup()
+            => ValidatePopupModel(
+                new CreateLeadCampaignEnrollmentRequest
+                {
+                    CampaignId = CampaignId,
+                    CampaignName = CampaignName,
+                    CampaignType = CampaignType,
+                    Segment = Segment,
+                    Status = CampaignStatus,
+                    EnrolledAt = EnrolledAt,
+                    EmailsSent = EmailsSent,
+                    EmailsOpen = EmailsOpen,
+                    Clicks = Clicks,
+                    OpenRate = OpenRate,
+                    Conversions = Conversions,
+                    Revenue = Revenue,
+                    LastTouch = LastTouch
+                },
+                new Dictionary<string, string> { [nameof(CreateLeadCampaignEnrollmentRequest.Status)] = nameof(CampaignStatus) });
+
+        private IEnumerable<ValidationResult> ValidateDocumentPopup()
+            => ValidatePopupModel(new CreateLeadDocumentRequest
             {
-                if (string.IsNullOrWhiteSpace(FileName)) yield return new("File name is required.", [nameof(FileName)]);
-                if (string.IsNullOrWhiteSpace(Extension)) yield return new("Extension is required.", [nameof(Extension)]);
-                if (string.IsNullOrWhiteSpace(Category)) yield return new("Category is required.", [nameof(Category)]);
+                FileName = FileName,
+                Extension = Extension,
+                Category = Category,
+                SizeKb = SizeKb,
+                UploadedAt = UploadedAt
+            });
+
+        private static IReadOnlyList<ValidationResult> ValidatePopupModel(object model, IReadOnlyDictionary<string, string>? memberMap = null)
+        {
+            var results = new List<ValidationResult>();
+            Validator.TryValidateObject(model, new ValidationContext(model), results, validateAllProperties: true);
+
+            if (memberMap is null || memberMap.Count == 0)
+            {
+                return results;
             }
+
+            return results
+                .Select(result => new ValidationResult(
+                    result.ErrorMessage,
+                    result.MemberNames.Select(member => memberMap.TryGetValue(member, out var mappedMember) ? mappedMember : member)))
+                .ToList();
         }
     }
 }

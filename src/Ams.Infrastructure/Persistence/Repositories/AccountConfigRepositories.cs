@@ -209,6 +209,32 @@ BEGIN
         (@TenantId, 'LifecycleStage', 'Renewal', 'Renewal', 'Renewal management stage.', 0, 40),
         (@TenantId, 'LifecycleStage', 'At Risk', 'At Risk', 'Account needs retention attention.', 0, 80),
         (@TenantId, 'LifecycleStage', 'Inactive', 'Inactive', 'Inactive lifecycle stage.', 0, 90);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM Client.AccountReferenceOption WHERE TenantId = @TenantId AND OptionGroup = 'Industry' AND IsDeleted = 0)
+BEGIN
+    INSERT INTO Client.AccountReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    VALUES
+        (@TenantId, 'Industry', 'Agriculture', 'Agriculture, Forestry, Fishing and Hunting', 'Industry classification used for account master records.', 0, 10),
+        (@TenantId, 'Industry', 'Mining', 'Mining, Quarrying, and Oil and Gas Extraction', 'Industry classification used for account master records.', 0, 20),
+        (@TenantId, 'Industry', 'Utilities', 'Utilities', 'Industry classification used for account master records.', 0, 30),
+        (@TenantId, 'Industry', 'Construction', 'Construction', 'Industry classification used for account master records.', 0, 40),
+        (@TenantId, 'Industry', 'Manufacturing', 'Manufacturing', 'Industry classification used for account master records.', 0, 50),
+        (@TenantId, 'Industry', 'Wholesale Trade', 'Wholesale Trade', 'Industry classification used for account master records.', 0, 60),
+        (@TenantId, 'Industry', 'Retail Trade', 'Retail Trade', 'Industry classification used for account master records.', 0, 70),
+        (@TenantId, 'Industry', 'Transportation', 'Transportation and Warehousing', 'Industry classification used for account master records.', 0, 80),
+        (@TenantId, 'Industry', 'Information', 'Information', 'Industry classification used for account master records.', 0, 90),
+        (@TenantId, 'Industry', 'Finance and Insurance', 'Finance and Insurance', 'Industry classification used for account master records.', 0, 100),
+        (@TenantId, 'Industry', 'Real Estate', 'Real Estate and Rental and Leasing', 'Industry classification used for account master records.', 0, 110),
+        (@TenantId, 'Industry', 'Professional Services', 'Professional, Scientific, and Technical Services', 'Industry classification used for account master records.', 0, 120),
+        (@TenantId, 'Industry', 'Management', 'Management of Companies and Enterprises', 'Industry classification used for account master records.', 0, 130),
+        (@TenantId, 'Industry', 'Administrative Services', 'Administrative and Support and Waste Management and Remediation Services', 'Industry classification used for account master records.', 0, 140),
+        (@TenantId, 'Industry', 'Education', 'Educational Services', 'Industry classification used for account master records.', 0, 150),
+        (@TenantId, 'Industry', 'Health Care', 'Health Care and Social Assistance', 'Industry classification used for account master records.', 0, 160),
+        (@TenantId, 'Industry', 'Arts and Entertainment', 'Arts, Entertainment, and Recreation', 'Industry classification used for account master records.', 0, 170),
+        (@TenantId, 'Industry', 'Accommodation and Food', 'Accommodation and Food Services', 'Industry classification used for account master records.', 0, 180),
+        (@TenantId, 'Industry', 'Other Services', 'Other Services except Public Administration', 'Industry classification used for account master records.', 0, 190),
+        (@TenantId, 'Industry', 'Public Administration', 'Public Administration', 'Industry classification used for account master records.', 0, 200);
 END;";
 
         await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));

@@ -15,8 +15,11 @@ public sealed class ClaimsService : IClaimsService
     public Task<PagedResult<ClaimDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lob, string? catCode, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, status, lob, catCode, pageNumber, pageSize, cancellationToken);
 
-    public Task<ClaimDetailDto?> GetDetailAsync(Guid claimId, CancellationToken cancellationToken = default)
-        => _repository.GetDetailAsync(claimId, cancellationToken);
+    public Task<ClaimDetailDto?> GetDetailAsync(Guid tenantId, Guid claimId, CancellationToken cancellationToken = default)
+        => _repository.GetDetailAsync(tenantId, claimId, cancellationToken);
+
+    public Task<IReadOnlyList<ClaimOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetOptionsAsync(tenantId, cancellationToken);
 
     public Task<Guid> CreateAsync(CreateClaimRequest request, CancellationToken cancellationToken = default)
     {
@@ -69,4 +72,19 @@ public sealed class ClaimsService : IClaimsService
 
     public Task<Guid> CreateFastCatFnolAsync(FastCatFnolRequest request, CancellationToken cancellationToken = default)
         => _repository.CreateFastCatFnolAsync(request, cancellationToken);
+
+    public Task<Guid> AssignAdjusterAsync(AssignClaimAdjusterRequest request, CancellationToken cancellationToken = default) => _repository.AssignAdjusterAsync(request, cancellationToken);
+    public Task<Guid> UpsertPartyAsync(UpsertClaimPartyRequest request, CancellationToken cancellationToken = default) => _repository.UpsertPartyAsync(request, cancellationToken);
+    public Task<Guid> CreateFinancialTransactionAsync(CreateClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!ClaimRules.IsFinancialTransactionType(request.TransactionTypeCode)) throw new InvalidOperationException("Unsupported claim financial transaction type.");
+        return _repository.CreateFinancialTransactionAsync(request, cancellationToken);
+    }
+    public Task<Guid> ReverseFinancialTransactionAsync(ReverseClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default) => _repository.ReverseFinancialTransactionAsync(request, cancellationToken);
+    public Task<Guid> CreateNoteAsync(CreateClaimNoteRequest request, CancellationToken cancellationToken = default) => _repository.CreateNoteAsync(request, cancellationToken);
+    public Task<Guid> CreateTaskAsync(CreateClaimTaskRequest request, CancellationToken cancellationToken = default) => _repository.CreateTaskAsync(request, cancellationToken);
+    public Task CompleteTaskAsync(CompleteClaimTaskRequest request, CancellationToken cancellationToken = default) => _repository.CompleteTaskAsync(request, cancellationToken);
+    public Task<Guid> LinkDocumentAsync(LinkClaimDocumentRequest request, CancellationToken cancellationToken = default) => _repository.LinkDocumentAsync(request, cancellationToken);
+    public Task<LossRunImportResultDto> ImportLossRunAsync(ImportLossRunRequest request, CancellationToken cancellationToken = default) => _repository.ImportLossRunAsync(request, cancellationToken);
+    public Task<IReadOnlyList<LossRunDto>> GetLossRunsAsync(Guid tenantId, Guid? accountId, CancellationToken cancellationToken = default) => _repository.GetLossRunsAsync(tenantId, accountId, cancellationToken);
 }

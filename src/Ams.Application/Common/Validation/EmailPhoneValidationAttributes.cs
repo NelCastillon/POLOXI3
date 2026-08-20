@@ -4,6 +4,18 @@ using System.Text.RegularExpressions;
 namespace Ams.Application.Common.Validation;
 
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter, AllowMultiple = false)]
+public sealed class AmsRequiredStringAttribute : ValidationAttribute
+{
+    public AmsRequiredStringAttribute()
+    {
+        ErrorMessage = "This field is required.";
+    }
+
+    public override bool IsValid(object? value)
+        => value is string text && !string.IsNullOrWhiteSpace(text);
+}
+
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter, AllowMultiple = false)]
 public sealed partial class AmsEmailAddressAttribute : ValidationAttribute
 {
     private static readonly EmailAddressAttribute EmailAddress = new();

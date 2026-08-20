@@ -47,13 +47,18 @@
         </div>
     }
 
-    <section class="sa-kpi-strip" aria-label="Application KPIs">
-        @KpiCard("all", "Total Apps", TotalApplicationCount.ToString(), "All application records from submission workflow", "bi-stack", "blue")
-        @KpiCard("priority", "Priority", PriorityApplicationCount.ToString(), "Incomplete, overdue, high-value, or requirement-heavy applications", "bi-exclamation-octagon", "red")
-        @KpiCard("submitted", "Submitted", SubmittedApplicationCount.ToString(), "Applications submitted or ready for carrier review", "bi-send", "cyan")
-        @KpiCard("requirements", "Requirements", RequirementsApplicationCount.ToString(), "Applications waiting on missing information", "bi-paperclip", "amber")
-        @KpiCard("approved", "Approved", ApprovedApplicationCount.ToString(), "Applications ready for quote workflow", "bi-check-circle", "green")
-        @KpiCard("complete", "Avg Complete", AverageCompletenessText, "Average application completeness", "bi-percent", "emerald")
+    <section class="app-kpi-strip" aria-label="Application KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="() => SetKpi(metric.Filter)">
+                <span class="app-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="app-kpi__body">
+                    <span class="app-kpi__val">@metric.Value</span>
+                    <span class="app-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
     </section>
 
     <section class="sa-workflows" aria-label="Application workflows">
@@ -79,10 +84,12 @@
         </button>
     </section>
 
-    <section class="sa-filter-panel" aria-label="Application filters">
-        <div class="sa-search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input @bind="SearchText" @bind:event="oninput" placeholder="Search app #, submission, account, LOB, carrier, status, producer, premium, due date, priority..." />
+    <section class="sa-search-row" aria-label="Application filters">
+        <div class="sa-search-wrap">
+            <span class="sa-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="sa-search-body">
+                <input class="sa-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search app #, submission, account, LOB, carrier, status, producer, premium, due date, priority..." aria-label="Search applications" />
+            </div>
         </div>
         <div class="sa-filter-grid">
             <label>
@@ -127,9 +134,6 @@
                 </select>
             </label>
         </div>
-        <button type="button" class="sa-btn sa-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
-            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-        </button>
     </section>
 
     <nav class="sa-tabs" aria-label="Application views">
@@ -519,6 +523,15 @@
     int RequirementsApplicationCount => _rows.Count(r => r.Status == "Requirements Pending");
     int ApprovedApplicationCount => _rows.Count(r => r.Status == "Approved");
     int CarrierCount => _rows.Select(r => Safe(r.Carrier, "Not Assigned")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    IEnumerable<AppMetric> Metrics =>
+    [
+        new("blue", "all", "bi-stack", "Total Apps", TotalApplicationCount.ToString(), "All applications", "All application records from submission workflow"),
+        new("red", "priority", "bi-exclamation-octagon", "Priority", PriorityApplicationCount.ToString(), "High-importance apps", "Incomplete, overdue, high-value, or requirement-heavy applications"),
+        new("cyan", "submitted", "bi-send", "Submitted", SubmittedApplicationCount.ToString(), "Carrier review ready", "Applications submitted or ready for carrier review"),
+        new("amber", "requirements", "bi-paperclip", "Requirements", RequirementsApplicationCount.ToString(), "Missing information", "Applications waiting on missing information"),
+        new("green", "approved", "bi-check-circle", "Approved", ApprovedApplicationCount.ToString(), "Ready for quote", "Applications ready for quote workflow"),
+        new("slate", "complete", "bi-percent", "Avg Complete", AverageCompletenessText, "Average complete", "Average application completeness")
+    ];
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_carrierFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
     string ConfirmIconClass => _pendingAction == "Reject" ? "sa-confirm-icon sa-confirm-icon--danger" : "sa-confirm-icon";
@@ -924,7 +937,7 @@
             "Submit to Carrier" => ($"Submit {_selected.AppNo} to carrier", "bi-send", "Submit Application"),
             "Add Requirements" => ($"Add requirements for {_selected.AppNo}", "bi-paperclip", "Add Requirements"),
             "Request Info" => ($"Request information for {_selected.AppNo}", "bi-question-circle", "Send Request"),
-            "Mark Approved" => ($"Approve {_selected.AppNo}", "bi-check-circle", "Mark Approved"),
+            "Mark Approved" => ($"Approve {_selected.AppNo}", "bi-check-circle", "Request Quote"),
             "Reject" => ($"Reject {_selected.AppNo}", "bi-x-circle", "Continue"),
             "Download App" => ($"Generate application packet for {_selected.AppNo}", "bi-file-earmark-pdf", "Generate Packet"),
             _ => ("Application Action", "bi-clipboard", "Continue")
@@ -934,7 +947,7 @@
             "Submit to Carrier" => "Send this completed application to the recommended or selected carrier market.",
             "Add Requirements" => "Capture outstanding requirements and due date for underwriting follow-up.",
             "Request Info" => "Create an information request for the producer, CSR, or insured before underwriting can continue.",
-            "Mark Approved" => "Create a quote approval record and move this application into the approved workflow stage.",
+            "Mark Approved" => "Mark the application ready and request quote terms from the related carrier market without recording synthetic carrier terms.",
             "Reject" => "Reject this application and move the related submission into declined status.",
             "Download App" => "Generate an application packet/proposal record for the current submission application.",
             _ => "Review the application action details and confirm before changes are applied."
@@ -970,7 +983,7 @@
             "Submit to Carrier" => ($"Submit {_selected.AppNo}?", "This will send the application to a carrier market and move the submission into review.", "bi-send"),
             "Add Requirements" => ($"Add requirements to {_selected.AppNo}?", "This will generate an application requirements packet for follow-up tracking.", "bi-paperclip"),
             "Request Info" => ($"Request more information for {_selected.AppNo}?", "This will generate an application information request packet for follow-up.", "bi-question-circle"),
-            "Mark Approved" => ($"Approve {_selected.AppNo}?", "This will create a quote request and move the related application to approved status.", "bi-check-circle"),
+            "Mark Approved" => ($"Approve {_selected.AppNo}?", "This will request quote terms from the related market. Carrier response terms must be recorded separately when received.", "bi-check-circle"),
             "Reject" => ($"Reject {_selected.AppNo}?", "This will decline the related submission and move the application to rejected status.", "bi-exclamation-triangle"),
             "Download App" => ($"Generate packet for {_selected.AppNo}?", "This will create an application packet/proposal record for the selected submission.", "bi-file-earmark-pdf"),
             _ => ("Confirm action", "Confirm this application action?", "bi-question-circle")
@@ -996,7 +1009,7 @@
                 "Submit to Carrier" => await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(_tenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.Notes ?? "Application submitted to carrier from application command center.")),
                 "Add Requirements" => await GenerateApplicationPacketAsync("Application Requirements", _actionForm.Notes),
                 "Request Info" => await GenerateApplicationPacketAsync("Application Information Request", _actionForm.Notes),
-                "Mark Approved" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, ParseCarrierId(_actionForm.CarrierIdText), _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved from application command center.")),
+                "Mark Approved" => await RequestApprovedApplicationQuoteAsync(),
                 "Reject" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, _actionForm.Notes ?? $"Application rejected from command center: {_selected.AppNo}.")),
                 "Download App" => await GenerateApplicationPacketAsync("Application Packet", _actionForm.Notes),
                 _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
@@ -1024,6 +1037,22 @@
         return new SubmissionActionResult(proposalId, $"{titlePrefix} generated.");
     }
 
+    async Task<SubmissionActionResult> RequestApprovedApplicationQuoteAsync()
+    {
+        if (_selected is null) return new SubmissionActionResult(Guid.Empty, "No application selected.");
+
+        var carrierId = ParseCarrierId(_actionForm.CarrierIdText);
+        var markets = await Api.GetSubmissionMarketsAsync(_selected.SubId) ?? [];
+        var marketId = markets.FirstOrDefault(m => !carrierId.HasValue || m.CarrierId == carrierId.Value)?.SubmissionMarketId;
+        if (!marketId.HasValue)
+        {
+            var submitResult = await Api.SubmitSubmissionToMarketAsync(_selected.SubId, new SubmitSubmissionToMarketRequest(_tenantId, carrierId, _actionForm.Notes ?? "Application approved from application command center."));
+            marketId = submitResult.Id;
+        }
+
+        return await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes ?? "Application approved and quote requested from application command center.", null, null, marketId));
+    }
+
     void ShowToast(string message, string cssClass)
     {
         var toast = new ToastMessage(Guid.NewGuid(), message, cssClass);
@@ -1039,20 +1068,9 @@
 
     string TabClass(string key) => _activeTab == key ? "sa-tab sa-tab--active" : "sa-tab";
     string RowClass(AppRow row) => _selected?.AppId == row.AppId ? "sa-row sa-row--selected" : "sa-row";
+    string MetricCardClass(AppMetric metric) => $"app-kpi app-kpi--{metric.Tone} {(_activeKpi == metric.Filter ? "app-kpi--active" : string.Empty)}";
     static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "sa-menu-item sa-menu-item--danger" : "sa-menu-item";
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
-
-    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
-    {
-        var active = _activeKpi == key;
-        var cardClass = active ? $"sa-kpi sa-kpi--{tone} sa-kpi--active" : $"sa-kpi sa-kpi--{tone}";
-        var title = active ? "Clear KPI filter" : subtitle;
-        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
-            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
-            <strong>@value</strong>
-            <small>@subtitle</small>
-        </button>;
-    }
 
     RenderFragment StatusBadge(string status) => @<span class="sa-status sa-status--@Slug(status)">@status</span>;
     RenderFragment ImportanceBadge(AppRow row) => @<span class="sa-importance sa-importance--@Slug(ImportanceLevel(row))">@ImportanceLevel(row)<small>@ImportanceScore(row)</small></span>;
@@ -1172,6 +1190,7 @@
         }
     }
 
+    sealed record AppMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
     sealed record GroupSummary(string Name, int Count, decimal Premium, int Priority, double AverageComplete, int Percent);

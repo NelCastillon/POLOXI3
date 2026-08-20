@@ -10,8 +10,11 @@ public sealed class CreateLeadRequest
     [Required, StringLength(50)]
     public string LeadNumber { get; set; } = string.Empty;
 
-    [Required, StringLength(200)]
+    [StringLength(200)]
     public string? AccountName { get; set; }
+
+    [Required, StringLength(50)]
+    public string LeadTypeCode { get; set; } = "Personal";
 
     [Required, StringLength(100)]
     public string FirstName { get; set; } = string.Empty;

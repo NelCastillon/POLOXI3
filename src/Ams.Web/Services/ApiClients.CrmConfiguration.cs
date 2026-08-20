@@ -76,6 +76,29 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public Task<PagedResult<OpportunityForecastCategoryDto>?> SearchOpportunityForecastCategoriesAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<PagedResult<OpportunityForecastCategoryDto>>($"api/crm/opp-forecast-categories?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
+
+    public async Task<Guid> CreateOpportunityForecastCategoryAsync(CreateOpportunityForecastCategoryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/crm/opp-forecast-categories", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken);
+        return result!.Id;
+    }
+
+    public async Task UpdateOpportunityForecastCategoryAsync(Guid id, UpdateOpportunityForecastCategoryRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PutAsJsonAsync($"api/crm/opp-forecast-categories/{id}", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DeleteOpportunityForecastCategoryAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.DeleteAsync($"api/crm/opp-forecast-categories/{id}", cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public Task<IReadOnlyList<PipelineSettingDto>?> GetPipelineSettingsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<IReadOnlyList<PipelineSettingDto>>($"api/crm/pipeline-settings?tenantId={tenantId}", cancellationToken);
 

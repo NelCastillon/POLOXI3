@@ -2,10 +2,13 @@
 @namespace Ams.Web.Components.Pages
 @using Ams.Application.Common.Dtos
 @using Ams.Application.Features.PolicyCertificates
+@using System.Text.Json
+@using Microsoft.JSInterop
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime JS
 
 <PageTitle>Certificates Hub - AMS</PageTitle>
 
@@ -40,10 +43,10 @@
         }
     </section>
 
-    <section class="ch-command-bar" aria-label="Certificate filters">
-        <div class="ch-search-wrap">
+    <section class="ch-command-bar um-search-filter-row" aria-label="Certificate filters">
+        <div class="um-search-box">
             <i class="bi bi-search" aria-hidden="true"></i>
-            <input type="search" placeholder="Search cert #, policy, account, holder, LOB, issuer..." @bind="SearchText" @bind:event="oninput" />
+            <input class="um-search-input" type="search" placeholder="Search cert #, policy, account, holder, LOB, issuer..." @bind="SearchText" @bind:event="oninput" />
         </div>
         <select class="form-select ch-filter-select" @bind="StatusFilter" aria-label="Status filter">
             <option value="">All statuses</option>
@@ -54,9 +57,9 @@
         </select>
         <select class="form-select ch-filter-select" @bind="TypeFilter" aria-label="Type filter">
             <option value="">All forms</option>
-            @foreach (var type in _certTypes)
+            @foreach (var type in CertificateTypeOptions)
             {
-                <option value="@type">@type</option>
+                <option value="@type.OptionCode">@type.DisplayName</option>
             }
         </select>
         <button type="button" class="um-btn um-btn-ghost" @onclick="ExportVisibleAsync"><i class="bi bi-download" aria-hidden="true"></i> Export visible</button>
@@ -117,7 +120,7 @@
                                     <td>@row.IssuedBy</td>
                                     <td><span class="ch-status ch-status-@CssToken(row.Status)">@row.Status</span></td>
                                     <td class="sr-actions-col">
-                                        <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => DownloadAsync(row)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> PDF</button>
+                                        <button type="button" class="um-btn um-btn-primary um-btn-xs" @onclick:stopPropagation="true" @onclick="() => DownloadAsync(row)" disabled="@(!CanGenerate(row))" title="@GenerationTitle(row)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Generate</button>
                                         <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => EmailAsync(row)"><i class="bi bi-envelope" aria-hidden="true"></i></button>
                                         <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenEdit(row)"><i class="bi bi-pencil" aria-hidden="true"></i></button>
                                         <button type="button" class="um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => ConfirmRevoke(row)" disabled="@IsRevoked(row)"><i class="bi bi-x-circle" aria-hidden="true"></i></button>
@@ -156,10 +159,26 @@
                     <div class="ch-flag-row">
                         <span class="@(_selected.AdditionalInsured ? "ch-flag-on" : "ch-flag-off")"><i class="bi bi-person-plus" aria-hidden="true"></i> Additional insured</span>
                         <span class="@(_selected.WaiverSubrogation ? "ch-flag-on" : "ch-flag-off")"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Waiver</span>
+                        <span class="@(_selected.PrimaryNonContributory ? "ch-flag-on" : "ch-flag-off")"><i class="bi bi-shield-check" aria-hidden="true"></i> Primary / non-contributory</span>
                     </div>
                 </div>
+                <div class="ch-coverage-card">
+                    <strong><i class="bi bi-clock-history" aria-hidden="true"></i> Audit and delivery</strong>
+                    @if (_selectedAudit.Count == 0)
+                    {
+                        <p>No audit events are available for this certificate.</p>
+                    }
+                    else
+                    {
+                        @foreach (var audit in _selectedAudit.Take(5))
+                        {
+                            <p><strong>@audit.EventTypeCode</strong> · @audit.CreatedDateUtc.ToLocalTime().ToString("g")<br />@audit.EventDescription</p>
+                        }
+                    }
+                    <p>@_selectedDeliveries.Count tracked delivery attempt(s). @_selectedRenewalText</p>
+                </div>
                 <div class="ch-detail-actions">
-                    <button type="button" class="um-btn um-btn-primary" @onclick="() => DownloadAsync(_selected)"><i class="bi bi-file-earmark-pdf" aria-hidden="true"></i> Download PDF</button>
+                    <button type="button" class="um-btn um-btn-primary" @onclick="() => DownloadAsync(_selected)" disabled="@(!CanGenerate(_selected))" title="@GenerationTitle(_selected)"><i class="bi bi-file-earmark-text" aria-hidden="true"></i> Generate Document</button>
                     <button type="button" class="um-btn um-btn-ghost" @onclick="() => EmailAsync(_selected)"><i class="bi bi-envelope" aria-hidden="true"></i> Email holder</button>
                     <button type="button" class="um-btn um-btn-ghost" @onclick="OpenSelectedPolicy"><i class="bi bi-shield" aria-hidden="true"></i> View policy</button>
                     <button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenEdit(_selected)"><i class="bi bi-pencil" aria-hidden="true"></i> Edit</button>
@@ -189,12 +208,14 @@
             <div class="ch-dlg-fields">
                 <label class="ch-dlg-field">Policy Number <span class="ch-req">*</span><input class="form-control" @bind="_issForm.PolicyNo" placeholder="POL-2025-..." /></label>
                 <label class="ch-dlg-field">Account Name <span class="ch-req">*</span><input class="form-control" @bind="_issForm.Account" placeholder="Account name" /></label>
-                <label class="ch-dlg-field">Certificate Form<select class="form-select" @bind="_issForm.CertType">@foreach (var type in _certTypes){<option value="@type">@type</option>}</select></label>
+                <label class="ch-dlg-field">Certificate Form<select class="form-select" @bind="_issForm.CertType">@foreach (var type in CertificateTypeOptions){<option value="@type.OptionCode">@type.DisplayName</option>}</select></label>
                 <label class="ch-dlg-field">Line of Business <span class="ch-req">*</span><input class="form-control" @bind="_issForm.Lob" placeholder="General Liability" /></label>
+                <label class="ch-dlg-field ch-dlg-full">Certificate Holder<select class="form-select" value="@_issForm.CertificateHolderId" @onchange="OnHolderChanged"><option value="">Create a new holder</option>@foreach (var holder in HolderOptions){<option value="@holder.CertificateHolderId">@holder.LegalName</option>}</select></label>
                 <label class="ch-dlg-field ch-dlg-full">Certificate Holder Name <span class="ch-req">*</span><input class="form-control" @bind="_issForm.HolderName" placeholder="Legal name of certificate holder" /></label>
                 <label class="ch-dlg-field ch-dlg-full">Holder Address<input class="form-control" @bind="_issForm.HolderAddress" /></label>
                 <label class="ch-check-row"><input type="checkbox" @bind="_issForm.AdditionalInsured" /> Add as additional insured</label>
                 <label class="ch-check-row"><input type="checkbox" @bind="_issForm.WaiverSubrogation" /> Include waiver of subrogation</label>
+                <label class="ch-check-row"><input type="checkbox" @bind="_issForm.PrimaryNonContributory" /> Primary and non-contributory</label>
                 <label class="ch-dlg-field">Effective Date<input class="form-control" type="date" @bind="_issForm.IssuedDate" /></label>
                 <label class="ch-dlg-field">Expiry Date<input class="form-control" type="date" @bind="_issForm.ExpDate" /></label>
                 <label class="ch-dlg-field ch-dlg-full">Description of Operations<textarea class="form-control" rows="3" @bind="_issForm.Description"></textarea></label>
@@ -269,8 +290,42 @@
     private string? _revokeReason;
     private CertRow? _selected;
     private IssueForm _issForm = new();
-    private readonly string[] _certTypes = ["ACORD 25", "ACORD 27", "ACORD 28", "Custom"];
     private readonly List<CertRow> _rows = [];
+    private CertificateWorkflowWorkspaceDto? _workspace;
+    private IReadOnlyList<CertificateAuditEventDto> _selectedAudit = [];
+    private IReadOnlyList<CertificateDeliveryDto> _selectedDeliveries = [];
+    private string _selectedRenewalText = "No renewal schedule configured.";
+
+    private IReadOnlyList<CertificateWorkflowOptionDto> CertificateTypeOptions
+    {
+        get
+        {
+            var persisted = (_workspace?.Options ?? []).Where(option => option.OptionGroupCode == "CertificateType" && option.IsActive).OrderBy(option => option.SortOrder).ToList();
+            var legacyValues = _rows.Select(row => row.CertType).Where(value => !string.IsNullOrWhiteSpace(value) && persisted.All(option => !string.Equals(option.OptionCode, value, StringComparison.OrdinalIgnoreCase))).Distinct(StringComparer.OrdinalIgnoreCase);
+            persisted.AddRange(legacyValues.Select((value, index) => new CertificateWorkflowOptionDto(Guid.Empty, _tenantId, "CertificateType", value, value, "Existing synchronized certificate type.", false, true, 1000 + index)));
+            return persisted;
+        }
+    }
+    private IReadOnlyList<CertificateHolderDto> HolderOptions =>
+        (_workspace?.Holders ?? []).Where(holder => holder.IsActive).OrderBy(holder => holder.LegalName).ToList();
+
+    private DocumentTemplateDefinitionDto? FindTemplate(CertRow row)
+    {
+        var normalizedType = NormalizeTemplateCode(row.CertType);
+        return (_workspace?.Templates ?? []).FirstOrDefault(item => string.Equals(NormalizeTemplateCode(item.TemplateCode), normalizedType, StringComparison.OrdinalIgnoreCase))
+            ?? (_workspace?.Templates ?? []).FirstOrDefault(item => item.DocumentTypeCode == "Certificate" && item.IsActive && !item.IsLicensedContent);
+    }
+
+    private bool CanGenerate(CertRow row)
+    {
+        var template = FindTemplate(row);
+        var published = template?.Versions.OrderByDescending(version => version.VersionNumber).FirstOrDefault(version => string.Equals(version.StatusCode, "Published", StringComparison.OrdinalIgnoreCase));
+        return template is { IsActive: true } && published is not null && !string.IsNullOrWhiteSpace(published.TemplateContent);
+    }
+
+    private string GenerationTitle(CertRow row) => CanGenerate(row)
+        ? "Generate a new immutable document version."
+        : "A published tenant template with renderable content must be configured before generation.";
 
     private string SearchText { get => _searchTerm; set { _searchTerm = value; SelectFallback(); } }
     private string StatusFilter { get => _filterStatus; set { _filterStatus = value; _activeKpi = string.IsNullOrWhiteSpace(value) ? "all" : value.ToLowerInvariant(); SelectFallback(); } }
@@ -305,6 +360,7 @@
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
         _userId = context.UserId;
+        await LoadWorkspaceAsync();
         await LoadCertificatesAsync();
     }
 
@@ -318,7 +374,7 @@
             }
             catch (Exception ex)
             {
-                await _toast.ShowAsync(new ToastModel { Title = "Certificate lookup failed", Content = $"Certificate lookup failed: {ex.Message}", CssClass = "e-toast-danger" });
+                await _toast.ShowAsync(new ToastModel { Title = "Certificate lookup failed", Content = $"Certificate lookup failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
                 SelectFallback();
             }
         }
@@ -346,15 +402,39 @@
             {
                 SelectFallback();
             }
+            await LoadSelectedWorkflowAsync();
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Certificate load failed", Content = $"Certificate load failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate load failed", Content = $"Certificate load failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
         finally
         {
             _loading = false;
         }
+    }
+
+    private async Task LoadWorkspaceAsync()
+    {
+        _workspace = await Api.GetCertificateWorkflowWorkspaceAsync(_tenantId);
+    }
+
+    private async Task LoadSelectedWorkflowAsync()
+    {
+        if (_selected is null)
+        {
+            _selectedAudit = [];
+            _selectedDeliveries = [];
+            _selectedRenewalText = "No renewal schedule configured.";
+            return;
+        }
+
+        _selectedAudit = await Api.GetCertificateAuditAsync(_tenantId, _selected.CertificateId) ?? [];
+        _selectedDeliveries = await Api.GetCertificateDeliveriesAsync(_tenantId, _selected.CertificateId) ?? [];
+        var schedule = _workspace?.RenewalSchedules.FirstOrDefault(item => item.CertificateId == _selected.CertificateId);
+        _selectedRenewalText = schedule is null
+            ? "No renewal schedule configured."
+            : $"Renewal runs {schedule.NextRunDateUtc.ToLocalTime():d} ({schedule.RenewalLeadDays} day lead).";
     }
 
     private async Task SelectQueryCertificateAsync()
@@ -377,7 +457,7 @@
 
             if (_selected is null)
             {
-                await _toast.ShowAsync(new ToastModel { Title = "Certificate not found", Content = $"No database certificate was found for {Certificate.Trim()}.", CssClass = "e-toast-warning" });
+                await _toast.ShowAsync(new ToastModel { Title = "Certificate not found", Content = $"No database certificate was found for {Certificate.Trim()}.", CssClass = "enterprise-toast-warning" });
             }
 
             if (_selected is not null)
@@ -445,7 +525,7 @@
         }
         else
         {
-            _ = _toast.ShowAsync(new ToastModel { Title = "Policy link unavailable", Content = "This certificate is not linked to a specific policy record yet.", CssClass = "e-toast-warning" });
+            _ = _toast.ShowAsync(new ToastModel { Title = "Policy link unavailable", Content = "This certificate is not linked to a specific policy record yet.", CssClass = "enterprise-toast-warning" });
         }
     }
 
@@ -458,12 +538,16 @@
         await LoadCertificatesAsync();
     }
 
-    private void SelectRow(CertRow row) => _selected = row;
+    private async Task SelectRow(CertRow row)
+    {
+        _selected = row;
+        await LoadSelectedWorkflowAsync();
+    }
     private void OpenIssue()
     {
         _editingCertificateId = null;
         _editingPolicyId = null;
-        _issForm = new();
+        _issForm = NewIssueForm();
         _showIssue = true;
     }
 
@@ -479,8 +563,10 @@
             Lob = row.Lob,
             HolderName = row.HolderName,
             HolderAddress = row.HolderAddress,
+            CertificateHolderId = row.CertificateHolderId,
             AdditionalInsured = row.AdditionalInsured,
             WaiverSubrogation = row.WaiverSubrogation,
+            PrimaryNonContributory = row.PrimaryNonContributory,
             IssuedDate = row.IssuedDate,
             ExpDate = row.ExpDate,
             Description = row.Description
@@ -488,12 +574,37 @@
         _showIssue = true;
     }
 
+    private IssueForm NewIssueForm()
+    {
+        var defaultType = CertificateTypeOptions.FirstOrDefault(option => option.IsDefault) ?? CertificateTypeOptions.FirstOrDefault();
+        return new IssueForm { CertType = defaultType?.OptionCode ?? string.Empty };
+    }
+
+    private void OnHolderChanged(ChangeEventArgs args)
+    {
+        if (!Guid.TryParse(args.Value?.ToString(), out var holderId))
+        {
+            _issForm.CertificateHolderId = null;
+            return;
+        }
+
+        var holder = HolderOptions.FirstOrDefault(item => item.CertificateHolderId == holderId);
+        if (holder is null) return;
+        _issForm.CertificateHolderId = holderId;
+        _issForm.HolderName = holder.LegalName;
+        _issForm.HolderAddress = string.Join(", ", new[] { holder.AddressLine1, holder.AddressLine2, holder.City, holder.StateProvince, holder.PostalCode }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        _issForm.AdditionalInsured = holder.RequiresAdditionalInsured;
+        _issForm.WaiverSubrogation = holder.RequiresWaiverOfSubrogation;
+        _issForm.PrimaryNonContributory = holder.RequiresPrimaryNonContributory;
+        _issForm.Description = holder.DefaultWording ?? string.Empty;
+    }
+
     private void CloseIssue()
     {
         _showIssue = false;
         _editingCertificateId = null;
         _editingPolicyId = null;
-        _issForm = new();
+        _issForm = NewIssueForm();
     }
 
     private async Task SaveDraftAsync()
@@ -510,12 +621,41 @@
     {
         if (string.IsNullOrWhiteSpace(_issForm.PolicyNo) || string.IsNullOrWhiteSpace(_issForm.Account) || string.IsNullOrWhiteSpace(_issForm.HolderName) || string.IsNullOrWhiteSpace(_issForm.Lob))
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Required fields", Content = "Policy number, account, holder, and line of business are required.", CssClass = "e-toast-warning" });
+            await _toast.ShowAsync(new ToastModel { Title = "Required fields", Content = "Policy number, account, holder, and line of business are required.", CssClass = "enterprise-toast-warning" });
             return;
         }
 
         try
         {
+            var existingHolder = _issForm.CertificateHolderId.HasValue
+                ? HolderOptions.FirstOrDefault(holder => holder.CertificateHolderId == _issForm.CertificateHolderId.Value)
+                : null;
+            var holderCode = existingHolder?.HolderCode ?? $"H-{Guid.NewGuid():N}"[..14].ToUpperInvariant();
+            var defaultDelivery = (_workspace?.Options ?? []).FirstOrDefault(option => option.OptionGroupCode == "DeliveryMethod" && option.IsDefault && option.IsActive)
+                ?? (_workspace?.Options ?? []).FirstOrDefault(option => option.OptionGroupCode == "DeliveryMethod" && option.IsActive);
+            var holderId = await Api.UpsertCertificateHolderAsync(new UpsertCertificateHolderRequest(
+                _tenantId,
+                _issForm.CertificateHolderId,
+                holderCode,
+                _issForm.HolderName.Trim(),
+                string.IsNullOrWhiteSpace(_issForm.HolderAddress) ? null : _issForm.HolderAddress.Trim(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                existingHolder?.ContactName,
+                existingHolder?.EmailAddress,
+                existingHolder?.PhoneNumber,
+                existingHolder?.PreferredDeliveryMethodCode ?? defaultDelivery?.OptionCode,
+                string.IsNullOrWhiteSpace(_issForm.Description) ? null : _issForm.Description.Trim(),
+                _issForm.AdditionalInsured,
+                _issForm.WaiverSubrogation,
+                _issForm.PrimaryNonContributory,
+                true,
+                _userId));
+            _issForm.CertificateHolderId = holderId;
+
             Guid id;
             if (_editingCertificateId is { } editingId)
             {
@@ -530,11 +670,14 @@
                     _issForm.IssuedDate,
                     _issForm.ExpDate,
                     _issForm.Lob.Trim(),
-                    "Tenant Admin",
+                    _userId?.ToString("D") ?? string.Empty,
                     status,
                     _issForm.AdditionalInsured,
                     _issForm.WaiverSubrogation,
-                    string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description.Trim(),
+                    _issForm.Description.Trim(),
+                    holderId,
+                    _issForm.PrimaryNonContributory,
+                    string.IsNullOrWhiteSpace(_issForm.Description) ? null : _issForm.Description.Trim(),
                     _userId);
                 await Api.UpdatePolicyCertificateAsync(editingId, request);
                 id = editingId;
@@ -552,11 +695,14 @@
                     _issForm.IssuedDate,
                     _issForm.ExpDate,
                     _issForm.Lob.Trim(),
-                    "Tenant Admin",
+                    _userId?.ToString("D") ?? string.Empty,
                     status,
                     _issForm.AdditionalInsured,
                     _issForm.WaiverSubrogation,
-                    string.IsNullOrWhiteSpace(_issForm.Description) ? "Certificate generated from enterprise issuance workflow." : _issForm.Description.Trim(),
+                    _issForm.Description.Trim(),
+                    holderId,
+                    _issForm.PrimaryNonContributory,
+                    string.IsNullOrWhiteSpace(_issForm.Description) ? null : _issForm.Description.Trim(),
                     _userId);
                 id = await Api.CreatePolicyCertificateAsync(request);
             }
@@ -564,32 +710,91 @@
             _showIssue = false;
             _editingCertificateId = null;
             _editingPolicyId = null;
-            _issForm = new();
+            _issForm = NewIssueForm();
+            await LoadWorkspaceAsync();
             await LoadCertificatesAsync();
             _selected = _rows.FirstOrDefault(r => r.CertificateId == id) ?? _rows.FirstOrDefault();
-            await _toast.ShowAsync(new ToastModel { Title = toastTitle, Content = toastContent, CssClass = "e-toast-success" });
+            await LoadSelectedWorkflowAsync();
+            await _toast.ShowAsync(new ToastModel { Title = toastTitle, Content = toastContent, CssClass = "enterprise-toast-success" });
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Save failed", Content = $"Save failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Save failed", Content = $"Save failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
     }
 
-    private async Task DownloadAsync(CertRow row) => await _toast.ShowAsync(new ToastModel { Title = "PDF ready", Content = $"{row.CertNo} PDF download prepared.", CssClass = "e-toast-success" });
+    private async Task DownloadAsync(CertRow row)
+    {
+        try
+        {
+            var template = FindTemplate(row)
+                ?? throw new InvalidOperationException("No active certificate template is configured for this tenant.");
+            var mergeJson = JsonSerializer.Serialize(new
+            {
+                DocumentTitle = template.TemplateName,
+                row.CertNo,
+                PolicyNumber = row.PolicyNo,
+                AccountName = row.Account,
+                row.HolderName,
+                row.HolderAddress,
+                CertificateType = row.CertType,
+                EffectiveDate = row.IssuedDate.ToString("yyyy-MM-dd"),
+                ExpirationDate = row.ExpDate.ToString("yyyy-MM-dd"),
+                LineOfBusiness = row.Lob,
+                row.AdditionalInsured,
+                WaiverOfSubrogation = row.WaiverSubrogation,
+                row.PrimaryNonContributory,
+                Body = row.Description
+            });
+            var generated = await Api.GenerateCertificateDocumentAsync(row.CertificateId, new GenerateCertificateDocumentRequest(_tenantId, row.CertificateId, template.DocumentTemplateDefinitionId, null, mergeJson, "Generated from Certificates Hub.", _userId));
+            await JS.InvokeVoidAsync("amsDownload.downloadBase64", $"{row.CertNo}.html", generated.ContentType, Convert.ToBase64String(generated.Content));
+            await LoadCertificatesAsync(preserveSelection: true);
+            await _toast.ShowAsync(new ToastModel { Title = "Document generated", Content = $"A versioned document was generated for {row.CertNo}.", CssClass = "enterprise-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Generation failed", Content = ex.Message, CssClass = "enterprise-toast-danger" });
+        }
+    }
     private async Task EmailAsync(CertRow row)
     {
         try
         {
-            await Api.MarkPolicyCertificateDeliveredAsync(row.CertificateId, new PolicyCertificateActionRequest(_tenantId, _userId));
-            await LoadCertificatesAsync(preserveSelection: true);
-            await _toast.ShowAsync(new ToastModel { Title = "Email queued", Content = $"{row.CertNo} queued for {row.HolderName}.", CssClass = "e-toast-success" });
+            var holder = HolderOptions.FirstOrDefault(item => item.CertificateHolderId == row.CertificateHolderId)
+                ?? throw new InvalidOperationException("The certificate is not linked to an active certificate holder.");
+            var generatedVersionId = await Api.GetLatestGeneratedCertificateDocumentVersionIdAsync(_tenantId, row.CertificateId)
+                ?? throw new InvalidOperationException("Generate a document version before queueing delivery.");
+            var method = (_workspace?.Options ?? []).FirstOrDefault(option => option.OptionGroupCode == "DeliveryMethod" && option.OptionCode == holder.PreferredDeliveryMethodCode && option.IsActive)
+                ?? (_workspace?.Options ?? []).FirstOrDefault(option => option.OptionGroupCode == "DeliveryMethod" && option.IsDefault && option.IsActive)
+                ?? throw new InvalidOperationException("No active delivery method is configured for this tenant.");
+            var recipient = method.OptionCode == "Email" ? holder.EmailAddress : holder.AddressLine1;
+            if (string.IsNullOrWhiteSpace(recipient)) throw new InvalidOperationException($"{holder.LegalName} does not have a destination configured for {method.DisplayName}.");
+            await Api.QueueCertificateDeliveryAsync(row.CertificateId, new QueueCertificateDeliveryRequest(_tenantId, row.CertificateId, generatedVersionId, method.OptionCode, holder.LegalName, recipient, _userId));
+            await LoadSelectedWorkflowAsync();
+            await _toast.ShowAsync(new ToastModel { Title = "Email queued", Content = $"{row.CertNo} queued for {row.HolderName}.", CssClass = "enterprise-toast-success" });
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Email failed", Content = $"Email failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Email failed", Content = $"Email failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
     }
-    private async Task ExportVisibleAsync() => await _toast.ShowAsync(new ToastModel { Title = "Export", Content = $"Exported {Filtered.Count} visible certificate row(s).", CssClass = "e-toast-success" });
+    private async Task ExportVisibleAsync()
+    {
+        if (Filtered.Count == 0)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Nothing to export", Content = "No visible certificate records are available.", CssClass = "enterprise-toast-warning" });
+            return;
+        }
+
+        var rows = new List<string> { "Certificate,Policy,Account,Holder,HolderAddress,Form,Issued,Expires,LineOfBusiness,IssuedBy,Status,AdditionalInsured,WaiverOfSubrogation,PrimaryNonContributory" };
+        rows.AddRange(Filtered.Select(row => string.Join(',',
+            Csv(row.CertNo), Csv(row.PolicyNo), Csv(row.Account), Csv(row.HolderName), Csv(row.HolderAddress), Csv(row.CertType),
+            Csv(row.IssuedDate.ToString("yyyy-MM-dd")), Csv(row.ExpDate.ToString("yyyy-MM-dd")), Csv(row.Lob), Csv(row.IssuedBy), Csv(row.Status),
+            row.AdditionalInsured, row.WaiverSubrogation, row.PrimaryNonContributory)));
+        var bytes = System.Text.Encoding.UTF8.GetBytes(string.Join(Environment.NewLine, rows));
+        await JS.InvokeVoidAsync("amsDownload.downloadBase64", $"certificates-{DateTime.UtcNow:yyyyMMddHHmmss}.csv", "text/csv", Convert.ToBase64String(bytes));
+        await _toast.ShowAsync(new ToastModel { Title = "Export complete", Content = $"Exported {Filtered.Count} visible certificate row(s).", CssClass = "enterprise-toast-success" });
+    }
 
     private void ConfirmRevoke(CertRow row)
     {
@@ -617,11 +822,11 @@
             await Api.RevokePolicyCertificateAsync(_revokeTarget.CertificateId, new RevokePolicyCertificateRequest(_tenantId, _userId, _revokeReason));
             _showRevokeConfirm = false;
             await LoadCertificatesAsync(preserveSelection: true);
-            await _toast.ShowAsync(new ToastModel { Title = "Certificate revoked", Content = $"{_revokeTarget.CertNo} was revoked in the database.", CssClass = "e-toast-warning" });
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate revoked", Content = $"{_revokeTarget.CertNo} was revoked in the database.", CssClass = "enterprise-toast-warning" });
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Revoke failed", Content = $"Revoke failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Revoke failed", Content = $"Revoke failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
         finally
         {
@@ -636,11 +841,11 @@
         {
             await Api.RestorePolicyCertificateAsync(row.CertificateId, new RestorePolicyCertificateRequest(_tenantId, _userId));
             await LoadCertificatesAsync(preserveSelection: true);
-            await _toast.ShowAsync(new ToastModel { Title = "Certificate restored", Content = $"{row.CertNo} was restored.", CssClass = "e-toast-success" });
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate restored", Content = $"{row.CertNo} was restored.", CssClass = "enterprise-toast-success" });
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Restore failed", Content = $"Restore failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Restore failed", Content = $"Restore failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
     }
 
@@ -670,16 +875,18 @@
             _showDeleteConfirm = false;
             _deleteTarget = null;
             await LoadCertificatesAsync();
-            await _toast.ShowAsync(new ToastModel { Title = "Certificate deleted", Content = $"{certNo} was removed from the register.", CssClass = "e-toast-success" });
+            await _toast.ShowAsync(new ToastModel { Title = "Certificate deleted", Content = $"{certNo} was removed from the register.", CssClass = "enterprise-toast-success" });
         }
         catch (Exception ex)
         {
-            await _toast.ShowAsync(new ToastModel { Title = "Delete failed", Content = $"Delete failed: {ex.Message}", CssClass = "e-toast-danger" });
+            await _toast.ShowAsync(new ToastModel { Title = "Delete failed", Content = $"Delete failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
         }
     }
 
     private static bool IsRevoked(CertRow row) => row.Status == "Revoked";
     private static bool Contains(string? value, string term) => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true;
+    private static string Csv(string? value) => string.Concat("\"", (value ?? string.Empty).Replace("\"", "\"\""), "\"");
+    private static string NormalizeTemplateCode(string value) => new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
     private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-");
     private static string ExpiryClass(CertRow row) => row.ExpDate < DateTime.Today ? "ch-exp-past" : row.IsExpiring ? "ch-exp-soon" : string.Empty;
 
@@ -687,14 +894,16 @@
 
     private sealed class IssueForm
     {
-        public string PolicyNo { get; set; } = "POL-2024-44821";
+        public string PolicyNo { get; set; } = string.Empty;
         public string Account { get; set; } = string.Empty;
-        public string CertType { get; set; } = "ACORD 25";
-        public string Lob { get; set; } = "General Liability";
+        public string CertType { get; set; } = string.Empty;
+        public string Lob { get; set; } = string.Empty;
+        public Guid? CertificateHolderId { get; set; }
         public string HolderName { get; set; } = string.Empty;
         public string HolderAddress { get; set; } = string.Empty;
         public bool AdditionalInsured { get; set; }
         public bool WaiverSubrogation { get; set; }
+        public bool PrimaryNonContributory { get; set; }
         public DateTime IssuedDate { get; set; } = DateTime.Today;
         public DateTime ExpDate { get; set; } = DateTime.Today.AddYears(1);
         public string Description { get; set; } = string.Empty;
@@ -702,10 +911,11 @@
 
     private sealed class CertRow
     {
-        public CertRow(Guid certificateId, Guid? policyId, string certNo, string policyNo, string account, string holderName, string holderAddress, string certType, DateTime issuedDate, DateTime expDate, string lob, string issuedBy, string status, bool additionalInsured, bool waiverSubrogation, string description)
+        public CertRow(Guid certificateId, Guid? policyId, Guid? certificateHolderId, string certNo, string policyNo, string account, string holderName, string holderAddress, string certType, DateTime issuedDate, DateTime expDate, string lob, string issuedBy, string status, bool additionalInsured, bool waiverSubrogation, bool primaryNonContributory, string description)
         {
             CertificateId = certificateId;
             PolicyId = policyId;
+            CertificateHolderId = certificateHolderId;
             CertNo = certNo;
             PolicyNo = policyNo;
             Account = account;
@@ -719,12 +929,14 @@
             Status = status;
             AdditionalInsured = additionalInsured;
             WaiverSubrogation = waiverSubrogation;
+            PrimaryNonContributory = primaryNonContributory;
             Description = description;
         }
 
         public static CertRow FromDto(PolicyCertificateDto dto) => new(
             dto.CertificateId,
             dto.PolicyId,
+            dto.CertificateHolderId,
             dto.CertificateNumber,
             dto.PolicyNumber,
             dto.AccountName,
@@ -738,10 +950,12 @@
             dto.Status,
             dto.AdditionalInsured,
             dto.WaiverSubrogation,
+            dto.PrimaryNonContributory,
             dto.Description);
 
         public Guid CertificateId { get; set; }
         public Guid? PolicyId { get; set; }
+        public Guid? CertificateHolderId { get; set; }
         public string CertNo { get; set; }
         public string PolicyNo { get; set; }
         public string Account { get; set; }
@@ -755,6 +969,7 @@
         public string Status { get; set; }
         public bool AdditionalInsured { get; set; }
         public bool WaiverSubrogation { get; set; }
+        public bool PrimaryNonContributory { get; set; }
         public string Description { get; set; }
         public bool IsExpiring => Status == "Issued" && ExpDate >= DateTime.Today && ExpDate <= DateTime.Today.AddDays(30);
     }

@@ -8,10 +8,10 @@ public class CreateLeadContactRequest
     public Guid TenantId { get; set; }
     public Guid LeadId { get; set; }
 
-    [Required, StringLength(150)]
+    [AmsRequiredString(ErrorMessage = "First name is required."), StringLength(150)]
     public string FirstName { get; set; } = string.Empty;
 
-    [Required, StringLength(150)]
+    [AmsRequiredString(ErrorMessage = "Last name is required."), StringLength(150)]
     public string LastName { get; set; } = string.Empty;
 
     [StringLength(200)]
@@ -176,6 +176,6 @@ public class CreateLeadDocumentRequest
 
 public sealed class UpdateLeadDocumentRequest : CreateLeadDocumentRequest
 {
-    public Guid DocumentId { get; set; }
+    public new Guid DocumentId { get; set; }
     public Guid? ModifiedByUserId { get; set; }
 }

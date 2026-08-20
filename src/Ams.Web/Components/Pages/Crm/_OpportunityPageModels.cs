@@ -5,9 +5,8 @@ namespace Ams.Web.Components.Pages.Crm;
 
 internal static class OpportunityPageConstants
 {
-    public static readonly Guid TenantId = Guid.Parse("00000000-0000-0000-0000-000000000001");
-    public static readonly string[] Stages = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
-    public static readonly string[] ForecastCategories = ["Pipeline", "Best Case", "Commit", "Closed"];
+    public const string DefaultStageName = "Qualification";
+    public const string DefaultForecastCategory = "Pipeline";
 
     public static string StageName(int statusCode) => statusCode switch
     {
@@ -17,7 +16,7 @@ internal static class OpportunityPageConstants
         4 => "Negotiation",
         5 => "Closed Won",
         6 => "Closed Lost",
-        _ => "Qualification"
+        _ => DefaultStageName
     };
 
     public static int StageCode(string stage) => stage switch
@@ -61,6 +60,40 @@ internal static class OpportunityPageConstants
         _ => "um-badge um-badge-warning"
     };
 
+    public static IReadOnlyList<string> ActiveStageNames(IEnumerable<OpportunityStageDto> stages)
+    {
+        return stages
+            .Where(s => s.IsActive && !string.IsNullOrWhiteSpace(s.StageName))
+            .OrderBy(s => s.SortOrder)
+            .ThenBy(s => s.StageName)
+            .Select(s => s.StageName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public static IReadOnlyList<string> ForecastCategoryNames(IEnumerable<OpportunityForecastCategoryDto> categories)
+    {
+        return categories
+            .Where(c => c.IsActive && !string.IsNullOrWhiteSpace(c.CategoryName))
+            .OrderBy(c => c.SortOrder)
+            .ThenBy(c => c.CategoryName)
+            .Select(c => c.CategoryName.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    public static string NormalizeForecast(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return DefaultForecastCategory;
+        }
+
+        return value.Trim().Equals("Closed Won", StringComparison.OrdinalIgnoreCase) || value.Trim().Equals("Closed Lost", StringComparison.OrdinalIgnoreCase)
+            ? "Closed"
+            : value.Trim();
+    }
+
     public static string Initials(string name)
     {
         var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -70,9 +103,8 @@ internal static class OpportunityPageConstants
 
 internal sealed class OpportunityFormModel
 {
-    [Required(ErrorMessage = "Opportunity Number is required.")]
     [StringLength(50, ErrorMessage = "Opportunity Number cannot exceed 50 characters.")]
-    public string OpportunityNumber { get; set; } = $"OPP-{DateTime.UtcNow:yyyyMMddHHmmss}";
+    public string OpportunityNumber { get; set; } = string.Empty;
 
     [Required(ErrorMessage = "Account is required.")]
     public Guid? AccountId { get; set; }
@@ -87,11 +119,11 @@ internal sealed class OpportunityFormModel
     [Range(0, 100, ErrorMessage = "Win Probability must be between 0 and 100.")]
     public decimal WinProbability { get; set; } = 50;
 
-    public DateTime? CloseDate { get; set; } = DateTime.UtcNow.AddMonths(1);
+    public DateTime? CloseDate { get; set; }
 
     [Required(ErrorMessage = "Forecast Category is required.")]
     [StringLength(50, ErrorMessage = "Forecast Category cannot exceed 50 characters.")]
-    public string ForecastCategoryCode { get; set; } = "Pipeline";
+    public string ForecastCategoryCode { get; set; } = OpportunityPageConstants.DefaultForecastCategory;
 
     public Guid? OwnerUserId { get; set; }
     public Guid? LeadId { get; set; }
@@ -104,6 +136,6 @@ internal static class OpportunityPageData
     public static OpportunityRow FromDto(OpportunityDto dto)
     {
         var stage = OpportunityPageConstants.StageName(dto.StatusCode);
-        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountId, dto.AccountName ?? string.Empty, dto.EstimatedAmount, dto.EstimatedAmount * dto.WinProbability / 100m, stage, dto.WinProbability, dto.ForecastCategoryCode ?? "Pipeline", dto.CloseDate, dto.OwnerUserId);
+        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountId, dto.AccountName ?? string.Empty, dto.EstimatedAmount, dto.EstimatedAmount * dto.WinProbability / 100m, stage, dto.WinProbability, OpportunityPageConstants.NormalizeForecast(dto.ForecastCategoryCode), dto.CloseDate, dto.OwnerUserId);
     }
 }

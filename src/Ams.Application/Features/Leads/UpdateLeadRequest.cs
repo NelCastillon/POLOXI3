@@ -8,6 +8,8 @@ public sealed class UpdateLeadRequest
     public Guid LeadId { get; set; }
     [StringLength(200)]
     public string? AccountName { get; set; }
+    [StringLength(50)]
+    public string? LeadTypeCode { get; set; }
     [StringLength(100)]
     public string? FirstName { get; set; }
     [StringLength(100)]

@@ -223,8 +223,8 @@ else
                         <label class="udd-field"><span>Full Name <em>*</em></span><InputText @bind-Value="_editForm.FullName" class="form-control" /></label>
                         <label class="udd-field"><span>Display Name</span><InputText @bind-Value="_editForm.DisplayName" class="form-control" /></label>
                         <label class="udd-field"><span>Phone Number</span><InputText @bind-Value="_editForm.PhoneNumber" @bind-Value:after="OnPhoneChanged" class="form-control" type="tel" placeholder="(555) 123-4567" />@if (!string.IsNullOrWhiteSpace(_editForm.PhoneNumber)) { <span class="@PhoneHintClass">@PhoneStatusText</span> }</label>
-                        <label class="udd-field"><span>Job Title</span><InputText @bind-Value="_editForm.JobTitle" class="form-control" /></label>
-                        <label class="udd-field"><span>Department</span><InputText @bind-Value="_editForm.Department" class="form-control" /></label>
+                        <label class="udd-field"><span>Department</span><InputSelect @bind-Value="_editForm.DepartmentId" @bind-Value:after="OnDepartmentChangedAsync" class="form-select"><option value="">Select department...</option>@foreach (var department in _departments) { <option value="@department.DepartmentId">@department.DepartmentName</option> }</InputSelect></label>
+                        <label class="udd-field"><span>Job Title</span><InputSelect @bind-Value="_editForm.JobTitleId" class="form-select" disabled="@(!_editForm.DepartmentId.HasValue)"><option value="">@(_editForm.DepartmentId.HasValue ? "Select job title..." : "Select department first...")</option>@foreach (var group in _jobTitles.GroupBy(title => title.CategoryCode)) { <optgroup label="@JobTitleCategory(group.Key)">@foreach (var title in group) { <option value="@title.JobTitleId">@title.JobTitleName</option> }</optgroup> }</InputSelect></label>
                         <label class="udd-field"><span>Time Zone</span><InputSelect @bind-Value="_editForm.TimeZoneCode" class="form-select"><option value="">Select time zone...</option>@foreach (var tz in _tzOptions) { <option value="@tz">@tz</option> }</InputSelect></label>
                         <label class="udd-field"><span>Locale</span><InputSelect @bind-Value="_editForm.LocaleCode" class="form-select"><option value="">Select locale...</option>@foreach (var locale in _localeOptions) { <option value="@locale">@locale</option> }</InputSelect></label>
                     </div>
@@ -279,6 +279,8 @@ else
     private List<AcknowledgementDetailDto> _acknowledgements = [];
     private List<RoleDto> _pickRoles = [];
     private List<PermissionDto> _pickPermissions = [];
+    private List<DepartmentDto> _departments = [];
+    private List<JobTitleDto> _jobTitles = [];
     private readonly HashSet<Guid> _selectedPermissionIds = [];
     private readonly List<ToastMessage> _toasts = [];
 
@@ -333,6 +335,7 @@ else
         _tenantId = context.TenantId;
         _currentUserId = context.UserId;
         _editContext = new(_editForm);
+        _departments = (await Api.GetDepartmentsAsync(_tenantId))?.Where(department => department.IsActive).OrderBy(department => department.DepartmentName).ToList() ?? [];
     }
 
     protected override async Task OnParametersSetAsync() => await LoadUserAsync();
@@ -414,15 +417,35 @@ else
         }
     }
 
-    private void OpenEdit()
+    private async Task OpenEdit()
     {
         if (_user is null) return;
-        _editForm = new EditUserForm { FullName = _user.FullName, DisplayName = _user.DisplayName, PhoneNumber = _user.PhoneNumber, JobTitle = _user.JobTitle, Department = _user.Department, TimeZoneCode = _user.TimeZoneCode, LocaleCode = _user.LocaleCode };
+        _editForm = new EditUserForm { FullName = _user.FullName, DisplayName = _user.DisplayName, PhoneNumber = _user.PhoneNumber, JobTitleId = _user.JobTitleId, DepartmentId = _user.DepartmentId, TimeZoneCode = _user.TimeZoneCode, LocaleCode = _user.LocaleCode };
+        await LoadEligibleJobTitlesAsync(preserveSelection: true);
         _editContext = new(_editForm);
         _formError = string.Empty;
         _showEdit = true;
     }
     private void CloseEdit() => _showEdit = false;
+
+    private async Task OnDepartmentChangedAsync() => await LoadEligibleJobTitlesAsync(preserveSelection: false);
+
+    private async Task LoadEligibleJobTitlesAsync(bool preserveSelection)
+    {
+        var selectedJobTitleId = preserveSelection ? _editForm.JobTitleId : null;
+        _jobTitles = _editForm.DepartmentId.HasValue
+            ? (await Api.GetJobTitlesAsync(_tenantId, _editForm.DepartmentId))?.ToList() ?? []
+            : [];
+        _editForm.JobTitleId = selectedJobTitleId.HasValue && _jobTitles.Any(title => title.JobTitleId == selectedJobTitleId) ? selectedJobTitleId : null;
+    }
+
+    private static string JobTitleCategory(string category) => category switch
+    {
+        "AccountManagement" => "Account Management",
+        "HumanResources" => "Human Resources",
+        "RiskManagement" => "Risk Management",
+        _ => category
+    };
 
     private async Task SaveEditAsync()
     {
@@ -431,7 +454,7 @@ else
         _formError = string.Empty;
         try
         {
-            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest { UserId = _user.UserId, FullName = _editForm.FullName.Trim(), DisplayName = _editForm.DisplayName?.Trim(), PhoneNumber = _editForm.PhoneNumber?.Trim(), JobTitle = _editForm.JobTitle?.Trim(), Department = _editForm.Department?.Trim(), TimeZoneCode = _editForm.TimeZoneCode, LocaleCode = _editForm.LocaleCode, ModifiedByUserId = _currentUserId });
+            await Api.UpdateUserAsync(_user.UserId, new UpdateUserRequest { UserId = _user.UserId, FullName = _editForm.FullName.Trim(), DisplayName = _editForm.DisplayName?.Trim(), PhoneNumber = _editForm.PhoneNumber?.Trim(), JobTitleId = _editForm.JobTitleId, DepartmentId = _editForm.DepartmentId, TimeZoneCode = _editForm.TimeZoneCode, LocaleCode = _editForm.LocaleCode, ModifiedByUserId = _currentUserId });
             _showEdit = false;
             ShowToast("User profile updated.", "udd-toast--success");
             await LoadUserAsync();
@@ -567,7 +590,7 @@ else
     private static string RiskTone(UserDto? user) => RiskLevel(user) switch { "Critical" => "red", "High" => "amber", "Medium" => "cyan", _ => "green" };
     private static bool IsPhoneValid(string? value) { if (string.IsNullOrWhiteSpace(value)) return true; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10; }
     private static string? NormalizePhone(string? value) { if (string.IsNullOrWhiteSpace(value)) return null; var digits = new string(value.Where(char.IsDigit).ToArray()); if (digits.Length == 11 && digits[0] == '1') digits = digits[1..]; return digits.Length == 10 ? $"({digits[..3]}) {digits.Substring(3, 3)}-{digits[6..]}" : value.Trim(); }
-    private static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string Safe(string? value, string? fallback) => string.IsNullOrWhiteSpace(value) ? fallback ?? string.Empty : value;
     private static bool Contains(string value, string term) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
     private static string Initials(string? name) => string.IsNullOrWhiteSpace(name) ? "?" : string.Concat(name.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(w => char.ToUpperInvariant(w[0])));
     private static readonly string[] _avatarColors = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#6366f1", "#ec4899"];
@@ -581,7 +604,7 @@ else
     private RenderFragment StatusPill(UserDto user) => @<span class="udd-pill @(user.IsLockedOut ? "udd-pill--amber" : IsActive(user) ? "udd-pill--green" : "udd-pill--neutral")"><i class="bi @(user.IsLockedOut ? "bi-lock-fill" : IsActive(user) ? "bi-check-circle" : "bi-dash-circle")" aria-hidden="true"></i>@(user.IsLockedOut ? "Locked" : user.StatusCode)</span>;
     private RenderFragment EmptyState(string icon, string title, string description) => @<div class="udd-empty"><i class="bi @icon" aria-hidden="true"></i><strong>@title</strong><span>@description</span></div>;
 
-    private sealed class EditUserForm { [Required] [StringLength(200)] public string FullName { get; set; } = string.Empty; [StringLength(200)] public string? DisplayName { get; set; } [AmsPhone] [StringLength(50)] public string? PhoneNumber { get; set; } [StringLength(100)] public string? JobTitle { get; set; } [StringLength(100)] public string? Department { get; set; } public string? TimeZoneCode { get; set; } public string? LocaleCode { get; set; } }
+    private sealed class EditUserForm { [Required] [StringLength(200)] public string FullName { get; set; } = string.Empty; [StringLength(200)] public string? DisplayName { get; set; } [AmsPhone] [StringLength(50)] public string? PhoneNumber { get; set; } public Guid? JobTitleId { get; set; } public Guid? DepartmentId { get; set; } public string? TimeZoneCode { get; set; } public string? LocaleCode { get; set; } }
     private sealed class ScopeForm { [Required] public string ScopeTypeCode { get; set; } = string.Empty; [Required] public string ScopeValue { get; set; } = string.Empty; }
     private sealed record TabDef(string Key, string Label, string Icon);
     private sealed record InsightDef(string Title, string Description, string Icon);

@@ -23,6 +23,27 @@ public sealed class DocumentRepository : IDocumentRepository
         return await cn.QuerySingleOrDefaultAsync<DocumentDto>(new CommandDefinition(sql, new { Id = id }, cancellationToken: cancellationToken));
     }
 
+    public async Task<DocumentDto?> GetPolicyDocumentAsync(Guid tenantId, Guid policyId, Guid documentId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+SELECT document.DocumentId, document.TenantId, document.DocumentTypeCode, document.CategoryCode,
+       document.EntityName, document.EntityId, document.FileName, document.StoragePath, document.ContentType,
+       document.FileSizeBytes, document.VersionNumber, document.StatusCode, document.RetentionDate,
+       document.Description, document.Tags, document.UploadedByName, document.CreatedDateUtc, document.ModifiedDateUtc
+FROM DMS.Document document
+INNER JOIN Submissions.BoundPolicy policy
+    ON policy.TenantId = document.TenantId
+   AND policy.PolicyId = document.EntityId
+   AND policy.IsDeleted = 0
+WHERE document.TenantId = @TenantId
+  AND policy.PolicyId = @PolicyId
+  AND document.DocumentId = @DocumentId
+  AND document.EntityName = N'Policy'
+  AND document.IsDeleted = 0;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await cn.QuerySingleOrDefaultAsync<DocumentDto>(new CommandDefinition(sql, new { TenantId = tenantId, PolicyId = policyId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<PagedResult<DocumentDto>> SearchAsync(Guid tenantId, string? categoryCode, string? entityName, Guid? entityId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
     {
         var sql = $@"
@@ -71,6 +92,22 @@ WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         await cn.ExecuteAsync(new CommandDefinition(sql, new { request.DocumentId, request.Description, request.Tags, request.RetentionDate, request.ModifiedByUserId }, cancellationToken: cancellationToken));
     }
 
+    public async Task LinkToEntityAsync(Guid tenantId, Guid documentId, string entityName, Guid entityId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+    {
+        const string sql = @"
+UPDATE DMS.Document
+SET EntityName = @EntityName,
+    EntityId = @EntityId,
+    ModifiedDateUtc = SYSUTCDATETIME(),
+    ModifiedByUserId = @ModifiedByUserId
+WHERE TenantId = @TenantId
+  AND DocumentId = @DocumentId
+  AND IsDeleted = 0;
+IF @@ROWCOUNT = 0 THROW 51000, N'Document was not found for the current tenant.', 1;";
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, DocumentId = documentId, EntityName = entityName, EntityId = entityId, ModifiedByUserId = modifiedByUserId }, cancellationToken: cancellationToken));
+    }
+
     public async Task ArchiveAsync(Guid documentId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
     {
         const string sql = "UPDATE DMS.Document SET StatusCode = 'Archived', ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ModifiedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
@@ -90,21 +127,71 @@ WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
         return rows.AsList();
     }
 
+    public async Task<DocumentVersionDto?> GetVersionAsync(Guid documentId, Guid documentVersionId, CancellationToken cancellationToken = default)
+    {
+        using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return null;
+
+        const string sql = "SELECT DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc FROM DMS.DocumentVersion WHERE DocumentVersionId = @DocumentVersionId AND DocumentId = @DocumentId AND IsDeleted = 0;";
+        return await cn.QuerySingleOrDefaultAsync<DocumentVersionDto>(new CommandDefinition(sql, new { DocumentVersionId = documentVersionId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
     public async Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default)
     {
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken)) return Guid.Empty;
+        if (!await TableExistsAsync(cn, DocumentVersionTable, cancellationToken))
+            throw new InvalidOperationException("Document version storage is not available.");
 
         const string sql = @"
+DECLARE @CurrentVersion INT;
 DECLARE @NextVersion INT;
-SELECT @NextVersion = ISNULL(MAX(VersionNumber), 0) + 1 FROM DMS.DocumentVersion WHERE DocumentId = @DocumentId AND IsDeleted = 0;
+
+SELECT @CurrentVersion = VersionNumber
+FROM DMS.Document WITH (UPDLOCK, HOLDLOCK)
+WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;
+
+IF @CurrentVersion IS NULL
+    THROW 51000, 'The document was not found for the specified tenant.', 1;
+
+IF NOT EXISTS (
+    SELECT 1 FROM DMS.DocumentVersion
+    WHERE DocumentId = @DocumentId AND VersionNumber = @CurrentVersion AND IsDeleted = 0
+)
+BEGIN
+    INSERT INTO DMS.DocumentVersion (DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes,
+           N'Original version preserved when version control was enabled', CreatedByUserId, CreatedDateUtc, 0
+    FROM DMS.Document
+    WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;
+END;
+
+SELECT @NextVersion = CASE
+    WHEN ISNULL(MAX(VersionNumber), 0) >= @CurrentVersion THEN ISNULL(MAX(VersionNumber), 0) + 1
+    ELSE @CurrentVersion + 1
+END
+FROM DMS.DocumentVersion
+WHERE DocumentId = @DocumentId AND IsDeleted = 0;
 
 INSERT INTO DMS.DocumentVersion (DocumentVersionId, TenantId, DocumentId, VersionNumber, FileName, StoragePath, ContentType, FileSizeBytes, ChangeNotes, CreatedByUserId, CreatedDateUtc, IsDeleted)
 VALUES (@DocumentVersionId, @TenantId, @DocumentId, @NextVersion, @FileName, @StoragePath, @ContentType, @FileSizeBytes, @ChangeNotes, @CreatedByUserId, SYSUTCDATETIME(), 0);
 
-UPDATE DMS.Document SET VersionNumber = @NextVersion, FileName = @FileName, StoragePath = @StoragePath, ContentType = @ContentType, FileSizeBytes = @FileSizeBytes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId WHERE DocumentId = @DocumentId AND IsDeleted = 0;";
+UPDATE DMS.Document
+SET VersionNumber = @NextVersion, FileName = @FileName, StoragePath = @StoragePath, ContentType = @ContentType,
+    FileSizeBytes = @FileSizeBytes, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @CreatedByUserId
+WHERE DocumentId = @DocumentId AND TenantId = @TenantId AND IsDeleted = 0;";
         var id = Guid.NewGuid();
-        await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentVersionId = id, request.TenantId, request.DocumentId, request.FileName, request.StoragePath, request.ContentType, request.FileSizeBytes, request.ChangeNotes, request.CreatedByUserId }, cancellationToken: cancellationToken));
+        using var transaction = cn.BeginTransaction();
+        try
+        {
+            await cn.ExecuteAsync(new CommandDefinition(sql, new { DocumentVersionId = id, request.TenantId, request.DocumentId, request.FileName, request.StoragePath, request.ContentType, request.FileSizeBytes, request.ChangeNotes, request.CreatedByUserId }, transaction, cancellationToken: cancellationToken));
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+
         return id;
     }
 
@@ -151,7 +238,27 @@ VALUES (@ShareLinkId, @TenantId, @DocumentId, @Token, @CreatedByUserId, @Expires
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         if (!await TableExistsAsync(cn, DocumentAccessLogTable, cancellationToken)) return [];
 
-        const string sql = "SELECT TOP(@Top) AccessLogId, TenantId, DocumentId, UserId, ShareLinkId, ActionCode, IpAddress, AccessDateUtc FROM DMS.DocumentAccessLog WHERE DocumentId = @DocumentId ORDER BY AccessDateUtc DESC;";
+        const string sql = @"
+SELECT TOP(@Top)
+    log.AccessLogId,
+    log.TenantId,
+    COALESCE(NULLIF(tenant.TenantName, N''), N'Unknown tenant') AS TenantName,
+    log.DocumentId,
+    log.UserId,
+    CASE
+        WHEN log.UserId IS NULL AND log.ShareLinkId IS NOT NULL THEN N'Secure share recipient'
+        WHEN log.UserId IS NULL THEN N'System'
+        ELSE COALESCE(NULLIF([user].DisplayName, N''), NULLIF([user].FullName, N''), NULLIF([user].UserName, N''), NULLIF([user].Email, N''), N'Former user')
+    END AS UserName,
+    log.ShareLinkId,
+    log.ActionCode,
+    log.IpAddress,
+    log.AccessDateUtc
+FROM DMS.DocumentAccessLog log
+LEFT JOIN Core.Tenant tenant ON tenant.TenantId = log.TenantId
+LEFT JOIN IAM.[User] [user] ON [user].UserId = log.UserId AND [user].TenantId = log.TenantId
+WHERE log.DocumentId = @DocumentId
+ORDER BY log.AccessDateUtc DESC;";
         var rows = await cn.QueryAsync<DocumentAccessLogDto>(new CommandDefinition(sql, new { DocumentId = documentId, Top = top }, cancellationToken: cancellationToken));
         return rows.AsList();
     }

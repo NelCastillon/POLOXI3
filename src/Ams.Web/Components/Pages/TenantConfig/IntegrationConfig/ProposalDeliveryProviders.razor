@@ -1,0 +1,301 @@
+@page "/tenant/integrations/proposal-delivery"
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Proposal Delivery Providers - AMS</PageTitle>
+<AppPageHeader Title="Proposal Delivery Providers" Subtitle="Configure tenant-specific email, portal, e-signature, and in-person proposal delivery." Icon="bi bi-send-check">
+    <Actions>@if (!string.IsNullOrWhiteSpace(ReturnUrl)) { <button class="um-btn um-btn-ghost" @onclick="ReturnToProposal"><i class="bi bi-arrow-left"></i> Back to Proposal</button> }<button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button></Actions>
+</AppPageHeader>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
+
+@if (_loading)
+{
+    <div class="um-loading"><div class="um-spinner"></div><span>Loading proposal delivery providers...</span></div>
+}
+else if (_loadError is not null)
+{
+    <div class="alert alert-danger pdp-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_loadError</span></div>
+}
+else
+{
+    <div class="pdp-page">
+        <section class="pdp-hero">
+            <div class="pdp-hero-main">
+                <span class="pdp-hero-icon"><i class="bi bi-send-check"></i></span>
+                <div>
+                    <span class="pdp-eyebrow"><i class="bi bi-cloud-check"></i> Azure-ready delivery setup</span>
+                    <h2>Proposal delivery command center</h2>
+                    <p>Configure tenant-specific proposal delivery providers, keep credentials in local development user-secrets or Azure app settings, and give the worker service the database-backed settings it needs to deliver proposals reliably.</p>
+                    <div class="pdp-hero-chips"><span><i class="bi bi-database-check"></i> Database-backed</span><span><i class="bi bi-shield-lock"></i> Local or Azure secret reference</span><span><i class="bi bi-arrow-repeat"></i> Worker retry policy</span></div>
+                </div>
+            </div>
+            <div class="pdp-hero-actions">
+                <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/proposal-deliveries")'><i class="bi bi-activity"></i> Monitor Deliveries</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="OpenEmailProvider"><i class="bi bi-envelope-at"></i> Configure Email</button>
+            </div>
+        </section>
+
+        <section class="pdp-kpis" aria-label="Proposal delivery provider summary">
+            <article><i class="bi bi-stack"></i><span>Providers</span><strong>@_providers.Count</strong><small>Total delivery methods</small></article>
+            <article><i class="bi bi-check-circle"></i><span>Configured</span><strong>@_providers.Count(x => x.IsConfigured)</strong><small>Ready for dispatch</small></article>
+            <article><i class="bi bi-exclamation-triangle"></i><span>Required</span><strong>@_providers.Count(x => !x.IsConfigured)</strong><small>Need settings</small></article>
+        </section>
+
+        <section class="pdp-email-blueprint">
+            <div>
+                <span class="pdp-eyebrow"><i class="bi bi-envelope-at"></i> Email delivery blueprint</span>
+                <h3>NetworkSolutions SMTP for local or Azure-hosted AMS</h3>
+                <p>Use <strong>ams_admin@agencybinder.com</strong> as the sender. Store the mailbox password locally in Ams.Worker user-secrets or in Azure App Service configuration as <strong>AMS_PROPOSAL_SMTP_PASSWORD</strong>; the worker resolves that secret at delivery time.</p>
+            </div>
+            <div class="pdp-blueprint-steps">
+                <span><i class="bi bi-1-circle"></i><strong>Seed provider</strong><small>Email provider row contains endpoint, sender, and secret reference.</small></span>
+                <span><i class="bi bi-2-circle"></i><strong>Store secret</strong><small>Local user-secret or Azure setting holds the NetworkSolutions mailbox password.</small></span>
+                <span><i class="bi bi-3-circle"></i><strong>Deliver proposal</strong><small>Worker processes queued dispatches and updates delivery status.</small></span>
+            </div>
+        </section>
+
+        <div class="pdp-provider-grid">
+        @foreach (var provider in _providers)
+        {
+            <div class="um-card pdp-provider-card @(string.Equals(provider.DeliveryMethodCode, DeliveryMethodCode, StringComparison.OrdinalIgnoreCase) ? "pdp-provider-card--selected" : null)">
+                    <div class="um-card-header">
+                        <div class="pdp-provider-title"><span class="pdp-provider-icon"><i class="bi @ProviderIcon(provider)"></i></span><div><h2>@provider.DisplayName</h2><p>@provider.DeliveryMethodCode · @provider.HandlerCode · @provider.ProviderCode</p></div></div>
+                        <span class="@(provider.IsConfigured ? "pdp-status pdp-status--ready" : "pdp-status pdp-status--required")">@(provider.IsConfigured ? "Configured" : "Configuration Required")</span>
+                    </div>
+                    <div class="um-card-body">
+                        @if (IsEmailProvider(provider))
+                        {
+                            <div class="pdp-provider-note"><i class="bi bi-info-circle"></i><span>NetworkSolutions mailbox: <strong>ams_admin@agencybinder.com</strong>. Password must be stored in Azure as <strong>AMS_PROPOSAL_SMTP_PASSWORD</strong>.</span></div>
+                        }
+                        <dl class="pdp-provider-facts">
+                            <div><dt>Endpoint</dt><dd>@(provider.EndpointUri ?? "Not configured")</dd></div>
+                            <div><dt>Sender</dt><dd>@(provider.SenderAddress ?? "Not configured")</dd></div>
+                            <div><dt>Secret reference</dt><dd>@(provider.SecretReference ?? "Not configured")</dd></div>
+                            <div><dt>Retry policy</dt><dd>@provider.MaxAttempts attempts · @provider.RetryDelaySeconds seconds</dd></div>
+                        </dl>
+                        <div class="pdp-card-actions"><button class="um-btn um-btn-primary" @onclick="() => OpenEdit(provider)"><i class="bi bi-gear"></i> Configure</button>@if (IsEmailProvider(provider)) { <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/proposal-deliveries")'><i class="bi bi-activity"></i> View Status</button> }</div>
+                    </div>
+                </div>
+        }
+        </div>
+    </div>
+}
+
+@if (_editing is not null)
+{
+    <div class="um-modal-backdrop pdp-modal-backdrop" role="presentation" @onclick="CloseEdit">
+    <div class="um-modal pdp-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+        <div class="um-modal-header"><i class="bi bi-send-check"></i><span>Configure @_editing.DisplayName</span><button class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseEdit"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_form" OnValidSubmit="SaveAsync"><DataAnnotationsValidator />
+            <div class="um-modal-body">
+                @if (!string.IsNullOrWhiteSpace(_saveError))
+                {
+                    <div class="alert alert-danger pdp-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_saveError</span></div>
+                }
+                @if (IsEmailProvider(_editing))
+                {
+                    <section class="pdp-setup-panel">
+                        <div>
+                            <span class="pdp-eyebrow"><i class="bi bi-envelope-at"></i> NetworkSolutions SMTP</span>
+                            <h3>Email delivery settings</h3>
+                            <p>Use the NetworkSolutions mailbox as the sender and keep the password in Ams.Worker user-secrets for local development or Azure application settings after deployment. The worker reads the password from the secret name configured in Secret reference.</p>
+                        </div>
+                        <div class="pdp-secure-callout"><i class="bi bi-shield-lock"></i><div><strong>Do not paste the mailbox password here.</strong><span>Only enter the secret name. Locally, store the value with user-secrets or an environment variable; in Azure, use App Service configuration.</span></div></div>
+                        <div class="pdp-setup-grid">
+                            <span><strong>Endpoint URI</strong><small>smtp://netsol-smtp-oxcs.hostingplatform.com:587</small></span>
+                            <span><strong>Sender</strong><small>ams_admin@agencybinder.com</small></span>
+                            <span><strong>Secret name</strong><small>AMS_PROPOSAL_SMTP_PASSWORD</small></span>
+                            <span><strong>JSON</strong><small>{"username":"ams_admin@agencybinder.com","enableSsl":"true"}</small></span>
+                        </div>
+                        <button type="button" class="um-btn um-btn-primary" @onclick="ApplyNetworkSolutionsDefaults"><i class="bi bi-magic"></i> Apply NetworkSolutions Defaults</button>
+                    </section>
+                }
+                <div class="um-form-grid">
+                <div class="um-field um-field--full"><label>Endpoint URI</label><InputText class="um-input" @bind-Value="_form.EndpointUri" /><ValidationMessage For="() => _form.EndpointUri" class="text-danger" /></div>
+                <div class="um-field"><label>Sender address</label><InputText class="um-input" @bind-Value="_form.SenderAddress" /><ValidationMessage For="() => _form.SenderAddress" class="text-danger" /></div>
+                <div class="um-field"><label>Secret reference</label><InputText class="um-input" @bind-Value="_form.SecretReference" /><small>Name of the Worker user-secret, appsetting, or environment variable containing the secret. For SMTP, use AMS_PROPOSAL_SMTP_PASSWORD.</small><ValidationMessage For="() => _form.SecretReference" class="text-danger" /></div>
+                <div class="um-field"><label>Maximum attempts</label><InputNumber class="um-input" @bind-Value="_form.MaxAttempts" /></div>
+                <div class="um-field"><label>Retry delay (seconds)</label><InputNumber class="um-input" @bind-Value="_form.RetryDelaySeconds" /></div>
+                <div class="um-field um-field--full"><label>Provider configuration JSON</label><InputTextArea class="um-input" rows="5" @bind-Value="_form.ConfigurationJson" /></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsConfigured" /> Configuration complete</label></div>
+                <div class="um-field um-field--checkbox"><label><InputCheckbox @bind-Value="_form.IsActive" /> Active</label></div>
+            </div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseEdit" disabled="@_saving">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> }<i class="bi bi-check2-circle"></i> Save Configuration</button></div>
+        </EditForm>
+    </div>
+    </div>
+}
+
+@code {
+    readonly List<ProposalDeliveryProviderDto> _providers = [];
+    CurrentUserContextModel? _currentUser;
+    ProposalDeliveryProviderDto? _editing;
+    ProviderForm _form = new();
+    EnterpriseToast? _toast;
+    bool _loading = true;
+    bool _saving;
+    bool _autoOpenApplied;
+    string? _loadError;
+    string? _saveError;
+
+    [SupplyParameterFromQuery(Name = "method")] public string? DeliveryMethodCode { get; set; }
+    [SupplyParameterFromQuery(Name = "returnUrl")] public string? ReturnUrl { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Integrations", "/tenant/integrations/health"), new("Proposal Delivery", "/tenant/integrations/proposal-delivery"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            _currentUser ??= await CurrentUser.RequireAsync();
+            _providers.Clear();
+            _providers.AddRange(await Api.GetProposalDeliveryProvidersAsync(_currentUser.TenantId) ?? []);
+            OpenRequestedProviderOnce();
+        }
+        catch (Exception ex) { _loadError = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    void OpenEdit(ProposalDeliveryProviderDto provider)
+    {
+        _editing = provider;
+        _saveError = null;
+        _form = new ProviderForm
+        {
+            EndpointUri = provider.EndpointUri,
+            SenderAddress = provider.SenderAddress,
+            SecretReference = provider.SecretReference,
+            ConfigurationJson = provider.ConfigurationJson,
+            IsConfigured = provider.IsConfigured,
+            IsActive = provider.IsActive,
+            MaxAttempts = provider.MaxAttempts,
+            RetryDelaySeconds = provider.RetryDelaySeconds
+        };
+    }
+
+    void CloseEdit()
+    {
+        _editing = null;
+        _saveError = null;
+    }
+
+    void OpenEmailProvider()
+    {
+        var provider = _providers.FirstOrDefault(IsEmailProvider);
+        if (provider is not null) OpenEdit(provider);
+    }
+
+    static bool IsEmailProvider(ProposalDeliveryProviderDto provider)
+        => string.Equals(provider.DeliveryMethodCode, "Email", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(provider.HandlerCode, "Smtp", StringComparison.OrdinalIgnoreCase);
+
+    static string ProviderIcon(ProposalDeliveryProviderDto provider) => provider.HandlerCode switch
+    {
+        "Smtp" => "bi-envelope-at",
+        "Portal" => "bi-window-sidebar",
+        "ESignature" => "bi-pen",
+        "Manual" => "bi-person-check",
+        _ => "bi-send-check"
+    };
+
+    void ApplyNetworkSolutionsDefaults()
+    {
+        _form.EndpointUri = "smtp://netsol-smtp-oxcs.hostingplatform.com:587";
+        _form.SenderAddress = "ams_admin@agencybinder.com";
+        _form.SecretReference = "AMS_PROPOSAL_SMTP_PASSWORD";
+        _form.ConfigurationJson = "{\"username\":\"ams_admin@agencybinder.com\",\"enableSsl\":\"true\"}";
+        _form.IsActive = true;
+        _form.IsConfigured = true;
+        _form.MaxAttempts = Math.Clamp(_form.MaxAttempts <= 0 ? 5 : _form.MaxAttempts, 1, 25);
+        _form.RetryDelaySeconds = Math.Clamp(_form.RetryDelaySeconds < 10 ? 300 : _form.RetryDelaySeconds, 10, 86400);
+        _saveError = null;
+    }
+
+    void OpenRequestedProviderOnce()
+    {
+        if (_autoOpenApplied || string.IsNullOrWhiteSpace(DeliveryMethodCode)) return;
+        var provider = _providers.FirstOrDefault(x => string.Equals(x.DeliveryMethodCode, DeliveryMethodCode, StringComparison.OrdinalIgnoreCase));
+        if (provider is not null)
+        {
+            _autoOpenApplied = true;
+            OpenEdit(provider);
+        }
+    }
+
+    void ReturnToProposal()
+    {
+        if (string.IsNullOrWhiteSpace(ReturnUrl)) return;
+        Nav.NavigateTo(ReturnUrl.StartsWith('/') ? ReturnUrl : $"/{ReturnUrl}");
+    }
+
+    async Task SaveAsync()
+    {
+        if (_editing is null || _currentUser is null) return;
+        _saveError = null;
+        if (IsEmailProvider(_editing)) NormalizeSmtpForm();
+        if (IsEmailProvider(_editing) && _form.IsConfigured && string.IsNullOrWhiteSpace(_form.SecretReference))
+        {
+            _saveError = "SMTP authentication requires Secret reference. Use AMS_PROPOSAL_SMTP_PASSWORD and add that key to Ams.Worker appsettings.Development.json, user-secrets, or a local environment variable.";
+            await _toast!.ShowAsync(new() { Title = "Secret reference required", Content = _saveError, CssClass = "enterprise-toast-danger" });
+            return;
+        }
+        try
+        {
+            _saving = true;
+            await Api.UpdateProposalDeliveryProviderAsync(_editing.ProposalDeliveryProviderId,
+                new(_currentUser.TenantId, _form.EndpointUri, _form.SenderAddress, _form.SecretReference,
+                    _form.ConfigurationJson, _form.IsConfigured, _form.IsActive, _form.MaxAttempts,
+                    _form.RetryDelaySeconds, _currentUser.UserId));
+            CloseEdit();
+            await LoadAsync();
+            await _toast!.ShowAsync(new() { Title = "Saved", Content = "Proposal delivery provider configuration updated.", CssClass = "enterprise-toast-success" });
+        }
+        catch (Exception ex)
+        {
+            _saveError = ex.Message;
+            await _toast!.ShowAsync(new() { Title = "Configuration failed", Content = $"Configuration failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
+        }
+        finally { _saving = false; }
+    }
+
+    void NormalizeSmtpForm()
+    {
+        _form.EndpointUri = NormalizeSmtpEndpoint(_form.EndpointUri);
+        _form.SecretReference = string.IsNullOrWhiteSpace(_form.SecretReference) ? "AMS_PROPOSAL_SMTP_PASSWORD" : _form.SecretReference.Trim();
+        _form.SenderAddress = _form.SenderAddress?.Trim();
+    }
+
+    static string? NormalizeSmtpEndpoint(string? endpointUri)
+    {
+        if (string.IsNullOrWhiteSpace(endpointUri)) return "smtp://netsol-smtp-oxcs.hostingplatform.com:587";
+
+        var normalized = endpointUri.Trim();
+        if (!normalized.Contains("://", StringComparison.Ordinal)) normalized = $"smtp://{normalized}";
+        if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) || !string.Equals(uri.Scheme, "smtp", StringComparison.OrdinalIgnoreCase)) return normalized;
+
+        return uri.IsDefaultPort ? $"smtp://{uri.Host}:587" : normalized;
+    }
+
+    sealed class ProviderForm
+    {
+        [StringLength(1000)] public string? EndpointUri { get; set; }
+        [EmailAddress, StringLength(320)] public string? SenderAddress { get; set; }
+        [StringLength(500)] public string? SecretReference { get; set; }
+        public string? ConfigurationJson { get; set; }
+        public bool IsConfigured { get; set; }
+        public bool IsActive { get; set; } = true;
+        [Range(1, 25)] public int MaxAttempts { get; set; } = 5;
+        [Range(10, 86400)] public int RetryDelaySeconds { get; set; } = 300;
+    }
+}

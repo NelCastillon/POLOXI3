@@ -201,7 +201,7 @@ AMS/
 
 - **Framework:** Blazor Server
 - **.NET Version:** 9
-- **UI Components:** Syncfusion Blazor
+- **UI Components:** enterprise native Blazor
 - **Styling:** Component-scoped CSS
 - **Icons:** Bootstrap Icons
 - **State Management:** Local component state

@@ -10,6 +10,19 @@ public sealed partial class ApiClient
     public Task<RenewalRetentionCenterDto?> GetRenewalRetentionCenterAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<RenewalRetentionCenterDto>($"api/renewal-retention/center?tenantId={tenantId}", cancellationToken);
 
+    public async Task<RenewalInitiationResultDto> InitiateEligibleRenewalsAsync(InitiateEligibleRenewalsRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/renewal-retention/initiate-eligible", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<RenewalInitiationResultDto>(cancellationToken: cancellationToken))!;
+    }
+
+    public async Task LaunchRenewalPlacementAsync(Guid retentionCaseId, LaunchRenewalPlacementRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/renewal-retention/cases/{retentionCaseId}/launch-placement", request, cancellationToken);
+        await EnsureSuccessWithDetailsAsync(response, cancellationToken);
+    }
+
     public Task<RenewalRetentionDetailDto?> GetRenewalRetentionDetailAsync(Guid retentionCaseId, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<RenewalRetentionDetailDto>($"api/renewal-retention/cases/{retentionCaseId}", cancellationToken);
 

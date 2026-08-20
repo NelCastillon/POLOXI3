@@ -1,0 +1,422 @@
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Microsoft.AspNetCore.Components.Forms
+@inject ApiClient Api
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@if (IsOpen)
+{
+    <div class="edu-backdrop" role="presentation" @onclick="CloseAsync">
+        <div class="edu-modal" role="dialog" aria-modal="true" aria-labelledby="edu-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header">
+                <i class="bi bi-cloud-arrow-up-fill" aria-hidden="true"></i>
+                <span id="edu-title">@Title</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseAsync" disabled="@_busy" aria-label="Close upload dialog">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+
+            <EditForm Model="_form" OnValidSubmit="UploadAsync">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="edu-intro">
+                        <span class="edu-intro-icon"><i class="bi bi-shield-check" aria-hidden="true"></i></span>
+                        <div>
+                            <strong>Enterprise document repository</strong>
+                            <span>@IntroText</span>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_loadError))
+                    {
+                        <div class="alert alert-danger edu-alert" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <span>@_loadError</span>
+                        </div>
+                    }
+
+                    <div @ref="_dropZone" class="edu-drop-zone @(_dragActive ? "edu-drop-zone--active" : string.Empty) @(_fileError is not null ? "edu-drop-zone--invalid" : string.Empty)"
+                         @ondragenter="ActivateDropZone"
+                         @ondragover="ActivateDropZone"
+                         @ondragleave="DeactivateDropZone"
+                         @ondrop="DeactivateDropZone"
+                         @ondragover:preventDefault="true">
+                        <InputFile @ref="_fileInput" class="edu-file-input" OnChange="SelectFile" accept="@Accept" />
+                        @if (_file is null)
+                        {
+                            <span class="edu-upload-icon"><i class="bi bi-cloud-arrow-up" aria-hidden="true"></i></span>
+                            <strong>Drag and drop a document here</strong>
+                            <span>or click to browse</span>
+                            <small>@AcceptedFileText · Maximum @FormatFileSize(MaxFileSizeBytes)</small>
+                        }
+                        else
+                        {
+                            <span class="edu-file-icon"><i class="bi @FileIcon(_file.Name)" aria-hidden="true"></i></span>
+                            <strong>@_file.Name</strong>
+                            <span>@FormatFileSize(_file.Size) · @(_file.ContentType ?? "application/octet-stream")</span>
+                            <small>Drop another file or click to replace</small>
+                        }
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_fileError))
+                    {
+                        <div class="text-danger edu-validation"><i class="bi bi-exclamation-circle" aria-hidden="true"></i>@_fileError</div>
+                    }
+
+                    <div class="um-form-grid edu-form-grid">
+                        <div class="um-field um-field--full">
+                            <label>Document Name <span class="text-danger">*</span></label>
+                            <InputText class="um-input" @bind-Value="_form.FileName" placeholder="Document file name" />
+                        </div>
+
+                        <div class="um-field">
+                            <label>Document Type <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_form.DocumentTypeCode" disabled="@_optionsLoading">
+                                <option value="">Select document type</option>
+                                @foreach (var type in _documentTypes)
+                                {
+                                    <option value="@type.Code">@type.Name</option>
+                                }
+                            </InputSelect>
+                        </div>
+
+                        <div class="um-field">
+                            <label>Category <span class="text-danger">*</span></label>
+                            <InputSelect class="um-input" @bind-Value="_form.CategoryCode" disabled="@_optionsLoading">
+                                <option value="">Select category</option>
+                                @foreach (var category in _categories)
+                                {
+                                    <option value="@category.Code">@category.Name</option>
+                                }
+                            </InputSelect>
+                        </div>
+
+                        @if (AllowEntityNameEntry)
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Linked Entity</label>
+                                <InputText class="um-input" @bind-Value="_form.EntityName" placeholder="Account, Policy, Claim, Submission..." />
+                                <ValidationMessage For="() => _form.EntityName" class="text-danger" />
+                            </div>
+                        }
+
+                        @if (ShowRetentionDate)
+                        {
+                            <div class="um-field">
+                                <label>Retention Date</label>
+                                <InputDate class="um-input" @bind-Value="_form.RetentionDate" />
+                                <ValidationMessage For="() => _form.RetentionDate" class="text-danger" />
+                            </div>
+                        }
+
+                        @if (ShowTags)
+                        {
+                            <div class="um-field @(ShowRetentionDate ? string.Empty : "um-field--full")">
+                                <label>Tags</label>
+                                <InputText class="um-input" @bind-Value="_form.Tags" placeholder="Comma-separated search tags" />
+                                <ValidationMessage For="() => _form.Tags" class="text-danger" />
+                            </div>
+                        }
+
+                        @if (ShowDescription)
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Description</label>
+                                <InputTextArea class="um-input" rows="3" @bind-Value="_form.Description" />
+                                <ValidationMessage For="() => _form.Description" class="text-danger" />
+                            </div>
+                        }
+
+                        <div class="um-field um-field--full edu-audit-row">
+                            <span><i class="bi bi-link-45deg" aria-hidden="true"></i> Linked to <strong>@EntityDisplayName</strong></span>
+                            <span><i class="bi bi-person-check" aria-hidden="true"></i> Uploaded by <strong>@UploadedByDisplayName</strong></span>
+                            <span><i class="bi bi-hdd-network" aria-hidden="true"></i> Stored in the configured document repository</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseAsync" disabled="@_busy">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@(_busy || _optionsLoading)">
+                        @if (_busy)
+                        {
+                            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                            <span>Uploading…</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i>
+                            <span>Upload Document</span>
+                        }
+                    </button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@code {
+    private IBrowserFile? _file;
+    private UploadForm _form = new();
+    private List<DocumentConfigItemDto> _categories = [];
+    private List<DocumentConfigItemDto> _documentTypes = [];
+    private bool _busy;
+    private bool _optionsLoading;
+    private bool _dragActive;
+    private string? _fileError;
+    private string? _loadError;
+    private string? _resolvedUploadedByName;
+    private bool _wasOpen;
+    private bool _dropZoneInitialized;
+    private ElementReference _dropZone;
+    private InputFile? _fileInput;
+    private IJSObjectReference? _dropModule;
+
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+    [Parameter] public Guid? CreatedByUserId { get; set; }
+    [Parameter] public string? UploadedByName { get; set; }
+    [Parameter] public string? EntityName { get; set; }
+    [Parameter] public Guid? EntityId { get; set; }
+    [Parameter] public string Title { get; set; } = "Upload Document";
+    [Parameter] public string IntroText { get; set; } = "Upload, classify, retain, and audit a document through the governed document workflow.";
+    [Parameter] public string Accept { get; set; } = ".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.tif,.tiff";
+    [Parameter] public string AcceptedFileText { get; set; } = "PDF, Word, Excel, CSV, PNG, JPG, or TIFF";
+    [Parameter] public long MaxFileSizeBytes { get; set; } = 104_857_600;
+    [Parameter] public string? DefaultDocumentTypeCode { get; set; }
+    [Parameter] public string? DefaultCategoryCode { get; set; }
+    [Parameter] public string? DefaultDescription { get; set; }
+    [Parameter] public string? DefaultTags { get; set; }
+    [Parameter] public DateOnly? DefaultRetentionDate { get; set; }
+    [Parameter] public bool ShowDescription { get; set; } = true;
+    [Parameter] public bool ShowTags { get; set; } = true;
+    [Parameter] public bool ShowRetentionDate { get; set; } = true;
+    [Parameter] public bool AllowEntityNameEntry { get; set; }
+    [Parameter] public EventCallback<Guid> OnUploaded { get; set; }
+    [Parameter] public EventCallback<string> OnUploadFailed { get; set; }
+
+    private string EntityDisplayName => string.IsNullOrWhiteSpace(EntityName) ? "Document repository" : EntityName;
+    private string UploadedByDisplayName => string.IsNullOrWhiteSpace(_resolvedUploadedByName) ? "Current user" : _resolvedUploadedByName;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsOpen && !_wasOpen)
+        {
+            _dropZoneInitialized = false;
+            Reset();
+            await LoadOptionsAsync();
+        }
+
+        _wasOpen = IsOpen;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!IsOpen || _dropZoneInitialized || _fileInput is null)
+            return;
+
+        _dropModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/EnterpriseDocumentUpload.razor.js");
+        await _dropModule.InvokeVoidAsync("initialize", _dropZone, _fileInput.Element);
+        _dropZoneInitialized = true;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dropModule is null)
+            return;
+
+        try
+        {
+            await _dropModule.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private void Reset()
+    {
+        _file = null;
+        _fileError = null;
+        _loadError = null;
+        _dragActive = false;
+        _resolvedUploadedByName = UploadedByName;
+        _form = new()
+        {
+            DocumentTypeCode = DefaultDocumentTypeCode ?? string.Empty,
+            CategoryCode = DefaultCategoryCode ?? string.Empty,
+            Description = DefaultDescription,
+            Tags = DefaultTags,
+            RetentionDate = DefaultRetentionDate,
+            EntityName = EntityName
+        };
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        if (TenantId == Guid.Empty)
+        {
+            _loadError = "A valid tenant is required before documents can be uploaded.";
+            return;
+        }
+
+        _optionsLoading = true;
+        try
+        {
+            var categoriesTask = Api.SearchDocumentConfigItemsAsync(TenantId, "DocumentCategory", pageSize: 1000);
+            var groupsTask = Api.SearchDocumentGroupsAsync(TenantId, pageSize: 1000);
+            var userTask = CreatedByUserId.HasValue ? Api.GetUserByIdAsync(CreatedByUserId.Value) : Task.FromResult<UserDto?>(null);
+            await Task.WhenAll(categoriesTask, groupsTask, userTask);
+
+            _categories = (await categoriesTask)?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            _documentTypes = (await groupsTask)?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.Name).ToList() ?? [];
+            _resolvedUploadedByName ??= (await userTask)?.FullName;
+
+            EnsureDefaultOption(_categories, DefaultCategoryCode, "Selected category");
+            EnsureDefaultOption(_documentTypes, DefaultDocumentTypeCode, "Selected document type");
+
+            if (_categories.Count == 0 || _documentTypes.Count == 0)
+            {
+                _loadError = "Document categories and document groups must be configured before uploading.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Document options failed to load: {ex.Message}";
+        }
+        finally
+        {
+            _optionsLoading = false;
+        }
+    }
+
+    private void EnsureDefaultOption(List<DocumentConfigItemDto> options, string? code, string name)
+    {
+        if (string.IsNullOrWhiteSpace(code) || options.Any(x => string.Equals(x.Code, code, StringComparison.OrdinalIgnoreCase))) return;
+        options.Insert(0, new DocumentConfigItemDto { TenantId = TenantId, Code = code, Name = name, IsActive = true });
+    }
+
+    private void SelectFile(InputFileChangeEventArgs args)
+    {
+        _dragActive = false;
+        _fileError = null;
+        var file = args.File;
+
+        if (file.Size <= 0)
+        {
+            _fileError = "The selected document is empty.";
+            return;
+        }
+
+        if (file.Size > MaxFileSizeBytes)
+        {
+            _fileError = $"The selected document exceeds the {FormatFileSize(MaxFileSizeBytes)} upload limit.";
+            return;
+        }
+
+        var extension = Path.GetExtension(file.Name);
+        var allowed = Accept.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (allowed.Length > 0 && !allowed.Any(x => x == "*/*" || string.Equals(x, extension, StringComparison.OrdinalIgnoreCase)))
+        {
+            _fileError = "The selected file type is not supported.";
+            return;
+        }
+
+        _file = file;
+        if (string.IsNullOrWhiteSpace(_form.FileName)) _form.FileName = file.Name;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_file is null)
+        {
+            _fileError = "Select a document file to upload.";
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_loadError)) return;
+
+        _busy = true;
+        try
+        {
+            await using var stream = _file.OpenReadStream(MaxFileSizeBytes);
+            var documentId = await Api.UploadDocumentAsync(new ApiClient.UploadDocumentRequest
+            {
+                TenantId = TenantId,
+                DocumentTypeCode = _form.DocumentTypeCode.Trim(),
+                CategoryCode = _form.CategoryCode.Trim(),
+                FileExtension = Path.GetExtension(_file.Name),
+                FileName = _form.FileName.Trim(),
+                OriginalFileName = _file.Name,
+                EntityName = Normalize(_form.EntityName),
+                EntityId = EntityId,
+                Description = Normalize(_form.Description),
+                Tags = Normalize(_form.Tags),
+                RetentionDate = _form.RetentionDate,
+                UploadedByName = Normalize(_resolvedUploadedByName),
+                CreatedByUserId = CreatedByUserId,
+                Content = stream
+            });
+
+            await OnUploaded.InvokeAsync(documentId);
+            await SetOpenAsync(false);
+        }
+        catch (Exception ex)
+        {
+            var message = $"Document upload failed: {ex.Message}";
+            _fileError = message;
+            await OnUploadFailed.InvokeAsync(message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void HandleInvalidSubmit() => _fileError ??= "Review the highlighted document fields and try again.";
+    private void ActivateDropZone() => _dragActive = true;
+    private void DeactivateDropZone() => _dragActive = false;
+
+    private async Task CloseAsync()
+    {
+        if (_busy) return;
+        await SetOpenAsync(false);
+    }
+
+    private async Task SetOpenAsync(bool value)
+    {
+        _wasOpen = value;
+        await IsOpenChanged.InvokeAsync(value);
+    }
+
+    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string FileIcon(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
+    {
+        ".pdf" => "bi-file-earmark-pdf",
+        ".doc" or ".docx" => "bi-file-earmark-word",
+        ".xls" or ".xlsx" or ".csv" => "bi-file-earmark-spreadsheet",
+        ".png" or ".jpg" or ".jpeg" or ".tif" or ".tiff" => "bi-file-earmark-image",
+        _ => "bi-file-earmark"
+    };
+
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes >= 1_073_741_824) return $"{bytes / 1_073_741_824d:N1} GB";
+        if (bytes >= 1_048_576) return $"{bytes / 1_048_576d:N1} MB";
+        if (bytes >= 1024) return $"{bytes / 1024d:N0} KB";
+        return $"{bytes:N0} bytes";
+    }
+
+    private sealed class UploadForm
+    {
+        [Required, StringLength(260)] public string FileName { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string DocumentTypeCode { get; set; } = string.Empty;
+        [Required, StringLength(80)] public string CategoryCode { get; set; } = string.Empty;
+        [StringLength(2000)] public string? Description { get; set; }
+        [StringLength(1000)] public string? Tags { get; set; }
+        [StringLength(100)] public string? EntityName { get; set; }
+        public DateOnly? RetentionDate { get; set; }
+    }
+}

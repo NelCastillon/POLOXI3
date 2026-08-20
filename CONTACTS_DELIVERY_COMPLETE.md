@@ -100,13 +100,13 @@ All update dynamically as data changes.
 ## 💻 Technical Stack
 
 - **Framework**: Blazor Server Components
-- **Components**: Syncfusion Blazor Suite
-  - SfGrid (Datagrid with sorting/pagination)
-  - SfDialog (Modal with form)
-  - SfDropDownList (Multi-select filters)
-  - SfTextBox (Text inputs)
-  - SfToast (Notifications)
-  - SfCheckBox (Checkboxes)
+- **Components**: enterprise native Blazor component set
+  - AppGrid (Datagrid with sorting/pagination)
+  - enterprise modal (Modal with form)
+  - native select (Multi-select filters)
+  - native input (Text inputs)
+  - enterprise toast (Notifications)
+  - native checkbox (Checkboxes)
 - **Styling**: Component-scoped CSS (no conflicts)
 - **Icons**: Bootstrap Icons (bi-*)
 

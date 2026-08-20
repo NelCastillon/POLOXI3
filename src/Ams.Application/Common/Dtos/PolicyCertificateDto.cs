@@ -5,6 +5,10 @@ public sealed class PolicyCertificateDto
     public Guid CertificateId { get; set; }
     public Guid TenantId { get; set; }
     public Guid? PolicyId { get; set; }
+    public Guid? CertificateHolderId { get; set; }
+    public Guid? CertificateRequestId { get; set; }
+    public Guid? DocumentTemplateVersionId { get; set; }
+    public Guid? GeneratedDocumentId { get; set; }
     public string CertificateNumber { get; set; } = string.Empty;
     public string PolicyNumber { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
@@ -18,7 +22,9 @@ public sealed class PolicyCertificateDto
     public string Status { get; set; } = string.Empty;
     public bool AdditionalInsured { get; set; }
     public bool WaiverSubrogation { get; set; }
+    public bool PrimaryNonContributory { get; set; }
     public string Description { get; set; } = string.Empty;
+    public string? HolderSpecificWording { get; set; }
     public DateTime? LastDeliveredDateUtc { get; set; }
     public DateTime? RevokedDateUtc { get; set; }
     public Guid? RevokedByUserId { get; set; }

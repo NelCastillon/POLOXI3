@@ -1,1 +1,1 @@
-namespace Ams.Domain.Enums; public enum LeadStatus { New = 1, Assigned = 2, Working = 3, Qualified = 4, Converted = 5, Disqualified = 6 }
+namespace Ams.Domain.Enums; public enum LeadStatus { New = 1, Contacted = 2, Qualified = 3, Converted = 4, Disqualified = 5 }

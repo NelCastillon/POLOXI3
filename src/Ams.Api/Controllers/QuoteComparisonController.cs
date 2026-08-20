@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using Ams.Application.Abstractions.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
@@ -11,13 +13,24 @@ public sealed class QuoteComparisonController : ControllerBase
     public QuoteComparisonController(ISubmissionService service) => _service = service;
 
     [HttpGet("compare/{submissionId:guid}")]
-    public async Task<IActionResult> Compare(Guid submissionId, CancellationToken cancellationToken)
-        => Ok(await _service.GetQuoteComparisonAsync(submissionId, cancellationToken));
+    [Authorize]
+    public async Task<IActionResult> Compare(Guid submissionId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+    {
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        return tenantId != Guid.Empty && Guid.TryParse(claim, out var authenticatedTenantId) && authenticatedTenantId == tenantId
+            ? Ok(await _service.GetQuoteComparisonAsync(submissionId, tenantId, cancellationToken))
+            : Forbid();
+    }
 
     [HttpGet("{quoteId:guid}")]
-    public async Task<IActionResult> GetById(Guid quoteId, CancellationToken cancellationToken)
+    [Authorize]
+    public async Task<IActionResult> GetById(Guid quoteId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        var item = await _service.GetQuoteByIdAsync(quoteId, cancellationToken);
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        if (tenantId == Guid.Empty || !Guid.TryParse(claim, out var authenticatedTenantId) || authenticatedTenantId != tenantId)
+            return Forbid();
+
+        var item = await _service.GetQuoteByIdAsync(quoteId, tenantId, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
 }

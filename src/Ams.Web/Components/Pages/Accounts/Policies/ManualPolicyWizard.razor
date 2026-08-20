@@ -1,0 +1,500 @@
+@page "/accounts/{AccountId:guid}/policies/new"
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext UserContext
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Add Existing Policy</PageTitle>
+
+<div class="manual-policy-page">
+    <div class="manual-policy-hero">
+        <div class="manual-hero-copy">
+            <div class="manual-hero-badge"><i class="bi bi-shield-check" aria-hidden="true"></i> Existing carrier policy intake</div>
+            <h1>Add Existing Policy</h1>
+            <p>Record a carrier-issued policy for servicing, verification, reporting, documents, and renewal workflows. This workflow does not issue or bind coverage.</p>
+            <div class="manual-summary-strip" aria-label="Workflow summary">
+                <div><span>Account</span><strong>@ShortId(AccountId)</strong></div>
+                <div><span>Workflow</span><strong>Manual Existing Policy</strong></div>
+                <div><span>Status</span><strong>@Display("PolicyStatus", _form.PolicyStatus)</strong></div>
+                <div><span>Package</span><strong>@(string.IsNullOrWhiteSpace(PolicyLineSummary) ? "Not selected" : PolicyLineSummary)</strong></div>
+            </div>
+        </div>
+        <div class="manual-header-actions manual-action-panel">
+            <button type="button" class="btn btn-outline-secondary" @onclick="Cancel">Cancel</button>
+            <button type="button" class="btn btn-outline-primary" disabled="@_saving" @onclick="SaveDraftAsync">Save Draft</button>
+            <button type="button" class="btn btn-primary" disabled="@_saving" @onclick="ValidateAsync">Validate</button>
+        </div>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="manual-card">Loading workflow settings...</div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger">@_loadError</div>
+    }
+    else
+    {
+        <div class="manual-progress" aria-label="Wizard progress">
+            <div style="width:@ProgressPercent%"></div>
+        </div>
+
+        <div class="manual-layout">
+            <aside class="manual-steps" aria-label="Manual policy steps">
+                <div class="manual-sidebar-card">
+                    <p class="manual-eyebrow">Progress</p>
+                    <strong>Step @_step of @_steps.Count</strong>
+                    <span>@CurrentStepTitle</span>
+                </div>
+                @foreach (var step in _steps)
+                {
+                    <button type="button" class="@StepClass(step.Number)" @onclick="() => GoToStep(step.Number)">
+                        <span>@step.Number</span>
+                        <strong>@step.Title</strong>
+                        @if (step.Number < _step)
+                        {
+                            <i class="bi bi-check2" aria-hidden="true"></i>
+                        }
+                    </button>
+                }
+                <div class="manual-sidebar-card manual-sidebar-note">
+                    <p class="manual-eyebrow">Guardrail</p>
+                    <span>Use DB-backed settings and carrier data. Avoid creating coverage from this page.</span>
+                </div>
+            </aside>
+
+            <main class="manual-card">
+                <div class="manual-card-header">
+                    <div>
+                        <p class="manual-eyebrow">@CurrentStepTitle</p>
+                        <h2>@CurrentStepHeading</h2>
+                    </div>
+                    <span class="manual-step-chip">@_step / @_steps.Count</span>
+                </div>
+                <EditForm Model="_form">
+                    <DataAnnotationsValidator />
+
+                    @if (_step == 1)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Policy Source</h3><p>Capture where this existing policy record originated and why it is being entered manually.</p></div>
+                            <div class="manual-grid">
+                                <label>Creation Source<select class="form-select" @bind="_form.PolicySourceCode">@Options("PolicyCreationSource")</select></label>
+                                <label>Reason<select class="form-select" @bind="_form.ManualReasonCode">@Options("ManualPolicyReason")</select></label>
+                                <label>External System<input class="form-control" @bind="_form.ExternalSystem" /></label>
+                                <label>Carrier Portal Reference<input class="form-control" @bind="_form.CarrierPortalReference" /></label>
+                                <label>Migration Batch<input class="form-control" @bind="_form.MigrationBatch" /></label>
+                                <label class="manual-check"><input type="checkbox" @bind="_form.BrokerOfRecord" /> Broker of Record</label>
+                            </div>
+                            <label>Notes<textarea class="form-control" rows="4" @bind="_form.Notes"></textarea></label>
+                        </section>
+                    }
+                    else if (_step == 2)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Policy Identity</h3><p>Identify the carrier policy and its package summary before adding coverage lines.</p></div>
+                            <div class="manual-grid">
+                                <label>Carrier ID<input class="form-control" @bind="_carrierIdText" placeholder="Carrier GUID" /></label>
+                                <label>Writing Company ID<input class="form-control" @bind="_writingCompanyIdText" placeholder="Defaults to Carrier" /></label>
+                                <label>Policy Package Summary<input class="form-control" value="@PolicyLineSummary" readonly /></label>
+                                <label>Policy Number<input class="form-control" @bind="_form.PolicyNumber" /></label>
+                                <label>Policy Type<input class="form-control" @bind="_form.PolicyType" /></label>
+                                <label>Policy Status<select class="form-select" @bind="_form.PolicyStatus">@Options("PolicyStatus")</select></label>
+                                <label>Policy Form<input class="form-control" @bind="_form.PolicyForm" /></label>
+                                <label>External Reference<input class="form-control" @bind="_form.ExternalReference" /></label>
+                            </div>
+                            <label>Policy Description<textarea class="form-control" rows="3" @bind="_form.PolicyDescription"></textarea></label>
+                        </section>
+                    }
+                    else if (_step == 3)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Insured and Risk</h3><p>Snapshot the named insured and risk details as they appear on the policy documents.</p></div>
+                            <div class="manual-grid">
+                                <label>Named Insured<input class="form-control" @bind="_form.NamedInsured" /></label>
+                                <label>DBA<input class="form-control" @bind="_form.DbaName" /></label>
+                            </div>
+                            <label>Mailing Address Snapshot JSON<textarea class="form-control" rows="4" @bind="_form.MailingAddressJson"></textarea></label>
+                            <label>Risk Snapshot JSON<textarea class="form-control" rows="4" @bind="_form.RiskSnapshotJson"></textarea></label>
+                        </section>
+                    }
+                    else if (_step == 4)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Term and Status</h3><p>Set the effective term, transaction type, and lifecycle status for servicing.</p></div>
+                            <div class="manual-grid">
+                                <label>Effective Date<input type="date" class="form-control" @bind="_form.EffectiveDate" /></label>
+                                <label>Expiration Date<input type="date" class="form-control" @bind="_form.ExpirationDate" /></label>
+                                <label>Term Status<select class="form-select" @bind="_form.TermStatus">@Options("PolicyTermStatus")</select></label>
+                                <label>Transaction Type<select class="form-select" @bind="_form.TransactionTypeCode">@Options("PolicyTransactionType")</select></label>
+                                <label>Policy Issue Date<input type="date" class="form-control" @bind="_form.PolicyIssueDate" /></label>
+                                <label>Retroactive Date<input type="date" class="form-control" @bind="_form.RetroactiveDate" /></label>
+                                <label>Cancellation Date<input type="date" class="form-control" @bind="_form.CancellationDate" /></label>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 5)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Premium and Billing</h3><p>Record premium, billing, and receivable context for reporting and accounting follow-up.</p></div>
+                            <div class="manual-grid">
+                                <label>Written Premium<input type="number" step="0.01" class="form-control" @bind="_form.WrittenPremium" /></label>
+                                <label>Annualized Premium<input type="number" step="0.01" class="form-control" @bind="_form.AnnualizedPremium" /></label>
+                                <label>Taxes<input type="number" step="0.01" class="form-control" @bind="_form.Taxes" /></label>
+                                <label>Fees<input type="number" step="0.01" class="form-control" @bind="_form.Fees" /></label>
+                                <label>Surcharges<input type="number" step="0.01" class="form-control" @bind="_form.Surcharges" /></label>
+                                <label>Total Cost<input type="number" step="0.01" class="form-control" @bind="_form.TotalCost" /></label>
+                                <label>Down Payment<input type="number" step="0.01" class="form-control" @bind="_form.DownPayment" /></label>
+                                <label>Billing Type<select class="form-select" @bind="_form.BillingTypeCode">@Options("BillingType")</select></label>
+                                <label>Payment Plan<input class="form-control" @bind="_form.PaymentPlan" /></label>
+                                <label>Finance Company<input class="form-control" @bind="_form.FinanceCompany" /></label>
+                            </div>
+                            <div class="manual-check-row">
+                                <label><input type="checkbox" @bind="_form.CreateAgencyInvoice" /> Create agency invoice</label>
+                                <label><input type="checkbox" @bind="_form.CreateInstallmentSchedule" /> Create installment schedule</label>
+                                <label><input type="checkbox" @bind="_form.TrackPaymentReceivable" /> Track payment receivable</label>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 6)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Coverages</h3><p>Add one or more DB-backed lines of business and capture coverage details by line.</p></div>
+                            <div class="manual-line-header">
+                                <div>
+                                    <p class="manual-eyebrow">Policy lines</p>
+                                    <p>Add one row for each line of business on this carrier policy.</p>
+                                </div>
+                                <button type="button" class="btn btn-outline-primary" @onclick="AddPolicyLine">Add Line</button>
+                            </div>
+                            @for (var i = 0; i < _form.PolicyLines.Count; i++)
+                            {
+                                var index = i;
+                                var line = _form.PolicyLines[index];
+                                <div class="manual-line-card">
+                                    <div class="manual-line-title">
+                                        <strong>Line @(index + 1)</strong>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(_form.PolicyLines.Count == 1)" @onclick="() => RemovePolicyLine(index)">Remove</button>
+                                    </div>
+                                    <div class="manual-grid">
+                                        <label>Line of Business<select class="form-select" value="@line.LineOfBusinessId?.ToString()" @onchange="args => SelectPolicyLineLob(index, args.Value?.ToString())">@LobOptions()</select></label>
+                                        <label>Status<select class="form-select" @bind="line.PolicyLineStatusCode">@Options("PolicyTermStatus")</select></label>
+                                        <label>Line Written Premium<input type="number" step="0.01" class="form-control" @bind="line.WrittenPremium" /></label>
+                                    </div>
+                                    <label>Coverage Summary<textarea class="form-control" rows="3" @bind="line.CoverageSummary"></textarea></label>
+                                    <label>Limits Summary<textarea class="form-control" rows="3" @bind="line.LimitsSummary"></textarea></label>
+                                    <label>Deductible Summary<textarea class="form-control" rows="3" @bind="line.DeductibleSummary"></textarea></label>
+                                </div>
+                            }
+                            <label>Coverage Summary<textarea class="form-control" rows="3" @bind="_form.CoverageSummary"></textarea></label>
+                            <label>Limits Summary<textarea class="form-control" rows="3" @bind="_form.LimitsSummary"></textarea></label>
+                            <label>Deductible Summary<textarea class="form-control" rows="3" @bind="_form.DeductibleSummary"></textarea></label>
+                            <label>Coverage Notes<textarea class="form-control" rows="3" @bind="_form.CoverageNotes"></textarea></label>
+                            <label>Data Completeness<select class="form-select" @bind="_form.DataCompletenessCode">@Options("DataCompleteness")</select></label>
+                        </section>
+                    }
+                    else if (_step == 7)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Producers and Commission</h3><p>Snapshot servicing ownership and expected commission values for downstream reconciliation.</p></div>
+                            <div class="manual-grid">
+                                <label>Agency<input class="form-control" @bind="_form.Agency" /></label>
+                                <label>Branch<input class="form-control" @bind="_form.Branch" /></label>
+                                <label>Department<input class="form-control" @bind="_form.Department" /></label>
+                                <label>Producer Name<input class="form-control" @bind="_form.ProducerName" /></label>
+                                <label>Account Manager<input class="form-control" @bind="_form.AccountManagerName" /></label>
+                                <label>CSR<input class="form-control" @bind="_form.CsrName" /></label>
+                                <label>Commission Type<select class="form-select" @bind="_form.CommissionTypeCode">@Options("CommissionType")</select></label>
+                                <label>Commission Rate %<input type="number" step="0.01" class="form-control" @bind="_form.CommissionRate" /></label>
+                                <label>Estimated Commission<input type="number" step="0.01" class="form-control" @bind="_form.EstimatedCommission" /></label>
+                                <label>Producer Split %<input type="number" step="0.01" class="form-control" @bind="_form.ProducerSplitPercent" /></label>
+                            </div>
+                        </section>
+                    }
+                    else if (_step == 8)
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Documents</h3><p>Strongly encourage a declarations page, binder, or carrier confirmation. Upload/linking uses the normal policy document workflow after the record is created.</p></div>
+                            <div class="manual-grid">
+                                <label>Document Type<select class="form-select" @bind="_documentTypeCode">@Options("DocumentType")</select></label>
+                                <label>Document Reference<input class="form-control" @bind="_documentReference" /></label>
+                                <label class="manual-check"><input type="checkbox" @bind="_form.HasSupportingDocument" /> Supporting document is available</label>
+                            </div>
+                        </section>
+                    }
+                    else
+                    {
+                        <section>
+                            <div class="manual-section-intro"><h3>Review and Create</h3><p>Confirm this record is an existing policy entry and not a coverage issuance action.</p></div>
+                            <div class="manual-review">
+                                <div><span>Named Insured</span><strong>@_form.NamedInsured</strong></div>
+                                <div><span>Policy Number</span><strong>@_form.PolicyNumber</strong></div>
+                                <div><span>Line of Business</span><strong>@_form.LineOfBusiness</strong></div>
+                                <div><span>Term</span><strong>@_form.EffectiveDate.ToString("MM/dd/yyyy") - @_form.ExpirationDate.ToString("MM/dd/yyyy")</strong></div>
+                                <div><span>Premium</span><strong>@((_form.AnnualizedPremium ?? _form.WrittenPremium ?? 0).ToString("C"))</strong></div>
+                                <div><span>Source</span><strong>@Display("PolicyCreationSource", _form.PolicySourceCode)</strong></div>
+                                <div><span>Reason</span><strong>@Display("ManualPolicyReason", _form.ManualReasonCode)</strong></div>
+                            </div>
+                            <div class="manual-callout manual-callout-warning mt-3"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>This action records an existing carrier policy in AgencyBinder. It does not issue or bind insurance coverage.</span></div>
+                            <button type="button" class="btn btn-success btn-lg manual-create-button" disabled="@_saving" @onclick="CreateAsync">Create Existing Policy</button>
+                        </section>
+                    }
+                </EditForm>
+
+                @if (_validation is not null)
+                {
+                    <div class="manual-validation">
+                        @if (_validation.BlockingErrors.Count > 0)
+                        {
+                            <h3>Blocking errors</h3>
+                            <ul>@foreach (var error in _validation.BlockingErrors) { <li>@error</li> }</ul>
+                        }
+                        @if (_validation.Warnings.Count > 0)
+                        {
+                            <h3>Warnings</h3>
+                            <ul>@foreach (var warning in _validation.Warnings) { <li>@warning</li> }</ul>
+                        }
+                        @if (_validation.Duplicates.Count > 0)
+                        {
+                            <h3>Duplicate review</h3>
+                            <ul>@foreach (var duplicate in _validation.Duplicates) { <li>@duplicate.Classification: @duplicate.PolicyNumber (@duplicate.EffectiveDate:MM/dd/yyyy - @duplicate.ExpirationDate:MM/dd/yyyy)</li> }</ul>
+                            <label><input type="checkbox" @bind="_form.OverridePossibleDuplicate" /> I reviewed the possible duplicates</label>
+                        }
+                    </div>
+                }
+
+                <div class="manual-footer">
+                    <button type="button" class="btn btn-outline-secondary" disabled="@(_step == 1)" @onclick="Previous">Previous</button>
+                    <button type="button" class="btn btn-outline-primary" disabled="@(_step == 9)" @onclick="Next">Next</button>
+                </div>
+            </main>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid AccountId { get; set; }
+
+    private readonly List<ManualStep> _steps = new()
+    {
+        new(1, "Policy Source"), new(2, "Policy Identity"), new(3, "Insured and Risk"), new(4, "Term and Status"), new(5, "Premium and Billing"), new(6, "Coverages"), new(7, "Producers and Commission"), new(8, "Documents"), new(9, "Review and Create")
+    };
+
+    private bool _loading = true;
+    private bool _saving;
+    private int _step = 1;
+    private Guid? _draftId;
+    private string? _loadError;
+    private string _carrierIdText = string.Empty;
+    private string _writingCompanyIdText = string.Empty;
+    private string _documentTypeCode = string.Empty;
+    private string _documentReference = string.Empty;
+    private List<ManualPolicyOptionDto> _options = new();
+    private List<LineOfBusinessDto> _lobs = new();
+    private CreateManualPolicyRequest _form = new();
+    private ManualPolicyValidationResultDto? _validation;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Accounts", "/accounts"), new("Account", $"/accounts/{AccountId}"), new("Add Existing Policy"));
+        try
+        {
+            var context = await UserContext.RequireAsync();
+            var tenantId = context.TenantId;
+            _options = (await Api.GetManualPolicyOptionsAsync(tenantId))?.ToList() ?? new();
+            _lobs = (await Api.SearchLobsAsync(tenantId, pageSize: 250))?.Items.Where(lob => lob.IsActive).OrderBy(lob => lob.LobName).ToList() ?? new();
+            _form = new CreateManualPolicyRequest
+            {
+                TenantId = tenantId,
+                AccountId = AccountId,
+                PolicySourceCode = Default("PolicyCreationSource", "ManualExistingPolicy"),
+                ManualReasonCode = Default("ManualPolicyReason", "WrittenOutsideAgencyBinder"),
+                PolicyStatus = Default("PolicyStatus", "PendingVerification"),
+                TermStatus = Default("PolicyTermStatus", "Active"),
+                TransactionTypeCode = Default("PolicyTransactionType", "Conversion"),
+                BillingTypeCode = Default("BillingType", "DirectBill"),
+                DataCompletenessCode = Default("DataCompleteness", "Partial"),
+                CommissionTypeCode = Default("CommissionType", "Estimated"),
+                EffectiveDate = DateOnly.FromDateTime(DateTime.Today),
+                ExpirationDate = DateOnly.FromDateTime(DateTime.Today.AddYears(1)),
+                CurrencyCode = "USD"
+            };
+            AddPolicyLine();
+            _documentTypeCode = Default("DocumentType", "DeclarationsPage");
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private RenderFragment Options(string group) => builder =>
+    {
+        var sequence = 0;
+        foreach (var option in _options.Where(o => o.OptionGroupCode == group).OrderBy(o => o.SortOrder))
+        {
+            builder.OpenElement(sequence++, "option");
+            builder.AddAttribute(sequence++, "value", option.OptionCode);
+            builder.AddContent(sequence++, option.DisplayName);
+            builder.CloseElement();
+        }
+    };
+
+    private string Default(string group, string fallback) => _options.FirstOrDefault(o => o.OptionGroupCode == group && o.IsDefault)?.OptionCode ?? fallback;
+    private string Display(string group, string code) => _options.FirstOrDefault(o => o.OptionGroupCode == group && o.OptionCode == code)?.DisplayName ?? code;
+    private string PolicyLineSummary => _form.PolicyLines.Count switch { 0 => string.Empty, 1 => _form.PolicyLines[0].LineOfBusinessName, _ => "Package" };
+    private string CurrentStepTitle => _steps.FirstOrDefault(step => step.Number == _step)?.Title ?? "Manual Policy";
+    private string CurrentStepHeading => $"Step {_step}: {CurrentStepTitle}";
+    private int ProgressPercent => (int)Math.Round((_step / (double)_steps.Count) * 100);
+    private string StepClass(int step) => step == _step ? "manual-step manual-step-active" : step < _step ? "manual-step manual-step-done" : "manual-step";
+    private static string ShortId(Guid value) => value.ToString("N")[..8].ToUpperInvariant();
+    private void GoToStep(int step) => _step = Math.Clamp(step, 1, 9);
+    private void Previous() => _step = Math.Max(1, _step - 1);
+    private void Next() => _step = Math.Min(9, _step + 1);
+    private void Cancel() => Nav.NavigateTo($"/accounts/{AccountId}");
+
+    private async Task SaveDraftAsync()
+    {
+        _saving = true;
+        try
+        {
+            ApplyIds();
+            var payload = System.Text.Json.JsonSerializer.Serialize(_form);
+            var draft = await Api.SaveManualPolicyDraftAsync(AccountId, new UpsertManualPolicyDraftRequest
+            {
+                TenantId = _form.TenantId,
+                AccountId = AccountId,
+                CurrentStep = _step,
+                PayloadJson = payload,
+                ModifiedByUserId = (await UserContext.RequireAsync()).UserId
+            }, _draftId);
+            _draftId = draft.DraftId;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ValidateAsync()
+    {
+        ApplyIds();
+        _validation = await Api.ValidateManualPolicyAsync(AccountId, _form);
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        try
+        {
+            ApplyIds();
+            _form.DraftId = _draftId;
+            _form.CreatedByUserId = (await UserContext.RequireAsync()).UserId;
+            _validation = await Api.ValidateManualPolicyAsync(AccountId, _form);
+            if (_validation.BlockingErrors.Count > 0)
+                return;
+
+            var result = await Api.CreateManualPolicyAsync(AccountId, _form);
+            Nav.NavigateTo($"/policies/{result.PolicyId}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ApplyIds()
+    {
+        if (Guid.TryParse(_carrierIdText, out var carrierId))
+            _form.CarrierId = carrierId;
+        if (Guid.TryParse(_writingCompanyIdText, out var writingCompanyId))
+            _form.WritingCompanyId = writingCompanyId;
+        ApplyPolicyLineSummary();
+    }
+
+    private RenderFragment LobOptions() => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "option");
+        builder.AddAttribute(sequence++, "value", string.Empty);
+        builder.AddContent(sequence++, "Select line of business");
+        builder.CloseElement();
+
+        foreach (var lob in _lobs)
+        {
+            builder.OpenElement(sequence++, "option");
+            builder.AddAttribute(sequence++, "value", lob.LobId.ToString());
+            builder.AddContent(sequence++, string.IsNullOrWhiteSpace(lob.LobCode) ? lob.LobName : $"{lob.LobName} ({lob.LobCode})");
+            builder.CloseElement();
+        }
+    };
+
+    private void AddPolicyLine()
+    {
+        _form.PolicyLines.Add(new ManualPolicyLineRequest
+        {
+            PolicyLineStatusCode = Default("PolicyTermStatus", "Active"),
+            SortOrder = _form.PolicyLines.Count + 1
+        });
+    }
+
+    private void RemovePolicyLine(int index)
+    {
+        if (_form.PolicyLines.Count <= 1 || index < 0 || index >= _form.PolicyLines.Count)
+            return;
+
+        _form.PolicyLines.RemoveAt(index);
+        ApplyPolicyLineSummary();
+    }
+
+    private void SelectPolicyLineLob(int index, string? lobIdText)
+    {
+        if (index < 0 || index >= _form.PolicyLines.Count)
+            return;
+
+        var line = _form.PolicyLines[index];
+        if (!Guid.TryParse(lobIdText, out var lobId))
+        {
+            line.LineOfBusinessId = null;
+            line.LineOfBusinessCode = string.Empty;
+            line.LineOfBusinessName = string.Empty;
+            ApplyPolicyLineSummary();
+            return;
+        }
+
+        var lob = _lobs.FirstOrDefault(item => item.LobId == lobId);
+        if (lob is null)
+            return;
+
+        line.LineOfBusinessId = lob.LobId;
+        line.LineOfBusinessCode = lob.LobCode;
+        line.LineOfBusinessName = lob.LobName;
+        ApplyPolicyLineSummary();
+    }
+
+    private void ApplyPolicyLineSummary()
+    {
+        for (var i = 0; i < _form.PolicyLines.Count; i++)
+        {
+            _form.PolicyLines[i].SortOrder = i + 1;
+        }
+
+        _form.LineOfBusiness = PolicyLineSummary;
+        if (_form.PolicyLines.Count == 1)
+        {
+            var line = _form.PolicyLines[0];
+            _form.CoverageSummary = line.CoverageSummary;
+            _form.LimitsSummary = line.LimitsSummary;
+            _form.DeductibleSummary = line.DeductibleSummary;
+        }
+    }
+
+    private sealed record ManualStep(int Number, string Title);
+}

@@ -2,6 +2,7 @@ using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Common.Dtos;
 using Ams.Application.Common.Models;
 using Dapper;
+using Microsoft.Data.SqlClient;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
 
@@ -67,20 +68,52 @@ WHERE TenantId = @TenantId
     public async Task<Guid> CreateAsync(Guid tenantId, string targetEntityName, Guid targetEntityId, Guid? workflowDefinitionId, Guid? userId, CancellationToken cancellationToken = default)
     {
         const string sql = @"
-DECLARE @Id UNIQUEIDENTIFIER = NEWID();
+DECLARE @Id UNIQUEIDENTIFIER = NEWID(), @ResolvedWorkflowDefinitionId UNIQUEIDENTIFIER;
+
+IF @WorkflowDefinitionId IS NOT NULL
+BEGIN
+    SELECT @ResolvedWorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE WorkflowDefinitionId = @WorkflowDefinitionId
+      AND IsActive = 1
+      AND IsDeleted = 0
+      AND TargetEntityName = @TargetEntityName
+      AND (TenantId = @TenantId OR TenantId IS NULL);
+END
+ELSE
+BEGIN
+    SELECT TOP 1 @ResolvedWorkflowDefinitionId = WorkflowDefinitionId
+    FROM Workflow.WorkflowDefinition
+    WHERE IsActive = 1
+      AND IsDeleted = 0
+      AND TargetEntityName = @TargetEntityName
+      AND (TenantId = @TenantId OR TenantId IS NULL)
+    ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, Version DESC, CreatedDateUtc DESC;
+END;
+
+IF @ResolvedWorkflowDefinitionId IS NULL
+    THROW 52300, 'No active workflow definition is configured for this tenant and target entity.', 1;
+
 INSERT INTO Workflow.WorkflowInstance (WorkflowInstanceId, TenantId, TargetEntityName, TargetEntityId, StatusCodeId, SubmittedDateUtc, CreatedDateUtc, CreatedByUserId, WorkflowDefinitionId, IsDeleted)
-VALUES (@Id, @TenantId, @TargetEntityName, @TargetEntityId, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, @WorkflowDefinitionId, 0);
+VALUES (@Id, @TenantId, @TargetEntityName, @TargetEntityId, 1, SYSUTCDATETIME(), SYSUTCDATETIME(), @UserId, @ResolvedWorkflowDefinitionId, 0);
 SELECT @Id;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new
+        try
         {
-            TenantId = tenantId,
-            TargetEntityName = targetEntityName,
-            TargetEntityId = targetEntityId,
-            WorkflowDefinitionId = workflowDefinitionId,
-            UserId = userId
-        }, cancellationToken: cancellationToken));
+            return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new
+            {
+                TenantId = tenantId,
+                TargetEntityName = targetEntityName.Trim(),
+                TargetEntityId = targetEntityId,
+                WorkflowDefinitionId = workflowDefinitionId,
+                UserId = userId
+            }, cancellationToken: cancellationToken));
+        }
+        catch (SqlException exception) when (exception.Number == 52300)
+        {
+            throw new InvalidOperationException(exception.Message, exception);
+        }
     }
 
     public async Task UpdateStatusAsync(Guid workflowInstanceId, int statusCode, Guid? userId, CancellationToken cancellationToken = default)

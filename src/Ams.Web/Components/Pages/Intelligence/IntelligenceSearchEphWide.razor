@@ -1,0 +1,893 @@
+@page "/intelligence/search/eph_wide"
+@attribute [Authorize(Policy=Ams.Web.Security.IntelligencePolicies.Search)]
+@using Ams.Application.Features.Intelligence
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<IntelligenceWorkspace>
+    <div class="eph-page">
+        <header class="eph-hero">
+            <div class="eph-hero-icon"><i class="bi bi-diagram-3"></i></div>
+            <div>
+                <span>EPH Engine — a Dynamic LLM-Generated Disambiguation mechanism designed to enhance enterprise AI search and agentic workflows</span>
+                <h1>Intelligent Search Wide Using EPH Engine</h1>
+                <p>The core idea: instead of forcing AI to choose the most likely interpretation of an ambiguous request, EPH does the logic until there is sufficient targeted results, confidently resolved and narrow that uncertainty.</p>
+            </div>
+        </header>
+
+        <section class="um-search-filter-row" aria-label="Wide enterprise question">
+            <div class="um-search-box">
+                <i class="bi bi-search"></i>
+                <input id="eph-query" class="um-search-input" placeholder="Example: Which policies are in trouble?" @bind="_query" @bind:event="oninput" @onkeydown="KeyDown" />
+            </div>
+            <label class="eph-toggle"><input type="checkbox" @bind="_useEphEngine" /><span></span><strong>EPH Engine</strong></label>
+            <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@_loading"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="eph-loading" role="status" aria-live="polite">
+                <i class="bi bi-water eph-spinner"></i>
+                <div>
+                    <strong>Deep-sea-searching&hellip; @(_useEphEngine ? "running progressive disambiguation" : "generating LLM answer")</strong>
+                    <p>@(_useEphEngine ? "Proposing a problem-specific hierarchy, progressively narrowing interpretation paths, eliminating weak candidates, and composing an answer from LLM knowledge." : "EPH Engine is off — composing a direct LLM answer without progressive narrowing.")</p>
+                    <div class="eph-loading-track"><span></span></div>
+                </div>
+            </section>
+        }
+        else if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+        }
+        else if (_response is not null)
+        {
+            @if (_response.StatusCode == "USER_CLARIFICATION_REQUIRED" && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
+            {
+                <section class="eph-explanation">
+                    <div class="eph-explanation-icon"><i class="bi bi-question-circle"></i></div>
+                    <div class="eph-explanation-body">
+                        <div class="eph-panel-header"><div><span>EPH needs one more detail before it can answer responsibly</span><h2>Clarification needed</h2></div><span class="eph-status">@(_response.ClarificationTarget ?? "AMBIGUOUS")</span></div>
+                        <p>@_response.ClarificationQuestion</p>
+                        @if (_response.ClarificationOptionItems.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small title="EPH already researched the possibilities — recognize the description instead of recalling a name, or type your own answer below.">Which sounds like the one you mean?</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var option in _response.ClarificationOptionItems)
+                                    {
+                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option.Label)">@option.Label</button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        else if (_response.ClarificationOptions.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small title="Top competing candidates — pick the one you mean, or type your own answer below.">Top competing candidates:</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var option in _response.ClarificationOptions)
+                                    {
+                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option)">@option</button>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        <div class="um-search-box" style="margin-top:.75rem;">
+                            <input class="um-search-input" placeholder="Or describe what you mean in your own words…" @bind="_clarificationAnswer" @bind:event="oninput" @onkeydown="ClarificationKeyDown" />
+                            <button class="um-btn um-btn-primary" disabled="@(_loading || string.IsNullOrWhiteSpace(_clarificationAnswer))" @onclick="() => SubmitClarificationAsync(_clarificationAnswer)"><i class="bi bi-arrow-return-right"></i> Continue</button>
+                        </div>
+                    </div>
+                </section>
+            }
+            @if (ShowAnswerView && _response.AnswerContext is { } answerContext)
+            {
+                <section class="eph-answer-card eph-reveal">
+                    <div class="eph-answer-head">
+                        <div>
+                            <span class="eph-answer-kicker">@AnswerModeKicker(answerContext)</span>
+                            @if (answerContext.WinnerDisplayName is not null)
+                            {
+                                <h2><strong>@answerContext.WinnerDisplayName</strong> ranks #1 in this analysis</h2>
+                            }
+                            else
+                            {
+                                <h2>Analysis result</h2>
+                            }
+                        </div>
+                        <span class="eph-confidence-pill eph-confidence-pill--@answerContext.ConfidenceLabel.ToLowerInvariant()" title="@ConfidenceTooltip">
+                            <i class="bi bi-shield-check"></i> @answerContext.ConfidenceLabel confidence · @GroundingBadge
+                        </span>
+                    </div>
+                    <p class="eph-answer-narrative">@answerContext.ConfidenceNarrative</p>
+                    @if (answerContext.ResponseMode == WideResponseModes.LimitedEvidence)
+                    {
+                        <div class="eph-evidence-warning"><i class="bi bi-exclamation-triangle"></i> Fewer deciding factors are evidence-backed than usual — verify before acting on this ranking.</div>
+                    }
+                    @if (answerContext.OutputContract is { IsSatisfied: false } contractResult)
+                    {
+                        <div class="eph-evidence-warning"><i class="bi bi-list-ol"></i> You asked for @contractResult.RequestedCount results, but only @contractResult.DeliveredCount candidates passed EPH's evidence and constraint checks@(contractResult.RecoveryAttempted ? " (a wider candidate recovery pass was attempted)" : "") — the ranking below is complete but shorter than requested.</div>
+                    }
+                    @if (answerContext.CandidateSummaries.Count > 0)
+                    {
+                        <div class="eph-rank-table">
+                            @foreach (var (summary, index) in answerContext.CandidateSummaries.Select((item, index) => (item, index)))
+                            {
+                                <div class="eph-rank-row eph-reveal" style="animation-delay:@($"{index * 70}ms")">
+                                    <span class="eph-rank-medal @(index == 0 ? "eph-rank-medal--gold" : index == 1 ? "eph-rank-medal--silver" : index == 2 ? "eph-rank-medal--bronze" : null)">@(index switch { 0 => "🥇", 1 => "🥈", 2 => "🥉", _ => (index + 1).ToString() })</span>
+                                    <div class="eph-rank-main">
+                                        <strong>@summary.DisplayName</strong>
+                                        @if (summary.SupportTierCode != "STRONG")
+                                        {
+                                            <span class="eph-tier-badge @(summary.SupportTierCode == "MODERATE" ? "eph-tier-badge--moderate" : "eph-tier-badge--limited")" title="@(summary.SupportTierCode == "MODERATE" ? "Moderate support — backed by fewer independent evidence signals than the top results" : "Limited support — provisional result backed by a single credible evidence signal")">@(summary.SupportTierCode == "MODERATE" ? "Moderate support" : "Limited support")</span>
+                                        }
+                                        @{ var hasInsights = summary.BestFor is not null || summary.PraisedFor.Count > 0 || summary.WatchOutFor.Count > 0; }
+                                        @if (hasInsights)
+                                        {
+                                            <div class="eph-rank-facts">
+                                                @if (summary.BestFor is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--bestfor" title="What this candidate is genuinely best for, based on retrieved evidence@(summary.BestForDimension is not null && summary.BestForScore is { } bfs ? $" — strongest decision dimension: {summary.BestForDimension} ({bfs:P0})" : "")">
+                                                        🎯 Best for: @summary.BestFor
+                                                    </span>
+                                                }
+                                                @if (summary.PraisedFor.Count > 0)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--praise" title="Recurring strength themes the retrieved evidence actually supports">
+                                                        👍 Praised for: @string.Join(" · ", summary.PraisedFor)
+                                                    </span>
+                                                }
+                                                @if (summary.WatchOutFor.Count > 0)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--watch" title="Recurring complaint or limitation themes the retrieved evidence actually supports">
+                                                        ⚠ Watch out: @string.Join(" · ", summary.WatchOutFor)
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
+                                        else if (summary.BestForDimension is not null || summary.TradeOffDimension is not null)
+                                        {
+                                            <div class="eph-rank-facts">
+                                                @if (summary.BestForDimension is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--strength" title="Strongest evidence-scored dimension for this candidate@(summary.BestForScore is { } bs ? $" — scored {bs:P0} on {summary.BestForDimension}" : "")">
+                                                        <i class="bi bi-arrow-up-circle-fill"></i> Strongest: @summary.BestForDimension@(summary.BestForScore is { } bestScore ? $" · {bestScore:P0}" : "")
+                                                    </span>
+                                                }
+                                                @if (summary.TradeOffDimension is not null)
+                                                {
+                                                    <span class="eph-fact-chip eph-fact-chip--tradeoff" title="Weakest evidence-scored dimension — the honest trade-off of choosing this candidate@(summary.TradeOffScore is { } ts ? $" — scored {ts:P0} on {summary.TradeOffDimension}" : "")">
+                                                        <i class="bi bi-arrow-down-circle-fill"></i> Trade-off: @summary.TradeOffDimension@(summary.TradeOffScore is { } tradeScore ? $" · {tradeScore:P0}" : "")
+                                                    </span>
+                                                }
+                                            </div>
+                                        }
+                                        <div class="eph-score-track"><span class="eph-score-fill" style="--score:@summary.CompositeScore.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                    </div>
+                                    <span class="eph-rank-score" title="Match score — how well this candidate fits the decision criteria relative to the alternatives; not a probability that it is objectively the best">@summary.CompositeScore.ToString("P0")<small class="eph-rank-score-label">match</small></span>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (answerContext.WinnerStrengths.Count > 0 && answerContext.WinnerDisplayName is not null)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-trophy"></i> Why @answerContext.WinnerDisplayName won</h3>
+                            <p>@(answerContext.WinnerStrengths.Count > 0 ? $"Its {string.Join(" and ", answerContext.WinnerStrengths.Take(2).Select(strength => $"{strength.Score:P0} {strength.DimensionName.ToLowerInvariant()}"))} score{(answerContext.WinnerStrengths.Take(2).Count() > 1 ? "s" : "")} created its largest advantages." : "It performed strongly across the criteria that drove this decision.")@(answerContext.WinnerWeaknesses.Count > 0 ? $" {string.Join(" and ", answerContext.WinnerWeaknesses.Select(weakness => $"{weakness.DimensionName} ({weakness.Score:P0})"))} {(answerContext.WinnerWeaknesses.Count > 1 ? "were" : "was")} comparatively weaker." : "")</p>
+                            <div class="eph-dimension-bars">
+                                @foreach (var strength in answerContext.WinnerStrengths)
+                                {
+                                    <div class="eph-dimension-bar">
+                                        <span>@strength.DimensionName</span>
+                                        <div class="eph-score-track"><span class="eph-score-fill" style="--score:@strength.Score.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                        <em>@strength.Score.ToString("P0")</em>
+                                    </div>
+                                }
+                                @foreach (var weakness in answerContext.WinnerWeaknesses)
+                                {
+                                    <div class="eph-dimension-bar eph-dimension-bar--weak">
+                                        <span>@weakness.DimensionName</span>
+                                        <div class="eph-score-track"><span class="eph-score-fill" style="--score:@weakness.Score.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)"></span></div>
+                                        <em>@weakness.Score.ToString("P0")</em>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (answerContext.CandidateContrasts.Count > 0 && answerContext.WinnerDisplayName is not null)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-arrow-left-right"></i> Why not the others?</h3>
+                            @foreach (var contrast in answerContext.CandidateContrasts)
+                            {
+                                <p class="eph-contrast">
+                                    <strong>vs @contrast.AlternativeDisplayName (@contrast.AlternativeScore.ToString("P0"))</strong> —
+                                    @if (contrast.AlternativeLeadsOn.Count > 0)
+                                    {
+                                        <span>competitive on @string.Join(", ", contrast.AlternativeLeadsOn.Select(dimension => dimension.ToLowerInvariant()))</span>
+                                    }
+                                    else
+                                    {
+                                        <span>close overall</span>
+                                    }
+                                    @if (contrast.WinnerLeadsOn.Count > 0)
+                                    {
+                                        <span>, but @answerContext.WinnerDisplayName led on @string.Join(", ", contrast.WinnerLeadsOn.Select(dimension => dimension.ToLowerInvariant())).</span>
+                                    }
+                                    else
+                                    {
+                                        <span>; the composite balance decided it.</span>
+                                    }
+                                </p>
+                            }
+                        </div>
+                    }
+                    @if (answerContext.ChangeableDimensions.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-sliders"></i> This ranking could change if…</h3>
+                            <p>The candidates are separated most by these factors. Tell EPH what matters most to make this ranking yours:</p>
+                            <div class="eph-personalize-chips">
+                                @foreach (var dimension in answerContext.ChangeableDimensions)
+                                {
+                                    <button type="button" class="eph-personalize-chip" disabled="@_loading" @onclick="() => PersonalizeAsync(dimension)"><i class="bi bi-magic"></i> @dimension</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                    @if (answerContext.RankingChangeDriver is { } changeDriver && answerContext.WinnerDisplayName is not null)
+                    {
+                        <div class="eph-answer-section eph-reveal eph-change-driver">
+                            <h3><i class="bi bi-arrow-left-right"></i> Most likely to change this ranking</h3>
+                            <p>
+                                <strong>@changeDriver.DimensionName</strong> — @answerContext.WinnerDisplayName currently leads by @changeDriver.MarginPoints.ToString("P0"), but <strong>@changeDriver.ChallengerDisplayName</strong> scores higher on this dimension@(changeDriver.ChallengerScore is { } cs && changeDriver.WinnerScore is { } ws ? $" ({cs:P0} vs {ws:P0})" : "").
+                                If @changeDriver.DimensionName.ToLowerInvariant() resolves against the current leader, @changeDriver.ChallengerDisplayName is the most likely new #1.
+                            </p>
+                        </div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-card-text"></i> Full answer</h3>
+                            <p>@_response.FinalAnswer</p>
+                        </div>
+                    }
+                    @if (_response.QueryContract is { } answerCardContract && (answerCardContract.HardConstraints.Count > 0 || answerCardContract.AmbiguousConcepts.Count > 0))
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-file-earmark-check"></i> Query contract</h3>
+                            <div class="eph-grounded-branches">
+                                <div class="eph-branch-level">
+                                    @foreach (var constraint in answerCardContract.HardConstraints)
+                                    {
+                                        <span class="eph-branch-chip" title="Hard constraint — fixed by your query, never reinterpreted."><i class="bi bi-lock"></i>@constraint<em>FIXED</em></span>
+                                    }
+                                    @foreach (var concept in answerCardContract.AmbiguousConcepts)
+                                    {
+                                        <span class="eph-branch-chip" title="Ambiguous concept — the only part EPH disambiguated."><i class="bi bi-question-circle"></i>@concept<em>DISAMBIGUATED</em></span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    @if (_response.SuggestedActions.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-arrow-right-circle"></i> Suggested actions</h3>
+                            <div class="eph-grounded-branches">
+                                <div class="eph-branch-level">
+                                    @foreach (var action in _response.SuggestedActions)
+                                    {
+                                        <span class="eph-branch-chip eph-action-chip" title="@action.Rationale" @onclick="() => OpenRoute(action.NavigationRoute)"><i class="bi bi-arrow-right-circle"></i>@action.DisplayName</span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    @if (_response.InterpretiveResults.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-stars"></i> Interpretation results</h3>
+                            @if (_response.InterpretiveResults.Any(r => r.DataVolatility == "TIME_SENSITIVE" && !r.IsExternallyGrounded))
+                            {
+                                <div class="eph-evidence-warning"><i class="bi bi-clock-history"></i> Some results depend on time-sensitive data (prices, rates, rankings). Figures may be outdated &mdash; verify against the referenced sources.</div>
+                            }
+                            <div class="eph-interp-grid">
+                                @foreach (var result in PrioritizedInterpretiveResults)
+                                {
+                                    <article class="eph-interp-card">
+                                        <div class="eph-interp-head">
+                                            <span class="eph-interp-icon"><i class="bi bi-lightbulb"></i></span>
+                                            <div class="eph-interp-title">
+                                                <strong>@result.BranchDisplayName</strong>
+                                                <small>@result.Interpretation</small>
+                                            </div>
+                                            <span class="eph-interp-score" title="Interpretation confidence for this reasoning path">@result.Confidence.ToString("P0")</span>
+                                        </div>
+                                        <ol class="eph-interp-items">
+                                            @foreach (var item in result.Items)
+                                            {
+                                                <li><strong>@item.Name</strong> &mdash; @item.Detail</li>
+                                            }
+                                        </ol>
+                                        <div class="eph-interp-badges">
+                                            <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                            @if (result.DataVolatility == "TIME_SENSITIVE")
+                                            {
+                                                <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                            }
+                                            @if (result.IsExternallyGrounded)
+                                            {
+                                                <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                            }
+                                        </div>
+                                    </article>
+                                }
+                            </div>
+                            @if (SecondaryInterpretiveResults.Count > 0)
+                            {
+                                <div class="eph-interp-secondary">
+                                    <div class="eph-interp-secondary-head">
+                                        <i class="bi bi-layers-half"></i>
+                                        <span>Not prioritized &middot; secondary analysis</span>
+                                        <em>@SecondaryInterpretiveResults.Count</em>
+                                    </div>
+                                    <div class="eph-interp-grid">
+                                        @foreach (var result in SecondaryInterpretiveResults)
+                                        {
+                                            <article class="eph-interp-card eph-interp-card--secondary">
+                                                <div class="eph-interp-head">
+                                                    <span class="eph-interp-icon eph-interp-icon--secondary"><i class="bi bi-lightbulb"></i></span>
+                                                    <div class="eph-interp-title">
+                                                        <strong>@result.BranchDisplayName</strong>
+                                                        <small>@result.Interpretation</small>
+                                                    </div>
+                                                    <span class="eph-interp-score eph-interp-score--secondary" title="Interpretation confidence for this reasoning path">@result.Confidence.ToString("P0")</span>
+                                                </div>
+                                                <ol class="eph-interp-items">
+                                                    @foreach (var item in result.Items)
+                                                    {
+                                                        <li><strong>@item.Name</strong> &mdash; @item.Detail</li>
+                                                    }
+                                                </ol>
+                                                <div class="eph-interp-badges">
+                                                    <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
+                                                    <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                                    @if (result.DataVolatility == "TIME_SENSITIVE")
+                                                    {
+                                                        <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                                    }
+                                                    @if (result.IsExternallyGrounded)
+                                                    {
+                                                        <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                                    }
+                                                </div>
+                                            </article>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @if (_response.ExternalReferences.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-globe2"></i> External sources <small class="eph-section-note">Real-world references · LLM knowledge (not enterprise-verified)</small></h3>
+                            @foreach (var reference in _response.ExternalReferences)
+                            {
+                                <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
+                                    <span class="eph-rank"><i class="bi bi-globe2"></i></span>
+                                    <div class="eph-evidence-main">
+                                        <strong>@reference.Title</strong>
+                                        <small>@reference.Source</small>
+                                        <p>@reference.Summary</p>
+                                        <div><span class="um-badge um-badge-neutral">@reference.BranchDisplayName</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                    @if (_response.ExternalKnowledge.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <h3><i class="bi bi-broadcast"></i> Live grounding sources <small class="eph-section-note">Live web sources · retrieved for time-sensitive grounding</small></h3>
+                            @foreach (var snippet in _response.ExternalKnowledge)
+                            {
+                                <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(snippet.Url)" title="Double-click to open @snippet.Url in a new tab.">
+                                    <span class="eph-rank"><i class="bi bi-broadcast"></i></span>
+                                    <div class="eph-evidence-main">
+                                        <strong>@snippet.Title</strong>
+                                        <small>Retrieved @snippet.RetrievedDateUtc.ToString("yyyy-MM-dd HH:mm") UTC</small>
+                                        <p>@snippet.Snippet</p>
+                                        <div><span class="um-badge um-badge-success"><i class="bi bi-globe2"></i> LIVE</span> <a href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@snippet.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                    </div>
+                                </article>
+                            }
+                        </div>
+                    }
+                    <button type="button" class="eph-reasoning-toggle" @onclick="() => _showReasoning = !_showReasoning">
+                        <i class="bi @(_showReasoning ? "bi-chevron-down" : "bi-chevron-right")"></i> How AskHenyo reached this answer
+                    </button>
+                    @if (_showReasoning && SurvivingBranches.Count > 0)
+                    {
+                        <div class="eph-answer-section eph-reveal">
+                            <div class="eph-grounded-branches">
+                                @foreach (var level in UsedBranchLevels)
+                                {
+                                    <div class="eph-branch-level">
+                                        @foreach (var branch in level)
+                                        {
+                                            <span class="eph-branch-chip" title="@branch.Interpretation"><i class="bi @(branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i>@branch.DisplayName<em>@(branch.CapabilityCode ?? branch.GroundingStatusCode)</em></span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                                        </div>
+                                    }
+                                </section>
+                            }
+                            @if (!ShowAnswerView && !string.IsNullOrWhiteSpace(_response.FinalAnswer))
+            {
+                <section class="eph-explanation">
+                    <div class="eph-explanation-icon"><i class="bi bi-chat-square-quote"></i></div>
+                    <div class="eph-explanation-body">
+                        <div class="eph-panel-header"><div><span>@VerificationLabel</span><h2>@AnswerHeading</h2></div><span class="eph-status">@GroundingBadge</span></div>
+                        @if (FinalRankedCandidates.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small title="Deterministic final ordering from the Candidate × Branch competition — the authoritative EPH conclusion, never the pre-competition LLM composition.">Final EPH ranking (Candidate × Branch competition):</small>
+                                <ol class="eph-final-ranking">
+                                    @foreach (var candidate in FinalRankedCandidates)
+                                    {
+                                        <li><strong>@candidate.DisplayName</strong> <span>@candidate.CompositeScore.ToString("P0")</span></li>
+                                    }
+                                </ol>
+                            </div>
+                            <small class="eph-interpretive-note" title="The LLM composition below was written before the final candidate competition; it is the interpretive candidate source, not the final ordering.">Interpretive composition (candidate source):</small>
+                        }
+                        <p>@_response.FinalAnswer</p>
+                        @if (_response.QueryContract is { } contract && (contract.HardConstraints.Count > 0 || contract.AmbiguousConcepts.Count > 0))
+                        {
+                            <div class="eph-grounded-branches">
+                                <small>Query contract:</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var constraint in contract.HardConstraints)
+                                    {
+                                        <span class="eph-branch-chip" title="Hard constraint — fixed by your query, never reinterpreted."><i class="bi bi-lock"></i>@constraint<em>FIXED</em></span>
+                                    }
+                                    @foreach (var concept in contract.AmbiguousConcepts)
+                                    {
+                                        <span class="eph-branch-chip" title="Ambiguous concept — the only part EPH disambiguated."><i class="bi bi-question-circle"></i>@concept<em>DISAMBIGUATED</em></span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                        @if (SurvivingBranches.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                @foreach (var level in UsedBranchLevels)
+                                {
+                                    <div class="eph-branch-level">
+                                        @foreach (var branch in level)
+                                        {
+                                            <span class="eph-branch-chip" title="@branch.Interpretation"><i class="bi @(branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i>@branch.DisplayName<em>@(branch.CapabilityCode ?? branch.GroundingStatusCode)</em></span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                        @if (_response.SuggestedActions.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small>Suggested actions:</small>
+                                <div class="eph-branch-level">
+                                    @foreach (var action in _response.SuggestedActions)
+                                    {
+                                        <span class="eph-branch-chip eph-action-chip" title="@action.Rationale" @onclick="() => OpenRoute(action.NavigationRoute)"><i class="bi bi-arrow-right-circle"></i>@action.DisplayName</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </section>
+            }
+
+            <section class="eph-kpis">
+                <article><i class="bi bi-activity eph-kpi-icon"></i><span>Status</span><strong>@_response.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
+                <article><i class="bi bi-diagram-3 eph-kpi-icon"></i><span>Depth reached</span><strong>@_response.DepthReached</strong><small>@_response.LlmCallCount LLM calls</small></article>
+                <article><i class="bi bi-signpost-split eph-kpi-icon"></i><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
+                <article><i class="bi bi-database-check eph-kpi-icon"></i><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external · @_response.EnterpriseEvidenceCount enterprise</small></article>
+                <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence. Deep leaf branches without evidence lower this without necessarily weakening the answer."><i class="bi bi-bounding-box-circles eph-kpi-icon"></i><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
+                <article title="Decision coverage: share of the dimensions that actually drive the final Candidate × Branch ranking that are supported by evidence — the most meaningful grounding measure for the answer itself."><i class="bi bi-crosshair eph-kpi-icon"></i><span>Decision coverage</span><strong>@_response.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
+                <article title="Confidence in the final ranking decision itself: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage."><i class="bi bi-shield-check eph-kpi-icon"></i><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>decision confidence</small></article>
+                @if (_response.WinnerStability is { } winnerStability)
+                {
+                    <article title="Deterministic ranking stability across information rounds. Winner: share of consecutive measurements where the #1 candidate did not change. Top-3: average overlap of the top-3 set between consecutive measurements. High stability means additional evidence is not changing the answer — a convergence signal."><i class="bi bi-graph-up-arrow eph-kpi-icon"></i><span>Ranking stability</span><strong>@winnerStability.ToString("P0")</strong><small>winner · top-3 @(_response.TopKStability?.ToString("P0") ?? "—")</small></article>
+                }
+                @if (_response.InformationRounds.Count > 0)
+                {
+                    <article title="Deterministic Shannon entropy — 0% = fully resolved, 100% = maximal uncertainty. Measured by EPH math, never the LLM. Basis: BRANCH = competing ALTERNATIVE interpretations; CANDIDATE = deterministic candidate-signal distribution (which candidate wins)."><i class="bi bi-thermometer-half eph-kpi-icon"></i><span>Uncertainty</span><strong>@_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0")</strong><small>@_response.TotalActualInformationGain.ToString("0.###") bits gained · @(_response.EntropyBasisCode ?? "BRANCH") basis</small></article>
+                }
+            </section>
+
+            @if (_response.InformationRounds.Count > 0)
+            {
+                <section class="eph-panel">
+                    <div class="eph-panel-header"><div class="eph-panel-title"><span class="eph-panel-icon"><i class="bi bi-radar"></i></span><div><span>V2.2 information-directed exploration · the LLM predicts, EPH measures</span><h2>Information rounds</h2></div></div><span class="eph-status" title="Rounds executed · targets evaluated · total measured uncertainty reduction (bits)">@_response.InformationRounds.Count rounds · @_response.TotalActualInformationGain.ToString("0.###") bits</span></div>
+                    @foreach (var round in _response.InformationRounds)
+                    {
+                        <article class="eph-info-round">
+                            <div class="eph-info-round-head">
+                                <strong>Round @round.RoundNumber</strong>
+                                <span title="Normalized uncertainty before → after this round (deterministic Shannon entropy). Basis: BRANCH = competing interpretations; CANDIDATE = candidate-signal distribution.">@round.NormalizedEntropyBefore.ToString("P0") → @(round.NormalizedEntropyAfter?.ToString("P0") ?? "—") · @round.EntropyBasisCode</span>
+                                <span title="Raw entropy audit: H / Hmax (bits) and measured population size N before → after. If N changed between measurements, normalized percentages are not directly comparable and the gain reading must be judged on raw bits.">H @round.EntropyBefore.ToString("0.####")@(round.MaxEntropyBefore is { } maxBefore ? $"/{maxBefore:0.####}" : null) → @(round.EntropyAfter is { } after ? $"{after:0.####}{(round.MaxEntropyAfter is { } maxAfter ? $"/{maxAfter:0.####}" : null)}" : "—") bits · N @(round.PopulationCountBefore?.ToString() ?? "—") → @(round.PopulationCountAfter?.ToString() ?? "—")</span>
+                                @if (round.PopulationCountBefore is { } nBefore && round.PopulationCountAfter is { } nAfter && nBefore != nAfter)
+                                {
+                                    <span class="um-badge um-badge-warning" title="The measured population changed between the before and after measurements, so normalized percentages compare different distributions. Judge this round on raw bits.">POPULATION CHANGED</span>
+                                }
+                                @if (round.RawEntropyDelta is { } rawDelta)
+                                {
+                                    <span class="um-badge um-badge-neutral" title="Raw measured entropy change (EntropyBefore − EntropyAfter) — the single measured fact for this round, before any clamping. Measured by EPH math, never the LLM.">Information change: @((rawDelta >= 0m ? "+" : "\u2212") + Math.Abs(rawDelta).ToString("0.###")) bits</span>
+                                    <span class="um-badge @(rawDelta > 0m ? "um-badge-success" : rawDelta < 0m ? "um-badge-warning" : "um-badge-neutral")" title="@(rawDelta < 0m ? "The new evidence INCREASED measured uncertainty. This is meaningful — it revealed prior overconfidence — and is not the same as no information." : rawDelta > 0m ? "The new evidence reduced measured uncertainty." : "The measured uncertainty did not change.")">Outcome: @(rawDelta > 0m ? "Uncertainty reduced" : rawDelta < 0m ? "Uncertainty increased" : "No measurable change")@(rawDelta != 0m && Math.Abs(rawDelta) < .05m ? " slightly" : null)</span>
+                                }
+                                else if (round.ActualInformationGain is { } gain)
+                                {
+                                    <span class="um-badge @(gain > 0m ? "um-badge-success" : "um-badge-neutral")" title="Actual information gain measured by EPH after targeted retrieval — never estimated by the LLM.">@gain.ToString("0.###") bits</span>
+                                }
+                            </div>
+                            @foreach (var target in round.Targets)
+                            {
+                                <div class="eph-info-target @(target.WasSelected ? null : "eph-info-target-skipped")">
+                                    <span class="eph-rank" title="@(target.WasSelected ? "Selected for targeted retrieval." : "Evaluated but not selected — kept for audit.")">@(target.SelectionRank?.ToString() ?? "–")</span>
+                                    <div class="eph-evidence-main">
+                                        <strong>@target.BranchDisplayName</strong>
+                                        @if (!string.IsNullOrWhiteSpace(target.EvidenceTarget))
+                                        {
+                                            <p>@target.EvidenceTarget</p>
+                                        }
+                                        <div>
+                                            <span class="um-badge um-badge-neutral" title="How unresolved this interpretation dimension is (LLM categorical estimate).">Uncertainty @target.UncertaintyCode</span>
+                                            <span class="um-badge um-badge-neutral" title="How likely new evidence here changes the final ranking (LLM categorical estimate).">Impact @target.RankingImpactCode</span>
+                                            <span class="um-badge um-badge-neutral" title="How well evidence here separates close candidates (LLM categorical estimate).">Discrimination @target.CandidateDiscriminationCode</span>
+                                        </div>
+                                    </div>
+                                    <div class="eph-score"><strong>@target.AdjustedInformationValue.ToString("P0")</strong><small>Info value</small></div>
+                                </div>
+                            }
+                        </article>
+                    }
+                </section>
+            }
+
+            @if (_response.Candidates.Count > 0)
+            {
+                <section class="eph-panel">
+                    <div class="eph-panel-header"><div class="eph-panel-title"><span class="eph-panel-icon"><i class="bi bi-trophy"></i></span><div><span>Candidate × Branch competition · ranked by surviving interpretations</span><h2>EPH Answer ranking</h2></div></div><span class="eph-status" title="EPH Journey: interpretations explored → evidence-supported → final dimensions → ranked candidates">@_response.Branches.Count → @SurvivingBranches.Count → @ActiveBranchCount → @_response.Candidates.Count</span></div>
+                    @foreach (var candidate in _response.Candidates)
+                    {
+                        <article class="eph-evidence @(candidate.IsConstraintViolation ? "eph-branch-unsupported" : null)">
+                            <span class="eph-rank">@candidate.RankNumber</span>
+                            <div class="eph-evidence-main">
+                                <strong>@candidate.DisplayName</strong>
+                                <p>@candidate.Detail</p>
+                                <div>
+                                    @if (candidate.IsConstraintViolation)
+                                    {
+                                        <span class="um-badge um-badge-danger" title="Failed a hard query constraint; kept visible, never hidden."><i class="bi bi-slash-circle"></i> RULED OUT</span>
+                                    }
+                                    else if (candidate.EvidenceCoverage < .5m)
+                                    {
+                                        <span class="um-badge um-badge-warning" title="This candidate has evidence on only some interpretation dimensions; its ranking is discounted accordingly."><i class="bi bi-exclamation-triangle"></i> LOW COVERAGE @candidate.EvidenceCoverage.ToString("P0")</span>
+                                    }
+                                    @foreach (var score in candidate.BranchScores)
+                                    {
+                                        <span class="um-badge um-badge-neutral" title="Evidence score for this interpretation dimension.">@score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="eph-score"><strong>@candidate.QualityScore.ToString("P0")</strong><small>Quality</small></div>
+                            <div class="eph-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage. Weak evidence lowers this confidence, never the quality itself."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
+                        </article>
+                    }
+                </section>
+            }
+
+            @if (_response.Branches.Count > 0 || _response.ExternalReferences.Count > 0 || _response.InterpretiveResults.Count > 0)
+            {
+            <div class="eph-layout">
+                <section class="eph-panel eph-hierarchy-panel">
+                    <div class="eph-panel-header"><div class="eph-panel-title"><span class="eph-panel-icon"><i class="bi bi-diagram-3"></i></span><div><span>EPG Engine Logic Applied</span><h2>Reasoning hierarchy</h2></div></div></div>
+                    <div class="eph-tree">
+                        @foreach (var level in BranchLevels)
+                        {
+
+                            @foreach (var branch in level)
+                            {
+                                <article class="eph-branch @(branch.IsEliminated ? "eph-branch-unsupported" : "eph-branch-valid")">
+                                    <span class="eph-branch-icon"><i class="bi @(branch.IsEliminated ? "bi-slash-circle" : branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i></span>
+                                    <div><strong>@branch.DisplayName</strong><p>@branch.Interpretation</p><small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small></div>
+                                    <div class="eph-branch-meta"><span>@BranchStateLabel(branch)</span>@if (branch.SemanticTypeCode == "DIMENSION")
+                                        {
+                                            <span class="um-badge um-badge-neutral" title="Jointly valid evaluation criterion — scored on importance/coverage, excluded from winner-take-all entropy.">Dimension</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="um-badge um-badge-neutral" title="Mutually exclusive competing interpretation — participates in Shannon entropy.">Alternative</span>
+                                        }<small title="Interpretation prior (LLM) · Evidence support · EPH confidence">@(branch.EphConfidence > 0 ? $"{branch.InterpretationPrior:P0} · {branch.EvidenceSupport:P0} · {branch.EphConfidence:P0}" : branch.Confidence.ToString("P0"))</small></div>
+                                </article>
+                            }
+                        }
+                    </div>
+                </section>
+
+                <section class="eph-panel eph-evidence-panel">
+                    <div class="eph-panel-header"><div class="eph-panel-title"><span class="eph-panel-icon"><i class="bi bi-collection"></i></span><div><span>LLM knowledge · not enterprise data</span><h2>Results &amp; references</h2></div></div></div>
+                    @if (_response.Evidence.Count == 0 && _response.ExternalReferences.Count == 0 && _response.InterpretiveResults.Count == 0)
+                    {
+                        <div class="eph-empty"><i class="bi bi-lightbulb"></i><strong>No result sets returned</strong><p>The LLM did not return interpretive result sets or references for this question.</p></div>
+                    }
+                    @foreach (var evidence in _response.Evidence)
+                    {
+                        var canOpen = !string.IsNullOrWhiteSpace(evidence.NavigationRoute);
+                        <article class="eph-evidence @(canOpen ? "eph-evidence-clickable" : null)" @ondblclick="() => OpenEvidence(evidence)" title="@(canOpen ? "Double-click to open the source record." : null)">
+                            <span class="eph-rank">@evidence.RankNumber</span>
+                            <div class="eph-evidence-main"><strong>@evidence.Title</strong><small>@evidence.ModuleCode · @evidence.EntityTypeCode</small><p>@evidence.Excerpt</p><div>@foreach (var branch in evidence.MatchedBranches) { <span class="um-badge um-badge-neutral">@branch</span> }</div></div>
+                            <div class="eph-score"><strong>@evidence.RelevanceScore.ToString("P0")</strong><small>Score</small></div>
+                        </article>
+                    }
+                    @if (_response.InterpretiveResults.Count > 0)
+                    {
+                        <div class="eph-section-divider"><i class="bi bi-stars"></i><h2>Interpretation results</h2></div>
+                        @if (_response.InterpretiveResults.Any(r => r.DataVolatility == "TIME_SENSITIVE" && !r.IsExternallyGrounded))
+                        {
+                            <div class="alert alert-warning" role="alert" style="border-left: 4px solid #ffc107;">
+                                <i class="bi bi-clock-history"></i> Some results below depend on time-sensitive data (prices, rates, rankings). Figures may be outdated &mdash; verify against the referenced sources for current values.
+                            </div>
+                        }
+                        @foreach (var result in PrioritizedInterpretiveResults)
+                        {
+                            <article class="eph-evidence">
+                                <span class="eph-rank"><i class="bi bi-lightbulb"></i></span>
+                                <div class="eph-evidence-main">
+                                    <strong>@result.BranchDisplayName</strong>
+                                    <small>@result.Interpretation</small>
+                                    @foreach (var item in result.Items)
+                                    {
+                                        <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
+                                    }
+                                    <div>
+                                        <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                        @if (result.DataVolatility == "TIME_SENSITIVE")
+                                        {
+                                            <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                        }
+                                        @if (result.IsExternallyGrounded)
+                                        {
+                                            <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="eph-score"><strong>@result.Confidence.ToString("P0")</strong><small>Score</small></div>
+                            </article>
+                        }
+                        @if (SecondaryInterpretiveResults.Count > 0)
+                        {
+                            <div class="eph-secondary-panel">
+                                <div class="eph-secondary-header">
+                                    <i class="bi bi-layers-half"></i>
+                                    <div>
+                                        <span>Not prioritized &middot; secondary analysis</span>
+                                        <h3>Interpretation results for not-prioritized paths</h3>
+                                        <p>These interpretation paths scored below the prioritization threshold or returned no enterprise evidence. They remain part of the answer surface for completeness and can be reactivated by supporting evidence.</p>
+                                    </div>
+                                    <span class="eph-secondary-count">@SecondaryInterpretiveResults.Count</span>
+                                </div>
+                                @foreach (var result in SecondaryInterpretiveResults)
+                                {
+                                    <article class="eph-evidence eph-evidence-secondary">
+                                        <span class="eph-rank eph-rank-secondary"><i class="bi bi-lightbulb"></i></span>
+                                        <div class="eph-evidence-main">
+                                            <strong>@result.BranchDisplayName</strong>
+                                            <small>@result.Interpretation</small>
+                                            @foreach (var item in result.Items)
+                                            {
+                                                <p><strong>@item.RankNumber. @item.Name</strong> &mdash; @item.Detail</p>
+                                            }
+                                            <div>
+                                                <span class="um-badge um-badge-neutral" title="This interpretation path was demoted to dormant/secondary — retained for completeness, not driving the primary answer.">NOT PRIORITIZED</span>
+                                                <span class="um-badge um-badge-neutral">INTERPRETIVE</span>
+                                                @if (result.DataVolatility == "TIME_SENSITIVE")
+                                                {
+                                                    <span class="um-badge um-badge-warning" title="This result depends on facts that change over time; figures may be outdated."><i class="bi bi-clock-history"></i> TIME-SENSITIVE</span>
+                                                }
+                                                @if (result.IsExternallyGrounded)
+                                                {
+                                                    <span class="um-badge um-badge-success" title="Figures were grounded against live external sources."><i class="bi bi-globe2"></i> LIVE-GROUNDED</span>
+                                                }
+                                            </div>
+                                        </div>
+                                        <div class="eph-score"><strong>@result.Confidence.ToString("P0")</strong><small>Score</small></div>
+                                    </article>
+                                }
+                            </div>
+                        }
+                    }
+                    @if (_response.ExternalReferences.Count > 0 && _response.AnswerContext is null)
+                    {
+                        <div class="eph-panel-header"><div><span>Real-world references · LLM knowledge (not enterprise-verified)</span><h2>External sources</h2></div></div>
+                        @foreach (var reference in _response.ExternalReferences)
+                        {
+                            <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(reference.Url)" title="Double-click to open @reference.Url in a new tab.">
+                                <span class="eph-rank"><i class="bi bi-globe2"></i></span>
+                                <div class="eph-evidence-main">
+                                    <strong>@reference.Title</strong>
+                                    <small>@reference.Source</small>
+                                    <p>@reference.Summary</p>
+                                    <div><span class="um-badge um-badge-neutral">@reference.BranchDisplayName</span> <a href="@reference.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@reference.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                </div>
+                            </article>
+                        }
+                    }
+                    @if (_response.ExternalKnowledge.Count > 0 && _response.AnswerContext is null)
+                    {
+                        <div class="eph-panel-header"><div><span>Live web sources &middot; retrieved for time-sensitive grounding</span><h2>Live grounding sources</h2></div></div>
+                        @foreach (var snippet in _response.ExternalKnowledge)
+                        {
+                            <article class="eph-evidence eph-evidence-clickable" @ondblclick="() => OpenExternal(snippet.Url)" title="Double-click to open @snippet.Url in a new tab.">
+                                <span class="eph-rank"><i class="bi bi-broadcast"></i></span>
+                                <div class="eph-evidence-main">
+                                    <strong>@snippet.Title</strong>
+                                    <small>Retrieved @snippet.RetrievedDateUtc.ToString("yyyy-MM-dd HH:mm") UTC</small>
+                                    <p>@snippet.Snippet</p>
+                                    <div><span class="um-badge um-badge-success"><i class="bi bi-globe2"></i> LIVE</span> <a href="@snippet.Url" target="_blank" rel="noopener noreferrer" @onclick:stopPropagation="true">@snippet.Url <i class="bi bi-box-arrow-up-right"></i></a></div>
+                                </div>
+                            </article>
+                        }
+                    }
+                </section>
+            </div>
+            }
+        }
+    </div>
+</IntelligenceWorkspace>
+
+@code {
+    private string _query = "";
+    private string _clarificationAnswer = "";
+    private bool _loading, _useEphEngine = true;
+    // V2.9 two-view UX: consumer Answer view by default; the full EPH Analysis stays one click away.
+    private bool _showAnswerView = true, _showReasoning;
+    private string? _error;
+    private WideSearchResponse? _response;
+
+    private bool ShowAnswerView => _showAnswerView && _response?.AnswerContext is not null && _response.StatusCode != "USER_CLARIFICATION_REQUIRED";
+    private string ConfidenceTooltip => _response is null ? "" : $"Decision confidence {_response.FinalConfidence:P0} · winner stability {(_response.WinnerStability?.ToString("P0") ?? "—")} · top-3 {(_response.TopKStability?.ToString("P0") ?? "—")} · uncertainty {_response.InitialNormalizedEntropy:P0} → {_response.FinalNormalizedEntropy:P0} · {_response.TotalActualInformationGain:0.###} bits gained";
+    private static string AnswerModeKicker(WideAnswerContext context) => context.ResponseMode switch
+    {
+        WideResponseModes.AnswerWithRefinement => "Ranked result — several candidates scored closely",
+        WideResponseModes.LimitedEvidence => "Directional result — limited evidence backing",
+        _ => "Direct answer",
+    };
+
+    // V2.9 personalization: a preference is a refinement, not a restart — it flows through the same
+    // continuation mechanism as a clarification answer (constraint-append + candidate reweighting).
+    private Task PersonalizeAsync(string dimension) => SubmitClarificationAsync($"prioritize {dimension}");
+
+    private IReadOnlyCollection<WideBranchDto> SurvivingBranches => _response?.Branches.Where(x => !x.IsEliminated).ToArray() ?? [];
+    private IReadOnlyCollection<WideInterpretiveResultDto> PrioritizedInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode != "DORMANT").ToArray() ?? [];
+    private IReadOnlyCollection<WideInterpretiveResultDto> SecondaryInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode == "DORMANT").ToArray() ?? [];
+    private IReadOnlyCollection<WideBranchDto> EliminatedBranches => _response?.Branches.Where(x => x.IsEliminated).ToArray() ?? [];
+    private IEnumerable<IGrouping<int, WideBranchDto>> BranchLevels => (_response?.Branches ?? []).OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);
+    private IEnumerable<IGrouping<int, WideBranchDto>> UsedBranchLevels => SurvivingBranches.OrderBy(x => x.SortOrder).GroupBy(x => x.LevelNumber).OrderBy(group => group.Key);
+    private bool HasEnterpriseEvidence => _response?.EnterpriseEvidenceCount > 0;
+    private string VerificationLabel => _response?.AnswerVerificationCode switch
+    {
+        // V2.5: "verified" is reserved for answers actually backed by enterprise evidence. Answers
+        // grounded only in live external sources are honestly labeled as externally grounded.
+        "VERIFIED" when HasEnterpriseEvidence => "Fully verified against enterprise evidence",
+        "VERIFIED" => "Grounded in live external sources — no enterprise evidence involved",
+        "PARTIALLY_VERIFIED" when HasEnterpriseEvidence => "Partially verified against enterprise evidence",
+        "PARTIALLY_VERIFIED" => "Grounded in live external sources — no enterprise evidence involved",
+        _ => "Interpretation not verified against enterprise data"
+    };
+    private string AnswerHeading => _response?.AnswerVerificationCode == "VERIFIED" && HasEnterpriseEvidence ? "Verified answer" : "Grounded answer";
+
+    // V2.4: the final visible ranking deterministically follows the Candidate × Branch competition.
+    private IReadOnlyList<WideCandidateDto> FinalRankedCandidates => _response is null ? []
+        : _response.Candidates.Where(c => !c.IsConstraintViolation).OrderBy(c => c.RankNumber).Take(10).ToArray();
+    private string GroundingBadge => _response switch
+    {
+        { AnswerVerificationCode: "VERIFIED" } when HasEnterpriseEvidence => "VERIFIED",
+        { AnswerVerificationCode: "VERIFIED" or "PARTIALLY_VERIFIED" } => "LIVE-GROUNDED",
+        { EvidenceCoverage: >= .5m } => "PARTIALLY GROUNDED",
+        _ => "LIMITED EVIDENCE"
+    };
+    private static string BranchStateLabel(WideBranchDto branch) => branch.BranchStateCode switch
+    {
+        "PRUNED" => "RULED OUT",
+        "DORMANT" => "NOT PRIORITIZED",
+        "SECONDARY" => "ALSO RELEVANT",
+        _ => branch.IsEliminated ? "RULED OUT" : branch.GroundingStatusCode
+    };
+    private int ActiveBranchCount => SurvivingBranches.Count(x => x.BranchStateCode == "ACTIVE");
+
+    protected override Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Intelligent Search Wide Using EPH Engine", "/intelligence/search/eph_wide"));
+        return Task.CompletedTask;
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
+        _clarificationAnswer = "";
+        _loading = true;
+        _error = null;
+        try
+        {
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UseEphEngine = _useEphEngine });
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    // V2.8: submitting a clarification answer continues the SAME reasoning context — the answer is
+    // sent as an added constraint alongside the original query, so EPH reweights instead of restarting.
+    private async Task SubmitClarificationAsync(string answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer) || _response is null) return;
+        var target = _response.ClarificationTarget;
+        // V2.8.5: carry the round counter and the asking execution's intent entropy so the backend
+        // can measure Clarification Gain and enforce the multi-round stop rules.
+        var round = _response.ClarificationRound + 1;
+        var priorIntentEntropy = _response.IntentEntropy;
+        _loading = true;
+        _error = null;
+        try
+        {
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UseEphEngine = _useEphEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy });
+            _clarificationAnswer = "";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task ClarificationKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await SubmitClarificationAsync(_clarificationAnswer);
+    }
+
+    private async Task KeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await SearchAsync();
+    }
+
+    private void OpenEvidence(EphEvidenceDto evidence)
+    {
+        if (!string.IsNullOrWhiteSpace(evidence.NavigationRoute)) Navigation.NavigateTo(evidence.NavigationRoute);
+    }
+
+    private void OpenRoute(string route)
+    {
+        if (!string.IsNullOrWhiteSpace(route)) Navigation.NavigateTo(route);
+    }
+
+    private async Task OpenExternal(string url)
+    {
+        if (!string.IsNullOrWhiteSpace(url)) await JS.InvokeVoidAsync("open", url, "_blank", "noopener,noreferrer");
+    }
+}
+

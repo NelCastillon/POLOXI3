@@ -1,0 +1,123 @@
+@page "/crm/compliance/do-not-call/screening"
+@namespace Ams.Web.Components.Pages.Crm
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>DNC Screening Operations</PageTitle>
+
+<AppPageHeader Title="DNC Screening Operations"
+               Subtitle="Monitor registry screening readiness, due work, failures, and result freshness"
+               Icon="bi-shield-check">
+    <Actions>
+        <a class="um-btn um-btn-ghost" href="/crm/compliance/do-not-call"><i class="bi bi-arrow-left"></i> DNC Registry</a>
+        <button class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </Actions>
+</AppPageHeader>
+
+<div class="dso-notice"><i class="bi bi-info-circle-fill"></i><div><strong>Provider-controlled screening</strong><span>This page shows persisted registry work and results. Screening runs only when a real provider is registered and enabled in platform configuration.</span></div></div>
+
+@if (!string.IsNullOrWhiteSpace(_error)) { <div class="dso-error">@_error</div> }
+
+<div class="dso-kpis" role="group" aria-label="Filter screening operations">
+    <button type="button" class="dso-kpi dso-kpi--blue @DueKpiClass" @onclick="ShowDue" aria-pressed="@IsDueView">
+        <span class="dso-kpi-icon"><i class="bi bi-calendar2-check"></i></span>
+        <span class="dso-kpi-content"><span class="dso-kpi-label">Due Now</span><strong>@DueOnlyRows.Count().ToString("N0")</strong><span class="dso-kpi-detail">Screening date reached</span></span>
+        <span class="dso-kpi-action">View queue <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dso-kpi dso-kpi--amber @PendingKpiClass" @onclick="ShowPending" aria-pressed="@IsPendingView">
+        <span class="dso-kpi-icon"><i class="bi bi-hourglass-split"></i></span>
+        <span class="dso-kpi-content"><span class="dso-kpi-label">Pending</span><strong>@PendingRows.Count().ToString("N0")</strong><span class="dso-kpi-detail">Awaiting screening</span></span>
+        <span class="dso-kpi-action">View queue <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dso-kpi dso-kpi--red @FailedKpiClass" @onclick="ShowFailed" aria-pressed="@IsFailedView">
+        <span class="dso-kpi-icon"><i class="bi bi-exclamation-octagon"></i></span>
+        <span class="dso-kpi-content"><span class="dso-kpi-label">Failed</span><strong>@FailedRows.Count().ToString("N0")</strong><span class="dso-kpi-detail">Provider action required</span></span>
+        <span class="dso-kpi-action">Review failures <i class="bi bi-arrow-right"></i></span>
+    </button>
+    <button type="button" class="dso-kpi dso-kpi--green @CurrentKpiClass" @onclick="ShowCurrent" aria-pressed="@IsCurrentView">
+        <span class="dso-kpi-icon"><i class="bi bi-shield-check"></i></span>
+        <span class="dso-kpi-content"><span class="dso-kpi-label">Current Results</span><strong>@CurrentRows.Count().ToString("N0")</strong><span class="dso-kpi-detail">Screening is in force</span></span>
+        <span class="dso-kpi-action">View current <i class="bi bi-arrow-right"></i></span>
+    </button>
+</div>
+
+<section class="dso-card">
+    @if (_loading)
+    {
+        <div class="dso-state"><span class="um-spin"></span> Loading screening operations...</div>
+    }
+    else
+    {
+        var rows = ActiveRows.ToList();
+        @if (rows.Count == 0)
+        {
+            <div class="dso-state"><i class="bi bi-check-circle-fill"></i><strong>No records in this view</strong></div>
+        }
+        else
+        {
+            <div class="dso-list">
+            @foreach (var row in rows)
+            {
+                <article class="dso-row">
+                    <div class="dso-icon @ResultTone(row)"><i class="bi @ResultIcon(row)"></i></div>
+                    <div class="dso-main"><strong>@row.LeadName</strong><span>@row.DisplayPhoneNumber · @row.LeadNumber</span></div>
+                    <div class="dso-result"><span class="dso-label">Latest result</span><strong>@ResultText(row)</strong><small>@ProviderText(row)</small></div>
+                    <div class="dso-date"><span class="dso-label">Last screened</span><strong>@DateText(row.LastScreenedDateUtc)</strong></div>
+                    <div class="dso-date"><span class="dso-label">Next due</span><strong class="@(IsDue(row) ? "overdue" : "")">@DateText(row.NextScreeningDueDateUtc)</strong></div>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenLead(row.LeadId)">Review Lead</button>
+                </article>
+            }
+            </div>
+        }
+    }
+</section>
+
+@code {
+    private PhoneComplianceWorkspaceDto _workspace = new();
+    private bool _loading = true;
+    private string? _error;
+    private string _tab = "due";
+    private DateTime Now => DateTime.UtcNow;
+    private IEnumerable<PhoneComplianceRegistryRowDto> DueOnlyRows => _workspace.Phones.Where(x => x.NextScreeningDueDateUtc.HasValue && x.NextScreeningDueDateUtc <= Now).OrderBy(x => x.NextScreeningDueDateUtc);
+    private IEnumerable<PhoneComplianceRegistryRowDto> PendingRows => _workspace.Phones.Where(x => string.Equals(x.OverallStatusCode, "PendingScreening", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.NextScreeningDueDateUtc ?? DateTime.MinValue);
+    private IEnumerable<PhoneComplianceRegistryRowDto> FailedRows => _workspace.Phones.Where(x => string.Equals(x.LatestScreeningResultCode, "Failed", StringComparison.OrdinalIgnoreCase) || string.Equals(x.LatestScreeningResultCode, "Error", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.LastScreenedDateUtc);
+    private IEnumerable<PhoneComplianceRegistryRowDto> CurrentRows => _workspace.Phones.Where(x => x.LastScreenedDateUtc.HasValue && !IsDue(x) && !string.Equals(x.LatestScreeningResultCode, "Failed", StringComparison.OrdinalIgnoreCase) && !string.Equals(x.LatestScreeningResultCode, "Error", StringComparison.OrdinalIgnoreCase)).OrderByDescending(x => x.LastScreenedDateUtc);
+    private IEnumerable<PhoneComplianceRegistryRowDto> ActiveRows => _tab switch { "pending" => PendingRows, "failed" => FailedRows, "current" => CurrentRows, _ => DueOnlyRows };
+    private bool IsDueView => _tab == "due";
+    private bool IsPendingView => _tab == "pending";
+    private bool IsFailedView => _tab == "failed";
+    private bool IsCurrentView => _tab == "current";
+    private string DueKpiClass => IsDueView ? "is-active" : string.Empty;
+    private string PendingKpiClass => IsPendingView ? "is-active" : string.Empty;
+    private string FailedKpiClass => IsFailedView ? "is-active" : string.Empty;
+    private string CurrentKpiClass => IsCurrentView ? "is-active" : string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("CRM", "/crm/leads"), new("DNC Registry", "/crm/compliance/do-not-call"), new("Screening Operations", "/crm/compliance/do-not-call/screening"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true; _error = null;
+        try { var user = await CurrentUser.RequireAsync(); _workspace = await Api.GetPhoneComplianceWorkspaceAsync(user.TenantId) ?? new(); }
+        catch (Exception ex) { _error = $"Unable to load screening operations: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void SetView(string view) => _tab = view;
+    private void ShowDue() => SetView("due");
+    private void ShowPending() => SetView("pending");
+    private void ShowFailed() => SetView("failed");
+    private void ShowCurrent() => SetView("current");
+    private bool IsDue(PhoneComplianceRegistryRowDto row) => !row.NextScreeningDueDateUtc.HasValue || row.NextScreeningDueDateUtc <= Now;
+    private static string ResultText(PhoneComplianceRegistryRowDto row) => string.IsNullOrWhiteSpace(row.LatestScreeningResultCode) ? "Not screened" : row.LatestScreeningResultCode;
+    private static string ProviderText(PhoneComplianceRegistryRowDto row) => string.IsNullOrWhiteSpace(row.LatestScreeningProviderCode) ? "Awaiting provider" : row.LatestScreeningProviderCode;
+    private static string DateText(DateTime? value) => value?.ToLocalTime().ToString("MMM d, yyyy g") ?? "Not available";
+    private static string ResultTone(PhoneComplianceRegistryRowDto row) => row.LatestScreeningResultCode switch { "Clear" => "success", "Matched" => "danger", "Failed" => "danger", _ => "warning" };
+    private static string ResultIcon(PhoneComplianceRegistryRowDto row) => row.LatestScreeningResultCode switch { "Clear" => "bi-shield-check", "Matched" => "bi-shield-x", "Failed" => "bi-exclamation-octagon", _ => "bi-hourglass-split" };
+    private void OpenLead(Guid leadId) => Nav.NavigateTo($"/crm/leads/{leadId}");
+}

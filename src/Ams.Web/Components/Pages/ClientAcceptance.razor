@@ -1,0 +1,316 @@
+@page "/submissions/{SubmissionId:guid}/client-acceptance"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+@inject Ams.Web.Services.CurrentUserContext CurrentUser
+
+<PageTitle>Client Acceptance - AMS</PageTitle>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true" />
+<AppPageHeader Icon="bi-person-check-fill" Title="Client Acceptance" Subtitle="Controlled proposal acceptance, coverage election, consent, and authorization to bind." ReturnUrl="@($"/submissions/{SubmissionId}/proposals")" ReturnLabel="Back to Proposal Workflow">
+    <Actions>
+        <button type="button" class="um-btn um-btn-ghost" disabled="@_loading" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        <button type="button" class="um-btn um-btn-primary" @onclick="GoBack"><i class="bi bi-folder2-open"></i> Submission Detail</button>
+    </Actions>
+</AppPageHeader>
+
+@if (_loading)
+{
+    <div class="ca-state"><div class="spinner-border text-primary"></div><strong>Loading acceptance controls...</strong><span>Checking delivered proposals, quote readiness, documents, consents, and prior decisions.</span></div>
+}
+else if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger ca-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_error</span></div>
+}
+else
+{
+    <section class="ca-hero">
+        <div class="ca-hero-main">
+            <span class="ca-hero-icon"><i class="bi bi-person-check-fill"></i></span>
+            <div>
+                <span class="ca-eyebrow"><i class="bi bi-shield-lock"></i> Acceptance control center</span>
+                <div class="ca-hero-title-row">
+                    <h1>@(_submission?.SubmissionNumber ?? "Client acceptance")</h1>
+                    @if (_submission is not null)
+                    {
+                        <span class="ca-hero-status @SubmissionStatusClass"><small>Submission status</small><strong>@DisplayStatus(_submission.Status)</strong></span>
+                    }
+                    <span class="ca-hero-readiness @HeaderReadinessClass"><small>Decision readiness</small><strong>@SubmitStatusText</strong></span>
+                </div>
+                <p>Capture customer decisions with quote fingerprints, coverage elections, consent attestations, and bind-ready authorization evidence.</p>
+                <div class="ca-hero-chips">
+                    <span><i class="bi bi-building"></i> @(_submission?.AccountName ?? "Account")</span>
+                    <span><i class="bi bi-briefcase"></i> @(_submission?.LineOfBusiness ?? "Line of business")</span>
+                    <span><i class="bi bi-calendar-event"></i> Effective @FormatDate(_submission?.EffectiveDate)</span>
+                </div>
+            </div>
+        </div>
+        <div class="ca-hero-actions">
+            @if (CanRequestBindFromHeader && HeaderAcceptance is not null)
+            {
+                <button type="button" class="um-btn um-btn-success" @onclick="() => OpenBind(HeaderAcceptance)" title="Open the governed bind request using this accepted quote and customer authorization."><i class="bi bi-shield-check"></i> Request Bind</button>
+            }
+            else if (HasBindProgress)
+            {
+                <button type="button" class="um-btn um-btn-success" @onclick="OpenBindCenter"><i class="bi bi-shield-check"></i> Open Bind Center</button>
+            }
+            <button type="button" class="um-btn um-btn-ghost" @onclick="OpenProposalWorkflow"><i class="bi bi-file-earmark-richtext"></i> Proposal Workflow</button>
+            @if (_form.ProposalId.HasValue)
+            {
+                <button type="button" class="um-btn um-btn-ghost" @onclick="OpenSelectedProposal"><i class="bi bi-eye"></i> View Proposal</button>
+            }
+        </div>
+    </section>
+
+    <div class="ca-kpis">
+        @Kpi("Proposal versions", _proposals.Count.ToString(), "bi-layers", "Delivered or prepared proposal versions available to the submission")
+        @Kpi("Recorded decisions", _history.Count.ToString(), "bi-journal-check", "Accepted, declined, withdrawn, and bind-related acceptance records")
+        @Kpi("Active acceptance", ActiveAcceptanceCount.ToString(), "bi-shield-check", "Acceptance records that still affect the bind workflow")
+        @Kpi("Bind readiness", _readiness?.CanAccept == true ? "Ready" : "Review", "bi-clipboard2-check", "Current proposal and quote readiness state")
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_saveError))
+    {
+        <div class="alert alert-danger ca-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>@_saveError</span></div>
+    }
+
+    @if (_recordedDecision is not null)
+    {
+        <section class="ca-next-step" aria-live="polite">
+            <span class="ca-next-step__icon"><i class="bi bi-check2-circle"></i></span>
+            <div><span class="ca-eyebrow">Decision synchronized</span><h2>@DisplayStatus(_recordedDecision.DecisionCode) decision recorded</h2><p>@(_recordedDecision.StatusCode == "Accepted" ? "Customer authorization and quote selection are complete. Continue the governed workflow with a bind request." : "The proposal lifecycle and submission status were updated. Continue in Proposal Workflow to review the next governed action.")</p></div>
+            @if (_recordedDecision.StatusCode == "Accepted" && _recordedDecision.CustomerAuthorizationId.HasValue)
+            {
+                <button type="button" class="um-btn um-btn-success" @onclick="() => OpenBind(_recordedDecision)"><i class="bi bi-shield-check"></i> Request Bind</button>
+            }
+            else
+            {
+                <button type="button" class="um-btn um-btn-primary" @onclick="OpenProposalWorkflow"><i class="bi bi-arrow-right-circle"></i> Proposal Workflow</button>
+            }
+        </section>
+    }
+
+    <div class="ca-layout">
+        <section class="ca-card ca-workbench">
+            <header>
+                <div><span class="ca-eyebrow">Decision workbench</span><h2>Capture client decision</h2><p>Acceptance is tied to the exact proposal version, quote fingerprint, coverage lines, signer, and evidence.</p></div>
+            </header>
+            <EditForm Model="_form" OnValidSubmit="SaveAsync" OnInvalidSubmit="HandleInvalidSubmitAsync">
+                <DataAnnotationsValidator />
+                <ValidationSummary class="ca-validation" />
+                <div class="ca-form-sections">
+                    <section class="ca-form-group ca-form-group--decision">
+                        <header><span><i class="bi bi-signpost-split"></i></span><div><strong>Proposal &amp; Decision</strong><small>Select the exact delivered proposal, quote option, and client outcome.</small></div></header>
+                        <div class="ca-grid">
+                            <label><span>Proposal version <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.ProposalId" @bind-Value:after="ProposalChangedAsync"><option value="">Select delivered proposal</option>@foreach (var item in _proposals.OrderByDescending(x => x.SentDateUtc ?? x.PresentedDateUtc ?? x.ApprovedDateUtc ?? DateTime.MinValue)){<option value="@item.ProposalId">@item.Title · @DisplayStatus(item.Status)</option>}</InputSelect></label>
+                            <label><span>Quote option <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.QuoteId" @bind-Value:after="QuoteChangedAsync" disabled="@(!_quotes.Any())"><option value="">Select proposal quote</option>@foreach (var quote in _quotes.OrderBy(x => x.SortOrder)){<option value="@quote.QuoteId">@quote.CarrierName · @quote.QuoteNumber · @quote.AnnualPremium.ToString("C0")</option>}</InputSelect></label>
+                            <label class="ca-full"><span>Decision <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.DecisionCode" @bind-Value:after="DecisionChanged">@foreach (var option in _decisionOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                        </div>
+                    </section>
+                    <section class="ca-form-group ca-form-group--authorization">
+                        <header><span><i class="bi bi-person-vcard"></i></span><div><strong>Authorization</strong><small>Identify the authorized person, capacity, authority basis, and acceptance method.</small></div></header>
+                        <div class="ca-grid">
+                            <label><span>Authorization method <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.AuthorizationMethodCode">@foreach (var option in _authorizationMethods){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                            <label><span>Authority basis <em>*</em></span><InputSelect class="form-select" @bind-Value="_form.AuthorityBasisCode">@foreach (var option in _authorityOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label>
+                            <label><span>Authorized person <em>*</em></span><InputText class="form-control" @bind-Value="_form.AuthorizedByName" maxlength="200" placeholder="Customer or authorized signer" /></label>
+                            <label><span>Title / capacity <em>*</em></span><InputText class="form-control" @bind-Value="_form.AuthorizedByTitle" maxlength="150" placeholder="Owner, CFO, risk manager" /></label>
+                            <label><span>Authorization date <em>*</em></span><InputDate class="form-control" @bind-Value="_form.AuthorizedDateUtc" /></label>
+                            <label><span>Signer email</span><InputText class="form-control" @bind-Value="_form.SignerEmail" maxlength="320" placeholder="signer@example.com" /></label>
+                        </div>
+                    </section>
+                    <section class="ca-form-group ca-form-group--evidence">
+                        <header><span><i class="bi bi-paperclip"></i></span><div><strong>Evidence &amp; Notes</strong><small>Link the supporting communication or document and preserve decision context.</small></div></header>
+                        <div class="ca-grid">
+                            <label><span>Evidence reference</span><InputText class="form-control" @bind-Value="_form.AuthorizationReference" maxlength="500" placeholder="Email, portal, call, or signature reference" /></label>
+                            <label><span>Evidence document</span><InputSelect class="form-select" @bind-Value="_form.AuthorizationDocumentId"><option value="">No linked document</option>@foreach (var document in _documents.OrderByDescending(x => x.CreatedDateUtc)){<option value="@document.DocumentId">@document.FileName</option>}</InputSelect></label>
+                            <label class="ca-full"><span>Decision notes</span><InputTextArea class="form-control" @bind-Value="_form.DecisionNotes" rows="3" maxlength="2000" placeholder="Summarize the customer's instruction, evidence, or exception handling." /></label>
+                        </div>
+                    </section>
+                </div>
+
+                @if (_readiness is not null)
+                {
+                    <div class="@ReadinessClass">
+                        <strong><i class="bi @(_readiness.CanAccept ? "bi-shield-check" : "bi-exclamation-triangle")"></i> @(_readiness.CanAccept ? "Quote is eligible for acceptance" : "Acceptance controls require attention")</strong>
+                        <div class="ca-readiness-grid">
+                            <span><i class="bi @BoolIcon(_readiness.IsProposalDelivered)"></i> Delivered proposal</span>
+                            <span><i class="bi @BoolIcon(_readiness.IsProposalCurrent)"></i> Current proposal</span>
+                            <span><i class="bi @BoolIcon(_readiness.IsQuoteInProposal)"></i> Quote in proposal</span>
+                            <span><i class="bi @BoolIcon(_readiness.IsQuoteBindable)"></i> Bindable quote</span>
+                            <span><i class="bi @BoolIcon(_readiness.HasCompleteBindableCoverage)"></i> All submission lines bindable</span>
+                        </div>
+                        @foreach (var blocker in _readiness.BlockingReasons){<span class="ca-blocker">@blocker</span>}
+                    </div>
+                }
+
+                @if (IsAcceptedDecision && _lineForms.Count > 0)
+                {
+                    <section class="ca-section"><header><div><h3>Coverage elections</h3><p>Confirm every persisted quote line, including rejected optional coverage.</p></div><strong>@_lineForms.Sum(x => x.Line.QuotedPremium).ToString("C0")</strong></header>
+                        <div class="ca-lines">@foreach (var item in _lineForms.OrderBy(x => x.Line.SortOrder)){<article><div class="ca-line-summary"><span class="ca-line-icon"><i class="bi bi-shield-check"></i></span><div><strong>@item.Line.LineOfBusiness</strong><span>@item.Line.QuotedPremium.ToString("C0") · Limit @FormatMoney(item.Line.Limit) · Deductible @FormatMoney(item.Line.Deductible)</span><small>@(item.Line.PaymentTerms ?? "Payment terms not specified") · TRIA @(item.Line.TriaIncluded == true ? "Included" : item.Line.TriaIncluded == false ? "Excluded" : "Not specified")</small></div></div><div class="ca-line-controls"><label><span>Coverage election</span><InputSelect class="form-select" @bind-Value="item.ElectionCode">@foreach (var option in _electionOptions){<option value="@option.OptionCode">@option.OptionName</option>}</InputSelect></label><label><span>Election notes</span><InputText class="form-control" @bind-Value="item.Notes" maxlength="1000" placeholder="Optional notes" /></label></div></article>}</div>
+                    </section>
+                }
+
+                @if (IsAcceptedDecision)
+                {
+                    <section class="ca-section"><header><div><h3>Consent and disclosures</h3><p>All configured attestations must be explicitly confirmed for acceptance.</p></div><strong>@_consentForms.Count(x => x.IsAccepted)/@_consentForms.Count</strong></header><div class="ca-consents">@foreach (var consent in _consentForms){<label class="@(consent.IsAccepted ? "ca-consent--accepted" : null)"><InputCheckbox class="form-check-input" @bind-Value="consent.IsAccepted" /><span><strong>@consent.Name</strong><small>@consent.Description</small></span></label>}</div></section>
+                }
+                <footer><button type="button" class="um-btn um-btn-ghost" @onclick="GoBack" disabled="@_saving"><i class="bi bi-x-lg"></i> Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> } else { <i class="bi bi-check2-circle"></i> } @(_saving ? "Recording..." : "Record Client Decision")</button></footer>
+            </EditForm>
+        </section>
+
+        <aside class="ca-card ca-history">
+            <header><div><span class="ca-eyebrow">Immutable history</span><h2>Acceptance timeline</h2><p>Audit-ready decisions and bind handoffs.</p></div></header>
+            @if (_history.Count == 0)
+            {
+                <div class="ca-empty"><i class="bi bi-clock-history"></i><strong>No decisions recorded</strong><span>Completed decisions and bind transitions appear here.</span></div>
+            }
+            else
+            {
+                <div class="ca-history-list">
+                    @foreach (var item in _history.OrderByDescending(x => x.CreatedDateUtc))
+                    {
+                        <article>
+                            <button type="button" class="ca-history-item" @onclick="() => OpenHistoryAsync(item)"><span class="ca-status ca-status--@StatusCss(item.StatusCode)">@DisplayStatus(item.StatusCode)</span><strong>@item.AuthorizedByName</strong><small>Proposal v@item.ProposalVersionNumber · @item.QuoteNumber</small><time>@FormatDateTime(item.CreatedDateUtc)</time></button>
+                            <div class="ca-history-actions">
+                                <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenHistoryAsync(item)"><i class="bi bi-card-text"></i> Details</button>
+                                @if (item.StatusCode == "Accepted" && !item.PolicyBindTransactionId.HasValue)
+                                {
+                                    <button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenBind(item)"><i class="bi bi-shield-check"></i> Request Bind</button>
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ca-danger" disabled="@_saving" @onclick="() => ConfirmWithdraw(item)"><i class="bi bi-arrow-counterclockwise"></i> Withdraw</button>
+                                }
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        </aside>
+    </div>
+}
+
+@if (_historyDetail is not null)
+{
+    <div class="ca-modal-backdrop" role="presentation">
+        <div class="um-modal ca-modal" role="dialog" aria-modal="true" aria-labelledby="ca-history-detail-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-journal-check"></i><span id="ca-history-detail-title">Acceptance Detail</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body">
+                <section class="ca-detail-summary"><span class="ca-status ca-status--@StatusCss(_historyDetail.StatusCode)">@DisplayStatus(_historyDetail.StatusCode)</span><div><h3>@_historyDetail.AuthorizedByName</h3><p>@_historyDetail.AuthorizedByTitle · @DisplayStatus(_historyDetail.AuthorizationMethodCode) · @FormatDateTime(_historyDetail.CreatedDateUtc)</p></div></section>
+                <div class="ca-detail-grid"><div><label>Quote</label><strong>@_historyDetail.QuoteNumber</strong></div><div><label>Proposal version</label><strong>@_historyDetail.ProposalVersionNumber</strong></div><div><label>Authority</label><strong>@DisplayStatus(_historyDetail.AuthorityBasisCode)</strong></div><div><label>Reference</label><strong>@(_historyDetail.AuthorizationReference ?? "No reference")</strong></div><div class="ca-detail-wide"><label>Decision notes</label><p>@(_historyDetail.DecisionNotes ?? "No decision notes recorded.")</p></div></div>
+                <section class="ca-section"><header><div><h3>Coverage elections</h3><p>@_historyDetail.CoverageElections.Count recorded coverage election(s).</p></div></header><div class="ca-detail-list">@foreach (var line in _historyDetail.CoverageElections.OrderBy(x => x.SortOrder)){<article><strong>@line.LineOfBusiness</strong><span>@DisplayStatus(line.ElectionCode) · @line.QuotedPremium.ToString("C0") · Limit @FormatMoney(line.Limit)</span><small>@(line.ElectionNotes ?? "No election notes")</small></article>}</div></section>
+                <section class="ca-section"><header><div><h3>Consents and audit</h3><p>@_historyDetail.Consents.Count consent(s), @_historyDetail.AuditEvents.Count audit event(s).</p></div></header><div class="ca-detail-list">@foreach (var consent in _historyDetail.Consents){<article><strong>@DisplayStatus(consent.ConsentCode)</strong><span>@(consent.IsAccepted ? "Accepted" : "Not accepted") · v@consent.ConsentVersion</span><small>@FormatDateTime(consent.AttestedDateUtc)</small></article>}@foreach (var audit in _historyDetail.AuditEvents.OrderByDescending(x => x.EventDateUtc).Take(6)){<article><strong>@DisplayStatus(audit.EventCode)</strong><span>@FormatDateTime(audit.EventDateUtc)</span><small>@(audit.EventDetail ?? "No event detail")</small></article>}</div></section>
+            </div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Close</button></div>
+        </div>
+    </div>
+}
+
+@if (_withdrawTarget is not null)
+{
+    <div class="ca-modal-backdrop" role="presentation">
+        <div class="um-modal ca-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ca-withdraw-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-exclamation-triangle text-danger"></i><span id="ca-withdraw-title">Withdraw acceptance</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_saving"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body"><p>This will withdraw the accepted customer authorization and revoke bind eligibility for this acceptance record.</p><div class="ca-confirm-target"><strong>@_withdrawTarget.AuthorizedByName</strong><span>Proposal v@_withdrawTarget.ProposalVersionNumber · @_withdrawTarget.QuoteNumber</span></div></div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_saving">Cancel</button><button type="button" class="um-btn um-btn-danger" @onclick="WithdrawConfirmedAsync" disabled="@_saving">@if (_saving) { <span class="spinner-border spinner-border-sm"></span> }<i class="bi bi-arrow-counterclockwise"></i> Withdraw Acceptance</button></div>
+        </div>
+    </div>
+}
+
+@if (_actionRequiredMessage is not null)
+{
+    <div class="ca-modal-backdrop" role="presentation">
+        <div class="um-modal ca-confirm-modal ca-action-modal" role="dialog" aria-modal="true" aria-labelledby="ca-action-required-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-shield-exclamation text-warning"></i><span id="ca-action-required-title">Action required before recording</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body">
+                <div class="ca-action-message"><span class="ca-action-message__icon"><i class="bi bi-exclamation-triangle-fill"></i></span><div><small>Why you cannot proceed</small><strong>@_actionRequiredMessage</strong></div></div>
+                <div class="ca-action-next"><span class="ca-action-next__step">Next step</span><div><strong>@_actionRequiredNextStep</strong><p>Complete this item, then return to Client Acceptance and refresh the readiness check.</p></div></div>
+            </div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs">Stay on this page</button>@if (!string.IsNullOrWhiteSpace(_actionRequiredUrl)){<a class="um-btn um-btn-primary" href="@_actionRequiredUrl"><i class="bi bi-box-arrow-up-right"></i> @_actionRequiredLinkLabel</a>}</div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid SubmissionId { get; set; }
+    [SupplyParameterFromQuery(Name = "proposalId")] public Guid? ProposalId { get; set; }
+    EnterpriseToast? _toast; bool _loading = true; bool _saving; string? _error; string? _saveError; string? _actionRequiredMessage; string? _actionRequiredNextStep; string? _actionRequiredUrl; string _actionRequiredLinkLabel = "Open solution";
+    CurrentUserContextModel? _user; SubmissionDto? _submission; ClientAcceptanceReadinessDto? _readiness; ClientAcceptanceDto? _historyDetail; ClientAcceptanceDto? _withdrawTarget; ClientAcceptanceDto? _recordedDecision;
+    List<ProposalWorkflowDto> _proposals = []; List<ProposalQuoteDto> _quotes = []; List<DocumentDto> _documents = []; List<ClientAcceptanceDto> _history = [];
+    List<SubmissionReferenceOptionDto> _decisionOptions = []; List<SubmissionReferenceOptionDto> _authorizationMethods = []; List<SubmissionReferenceOptionDto> _authorityOptions = []; List<SubmissionReferenceOptionDto> _electionOptions = []; List<LineElectionForm> _lineForms = []; List<ConsentForm> _consentForms = [];
+    AcceptanceForm _form = new();
+    bool IsAcceptedDecision => string.Equals(_form.DecisionCode, "Accepted", StringComparison.OrdinalIgnoreCase);
+    ClientAcceptanceDto? HeaderAcceptance => _history.FirstOrDefault(item =>
+        (!ProposalId.HasValue || item.ProposalId == ProposalId.Value)
+        && item.StatusCode is "Accepted" or "BindRequested" or "CarrierBound");
+    bool HasRecordedDecision => HeaderAcceptance is not null
+        || string.Equals(_submission?.Status, "Customer Accepted", StringComparison.OrdinalIgnoreCase);
+    bool HasBindProgress => HeaderAcceptance?.PolicyBindTransactionId.HasValue == true
+        || HeaderAcceptance?.StatusCode is "BindRequested" or "CarrierBound";
+    bool CanRequestBindFromHeader => HeaderAcceptance is
+    {
+        StatusCode: "Accepted",
+        CustomerAuthorizationId: not null,
+        PolicyBindTransactionId: null
+    };
+    bool CanRecordDecision => !_saving
+        && !HasRecordedDecision
+        && _form.ProposalId.HasValue
+        && _form.QuoteId.HasValue
+        && _form.ProposalVersionNumber > 0
+        && _form.QuoteFingerprint.Length == 64
+        && (!IsAcceptedDecision || (_readiness?.CanAccept == true
+            && _lineForms.Count > 0
+            && _consentForms.Count > 0
+            && _consentForms.All(x => x.IsAccepted)
+            && (!string.IsNullOrWhiteSpace(_form.AuthorizationReference) || _form.AuthorizationDocumentId.HasValue)));
+    int ActiveAcceptanceCount => _history.Count(x => x.StatusCode is "Accepted" or "BindRequested" or "CarrierBound");
+    string SubmitStatusClass => CanRecordDecision ? "ca-status-pill ca-status-pill--ready" : "ca-status-pill ca-status-pill--review";
+    string HeaderReadinessClass => HasRecordedDecision || CanRecordDecision ? "ca-hero-readiness--ready" : "ca-hero-readiness--review";
+    string SubmitStatusText => HeaderAcceptance?.StatusCode switch
+    {
+        "CarrierBound" => "Carrier bound",
+        "BindRequested" => "Bind requested",
+        "Accepted" when HeaderAcceptance.PolicyBindTransactionId.HasValue => "Bind requested",
+        "Accepted" => "Decision recorded",
+        _ when string.Equals(_submission?.Status, "Customer Accepted", StringComparison.OrdinalIgnoreCase) => "Decision recorded",
+        _ when CanRecordDecision => "Ready to record",
+        _ => "Needs review"
+    };
+    string SubmissionStatusClass => $"ca-hero-status--{StatusCss(_submission?.Status)}";
+    string ReadinessClass => _readiness?.CanAccept == true ? "ca-readiness ca-readiness--ready" : "ca-readiness ca-readiness--blocked";
+
+    protected override async Task OnParametersSetAsync(){Breadcrumbs.SetCrumbs(new("Submissions", "/submissions"), new("Client Acceptance")); await LoadAsync();}
+    async Task LoadAsync(){try{_loading=true;_error=null;_saveError=null;_user??=await CurrentUser.RequireAsync();_submission=await Api.GetSubmissionByIdAsync(SubmissionId);_proposals=(await Api.GetSubmissionProposalsAsync(SubmissionId,_user.TenantId)??[]).ToList();_documents=(await Api.GetSubmissionDocumentsAsync(SubmissionId,_user.TenantId)??[]).ToList();_history=(await Api.GetClientAcceptancesAsync(SubmissionId,_user.TenantId)??[]).ToList();var options=await Api.GetSubmissionReferenceOptionsAsync(_user.TenantId)??[];SetOptions(_decisionOptions,options,"ClientAcceptanceDecision");SetOptions(_authorizationMethods,options,"CustomerAuthorizationMethod");SetOptions(_authorityOptions,options,"AuthorityBasis");SetOptions(_electionOptions,options,"CoverageElection");_consentForms=options.Where(x=>x.OptionGroup=="ClientAcceptanceConsent"&&x.IsActive).OrderBy(x=>x.SortOrder).Select(x=>new ConsentForm(x.OptionCode,x.OptionName,x.Description??string.Empty)).ToList();_form.DecisionCode=_decisionOptions.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_decisionOptions.FirstOrDefault()?.OptionCode??"Accepted";_form.AuthorizationMethodCode=_authorizationMethods.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorizationMethods.FirstOrDefault()?.OptionCode??string.Empty;_form.AuthorityBasisCode=_authorityOptions.FirstOrDefault(x=>x.IsDefault)?.OptionCode??_authorityOptions.FirstOrDefault()?.OptionCode??string.Empty;if(ProposalId.HasValue&&_proposals.Any(x=>x.ProposalId==ProposalId.Value)){_form.ProposalId=ProposalId;await LoadReadinessAsync(null);}}catch(Exception ex){_error=$"Failed to load client acceptance: {ex.Message}";await ToastAsync($"Failed to load client acceptance: {ex.Message}","danger");}finally{_loading=false;}}
+    async Task ProposalChangedAsync(){_readiness=null;_recordedDecision=null;_quotes.Clear();_lineForms.Clear();_saveError=null;if(!_form.ProposalId.HasValue)return;await LoadReadinessAsync(null);}
+    async Task QuoteChangedAsync(){_saveError=null;if(_form.ProposalId.HasValue&&_form.QuoteId.HasValue)await LoadReadinessAsync(_form.QuoteId);}
+    void DecisionChanged(){_saveError=null;_recordedDecision=null;if(!IsAcceptedDecision){foreach(var consent in _consentForms)consent.IsAccepted=false;}}
+    async Task LoadReadinessAsync(Guid? quoteId){if(_user is null||!_form.ProposalId.HasValue)return;try{_readiness=await Api.GetClientAcceptanceReadinessAsync(_form.ProposalId.Value,quoteId,_user.TenantId);_quotes=_readiness?.Quotes.ToList()??[];_form.ProposalVersionNumber=_readiness?.ProposalVersionNumber??0;_form.QuoteId=_readiness?.SelectedQuoteId;_form.QuoteFingerprint=_readiness?.QuoteFingerprint??string.Empty;_lineForms=(_readiness?.QuoteLines??[]).Select(x=>new LineElectionForm(x,_electionOptions.FirstOrDefault(o=>o.IsDefault)?.OptionCode??_electionOptions.FirstOrDefault()?.OptionCode??"Accepted")).ToList();}catch(Exception ex){_saveError=$"Readiness check failed: {ex.Message}";await ToastAsync(_saveError,"danger");}}
+    async Task SaveAsync(){if(_user is null||!_form.ProposalId.HasValue||!_form.QuoteId.HasValue){ShowActionRequired("Select a proposal version and quote option before recording the client decision.","Choose the delivered proposal and the exact quote option on this page.",null,"Review selections");return;}if(!CanRecordDecision){ShowDecisionBlocker();return;}try{_saving=true;_saveError=null;_recordedDecision=null;var request=new RecordClientAcceptanceRequest{TenantId=_user.TenantId,ProposalId=_form.ProposalId.Value,ProposalVersionNumber=_form.ProposalVersionNumber,QuoteId=_form.QuoteId.Value,QuoteFingerprint=_form.QuoteFingerprint,DecisionCode=_form.DecisionCode,DecisionNotes=_form.DecisionNotes,AuthorizationMethodCode=_form.AuthorizationMethodCode,AuthorizationReference=_form.AuthorizationReference,AuthorizationDocumentId=_form.AuthorizationDocumentId,AuthorizedByName=_form.AuthorizedByName,AuthorizedByTitle=_form.AuthorizedByTitle,AuthorityBasisCode=_form.AuthorityBasisCode,AuthorizedDateUtc=_form.AuthorizedDateUtc,SignerEmail=_form.SignerEmail,IdempotencyKey=Guid.NewGuid().ToString("N"),CoverageElections=IsAcceptedDecision?_lineForms.Select(x=>new ClientAcceptanceCoverageElectionRequest{QuoteLineId=x.Line.QuoteLineId,ElectionCode=x.ElectionCode,ElectionNotes=x.Notes}).ToList():[],Consents=IsAcceptedDecision?_consentForms.Select(x=>new ClientAcceptanceConsentRequest{ConsentCode=x.Code,ConsentVersion="1.0",IsAccepted=x.IsAccepted}).ToList():[]};var acceptanceId=await Api.RecordClientAcceptanceAsync(request);await LoadAsync();_recordedDecision=_history.FirstOrDefault(x=>x.ClientAcceptanceId==acceptanceId);await ToastAsync("Client decision recorded and synchronized to the submission workflow.","success");}catch(Exception ex){_saveError=$"Recording client decision failed: {ex.Message}";await ToastAsync(_saveError,"danger");}finally{_saving=false;}}
+    async Task HandleInvalidSubmitAsync(){_saveError="Review the highlighted decision fields and provide all required client authorization details.";await ToastAsync(_saveError,"danger");}
+    string GetSubmitBlockerMessage(){if(_readiness?.CanAccept!=true&&IsAcceptedDecision)return _readiness?.BlockingReasons.FirstOrDefault()??"The proposal and quote are not currently eligible for acceptance.";if(IsAcceptedDecision&&_consentForms.Any(x=>!x.IsAccepted))return "Accept every required consent and disclosure before recording the decision.";if(IsAcceptedDecision&&string.IsNullOrWhiteSpace(_form.AuthorizationReference)&&!_form.AuthorizationDocumentId.HasValue)return "Provide an evidence reference or link an evidence document before recording acceptance.";return "Complete the proposal, quote, and client authorization details before recording the decision.";}
+    void ShowDecisionBlocker(){var message=GetSubmitBlockerMessage();if(IsAcceptedDecision&&_readiness?.IsQuoteBindable==false&&_form.QuoteId.HasValue){ShowActionRequired(message,"Open Quote Review and mark every persisted coverage line as bindable, then save the quote.",$"/submissions/{SubmissionId}?action=quote-review&quoteId={_form.QuoteId.Value}","Open Quote Review");return;}if(IsAcceptedDecision&&_readiness is not null&&(!_readiness.IsQuoteActive||!_readiness.IsQuoteUnexpired||!_readiness.HasCoverageLines)&&_form.QuoteId.HasValue){ShowActionRequired(message,"Open Quote Review and correct the quote status, expiration, or persisted coverage-line terms.",$"/submissions/{SubmissionId}?action=quote-review&quoteId={_form.QuoteId.Value}","Open Quote Review");return;}if(IsAcceptedDecision&&_readiness is not null&&(!_readiness.IsProposalDelivered||!_readiness.IsProposalCurrent||!_readiness.IsQuoteInProposal)){ShowActionRequired(message,"Open Proposal Workflow and complete the current proposal version, quote selection, presentation, and delivery confirmation.",$"/submissions/{SubmissionId}/proposals","Open Proposal Workflow");return;}ShowActionRequired(message,"Complete the highlighted authorization, consent, evidence, and coverage-election fields on this page.",null,"Review decision");}
+    void ShowActionRequired(string message,string nextStep,string? url,string linkLabel){_saveError=null;_actionRequiredMessage=message;_actionRequiredNextStep=nextStep;_actionRequiredUrl=url;_actionRequiredLinkLabel=linkLabel;}
+    void ConfirmWithdraw(ClientAcceptanceDto item)=>_withdrawTarget=item;
+    async Task WithdrawConfirmedAsync(){if(_withdrawTarget is null)return;await WithdrawAsync(_withdrawTarget);}
+    async Task WithdrawAsync(ClientAcceptanceDto item){if(_user is null)return;var reason=$"Acceptance withdrawn from the client acceptance workbench on {DateTime.Now:g}.";try{_saving=true;await Api.WithdrawClientAcceptanceAsync(item.ClientAcceptanceId,new(_user.TenantId,item.VersionNumber,reason,_user.UserId));CloseDialogs();await ToastAsync("Client acceptance withdrawn and authorization revoked.","success");await LoadAsync();}catch(Exception ex){_saveError=$"Withdrawing acceptance failed: {ex.Message}";await ToastAsync(_saveError,"danger");}finally{_saving=false;}}
+    async Task OpenHistoryAsync(ClientAcceptanceDto item){try{_historyDetail=await Api.GetClientAcceptanceByIdAsync(item.ClientAcceptanceId,item.TenantId);if(_historyDetail is null)await ToastAsync("Acceptance record was not found.","danger");}catch(Exception ex){await ToastAsync($"Loading acceptance detail failed: {ex.Message}","danger");}}
+    void CloseDialogs(){if(_saving)return;_historyDetail=null;_withdrawTarget=null;_actionRequiredMessage=null;_actionRequiredNextStep=null;_actionRequiredUrl=null;}
+    void OpenProposalWorkflow()=>Nav.NavigateTo($"/submissions/{SubmissionId}/proposals");
+    void OpenSelectedProposal(){if(_form.ProposalId.HasValue)Nav.NavigateTo($"/submissions/{SubmissionId}/proposals?proposalId={_form.ProposalId}");}
+    void OpenBind(ClientAcceptanceDto item)=>Nav.NavigateTo($"/quotes/bind?submissionId={SubmissionId}&proposalId={item.ProposalId}&quoteId={item.QuoteId}&authorizationId={item.CustomerAuthorizationId}&clientAcceptanceId={item.ClientAcceptanceId}");
+    void OpenBindCenter()=>Nav.NavigateTo($"/quotes/bind?submissionId={SubmissionId}");
+    Task ToastAsync(string message,string kind)=>_toast?.ShowAsync(new ToastModel{Content=message,CssClass=$"enterprise-toast-{kind}",Timeout=5000})??Task.CompletedTask;
+    static void SetOptions(List<SubmissionReferenceOptionDto> target,IReadOnlyList<SubmissionReferenceOptionDto> source,string group){target.Clear();target.AddRange(source.Where(x=>x.OptionGroup==group&&x.IsActive).OrderBy(x=>x.SortOrder));}
+    void GoBack()=>Nav.NavigateTo($"/submissions/{SubmissionId}");
+    RenderFragment Kpi(string label,string value,string icon,string title)=>@<article class="ca-kpi" title="@title"><i class="bi @icon"></i><div><strong>@value</strong><span>@label</span><small>@title</small></div></article>;
+    static string DisplayStatus(string? value)=>string.IsNullOrWhiteSpace(value)?"-":value.Replace("_"," ");
+    static string StatusCss(string? value)=>string.IsNullOrWhiteSpace(value)?"unknown":value.ToLowerInvariant().Replace(" ","").Replace("_","");
+    static string BoolIcon(bool value)=>value?"bi-check-circle-fill":"bi-x-circle-fill";
+    static string FormatDate(DateTime? value)=>value.HasValue?value.Value.ToString("d"):"Not set";
+    static string FormatDateTime(DateTime value)=>value.ToLocalTime().ToString("g");
+    static string FormatMoney(decimal? value)=>value.HasValue?value.Value.ToString("C0"):"-";
+    sealed class AcceptanceForm : IValidatableObject{[Required]public Guid? ProposalId{get;set;}[Required]public Guid? QuoteId{get;set;}[Range(1,int.MaxValue)]public int ProposalVersionNumber{get;set;}[Required,StringLength(64,MinimumLength=64)]public string QuoteFingerprint{get;set;}=string.Empty;[Required,StringLength(50)]public string DecisionCode{get;set;}=string.Empty;[StringLength(2000)]public string? DecisionNotes{get;set;}[Required,StringLength(50)]public string AuthorizationMethodCode{get;set;}=string.Empty;[StringLength(500)]public string? AuthorizationReference{get;set;}public Guid? AuthorizationDocumentId{get;set;}[Required,StringLength(200)]public string AuthorizedByName{get;set;}=string.Empty;[Required,StringLength(150)]public string AuthorizedByTitle{get;set;}=string.Empty;[Required,StringLength(50)]public string AuthorityBasisCode{get;set;}=string.Empty;[Required]public DateTime AuthorizedDateUtc{get;set;}=DateTime.Today;[EmailAddress,StringLength(320)]public string? SignerEmail{get;set;}public IEnumerable<ValidationResult> Validate(ValidationContext context){if(AuthorizedDateUtc==default||AuthorizedDateUtc>DateTime.UtcNow.AddMinutes(5))yield return new ValidationResult("Authorization date is required and cannot be in the future.",[nameof(AuthorizedDateUtc)]);if(string.Equals(DecisionCode,"Accepted",StringComparison.OrdinalIgnoreCase)&&string.IsNullOrWhiteSpace(AuthorizationReference)&&!AuthorizationDocumentId.HasValue)yield return new ValidationResult("Acceptance requires an evidence reference or evidence document.",[nameof(AuthorizationReference)]);if(!string.Equals(DecisionCode,"Accepted",StringComparison.OrdinalIgnoreCase)&&string.IsNullOrWhiteSpace(DecisionNotes))yield return new ValidationResult("Decision notes are required when the client does not accept.",[nameof(DecisionNotes)]);}}
+    sealed class LineElectionForm(SubmissionQuoteLineDto line,string code){public SubmissionQuoteLineDto Line{get;}=line;public string ElectionCode{get;set;}=code;[StringLength(1000)]public string? Notes{get;set;}}
+    sealed class ConsentForm(string code,string name,string description){public string Code{get;}=code;public string Name{get;}=name;public string Description{get;}=description;public bool IsAccepted{get;set;}}
+}

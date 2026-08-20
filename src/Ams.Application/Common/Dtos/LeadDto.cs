@@ -7,6 +7,7 @@ public sealed class LeadDto
     public Guid? AccountId { get; set; }
     public string LeadNumber { get; set; } = string.Empty;
     public string? AccountName { get; set; }
+    public string LeadTypeCode { get; set; } = "Personal";
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? Email { get; set; }
@@ -20,6 +21,9 @@ public sealed class LeadDto
     public DateTime? QualifiedDate { get; set; }
     public int StatusCode { get; set; }
     public Guid? AssignedToUserId { get; set; }
+    public string PhoneComplianceStatusCode { get; set; } = "Unknown";
+    public bool IsCallAllowed { get; set; }
+    public bool IsSmsAllowed { get; set; }
     public DateTime CreatedDateUtc { get; set; }
     public DateTime? ModifiedDateUtc { get; set; }
 }

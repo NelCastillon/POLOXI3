@@ -195,11 +195,11 @@ _aiSummary = await Api.GenerateAiSummaryAsync("workbench-type");
 
 ## 🎨 UI Components Used
 
-### Syncfusion Components
-- **SfGrid** - Data table grids
-- **SfKanban** - Kanban board (Producer)
-- **SfDropDownList** - Filter dropdowns
-- **SfToast** - Notifications
+### Enterprise native components
+- **AppGrid** - Data table grids
+- **enterprise kanban board** - Kanban board (Producer)
+- **native select** - Filter dropdowns
+- **enterprise toast** - Notifications
 
 ### Custom Components
 - **AppPageHeader** - Page title/actions (Producer, Operations)
@@ -315,7 +315,7 @@ _aiSummary = await Api.GenerateAiSummaryAsync("workbench-type");
 
 ### Troubleshooting
 - Check browser console for JS errors
-- Verify Syncfusion licenses
+- Verify enterprise CSS/native component patterns
 - Check API endpoint responses
 - Verify data model structure matches API
 

@@ -342,7 +342,7 @@ protected override async Task OnInitializedAsync()
 ### Database Queries
 - **Loading**: Single search query for all data
 - **Filtering**: In-memory LINQ (fast for < 10K records)
-- **Pagination**: Handled by Syncfusion grid
+- **Pagination**: Handled by enterprise CSS grid
 
 ### Optimization Tips
 1. Use pagination if dataset > 5K records

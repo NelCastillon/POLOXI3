@@ -1,0 +1,391 @@
+@namespace Ams.Web.Components.Shared
+@using System.Linq.Expressions
+@using Ams.Application.Features.Locations
+@using Microsoft.AspNetCore.Components.Forms
+@implements IDisposable
+@inject ApiClient Api
+
+<div class="ale-address-autocomplete">
+    <div class="ale-input-wrap">
+        <i class="bi bi-geo-alt ale-input-icon" aria-hidden="true"></i>
+        <InputText Value="@Street"
+                   ValueChanged="OnStreetChangedAsync"
+                   ValueExpression="@StreetExpression"
+                   class="um-input ale-input"
+                   style="padding-left: 3.5rem; padding-right: 2.25rem;"
+                   placeholder="@Placeholder"
+                   autocomplete="off"
+                   role="combobox"
+                   aria-autocomplete="list"
+                   aria-expanded="@(_suggestions.Count > 0)"
+                   aria-controls="@_listboxId"
+                   aria-activedescendant="@ActiveDescendant"
+                   @oninput="HandleInputAsync"
+                   @onkeydown="HandleKeyDownAsync" />
+        @if (_searching)
+        {
+            <span class="spinner-border spinner-border-sm ale-spinner" aria-label="Searching addresses"></span>
+        }
+    </div>
+
+    @if (_suggestions.Count > 0)
+    {
+        <div id="@_listboxId" class="ale-suggestions" role="listbox" aria-label="Address suggestions">
+            @for (var index = 0; index < _suggestions.Count; index++)
+            {
+                var suggestion = _suggestions[index];
+                var optionId = OptionId(index);
+                <button id="@optionId"
+                        type="button"
+                        class="ale-suggestion @(index == _activeIndex ? "ale-suggestion--active" : null)"
+                        role="option"
+                        aria-selected="@(index == _activeIndex)"
+                        @onmouseenter="() => _activeIndex = index"
+                        @onclick="() => SelectAsync(suggestion)">
+                    <i class="bi bi-geo-alt-fill" aria-hidden="true"></i>
+                    <span><strong>@suggestion.FormattedAddress</strong><small>@SuggestionDetail(suggestion)</small></span>
+                </button>
+            }
+            <div class="ale-provider"><i class="bi bi-shield-check" aria-hidden="true"></i> Suggestions provided by @_status?.ProviderName</div>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <small class="ale-message @(_status?.IsAvailable == false || _lookupFailed ? "ale-message--warning" : null)">
+            <i class="bi @(_status?.IsAvailable == false || _lookupFailed ? "bi-exclamation-triangle" : "bi-info-circle")" aria-hidden="true"></i>
+            @_message
+        </small>
+    }
+    else if (Resolution?.IsProviderValidated == true)
+    {
+        <small class="ale-message ale-message--validated"><i class="bi bi-patch-check-fill" aria-hidden="true"></i> Address selected and geocoded by @_status?.ProviderName.</small>
+    }
+
+    @if (FallbackActive)
+    {
+        <div class="ale-fallback">
+            <div class="ale-fallback-field">
+                <label>City</label>
+                <input class="um-input"
+                       value="@City"
+                       placeholder="Start typing a city"
+                       autocomplete="off"
+                       @oninput="OnFallbackCityInputAsync" />
+                @if (_citySuggestions.Count > 0)
+                {
+                    <div class="ale-suggestions" role="listbox" aria-label="City suggestions">
+                        @foreach (var city in _citySuggestions)
+                        {
+                            <button type="button" class="ale-suggestion" role="option" @onclick="() => SelectFallbackCityAsync(city)">
+                                <i class="bi bi-buildings" aria-hidden="true"></i>
+                                <span><strong>@city.CityName</strong><small>@city.StateCode, @city.CountryCode</small></span>
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="ale-fallback-field">
+                <label>State</label>
+                <select class="um-input" value="@State" @onchange="OnFallbackStateChangedAsync">
+                    <option value="">Select state</option>
+                    @foreach (var state in _states)
+                    {
+                        <option value="@state.StateCode">@state.StateName</option>
+                    }
+                </select>
+            </div>
+            <div class="ale-fallback-field">
+                <label>ZIP</label>
+                @if (_postalCodes.Count > 0)
+                {
+                    <select class="um-input" value="@PostalCode" @onchange="OnFallbackPostalCodeChangedAsync">
+                        <option value="">Select ZIP</option>
+                        @foreach (var postal in _postalCodes)
+                        {
+                            <option value="@postal.PostalCode">@postal.PostalCode</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <input class="um-input" value="@PostalCode" placeholder="ZIP code" maxlength="12" @onchange="OnFallbackPostalCodeChangedAsync" />
+                }
+            </div>
+            <div class="ale-fallback-field">
+                <label>Country</label>
+                <select class="um-input" value="@(CountryCode ?? "US")" @onchange="OnFallbackCountryChangedAsync">
+                    <option value="US">United States</option>
+                </select>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Street { get; set; }
+    [Parameter] public EventCallback<string?> StreetChanged { get; set; }
+    [Parameter, EditorRequired] public Expression<Func<string?>> StreetExpression { get; set; } = default!;
+    [Parameter] public string? City { get; set; }
+    [Parameter] public EventCallback<string?> CityChanged { get; set; }
+    [Parameter] public string? State { get; set; }
+    [Parameter] public EventCallback<string?> StateChanged { get; set; }
+    [Parameter] public string? PostalCode { get; set; }
+    [Parameter] public EventCallback<string?> PostalCodeChanged { get; set; }
+    [Parameter] public string? CountryCode { get; set; }
+    [Parameter] public EventCallback<string?> CountryCodeChanged { get; set; }
+    [Parameter] public AddressResolutionInput? Resolution { get; set; }
+    [Parameter] public EventCallback<AddressResolutionInput?> ResolutionChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Start typing an address";
+
+    private readonly string _listboxId = $"ale-addresses-{Guid.NewGuid():N}";
+    private readonly List<AddressSuggestionDto> _suggestions = [];
+    private AddressEngineStatusDto? _status;
+    private CancellationTokenSource? _searchCancellation;
+    private string? _query;
+    private string? _message;
+    private int _activeIndex = -1;
+    private bool _searching;
+    private bool _lookupFailed;
+
+    private string? ActiveDescendant => _activeIndex >= 0 && _activeIndex < _suggestions.Count ? OptionId(_activeIndex) : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _status = await Api.GetAddressEngineStatusAsync();
+            if (_status is null)
+                _message = "Address lookup status is unavailable. Manual address entry is available.";
+            else if (!_status.IsAvailable)
+                _message = _status.Message ?? "Address lookup is unavailable. Manual address entry is available.";
+        }
+        catch (Exception ex)
+        {
+            _lookupFailed = true;
+            _message = $"Address lookup is unavailable: {ex.Message}. Manual address entry is available.";
+        }
+    }
+
+    private Task HandleInputAsync(ChangeEventArgs args) =>
+        OnStreetChangedAsync(args.Value?.ToString());
+
+    private async Task OnStreetChangedAsync(string? value)
+    {
+        if (string.Equals(_query, value, StringComparison.Ordinal)) return;
+        _query = value;
+        await StreetChanged.InvokeAsync(value);
+        if (Resolution is not null) await ResolutionChanged.InvokeAsync(null);
+        CancelSearch();
+        _suggestions.Clear();
+        _activeIndex = -1;
+        _lookupFailed = false;
+
+        var query = value?.Trim();
+        if (_status?.IsAvailable != true || string.IsNullOrWhiteSpace(query)) return;
+        if (query.Length < _status.MinimumQueryLength)
+        {
+            _message = $"Enter at least {_status.MinimumQueryLength} characters for address suggestions.";
+            return;
+        }
+
+        _message = null;
+        _searchCancellation = new CancellationTokenSource();
+        var cancellationToken = _searchCancellation.Token;
+        try
+        {
+            await Task.Delay(_status.DebounceMilliseconds, cancellationToken);
+            _searching = true;
+            var results = await Api.AutocompleteAddressAsync(
+                query,
+                CountryCode ?? _status.DefaultCountrySet,
+                _status.DefaultLanguage,
+                _status.MaximumSuggestions,
+                cancellationToken);
+            _suggestions.AddRange(results);
+            _activeIndex = _suggestions.Count > 0 ? 0 : -1;
+            if (_suggestions.Count == 0) _message = "No address suggestions were found. Continue with manual entry.";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _lookupFailed = true;
+            _message = $"Address suggestions are unavailable. {ex.Message.TrimEnd('.')}. Continue with manual entry.";
+        }
+        finally
+        {
+            _searching = false;
+        }
+    }
+
+    private async Task SelectAsync(AddressSuggestionDto suggestion)
+    {
+        CancelSearch();
+        _suggestions.Clear();
+        _activeIndex = -1;
+        _message = null;
+
+        var street = suggestion.AddressLine1 ?? suggestion.FormattedAddress;
+        await StreetChanged.InvokeAsync(street);
+        await CityChanged.InvokeAsync(suggestion.City);
+        await StateChanged.InvokeAsync(suggestion.StateCode);
+        await PostalCodeChanged.InvokeAsync(suggestion.PostalCode);
+        await CountryCodeChanged.InvokeAsync(suggestion.CountryCode);
+        await ResolutionChanged.InvokeAsync(new AddressResolutionInput
+        {
+            ProviderCode = suggestion.ProviderCode,
+            ProviderPlaceId = suggestion.ProviderPlaceId,
+            QueryText = _query,
+            FormattedAddress = suggestion.FormattedAddress,
+            AddressLine1 = street,
+            AddressLine2 = suggestion.AddressLine2,
+            City = suggestion.City,
+            StateCode = suggestion.StateCode,
+            PostalCode = suggestion.PostalCode,
+            CountryCode = suggestion.CountryCode,
+            County = suggestion.County,
+            Latitude = suggestion.Latitude,
+            Longitude = suggestion.Longitude,
+            ConfidenceCode = suggestion.ConfidenceCode,
+            IsProviderValidated = true
+        });
+    }
+
+    private async Task HandleKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (_suggestions.Count == 0) return;
+        switch (args.Key)
+        {
+            case "ArrowDown":
+                _activeIndex = (_activeIndex + 1) % _suggestions.Count;
+                break;
+            case "ArrowUp":
+                _activeIndex = (_activeIndex - 1 + _suggestions.Count) % _suggestions.Count;
+                break;
+            case "Enter" when _activeIndex >= 0:
+                await SelectAsync(_suggestions[_activeIndex]);
+                break;
+            case "Escape":
+                _suggestions.Clear();
+                _activeIndex = -1;
+                break;
+        }
+    }
+
+    private string OptionId(int index) => $"{_listboxId}-{index}";
+
+    private static string SuggestionDetail(AddressSuggestionDto suggestion) =>
+        string.Join(" · ", new[] { suggestion.County, suggestion.PostalCode, suggestion.CountryCode }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    private void CancelSearch()
+    {
+        _searchCancellation?.Cancel();
+        _searchCancellation?.Dispose();
+        _searchCancellation = null;
+    }
+
+    // ── Manual fallback (DB-backed geography) ─────────────────────────────
+    private readonly List<GeoCityDto> _citySuggestions = [];
+    private readonly List<GeoPostalCodeDto> _postalCodes = [];
+    private IReadOnlyList<GeoStateDto> _states = [];
+    private CancellationTokenSource? _cityCancellation;
+    private bool _fallbackLoaded;
+
+    private bool FallbackActive => _status?.IsAvailable != true || _lookupFailed;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (FallbackActive && !_fallbackLoaded)
+        {
+            _fallbackLoaded = true;
+            try
+            {
+                _states = await Api.GetGeoStatesAsync(CountryCode ?? "US");
+            }
+            catch
+            {
+                _fallbackLoaded = false;
+            }
+        }
+    }
+
+    private async Task OnFallbackCityInputAsync(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        await CityChanged.InvokeAsync(value);
+        _cityCancellation?.Cancel();
+        _cityCancellation?.Dispose();
+        _cityCancellation = new CancellationTokenSource();
+        var token = _cityCancellation.Token;
+        _citySuggestions.Clear();
+
+        var query = value?.Trim();
+        if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return;
+
+        try
+        {
+            await Task.Delay(250, token);
+            var cities = await Api.SearchGeoCitiesAsync(query, CountryCode ?? "US", 10, token);
+            _citySuggestions.AddRange(cities);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _message = $"City lookup failed: {ex.Message}";
+        }
+    }
+
+    private async Task SelectFallbackCityAsync(GeoCityDto city)
+    {
+        _citySuggestions.Clear();
+        await CityChanged.InvokeAsync(city.CityName);
+        await StateChanged.InvokeAsync(city.StateCode);
+        await CountryCodeChanged.InvokeAsync(city.CountryCode);
+        await LoadFallbackPostalCodesAsync(city.StateCode, city.CityName, city.CountryCode);
+    }
+
+    private async Task OnFallbackStateChangedAsync(ChangeEventArgs args)
+    {
+        var stateCode = args.Value?.ToString();
+        await StateChanged.InvokeAsync(stateCode);
+        if (!string.IsNullOrWhiteSpace(stateCode) && !string.IsNullOrWhiteSpace(City))
+        {
+            await LoadFallbackPostalCodesAsync(stateCode, City, CountryCode ?? "US");
+        }
+    }
+
+    private async Task OnFallbackPostalCodeChangedAsync(ChangeEventArgs args) =>
+        await PostalCodeChanged.InvokeAsync(args.Value?.ToString());
+
+    private async Task OnFallbackCountryChangedAsync(ChangeEventArgs args) =>
+        await CountryCodeChanged.InvokeAsync(args.Value?.ToString());
+
+    private async Task LoadFallbackPostalCodesAsync(string stateCode, string cityName, string? countryCode)
+    {
+        _postalCodes.Clear();
+        try
+        {
+            var postalCodes = await Api.GetGeoPostalCodesAsync(stateCode, cityName, countryCode);
+            _postalCodes.AddRange(postalCodes);
+            if (_postalCodes.Count == 1)
+            {
+                await PostalCodeChanged.InvokeAsync(_postalCodes[0].PostalCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _message = $"ZIP lookup failed: {ex.Message}";
+        }
+    }
+
+    public void Dispose()
+    {
+        CancelSearch();
+        _cityCancellation?.Cancel();
+        _cityCancellation?.Dispose();
+    }
+}

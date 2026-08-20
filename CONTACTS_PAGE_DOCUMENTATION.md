@@ -178,13 +178,13 @@ Contacts Page
 
 ### Technologies Used
 - **Blazor Server Components**
-- **Syncfusion Components**
-  - SfGrid (Datagrid)
-  - SfDialog (Modal)
-  - SfDropDownList (Dropdowns)
-  - SfTextBox (Input fields)
-  - SfToast (Notifications)
-  - SfCheckBox (Checkboxes)
+- **Enterprise native components**
+  - AppGrid (Datagrid)
+  - enterprise modal (Modal)
+  - native select (Dropdowns)
+  - native input (Input fields)
+  - enterprise toast (Notifications)
+  - native checkbox (Checkboxes)
 - **Component-scoped CSS**
 - **Bootstrap Icons**
 

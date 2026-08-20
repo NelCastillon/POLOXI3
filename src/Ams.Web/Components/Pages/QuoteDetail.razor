@@ -1,0 +1,226 @@
+@page "/submissions/quotes/{QuoteId:guid}"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
+
+<PageTitle>@(_quote is null ? "Quote Detail" : $"{_quote.QuoteNumber} - AMS")</PageTitle>
+
+<div class="qdd-page">
+    @if (_loading)
+    {
+        <div class="qdd-state" role="status">
+            <span class="spinner-border" aria-hidden="true"></span>
+            <strong>Loading quote details...</strong>
+        </div>
+    }
+    else if (_loadError is not null)
+    {
+        <div class="qdd-state qdd-state--error" role="alert">
+            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i>
+            <strong>Quote details could not be loaded</strong>
+            <span>@_loadError</span>
+            <div class="qdd-state__actions">
+                <button type="button" class="qdd-btn qdd-btn--primary" @onclick="LoadAsync"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Retry</button>
+                <button type="button" class="qdd-btn qdd-btn--light" @onclick='() => Nav.NavigateTo("/submissions/quotes")'><i class="bi bi-arrow-left" aria-hidden="true"></i> Quote Center</button>
+            </div>
+        </div>
+    }
+    else if (_quote is not null)
+    {
+        <section class="qdd-command-header">
+            <div>
+                <span class="qdd-eyebrow"><i class="bi bi-file-earmark-check" aria-hidden="true"></i> Enterprise quote detail</span>
+                <div class="qdd-title-row">
+                    <h1>@_quote.QuoteNumber</h1>
+                    <span class="@StatusClass">@_quote.Status</span>
+                </div>
+                <p>@_quote.CarrierName quote received @DateTimeLabel(_quote.QuoteReceivedDateUtc ?? _quote.QuotedDateUtc).</p>
+                <div class="qdd-command-header__meta">
+                    <span><i class="bi bi-cash-stack" aria-hidden="true"></i>@_quote.AnnualPremium.ToString("C0") annual premium</span>
+                    <span><i class="bi bi-calendar-event" aria-hidden="true"></i>Effective @DateLabel(_quote.EffectiveDate)</span>
+                    <span><i class="bi bi-hourglass-split" aria-hidden="true"></i>Expires @DateLabel(_quote.ExpiresDateUtc)</span>
+                    <span><i class="bi bi-arrow-repeat" aria-hidden="true"></i>Response v@_quote.ResponseVersion</span>
+                </div>
+            </div>
+            <div class="qdd-command-header__actions">
+                @if (_quote.IsSelected || _quote.Status is "Selected" or "Accepted" or "Bound")
+                {
+                    <button type="button" class="qdd-btn qdd-btn--primary" @onclick='() => Nav.NavigateTo($"/premium-finance?sourceType=Quote&sourceId={QuoteId}")'><i class="bi bi-bank2" aria-hidden="true"></i> Finance Premium</button>
+                }
+                <button type="button" class="qdd-btn qdd-btn--primary" @onclick="OpenSubmission"><i class="bi bi-send" aria-hidden="true"></i> Open Submission</button>
+                <button type="button" class="qdd-btn qdd-btn--light" @onclick='() => Nav.NavigateTo("/submissions/quotes")'><i class="bi bi-columns-gap" aria-hidden="true"></i> Quote Center</button>
+            </div>
+        </section>
+
+        <section class="qdd-kpis" aria-label="Quote summary">
+            @SummaryCard("Premium", _quote.AnnualPremium.ToString("C0"), "Annual quoted premium", "bi-currency-dollar")
+            @SummaryCard("Deductible", Money(_quote.Deductible), "Customer retention", "bi-shield-minus")
+            @SummaryCard("Limit", Money(_quote.Limit), "Quoted coverage limit", "bi-shield-check")
+            @SummaryCard("Commission", Percent(_quote.CommissionPercent), "Agency compensation", "bi-percent")
+            @SummaryCard("Coverage Lines", _quote.LineCount.ToString(), "DB-backed quoted lines", "bi-layers")
+            @SummaryCard("Score", _quote.RecommendationScore.ToString(), _quote.IsRecommended ? "Recommended option" : "Recommendation score", "bi-stars")
+        </section>
+
+        <div class="qdd-layout">
+            <main class="qdd-main">
+                <section class="qdd-card">
+                    <div class="qdd-card__header">
+                        <div><span>Coverage and pricing</span><h2>Quote terms</h2></div>
+                        @if (_quote.IsBindable)
+                        {
+                            <span class="qdd-badge qdd-badge--success"><i class="bi bi-check2-circle" aria-hidden="true"></i> Bindable</span>
+                        }
+                    </div>
+                    <dl class="qdd-detail-grid">
+                        @Detail("Carrier", _quote.CarrierName)
+                        @Detail("Carrier reference", Text(_quote.CarrierReferenceNumber))
+                        @Detail("Carrier rating", Text(_quote.CarrierRating))
+                        @Detail("Effective date", DateLabel(_quote.EffectiveDate))
+                        @Detail("Expiration date", DateLabel(_quote.ExpiresDateUtc))
+                        @Detail("Payment terms", Text(_quote.PaymentTerms))
+                        @Detail("Minimum earned premium", Money(_quote.MinimumEarnedPremium))
+                        @Detail("Taxes and fees", Money(_quote.TaxesAndFees))
+                        @Detail("Broker fee", Money(_quote.BrokerFee))
+                        @Detail("TRIA included", _quote.TriaIncluded.HasValue ? (_quote.TriaIncluded.Value ? "Yes" : "No") : "Not specified")
+                    </dl>
+                </section>
+
+                @if (_quote.Lines.Count > 0)
+                {
+                    <section class="qdd-card">
+                        <div class="qdd-card__header">
+                            <div><span>Package composition</span><h2>Coverage line breakdown</h2></div>
+                            <span class="qdd-line-count">@_quote.Lines.Count line@(_quote.Lines.Count == 1 ? string.Empty : "s")</span>
+                        </div>
+                        <div class="qdd-lines">
+                            @foreach (var line in _quote.Lines.OrderBy(line => line.SortOrder))
+                            {
+                                <details class="qdd-line" open="@(_quote.Lines.Count <= 3)">
+                                    <summary>
+                                        <span><i class="bi bi-layers" aria-hidden="true"></i><strong>@line.LineOfBusiness</strong><small>@line.Status</small></span>
+                                        <strong>@line.QuotedPremium.ToString("C0")</strong>
+                                    </summary>
+                                    <dl class="qdd-line__terms">
+                                        @Detail("Premium", line.QuotedPremium.ToString("C0"))
+                                        @Detail("Deductible", Money(line.Deductible))
+                                        @Detail("Limit", Money(line.Limit))
+                                        @Detail("Commission", Percent(line.CommissionPercent))
+                                        @Detail("Payment terms", Text(line.PaymentTerms))
+                                        @Detail("Minimum earned", Money(line.MinimumEarnedPremium))
+                                        @Detail("Taxes and fees", Money(line.TaxesAndFees))
+                                        @Detail("Broker fee", Money(line.BrokerFee))
+                                        @Detail("TRIA included", line.TriaIncluded.HasValue ? (line.TriaIncluded.Value ? "Yes" : "No") : "Not specified")
+                                        @Detail("Bindable", line.IsBindable ? "Yes" : "No")
+                                    </dl>
+                                    <div class="qdd-line__conditions">
+                                        @LineCondition("Coverage forms", line.CoverageForms)
+                                        @LineCondition("Subjectivities", line.Subjectivities)
+                                        @LineCondition("Exclusions", line.Exclusions)
+                                        @LineCondition("Notes", line.CoverageNotes)
+                                    </div>
+                                </details>
+                            }
+                        </div>
+                    </section>
+                }
+
+                <section class="qdd-card">
+                    <div class="qdd-card__header"><div><span>Underwriting review</span><h2>Coverage conditions</h2></div></div>
+                    <div class="qdd-notes-grid">
+                        @NoteBlock("Coverage forms", _quote.CoverageForms, "bi-file-earmark-text")
+                        @NoteBlock("Subjectivities", _quote.Subjectivities, "bi-clipboard-check")
+                        @NoteBlock("Exclusions", _quote.Exclusions, "bi-slash-circle")
+                        @NoteBlock("Coverage notes", _quote.CoverageNotes, "bi-journal-text")
+                    </div>
+                </section>
+            </main>
+
+            <aside class="qdd-side">
+                <section class="qdd-card">
+                    <div class="qdd-card__header"><div><span>Next best actions</span><h2>Quote workflow</h2></div></div>
+                    <div class="qdd-actions">
+                        <button type="button" class="qdd-action" @onclick="OpenSubmission"><i class="bi bi-eye" aria-hidden="true"></i><span><strong>Review in Submission</strong><small>Compare all market responses</small></span></button>
+                        <button type="button" class="qdd-action" @onclick="OpenProposal"><i class="bi bi-file-earmark-richtext" aria-hidden="true"></i><span><strong>Proposal Workflow</strong><small>Prepare and present client options</small></span></button>
+                        <button type="button" class="qdd-action" @onclick='() => Nav.NavigateTo("/quotes/bind")'><i class="bi bi-shield-check" aria-hidden="true"></i><span><strong>Bind Workflow</strong><small>Request bind and confirm coverage</small></span></button>
+                    </div>
+                </section>
+
+                <section class="qdd-card">
+                    <div class="qdd-card__header"><div><span>Governance</span><h2>Readiness</h2></div></div>
+                    <ul class="qdd-checks">
+                        @Check("Reviewed", _quote.IsReviewed)
+                        @Check("Approved for presentation", _quote.ApprovedForPresentationDateUtc.HasValue)
+                        @Check("Proposal ready", _quote.IsProposalReady)
+                        @Check("Selected", _quote.IsSelected)
+                    </ul>
+                    @if (!string.IsNullOrWhiteSpace(_quote.ProposalReadinessReason))
+                    {
+                        <button type="button" class="qdd-readiness-note" @onclick="OpenReadinessAction" title="Open Review Quote Terms">
+                            <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                            <span>@_quote.ProposalReadinessReason</span>
+                            <i class="bi bi-arrow-right" aria-hidden="true"></i>
+                        </button>
+                    }
+                </section>
+            </aside>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid QuoteId { get; set; }
+
+    QuoteComparisonDto? _quote;
+    bool _loading = true;
+    string? _loadError;
+    Guid _tenantId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Quotes", "/submissions/quotes"), new("Detail", $"/submissions/quotes/{QuoteId}"));
+        await LoadAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty)
+                _tenantId = (await CurrentUser.RequireAsync()).TenantId;
+            _quote = await Api.GetSubmissionQuoteByIdAsync(QuoteId, _tenantId);
+            if (_quote is null)
+                _loadError = "The requested quote was not found.";
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    void OpenSubmission() => Nav.NavigateTo($"/submissions/{_quote!.SubmissionId}?tab=quotes");
+    void OpenReadinessAction() => Nav.NavigateTo($"/submissions/{_quote!.SubmissionId}?tab=quotes&action=quote-review&quoteId={_quote.QuoteId}");
+    void OpenProposal() => Nav.NavigateTo($"/submissions/{_quote!.SubmissionId}/proposals");
+
+    string StatusClass => $"qdd-status qdd-status--{(_quote?.Status ?? string.Empty).ToLowerInvariant().Replace(" ", "-")}";
+
+    static string Text(string? value) => string.IsNullOrWhiteSpace(value) ? "Not specified" : value;
+    static string Money(decimal? value) => value.HasValue ? value.Value.ToString("C0") : "Not specified";
+    static string Percent(decimal? value) => value.HasValue ? $"{value.Value:0.##}%" : "Not specified";
+    static string DateLabel(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy") : "Not specified";
+    static string DateTimeLabel(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy h:mm tt");
+
+    RenderFragment SummaryCard(string label, string value, string detail, string icon) => @<article class="qdd-kpi"><i class="bi @icon" aria-hidden="true"></i><span><small>@label</small><strong>@value</strong><em>@detail</em></span></article>;
+    RenderFragment Detail(string label, string value) => @<div><dt>@label</dt><dd>@value</dd></div>;
+    RenderFragment NoteBlock(string title, string? value, string icon) => @<article class="qdd-note"><i class="bi @icon" aria-hidden="true"></i><div><strong>@title</strong><p>@Text(value)</p></div></article>;
+    RenderFragment LineCondition(string title, string? value) => @<article><strong>@title</strong><p>@Text(value)</p></article>;
+    RenderFragment Check(string label, bool complete) => @<li class="@(complete ? "qdd-check--complete" : string.Empty)"><i class="bi @(complete ? "bi-check-circle-fill" : "bi-circle")" aria-hidden="true"></i><span>@label</span></li>;
+}

@@ -25,6 +25,7 @@ public sealed class CreateServiceRequestRequest
 
 public sealed class UpdateServiceRequestRequest
 {
+    public Guid TenantId { get; set; }
     public Guid AccountId { get; set; }
     public Guid? AgreementId { get; set; }
     public Guid? EngagementId { get; set; }

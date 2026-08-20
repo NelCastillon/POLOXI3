@@ -52,19 +52,25 @@
                         </div>
                     </div>
                     <div class="clm-form-grid">
-                        <div class="clm-field">
-                            <label>Policy # <span>*</span></label>
-                            <InputText class="clm-input" @bind-Value="_newClaim.PolicyNumber" placeholder="Policy number" />
-                            
+                        <div class="clm-field clm-field-wide">
+                            <label>Authoritative Policy <span>*</span></label>
+                            <InputSelect class="clm-input" @bind-Value="_newClaim.PolicyId" @bind-Value:after="ApplySelectedPolicy">
+                                <option value="@Guid.Empty">Select a bound policy</option>
+                                @foreach (var policy in _policies.OrderBy(p => p.AccountName).ThenBy(p => p.PolicyNumber))
+                                {
+                                    <option value="@policy.PolicyId">@policy.PolicyNumber - @policy.AccountName - @policy.CarrierName</option>
+                                }
+                            </InputSelect>
                         </div>
+                        <div class="clm-field"><label>Policy #</label><InputText class="clm-input" @bind-Value="_newClaim.PolicyNumber" readonly /></div>
                         <div class="clm-field">
                             <label>Account / Insured <span>*</span></label>
-                            <InputText class="clm-input" @bind-Value="_newClaim.AccountName" placeholder="Named insured" />
+                            <InputText class="clm-input" @bind-Value="_newClaim.AccountName" readonly />
                             
                         </div>
                         <div class="clm-field">
                             <label>Carrier <span>*</span></label>
-                            <InputText class="clm-input" @bind-Value="_newClaim.Carrier" placeholder="Carrier name" />
+                            <InputText class="clm-input" @bind-Value="_newClaim.Carrier" readonly />
                             
                         </div>
                         <div class="clm-field">
@@ -275,15 +281,15 @@
                                 <tbody>
                                     @foreach (var claim in FilteredClaims)
                                     {
-                                        <tr class="@RowClass(claim)" @onclick="() => SelectClaim(claim)">
-                                            <td data-label="Claim"><button type="button" class="clm-link" @onclick:stopPropagation="true" @onclick="@(() => OpenClaim(claim))">@claim.ClaimNumber</button><small>@claim.DateReported.ToString("MMM d, yyyy") / @(DaysOpenLabel(claim))</small></td>
+                                        <tr class="@RowClass(claim)" @onclick="() => SelectClaim(claim)" @ondblclick="() => OpenClaim(claim)">
+                                            <td data-label="Claim"><button type="button" class="clm-link" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onclick="@(() => OpenClaim(claim))">@claim.ClaimNumber</button><small>@claim.DateReported.ToString("MMM d, yyyy") / @(DaysOpenLabel(claim))</small></td>
                                             <td data-label="Insured"><strong>@claim.AccountName</strong><small>@claim.PolicyNumber / @claim.Lob</small></td>
                                             <td data-label="Status"><span class="@StatusClass(claim.Status)">@claim.Status</span></td>
                                             <td data-label="Loss"><strong>@claim.LossType</strong><small>@claim.PrimaryClaimant</small></td>
                                             <td data-label="Handler"><strong>@DisplayValue(claim.AssignedHandler, "Unassigned")</strong><small>@FlagSummary(claim)</small></td>
                                             <td data-label="Incurred" class="text-end"><strong>@claim.TotalIncurred.ToString("C0")</strong><small>Reserve @claim.TotalReserves.ToString("C0")</small></td>
                                             <td data-label="Actions" class="text-end">
-                                                <div class="clm-row-actions" @onclick:stopPropagation="true">
+                                                <div class="clm-row-actions" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
                                                     <button type="button" class="clm-icon-btn" title="Open claim" @onclick="@(() => OpenClaim(claim))"><i class="bi bi-arrow-right-circle" aria-hidden="true"></i></button>
                                                     <button type="button" class="clm-icon-btn" title="Account 360" @onclick="@(() => OpenAccount(claim))"><i class="bi bi-building" aria-hidden="true"></i></button>
                                                     <button type="button" class="clm-icon-btn" title="Policy" @onclick="@(() => OpenPolicy(claim))"><i class="bi bi-shield-check" aria-hidden="true"></i></button>
@@ -411,13 +417,15 @@
     private ClaimDto? _selected;
     private NewClaimForm _newClaim = new();
     private List<ClaimDto> _claims = [];
+    private List<PolicyRegisterDto> _policies = [];
     private readonly List<ClaimToast> _toasts = [];
 
     private readonly TabDef[] _tabs = [new("register", "Register", "bi-table"), new("board", "Board", "bi-kanban"), new("followup", "Follow-Up", "bi-list-check"), new("analytics", "Analytics", "bi-bar-chart")];
-    private readonly string[] _statuses = ["Open", "Closed", "Reopened", "In Litigation", "Subrogation", "Denied"];
-    private readonly string[] _lobs = ["General Liability", "Commercial Auto", "Commercial Property", "Workers Comp", "Umbrella", "Professional Liab.", "Home/Dwelling", "Personal Auto"];
-    private readonly string[] _lossTypes = ["Bodily Injury", "Property Damage", "Auto Collision", "Auto Comprehensive", "Workers Comp Injury", "Product Liability", "Professional Error", "Theft", "Fire", "Water/Flood", "Wind/Hail", "Slip & Fall", "Equipment Breakdown"];
-    private readonly string[] _priorities = ["Standard", "High", "Critical"];
+    private List<ClaimOptionDto> _options = [];
+    private IEnumerable<string> _statuses => OptionValues("ClaimStatus");
+    private IEnumerable<string> _lobs => OptionValues("LineOfBusiness");
+    private IEnumerable<string> _lossTypes => OptionValues("LossType");
+    private IEnumerable<string> _priorities => OptionValues("ClaimPriority");
 
     private List<ClaimDto> AllClaims => _claims;
     private List<ClaimDto> FilteredClaims => AllClaims.Where(MatchesFilters).OrderByDescending(c => SeverityScore(c)).ThenByDescending(c => c.DateReported).ToList();
@@ -471,6 +479,9 @@
             _tenantAdminUserId = _userContext.UserId;
             var result = await Api.SearchClaimsAsync(_tenantId, pageSize: 500);
             _claims = (result?.Items ?? []).ToList();
+            _options = await Api.GetClaimOptionsAsync(_tenantId) ?? [];
+            var policies = await Api.SearchPolicyRegisterAsync(_tenantId, pageSize: 500);
+            _policies = (policies?.Items ?? []).Where(p => p.PolicyId != Guid.Empty && p.AccountId != Guid.Empty && p.CarrierId != Guid.Empty).ToList();
             _selected = _selected is null ? FilteredClaims.FirstOrDefault() : FilteredClaims.FirstOrDefault(c => c.ClaimId == _selected.ClaimId) ?? FilteredClaims.FirstOrDefault();
         }
         catch (Exception ex)
@@ -532,6 +543,9 @@
             var id = await Api.CreateClaimAsync(new CreateClaimRequest
             {
                 TenantId = _tenantId,
+                PolicyId = _newClaim.PolicyId,
+                AccountId = _newClaim.AccountId,
+                CarrierId = _newClaim.CarrierId,
                 PolicyNumber = Normalize(_newClaim.PolicyNumber) ?? string.Empty,
                 AccountName = Normalize(_newClaim.AccountName) ?? string.Empty,
                 Lob = _newClaim.Lob,
@@ -594,6 +608,19 @@
         };
     }
 
+    private void ApplySelectedPolicy()
+    {
+        var policy = _policies.FirstOrDefault(p => p.PolicyId == _newClaim.PolicyId);
+        if (policy is null) return;
+        _newClaim.AccountId = policy.AccountId;
+        _newClaim.CarrierId = policy.CarrierId;
+        _newClaim.PolicyNumber = policy.PolicyNumber;
+        _newClaim.AccountName = policy.AccountName;
+        _newClaim.Carrier = policy.CarrierName;
+        _newClaim.Lob = policy.LineOfBusiness;
+        _newClaim.AssignedHandler = policy.AssignedToUserName ?? "Unassigned";
+    }
+
     private string TabClass(string key) => _activeTab == key ? "clm-view-btn clm-view-btn-active" : "clm-view-btn";
     private int TabCount(string key) => key switch { "register" => FilteredClaims.Count, "board" => BoardGroups.Sum(g => g.Claims.Count), "followup" => FollowUpClaims.Count, "analytics" => AllClaims.Count, _ => 0 };
     private string KpiClass(KpiTile kpi) => _kpiFilter == kpi.Filter ? $"clm-kpi-card clm-{kpi.Tone} clm-kpi-card-active" : $"clm-kpi-card clm-{kpi.Tone}";
@@ -612,6 +639,7 @@
     private static string DaysOpenLabel(ClaimDto claim) => claim.ClosedDate.HasValue || string.Equals(claim.Status, "Closed", StringComparison.OrdinalIgnoreCase) ? "Closed" : $"{claim.DaysOpen:N0}d open";
     private static string CssToken(string value) => string.IsNullOrWhiteSpace(value) ? "none" : value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private IEnumerable<string> OptionValues(string group) => _options.Where(x => string.Equals(x.OptionGroupCode, group, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SortOrder).Select(x => x.DisplayName);
     private static string Csv(string? value) => "\"" + (value ?? string.Empty).Replace("\"", "\"\"") + "\"";
 
     private static RenderFragment Metric(string label, string value, string icon) => builder =>
@@ -682,6 +710,9 @@
 
     private sealed class NewClaimForm
     {
+        [Required] public Guid PolicyId { get; set; }
+        public Guid AccountId { get; set; }
+        public Guid CarrierId { get; set; }
         [Required, StringLength(50)] public string PolicyNumber { get; set; } = string.Empty;
         [Required, StringLength(160)] public string AccountName { get; set; } = string.Empty;
         [Required, StringLength(120)] public string Carrier { get; set; } = string.Empty;

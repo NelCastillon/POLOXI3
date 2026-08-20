@@ -1,0 +1,481 @@
+@page "/communications/proposal-deliveries"
+@namespace Ams.Web.Components.Pages
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Nav
+
+<PageTitle>Proposal Delivery Monitor - AMS</PageTitle>
+<EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="5000" NewestOnTop="true" />
+
+@if (_editTarget is not null)
+{
+    <div class="pdm-modal-backdrop" role="presentation">
+        <div class="um-modal pdm-modal" role="dialog" aria-modal="true" aria-labelledby="pdm-edit-recipient-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-envelope-at"></i><span id="pdm-edit-recipient-title">Edit Delivery Recipient</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_editForm" OnValidSubmit="SaveRecipientAsync"><DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="pdm-dialog-intro"><span><i class="bi bi-shield-check"></i> Eligible dispatch update</span><p>Edit recipients only for queued, failed, or configuration-required dispatches. Completed delivery history remains immutable.</p></div><div class="um-form-grid"><div class="um-field um-field--full"><label>Recipient email</label><InputText type="email" class="um-input" @bind-Value="_editForm.Recipient" /><ValidationMessage For="() => _editForm.Recipient" class="text-danger" /></div><div class="um-field um-field--full"><label>Change reason</label><InputTextArea class="um-input" rows="3" @bind-Value="_editForm.ChangeReason" /><ValidationMessage For="() => _editForm.ChangeReason" class="text-danger" /></div></div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_actionBusy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-check2-circle"></i> Save Recipient</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_resendTarget is not null)
+{
+    <div class="pdm-modal-backdrop" role="presentation">
+        <div class="um-modal pdm-modal" role="dialog" aria-modal="true" aria-labelledby="pdm-resend-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-send-plus"></i><span id="pdm-resend-title">Resend Proposal Delivery</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_resendForm" OnValidSubmit="ResendAsync"><DataAnnotationsValidator />
+                <div class="um-modal-body"><div class="pdm-dialog-intro"><span><i class="bi bi-clock-history"></i> Preserve delivery history</span><p>Resend creates a new queued dispatch and keeps the selected delivery attempt in the audit trail.</p></div><div class="um-form-grid"><div class="um-field um-field--full"><label>Recipient email</label><InputText type="email" class="um-input" @bind-Value="_resendForm.Recipient" /><ValidationMessage For="() => _resendForm.Recipient" class="text-danger" /></div><div class="um-field um-field--full"><label>Reason</label><InputTextArea class="um-input" rows="3" @bind-Value="_resendForm.Reason" /><ValidationMessage For="() => _resendForm.Reason" class="text-danger" /></div></div></div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_actionBusy">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_actionBusy"><i class="bi bi-send-plus"></i> Resend</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="pdm-modal-backdrop" role="presentation">
+        <div class="um-modal pdm-modal pdm-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="pdm-delete-title" @onclick:stopPropagation="true">
+            <div class="um-confirm-dialog"><div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-trash3" aria-hidden="true"></i></div><div><h3 id="pdm-delete-title">Remove delivery from monitor?</h3><p>This soft-deletes the dispatch from the monitor and records an audit event. It does not erase proposal lifecycle history.</p></div></div>
+            <EditForm Model="_deleteForm" OnValidSubmit="DeleteAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="um-field um-field--full"><label>Removal reason</label><InputTextArea class="um-input" rows="3" @bind-Value="_deleteForm.Reason" /><ValidationMessage For="() => _deleteForm.Reason" class="text-danger" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_actionBusy">Cancel</button><button type="submit" class="um-btn um-btn-danger" disabled="@_actionBusy"><i class="bi bi-trash3"></i> Remove Delivery</button></div></EditForm>
+        </div>
+    </div>
+}
+
+@if (_statusDetailTarget is not null)
+{
+    <div class="pdm-modal-backdrop" role="presentation">
+        <div class="um-modal pdm-modal pdm-status-modal" role="dialog" aria-modal="true" aria-labelledby="pdm-status-detail-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi @StatusDetailIcon(_statusDetailTarget)"></i><span id="pdm-status-detail-title">Delivery Status Detail</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDialogs" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button></div>
+            <div class="um-modal-body">
+                <section class="pdm-status-summary"><span class="@StatusClass(_statusDetailTarget.StatusCode)">@MonitorStatus(_statusDetailTarget)</span><div><h3>@StatusDetailTitle(_statusDetailTarget)</h3><p>@StatusDetailReason(_statusDetailTarget)</p></div></section>
+                <div class="pdm-status-detail-grid">
+                    <div><label>Recipient</label><strong>@_statusDetailTarget.Recipient</strong></div>
+                    <div><label>Provider</label><strong>@_statusDetailTarget.ProviderName</strong><span>@DisplayStatus(_statusDetailTarget.DeliveryMethodCode) · @(_statusDetailTarget.DeliveryHandlerCode ?? "Handler")</span></div>
+                    <div><label>Attempts</label><strong>@_statusDetailTarget.AttemptCount / @_statusDetailTarget.MaxAttempts</strong><span>Next attempt: @FormatDate(_statusDetailTarget.NextAttemptDateUtc)</span></div>
+                    <div><label>Dispatch</label><strong>@ShortId(_statusDetailTarget.ProposalDeliveryDispatchId)</strong><span>Queued @FormatDate(_statusDetailTarget.CreatedDateUtc)</span></div>
+                    <div class="pdm-status-detail-wide"><label>Error code</label><strong>@(_statusDetailTarget.ErrorCode ?? "No provider error code")</strong></div>
+                    <div class="pdm-status-detail-wide"><label>Specific message</label><p>@StatusSpecificMessage(_statusDetailTarget)</p></div>
+                </div>
+                <section class="pdm-fix-panel"><span><i class="bi bi-tools"></i> Recommended fix options</span><div class="pdm-fix-actions">@if (RequiresConfiguration(_statusDetailTarget)) { <button type="button" class="um-btn um-btn-primary" @onclick="() => FixConfigure(_statusDetailTarget)"><i class="bi bi-gear"></i> Configure Provider</button> }@if (CanEditRecipient(_statusDetailTarget)) { <button type="button" class="um-btn um-btn-ghost" @onclick="() => FixEditRecipient(_statusDetailTarget)"><i class="bi bi-pencil-square"></i> Edit Recipient</button> }@if (_statusDetailTarget.CanRetry) { <button type="button" class="um-btn um-btn-ghost" @onclick="() => FixRetryAsync(_statusDetailTarget)" disabled="@_actionBusy"><i class="bi bi-arrow-repeat"></i> Retry</button> }<button type="button" class="um-btn um-btn-ghost" @onclick="() => FixResend(_statusDetailTarget)"><i class="bi bi-send-plus"></i> Resend</button><button type="button" class="um-btn um-btn-ghost" @onclick="() => OpenProposal(_statusDetailTarget)"><i class="bi bi-box-arrow-up-right"></i> Open Proposal</button></div></section>
+            </div>
+            <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseDialogs" disabled="@_actionBusy">Close</button></div>
+        </div>
+    </div>
+}
+
+<section class="pdm-page">
+    <div class="pdm-hero">
+        <div class="pdm-hero-left">
+            <div class="pdm-hero-icon"><i class="bi bi-send-check" aria-hidden="true"></i></div>
+            <div>
+                <div class="pdm-eyebrow"><i class="bi bi-activity"></i> Tenant Communications - Proposal Delivery</div>
+                <div class="pdm-title-row"><h1>Proposal Delivery Command Center</h1><span>@Filtered.Count() dispatches</span></div>
+                <p>Monitor actual proposal email dispatches from queue to delivery, confirm worker processing, review provider readiness, and resolve failed or configuration-blocked sends.</p>
+                <div class="pdm-hero-chips"><span><i class="bi bi-check-circle"></i>@DeliveryHealth.ToString("0")% delivery health</span><span><i class="bi bi-exclamation-triangle"></i>@FailedCount failed</span><span><i class="bi bi-sliders"></i>@ConfigurationRequiredCount configuration required</span></div>
+            </div>
+        </div>
+        <div class="pdm-hero-actions">
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/tenant/integrations/proposal-delivery?method=Email")'><i class="bi bi-gear"></i> Configure Email</button>
+            <button type="button" class="um-btn um-btn-ghost" @onclick='() => Nav.NavigateTo("/communications/notifications")'><i class="bi bi-bell"></i> Notifications</button>
+            <button type="button" class="um-btn um-btn-primary" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </div>
+
+    <section class="pdm-command-strip" aria-label="Proposal delivery operating model">
+        <article><i class="bi bi-database-check"></i><div><strong>Queued in AMS</strong><span>Proposal delivery rows are persisted before any provider is contacted.</span></div></article>
+        <article><i class="bi bi-cpu"></i><div><strong>Processed by worker</strong><span>Ams.Worker claims queued records and sends through the configured provider.</span></div></article>
+        <article><i class="bi bi-clipboard2-pulse"></i><div><strong>Status audited here</strong><span>Use this page for retries, configuration fixes, and proposal drill-through.</span></div></article>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_loadError))
+    {
+        <div class="alert alert-danger pdm-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert"><i class="bi bi-exclamation-triangle-fill me-2"></i>@_loadError</div>
+    }
+
+    <div class="pdm-kpi-strip">
+        @Kpi("all", "bi-stack", "Total", _items.Count.ToString("N0"), "All dispatches")
+        @Kpi("Queued", "bi-hourglass-split", "Queued", CountStatus("Queued").ToString("N0"), "Waiting for worker")
+        @Kpi("Delivered", "bi-send-check", "Delivered", DeliveredCount.ToString("N0"), "Confirmed delivery")
+        @Kpi("Configuration Required", "bi-sliders", "Config Required", ConfigurationRequiredCount.ToString("N0"), "Provider setup needed")
+        @Kpi("Failed", "bi-exclamation-octagon", "Failed", FailedCount.ToString("N0"), "Retry or investigate")
+    </div>
+
+    <div class="pdm-filter-panel">
+        <div class="pdm-search"><i class="bi bi-search" aria-hidden="true"></i><input value="@_searchTerm" @oninput="SearchChanged" placeholder="Search recipient, proposal, submission, account, provider, or status" /></div>
+        <select class="form-select" value="@_statusFilter" @onchange="StatusChanged" aria-label="Delivery status filter">
+            <option value="">All statuses</option>
+            @foreach (var status in Statuses)
+            {
+                <option value="@status">@DisplayStatus(status)</option>
+            }
+        </select>
+    </div>
+
+    <div class="pdm-panel">
+        <div class="pdm-panel-header"><div><span><i class="bi bi-activity"></i> Live Dispatch Queue</span><strong>@Filtered.Count().ToString("N0") tenant proposal delivery records</strong></div><small>Latest 250 dispatches from Submissions.ProposalDeliveryDispatch</small></div>
+        @if (_loading)
+        {
+            <div class="pdm-empty"><div class="um-spinner" aria-hidden="true"></div><span>Loading proposal delivery dispatches...</span></div>
+        }
+        else if (!Filtered.Any())
+        {
+            <div class="pdm-empty"><i class="bi bi-send-slash"></i><span>No proposal delivery dispatches match this view.</span><button type="button" class="um-btn um-btn-primary" @onclick='() => Nav.NavigateTo("/submissions")'>Open Submissions</button></div>
+        }
+        else
+        {
+            <div class="pdm-grid-wrap">
+                <table class="pdm-grid">
+                    <thead><tr><th>Delivery</th><th>Proposal</th><th>Recipient</th><th>Status</th><th>Attempts</th><th>Provider</th><th>Timeline</th><th>Actions</th></tr></thead>
+                    <tbody>
+                        @foreach (var item in Filtered)
+                        {
+                            <tr @onclick="() => OpenProposal(item)">
+                                <td><div class="pdm-main-cell"><span class="pdm-cell-kicker">Account</span><strong>@(item.AccountName ?? "Account not linked")</strong><span>@item.SubmissionNumber · @DisplayStatus(item.SubmissionStatus)</span><small>@(item.OpportunityName ?? "No opportunity")</small></div></td>
+                                <td><div class="pdm-main-cell"><span class="pdm-cell-kicker">Proposal</span><strong>@item.ProposalTitle</strong><span>Version @item.ProposalVersionNumber</span><small>Dispatch @ShortId(item.ProposalDeliveryDispatchId)</small></div></td>
+                                <td><div class="pdm-main-cell"><span class="pdm-cell-kicker">Recipient</span><strong>@item.Recipient</strong><span>@(item.SenderAddress ?? "Sender not configured")</span><small>@(item.AssignedProducerName ?? "Producer not assigned")</small></div></td>
+                                <td><button type="button" class="pdm-status-trigger" title="Double-click for delivery status details" @ondblclick="() => OpenStatusDetail(item)" @onclick:stopPropagation="true"><span class="@StatusClass(item.StatusCode)">@MonitorStatus(item)</span></button>@if (!string.IsNullOrWhiteSpace(item.ErrorMessage)) { <p class="pdm-error">@item.ErrorMessage</p> }</td>
+                                <td><div class="pdm-attempt"><strong>@item.AttemptCount / @item.MaxAttempts</strong>@if (item.NextAttemptDateUtc.HasValue) { <small>Next @FormatDate(item.NextAttemptDateUtc)</small> } else { <small>No retry scheduled</small> }</div></td>
+                                <td><div class="pdm-main-cell"><span class="pdm-cell-kicker">Provider</span><strong>@item.ProviderName</strong><span>@DisplayStatus(item.DeliveryMethodCode) · @(item.DeliveryHandlerCode ?? "Handler")</span><small class="@(item.ProviderIsConfigured && item.ProviderIsActive ? "pdm-provider-ok" : "pdm-provider-warn")">@(item.ProviderIsConfigured && item.ProviderIsActive ? "Configured" : "Needs setup")</small></div></td>
+                                <td><div class="pdm-timeline"><span>Queued @FormatDate(item.CreatedDateUtc)</span>@if (item.CompletedDateUtc.HasValue) { <span>Completed @FormatDate(item.CompletedDateUtc)</span> }@if (item.FirstViewedDateUtc.HasValue) { <span>Viewed @FormatDate(item.FirstViewedDateUtc)</span> }@if (item.BouncedDateUtc.HasValue) { <span>Bounced @FormatDate(item.BouncedDateUtc)</span> }</div></td>
+                                <td><div class="pdm-actions"><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenProposal(item)" @onclick:stopPropagation="true"><i class="bi bi-box-arrow-up-right"></i> Proposal</button>@if (CanEditRecipient(item)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenEditRecipient(item)" @onclick:stopPropagation="true"><i class="bi bi-pencil-square"></i> Edit Recipient</button> }<button type="button" class="um-btn um-btn-primary um-btn-sm" @onclick="() => OpenResend(item)" @onclick:stopPropagation="true" disabled="@_actionBusy"><i class="bi bi-send-plus"></i> Resend</button>@if (RequiresConfiguration(item)) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => OpenConfiguration(item)" @onclick:stopPropagation="true"><i class="bi bi-gear"></i> Configure</button> }@if (item.CanRetry) { <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="() => RetryAsync(item)" @onclick:stopPropagation="true" disabled="@_actionBusy"><i class="bi bi-arrow-repeat"></i> Retry</button> }<button type="button" class="um-btn um-btn-ghost um-btn-sm pdm-danger-action" @onclick="() => OpenDelete(item)" @onclick:stopPropagation="true" disabled="@_actionBusy"><i class="bi bi-trash3"></i> Remove</button></div></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    EnterpriseToast? _toast;
+    Ams.Web.Services.CurrentUserContextModel? _currentUser;
+    List<ProposalDeliveryMonitorDto> _items = [];
+    string? _statusFilter;
+    string? _searchTerm;
+    string? _loadError;
+    string _activeKpi = "all";
+    bool _loading;
+    bool _actionBusy;
+    ProposalDeliveryMonitorDto? _editTarget;
+    ProposalDeliveryMonitorDto? _resendTarget;
+    ProposalDeliveryMonitorDto? _deleteTarget;
+    ProposalDeliveryMonitorDto? _statusDetailTarget;
+    EditRecipientForm _editForm = new();
+    ResendForm _resendForm = new();
+    DeleteForm _deleteForm = new();
+
+    IEnumerable<ProposalDeliveryMonitorDto> Filtered => _items.Where(MatchesActiveFilter);
+    IEnumerable<string> Statuses => _items.Select(x => x.StatusCode).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(DisplayStatus);
+    int FailedCount => CountStatus("Failed");
+    int ConfigurationRequiredCount => CountStatus("Configuration Required");
+    int DeliveredCount => _items.Count(x => IsDelivered(x.StatusCode));
+    decimal DeliveryHealth => _items.Count == 0 ? 100 : (decimal)DeliveredCount / _items.Count * 100;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Communications", "/communications/inbox"), new("Proposal Delivery Monitor", null));
+        await LoadAsync();
+    }
+
+    void OpenEditRecipient(ProposalDeliveryMonitorDto item)
+    {
+        _editTarget = item;
+        _resendTarget = null;
+        _deleteTarget = null;
+        _statusDetailTarget = null;
+        _editForm = new() { Recipient = item.Recipient, ChangeReason = "Correcting proposal delivery recipient." };
+    }
+
+    void OpenResend(ProposalDeliveryMonitorDto item)
+    {
+        _resendTarget = item;
+        _editTarget = null;
+        _deleteTarget = null;
+        _statusDetailTarget = null;
+        _resendForm = new() { Recipient = item.Recipient, Reason = "Resending proposal delivery from monitor." };
+    }
+
+    void OpenDelete(ProposalDeliveryMonitorDto item)
+    {
+        _deleteTarget = item;
+        _editTarget = null;
+        _resendTarget = null;
+        _statusDetailTarget = null;
+        _deleteForm = new() { Reason = $"Removed delivery dispatch {ShortId(item.ProposalDeliveryDispatchId)} from monitor." };
+    }
+
+    void OpenStatusDetail(ProposalDeliveryMonitorDto item)
+    {
+        _statusDetailTarget = item;
+        _editTarget = null;
+        _resendTarget = null;
+        _deleteTarget = null;
+    }
+
+    void CloseDialogs()
+    {
+        if (_actionBusy) return;
+        _editTarget = null;
+        _resendTarget = null;
+        _deleteTarget = null;
+        _statusDetailTarget = null;
+    }
+
+    async Task SaveRecipientAsync()
+    {
+        if (_editTarget is null || _currentUser is null) return;
+        try
+        {
+            _actionBusy = true;
+            await Api.UpdateProposalDeliveryRecipientAsync(_editTarget.ProposalDeliveryDispatchId, new(_currentUser.TenantId, _editForm.Recipient, _editForm.ChangeReason, _currentUser.UserId));
+            CloseDialogsAfterAction();
+            await LoadAsync();
+            await ShowToast("Recipient updated", $"Delivery recipient updated to {_editForm.Recipient}.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Update failed", $"Recipient update failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task ResendAsync()
+    {
+        if (_resendTarget is null || _currentUser is null) return;
+        try
+        {
+            _actionBusy = true;
+            await Api.ResendProposalDeliveryAsync(_resendTarget.ProposalDeliveryDispatchId, new(_currentUser.TenantId, _resendForm.Recipient, _resendForm.Reason, _currentUser.UserId));
+            CloseDialogsAfterAction();
+            await LoadAsync();
+            await ShowToast("Resend queued", $"Proposal delivery resend queued for {_resendForm.Recipient}.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Resend failed", $"Proposal delivery resend failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task DeleteAsync()
+    {
+        if (_deleteTarget is null || _currentUser is null) return;
+        try
+        {
+            _actionBusy = true;
+            await Api.DeleteProposalDeliveryAsync(_deleteTarget.ProposalDeliveryDispatchId, _currentUser.TenantId, _deleteForm.Reason);
+            CloseDialogsAfterAction();
+            await LoadAsync();
+            await ShowToast("Delivery removed", "Proposal delivery dispatch removed from the monitor.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Remove failed", $"Removing proposal delivery failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    void CloseDialogsAfterAction()
+    {
+        _editTarget = null;
+        _resendTarget = null;
+        _deleteTarget = null;
+        _statusDetailTarget = null;
+    }
+
+    async Task LoadAsync()
+    {
+        try
+        {
+            _loading = true;
+            _loadError = null;
+            _currentUser ??= await CurrentUser.RequireAsync();
+            _items = (await Api.GetProposalDeliveryMonitorAsync(_currentUser.TenantId, _statusFilter, _searchTerm) ?? []).ToList();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load proposal delivery monitor: {ex.Message}";
+            await ShowToast("Load failed", $"Failed to load proposal delivery monitor: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    void FixConfigure(ProposalDeliveryMonitorDto item)
+    {
+        CloseDialogsAfterAction();
+        OpenConfiguration(item);
+    }
+
+    void FixEditRecipient(ProposalDeliveryMonitorDto item) => OpenEditRecipient(item);
+    void FixResend(ProposalDeliveryMonitorDto item) => OpenResend(item);
+
+    async Task FixRetryAsync(ProposalDeliveryMonitorDto item)
+    {
+        CloseDialogsAfterAction();
+        await RetryAsync(item);
+    }
+
+    async Task RetryAsync(ProposalDeliveryMonitorDto item)
+    {
+        if (_currentUser is null) return;
+        try
+        {
+            _actionBusy = true;
+            await Api.RetryProposalDeliveryAsync(item.ProposalDeliveryDispatchId, new RetryProposalDeliveryRequest(_currentUser.TenantId, _currentUser.UserId));
+            await LoadAsync();
+            await ShowToast("Retry queued", $"Proposal delivery retry queued for {item.Recipient}.", "success");
+        }
+        catch (Exception ex)
+        {
+            await ShowToast("Retry failed", $"Delivery retry failed: {ex.Message}", "danger");
+        }
+        finally
+        {
+            _actionBusy = false;
+        }
+    }
+
+    async Task SearchChanged(ChangeEventArgs args)
+    {
+        _searchTerm = args.Value?.ToString();
+        await LoadAsync();
+    }
+
+    async Task StatusChanged(ChangeEventArgs args)
+    {
+        _statusFilter = args.Value?.ToString();
+        _activeKpi = string.IsNullOrWhiteSpace(_statusFilter) ? "all" : _statusFilter;
+        await LoadAsync();
+    }
+
+    async Task SetKpi(string status)
+    {
+        _activeKpi = status;
+        _statusFilter = status == "all" ? null : status;
+        await LoadAsync();
+    }
+
+    async Task ClearFilters()
+    {
+        _activeKpi = "all";
+        _statusFilter = null;
+        _searchTerm = null;
+        await LoadAsync();
+    }
+
+    bool MatchesActiveFilter(ProposalDeliveryMonitorDto item) => string.IsNullOrWhiteSpace(_statusFilter) || item.StatusCode.Equals(_statusFilter, StringComparison.OrdinalIgnoreCase);
+    int CountStatus(string status) => _items.Count(x => x.StatusCode.Equals(status, StringComparison.OrdinalIgnoreCase));
+    static bool CanEditRecipient(ProposalDeliveryMonitorDto item) => item.StatusCode is "Queued" or "Configuration Required" or "Failed";
+    bool RequiresConfiguration(ProposalDeliveryMonitorDto item) => item.StatusCode.Equals("Configuration Required", StringComparison.OrdinalIgnoreCase) || !item.ProviderIsConfigured || !item.ProviderIsActive;
+    static bool IsDelivered(string status) => status is "Delivered" or "Viewed" or "Downloaded" or "Signed";
+    static string ShortId(Guid id) => id.ToString("N")[..8].ToUpperInvariant();
+    static string FormatDate(DateTime date) => date.ToLocalTime().ToString("g");
+    static string FormatDate(DateTime? date) => date.HasValue ? FormatDate(date.Value) : "-";
+    static string DisplayStatus(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value.Replace("_", " ");
+    static string MonitorStatus(ProposalDeliveryMonitorDto item)
+        => DisplayStatus(item.StatusCode);
+
+    static string StatusDetailIcon(ProposalDeliveryMonitorDto item) => item.StatusCode switch
+    {
+        "Configuration Required" => "bi-gear-wide-connected",
+        "Failed" or "Bounced" or "Declined" or "Cancelled" => "bi-exclamation-octagon",
+        "Delivered" or "Viewed" or "Downloaded" or "Signed" => "bi-check-circle",
+        _ => "bi-info-circle"
+    };
+
+    static string StatusDetailTitle(ProposalDeliveryMonitorDto item) => item.StatusCode switch
+    {
+        _ when string.Equals(item.ErrorCode, "SMTP_SECRET_REQUIRED", StringComparison.OrdinalIgnoreCase) => "SMTP secret reference is missing from the worker environment",
+        _ when string.Equals(item.ErrorCode, "SMTP_AUTH_FAILED", StringComparison.OrdinalIgnoreCase) => "SMTP authentication failed",
+        _ when string.Equals(item.ErrorCode, "SMTP_CERTIFICATE_NAME_MISMATCH", StringComparison.OrdinalIgnoreCase) => "SMTP certificate name mismatch",
+        _ when string.Equals(item.ErrorCode, "SMTP_TLS_FAILED", StringComparison.OrdinalIgnoreCase) => "SMTP TLS/SSL negotiation failed",
+        _ when string.Equals(item.ErrorCode, "SMTP_CONNECTION_FAILED", StringComparison.OrdinalIgnoreCase) => "SMTP connection failed",
+        _ when string.Equals(item.ErrorCode, "SMTP_RECIPIENT_REJECTED", StringComparison.OrdinalIgnoreCase) => "SMTP recipient was rejected",
+        _ when string.Equals(item.ErrorCode, "SMTP_SEND_FAILED", StringComparison.OrdinalIgnoreCase) => "SMTP send failed",
+        "Configuration Required" => "Provider configuration is blocking delivery",
+        "Failed" => "Delivery attempt failed",
+        "Bounced" => "Recipient mail server rejected the delivery",
+        "Queued" or "Processing" or "Pending Dispatch" => "Delivery is waiting for worker processing",
+        _ when item.StatusCode.Equals("Delivered", StringComparison.OrdinalIgnoreCase) && item.DeliveryHandlerCode?.Equals("Smtp", StringComparison.OrdinalIgnoreCase) == true => "Email delivered successfully",
+        "Delivered" or "Viewed" or "Downloaded" or "Signed" => "Delivery completed successfully",
+        _ => $"Delivery status is {DisplayStatus(item.StatusCode)}"
+    };
+
+    static string StatusDetailReason(ProposalDeliveryMonitorDto item)
+    {
+        if (string.Equals(item.ErrorCode, "SMTP_SECRET_REQUIRED", StringComparison.OrdinalIgnoreCase)) return "SMTP authentication requires the configured secret reference. Because this app is running locally, add the NetworkSolutions mailbox password to Ams.Worker appsettings.Development.json as SmtpSettings:Password, or set AMS_PROPOSAL_SMTP_PASSWORD in user-secrets/local environment variables. Keep Secret reference set to AMS_PROPOSAL_SMTP_PASSWORD in Proposal Delivery Providers, restart the worker, then retry the delivery.";
+        if (item.StatusCode.Equals("Delivered", StringComparison.OrdinalIgnoreCase) && item.DeliveryHandlerCode?.Equals("Smtp", StringComparison.OrdinalIgnoreCase) == true) return "Ams.Worker authenticated successfully and Network Solutions accepted the email for delivery to the recipient. No sending failure was reported. If the message is not visible, check the recipient's spam or junk folder and review the Network Solutions outbound mail logs.";
+        if (!string.IsNullOrWhiteSpace(item.ErrorMessage)) return item.ErrorMessage;
+        if (!item.ProviderIsConfigured) return "The selected delivery provider is not fully configured. Open provider settings and complete the required SMTP, handler, and secret reference values.";
+        if (!item.ProviderIsActive) return "The selected delivery provider is inactive. Open provider settings and activate the provider before retrying delivery.";
+        if (item.StatusCode.Equals("Configuration Required", StringComparison.OrdinalIgnoreCase)) return "Delivery cannot be sent until the provider configuration is completed and active.";
+        if (item.StatusCode.Equals("Failed", StringComparison.OrdinalIgnoreCase)) return "The worker recorded a failed send attempt without a provider-specific message. Review the provider settings, recipient address, and retry or resend the dispatch.";
+        if (item.StatusCode.Equals("Queued", StringComparison.OrdinalIgnoreCase) || item.StatusCode.Equals("Processing", StringComparison.OrdinalIgnoreCase)) return "The dispatch has not completed yet. If it remains in this state, verify that the worker service is running and the provider is configured.";
+        return "No failure detail was recorded for this delivery status.";
+    }
+
+    static string StatusSpecificMessage(ProposalDeliveryMonitorDto item)
+    {
+        if (item.StatusCode.Equals("Delivered", StringComparison.OrdinalIgnoreCase)) return StatusDetailReason(item);
+        return string.IsNullOrWhiteSpace(item.ErrorMessage) ? StatusDetailReason(item) : item.ErrorMessage;
+    }
+
+    void OpenProposal(ProposalDeliveryMonitorDto item) => Nav.NavigateTo($"/submissions/{item.SubmissionId}/proposals");
+    void OpenConfiguration(ProposalDeliveryMonitorDto item) => Nav.NavigateTo($"/tenant/integrations/proposal-delivery?method={Uri.EscapeDataString(item.DeliveryMethodCode)}&returnUrl={Uri.EscapeDataString("communications/proposal-deliveries")}");
+
+    string StatusClass(string status) => status switch
+    {
+        "Delivered" or "Viewed" or "Downloaded" or "Signed" => "pdm-status pdm-status--ok",
+        "Queued" or "Processing" or "Pending Dispatch" => "pdm-status pdm-status--info",
+        "Configuration Required" => "pdm-status pdm-status--warn",
+        "Failed" or "Bounced" or "Declined" or "Cancelled" => "pdm-status pdm-status--danger",
+        _ => "pdm-status"
+    };
+
+    string KpiClass(string key) => _activeKpi.Equals(key, StringComparison.OrdinalIgnoreCase) ? "pdm-kpi pdm-kpi--active" : "pdm-kpi";
+
+    RenderFragment Kpi(string key, string icon, string label, string value, string title) => @<button type="button" class="@KpiClass(key)" title="@title" @onclick="() => SetKpi(key)"><span><i class="bi @icon"></i> @label</span><strong>@value</strong><small>@title</small></button>;
+
+    async Task ShowToast(string title, string message, string kind)
+    {
+        if (_toast is not null)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = title, Content = message, CssClass = $"enterprise-toast-{kind}" });
+        }
+    }
+
+    sealed class EditRecipientForm
+    {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.EmailAddress, System.ComponentModel.DataAnnotations.StringLength(320)] public string Recipient { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.StringLength(1000)] public string? ChangeReason { get; set; }
+    }
+
+    sealed class ResendForm
+    {
+        [System.ComponentModel.DataAnnotations.EmailAddress, System.ComponentModel.DataAnnotations.StringLength(320)] public string? Recipient { get; set; }
+        [System.ComponentModel.DataAnnotations.StringLength(1000)] public string? Reason { get; set; }
+    }
+
+    sealed class DeleteForm
+    {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(1000)] public string Reason { get; set; } = string.Empty;
+    }
+}

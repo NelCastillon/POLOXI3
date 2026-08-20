@@ -1,7 +1,10 @@
 @page "/submissions/{SubmissionId:guid}/markets"
 @namespace Ams.Web.Components.Pages
+@using Ams.Application.Features.Submissions
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 
 <PageTitle>Market Selection Board ? AMS</PageTitle>
 
@@ -74,16 +77,13 @@ else
     {
         <!-- -- KANBAN BOARD ----------------------------------------- -->
         <div class="msb-kanban-wrap">
-            <SfKanban TValue="MarketRow" KeyField="TierKey" DataSource="@FilteredMarkets.ToList()">
-                <KanbanColumns>
-                    <KanbanColumn KeyField="@(new List<string>{"T1"})"         HeaderText="Tier 1 ? Primary"   />
-                    <KanbanColumn KeyField="@(new List<string>{"T2"})"         HeaderText="Tier 2 ? Secondary" />
-                    <KanbanColumn KeyField="@(new List<string>{"Watch"})"      HeaderText="Watch List"         />
-                    <KanbanColumn KeyField="@(new List<string>{"Unassigned"})" HeaderText="Unassigned"         />
-                </KanbanColumns>
-                <KanbanCardSettings HeaderField="Carrier">
-                    <Template>
-                        @{ var mkt = (MarketRow)context; }
+            <div class="app-kanban msb-native-kanban">
+                @foreach (var group in FilteredMarkets.GroupBy(m => m.TierKey))
+                {
+                    <section class="msb-native-lane">
+                        <h3>@group.Key</h3>
+                        @foreach (var mkt in group)
+                        {
                         <div class="msb-kcard msb-kcard-@ScoreRing(mkt.AppetiteScore)">
                             <div class="msb-kc-head">
                                 <div class="msb-kc-info">
@@ -115,21 +115,21 @@ else
                                 </button>
                             </div>
                         </div>
-                    </Template>
-                </KanbanCardSettings>
-                <KanbanEvents TValue="MarketRow" DragStop="OnKanbanDragStop" />
-            </SfKanban>
+                        }
+                    </section>
+                }
+            </div>
         </div>
 
-        @* old board lanes removed ? SfKanban is now the board view *@
+        @* old board lanes removed ? AppKanban is now the board view *@
     }
     else
     {
         <!-- -- MATRIX VIEW ------------------------------------------ -->
         <div class="msb-matrix-wrap">
-            <SfGrid DataSource="@FilteredMarkets.ToList()" AllowSorting="true" AllowPaging="true"
+            <AppGrid DataSource="@FilteredMarkets.ToList()" AllowSorting="true" AllowPaging="true"
                     AllowResizing="true" RowHeight="44">
-                <GridPageSettings PageSize="25" />
+                
                 <GridColumns>
                     <GridColumn Field="Carrier"          HeaderText="Carrier / Program"  Width="200"
                                 Template="@(ctx => CarrierCell((MarketRow)ctx))" />
@@ -153,7 +153,7 @@ else
                     <GridColumn HeaderText=""            Width="110"  AllowSorting="false"
                                 Template="@(ctx => MatrixActions((MarketRow)ctx))" />
                 </GridColumns>
-            </SfGrid>
+            </AppGrid>
         </div>
     }
 
@@ -185,6 +185,35 @@ else
                 @DrawerMetricRow("Historical Bind Ratio",_detailMarket.BindRatioPct + "%",                  ScoreRing(_detailMarket.BindRatioPct))
                 @DrawerMetricRow("Commission Rate",      _detailMarket.CommissionPct.ToString("F1") + "%", _detailMarket.CommissionPct >= 15 ? "high" : _detailMarket.CommissionPct >= 10 ? "ok" : "low")
                 @DrawerMetricRow("Producer Preference",  new string('?', _detailMarket.ProducerPreference) + new string('?', 5 - _detailMarket.ProducerPreference), "ok")
+
+                <h3 class="msb-drawer-section-head">Market Request Workflow</h3>
+                @DrawerMetricRow("Underwriter", SafeValue(_detailMarket.UnderwriterName), "ok")
+                @DrawerMetricRow("Contact", SafeValue(_detailMarket.UnderwriterEmail), "ok")
+                @DrawerMetricRow("Due Date", _detailMarket.DueDateUtc?.ToLocalTime().ToString("MMM d, yyyy") ?? "Not set", _detailMarket.DueDateUtc.HasValue && _detailMarket.DueDateUtc < DateTime.UtcNow ? "low" : "ok")
+                @DrawerMetricRow("Request Scope", SafeValue(_detailMarket.QuoteRequestScopeCode), "ok")
+                @DrawerMetricRow("Requested Premium", _detailMarket.RequestedPremium?.ToString("C0") ?? "Not set", _detailMarket.IsPastDue ? "low" : "ok")
+                @DrawerMetricRow("Submission Method", SafeValue(_detailMarket.SubmissionMethodCode), "ok")
+                @DrawerMetricRow("Requested Coverages", SafeValue(_detailMarket.RequestedCoverageSummary), "ok")
+                @DrawerMetricRow("Requested Limits", SafeValue(_detailMarket.RequestedLimits), "ok")
+                @if (_detailMarket.RequestedLines.Any())
+                {
+                    <div class="msb-apt-row">
+                        <span class="msb-apt-field">Selected Lines</span>
+                        <span class="msb-apt-val">@string.Join("; ", _detailMarket.RequestedLines.Select(l => $"{l.LineOfBusiness} {l.TargetPremium:C0}"))</span>
+                    </div>
+                }
+
+                <h3 class="msb-drawer-section-head">Carrier Transmission</h3>
+                @DrawerMetricRow("Transmission Status", string.IsNullOrWhiteSpace(_detailMarket.LatestTransmissionStatusCode) ? "Not transmitted" : _detailMarket.LatestTransmissionStatusCode, TransmissionScore(_detailMarket.LatestTransmissionStatusCode))
+                @DrawerMetricRow("Connector", string.IsNullOrWhiteSpace(_detailMarket.LatestTransmissionConnectorName) ? (_detailMarket.LatestTransmissionChannelCode ?? "Not configured") : _detailMarket.LatestTransmissionConnectorName, "ok")
+                @DrawerMetricRow("External Reference", SafeValue(_detailMarket.LatestTransmissionExternalReferenceNumber), "ok")
+                @DrawerMetricRow("Sent", _detailMarket.LatestTransmissionSentDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "Not sent", _detailMarket.LatestTransmissionSentDateUtc.HasValue ? "ok" : "low")
+                @DrawerMetricRow("Confirmed", _detailMarket.LatestTransmissionConfirmedDateUtc?.ToLocalTime().ToString("MMM d, yyyy h:mm tt") ?? "Not confirmed", _detailMarket.LatestTransmissionConfirmedDateUtc.HasValue ? "ok" : "low")
+                @if (!string.IsNullOrWhiteSpace(_detailMarket.LatestTransmissionLastError))
+                {
+                    @DrawerMetricRow("Failure Detail", _detailMarket.LatestTransmissionLastError, "low")
+                }
+                @DrawerMetricRow("Inbound Response", LatestInboundSummary(_detailMarket), _detailMarket.LatestInboundResponseReceivedDateUtc.HasValue ? "ok" : "low")
 
                 <!-- Appetite details -->
                 <h3 class="msb-drawer-section-head">Appetite Details</h3>
@@ -222,6 +251,9 @@ else
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => { SetTier(_detailMarket, 2); _detailMarket = null; }">
                         <i class="bi bi-2-circle" aria-hidden="true"></i> Add to Tier 2
                     </button>
+                    <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => RecordResponse(_detailMarket)">
+                        <i class="bi bi-receipt" aria-hidden="true"></i> Record Response
+                    </button>
                 </div>
             </div>
         </div>
@@ -238,6 +270,8 @@ else
     string _search        = "";
     int    _filterTier    = -1;
     int    _minAppetite   = 0;
+    Guid   _tenantId;
+    Guid?  _currentUserId;
     string _submissionNo  = "";
     string _account       = "";
     string _lob           = "";
@@ -251,9 +285,35 @@ else
 
     sealed class MarketRow
     {
+        public Guid SubmissionMarketId { get; set; }
+        public Guid CarrierId { get; set; }
         public string  Carrier            { get; set; } = "";
         public string  Program            { get; set; } = "";
         public string  UnderwriterName    { get; set; } = "";
+        public string? UnderwriterEmail { get; set; }
+        public string? UnderwriterPhone { get; set; }
+        public DateTime? DueDateUtc { get; set; }
+        public string? RequestedCoverageSummary { get; set; }
+        public string? RequestedLimits { get; set; }
+        public string? SubmissionMethodCode { get; set; }
+        public string? QuoteRequestScopeCode { get; set; }
+        public decimal? RequestedPremium { get; set; }
+        public bool IsPastDue { get; set; }
+        public int? DaysPastDue { get; set; }
+        public List<SubmissionMarketLineDto> RequestedLines { get; set; } = [];
+        public Guid? LatestCarrierTransmissionId { get; set; }
+        public string? LatestTransmissionStatusCode { get; set; }
+        public string? LatestTransmissionChannelCode { get; set; }
+        public string? LatestTransmissionConnectorName { get; set; }
+        public string? LatestTransmissionExternalReferenceNumber { get; set; }
+        public DateTime? LatestTransmissionSentDateUtc { get; set; }
+        public DateTime? LatestTransmissionConfirmedDateUtc { get; set; }
+        public DateTime? LatestTransmissionFailedDateUtc { get; set; }
+        public DateTime? LatestTransmissionBounceDateUtc { get; set; }
+        public string? LatestTransmissionLastError { get; set; }
+        public string? LatestInboundResponseStatusCode { get; set; }
+        public string? LatestInboundResponseTypeCode { get; set; }
+        public DateTime? LatestInboundResponseReceivedDateUtc { get; set; }
         public int     Tier               { get; set; }        // 0=unassigned 1=T1 2=T2 3=watch
         public string  TierKey            => Tier switch { 1=>"T1", 2=>"T2", 3=>"Watch", _=>"Unassigned" };
         public int     AppetiteScore      { get; set; }        // 0-100
@@ -285,137 +345,124 @@ else
             new("Home","/"), new("Submissions","/submissions"),
             new("Submission",$"/submissions/{SubmissionId}"),
             new("Markets",$"/submissions/{SubmissionId}/markets"));
-        await Task.Delay(0);
-        BuildStub();
-        _loading = false;
+        await LoadAsync();
     }
 
-    void BuildStub()
+    async Task LoadAsync()
     {
-        _submissionNo = "SUB-2025-0042";
-        _account      = "Sullivan Mfg. LLC";
-        _lob          = "General Liability";
-
-        _markets.AddRange(new[]
+        _loading = true;
+        try
         {
-            new MarketRow
-            {
-                Carrier="Travelers Indemnity",       Program="Select Accounts GL",
-                UnderwriterName="Lisa Chen",         Tier=1,
-                AppetiteScore=92, TurnaroundDays=5,  HitRatioPct=78, BindRatioPct=64, ProducerPreference=5, CommissionPct=16.5m,
-                Submitted=true,
-                StrategyNote="Primary preferred carrier. Consistent quoting on mfg accounts.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes"), new("Max Payroll","$10M"), new("Min Premium","$5,000"), new("State","TX, LA, OK") },
-                History=new(){ new(){Year="2024",Submitted=12,Quoted=9,Bound=7,AvgPremium=16_800}, new(){Year="2023",Submitted=10,Quoted=8,Bound=6,AvgPremium=14_200} }
-            },
-            new MarketRow
-            {
-                Carrier="Hartford Fire & Cas.",      Program="Spectrum Commercial",
-                UnderwriterName="Mike Rosario",      Tier=1,
-                AppetiteScore=85, TurnaroundDays=7,  HitRatioPct=65, BindRatioPct=52, ProducerPreference=4, CommissionPct=15.0m,
-                Submitted=true,
-                StrategyNote="Strong broad-form coverage. Good for products-completed ops.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes"), new("Max Payroll","$8M"), new("Steel Fabrication","Preferred"), new("State","All") },
-                History=new(){ new(){Year="2024",Submitted=8,Quoted=6,Bound=4,AvgPremium=19_100}, new(){Year="2023",Submitted=7,Quoted=5,Bound=3,AvgPremium=17_400} }
-            },
-            new MarketRow
-            {
-                Carrier="Liberty Mutual",            Program="Business Insurance",
-                UnderwriterName="Jennifer Wu",       Tier=1,
-                AppetiteScore=78, TurnaroundDays=10, HitRatioPct=58, BindRatioPct=41, ProducerPreference=3, CommissionPct=14.5m,
-                Submitted=true,
-                StrategyNote="Needs 7yr loss runs. Higher premium but broader exclusion waivers.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Conditional"), new("Max Revenue","$15M"), new("Loss Runs","7 years req."), new("State","TX") },
-                History=new(){ new(){Year="2024",Submitted=6,Quoted=4,Bound=2,AvgPremium=21_500}, new(){Year="2023",Submitted=5,Quoted=3,Bound=2,AvgPremium=19_800} }
-            },
-            new MarketRow
-            {
-                Carrier="Zurich American",           Program="Z-Pac Manufacturing",
-                UnderwriterName="Prior carrier",     Tier=3,
-                AppetiteScore=41, TurnaroundDays=8,  HitRatioPct=30, BindRatioPct=22, ProducerPreference=2, CommissionPct=12.0m,
-                Submitted=false,
-                StrategyNote="Declined prior submission. Products/CO exposure exceeds per-account limit.",
-                AppetiteDetails=new(){ new("Mfg GL","Conditional"), new("Products/CO","No ? over capacity"), new("Max Revenue","$8M"), new("Prior Declines","May apply"), new("State","TX") },
-                History=new(){ new(){Year="2024",Submitted=4,Quoted=1,Bound=1,AvgPremium=18_200}, new(){Year="2023",Submitted=3,Quoted=2,Bound=1,AvgPremium=16_000} }
-            },
-            new MarketRow
-            {
-                Carrier="CNA Commercial",            Program="CNA Connect",
-                UnderwriterName="?",                 Tier=2,
-                AppetiteScore=70, TurnaroundDays=12, HitRatioPct=50, BindRatioPct=38, ProducerPreference=3, CommissionPct=14.0m,
-                Submitted=false,
-                StrategyNote="Backup market. Slower turnaround but competitive on limits.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Conditional"), new("Max Payroll","$5M"), new("State","TX, OK") },
-                History=new(){ new(){Year="2024",Submitted=5,Quoted=3,Bound=2,AvgPremium=17_600} }
-            },
-            new MarketRow
-            {
-                Carrier="Markel Corporation",        Program="Markel Specialty",
-                UnderwriterName="Sarah Kim",         Tier=2,
-                AppetiteScore=66, TurnaroundDays=14, HitRatioPct=44, BindRatioPct=33, ProducerPreference=3, CommissionPct=13.5m,
-                Submitted=false,
-                StrategyNote="E&S option. Broader appetite on difficult classes.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Products/CO","Yes ? E&S"), new("Hard-to-place","Yes"), new("State","All ? E&S") },
-                History=new(){ new(){Year="2024",Submitted=3,Quoted=2,Bound=1,AvgPremium=22_400} }
-            },
-            new MarketRow
-            {
-                Carrier="Cincinnati Financial",      Program="Commercial Lines",
-                UnderwriterName="Dan Torres",        Tier=0,
-                AppetiteScore=58, TurnaroundDays=9,  HitRatioPct=48, BindRatioPct=36, ProducerPreference=4, CommissionPct=15.5m,
-                Submitted=false,
-                StrategyNote="Preferred commission structure. Slower quoting on larger accounts.",
-                AppetiteDetails=new(){ new("Mfg GL","Yes"), new("Max Revenue","$6M"), new("State","TX") },
-                History=new(){ new(){Year="2024",Submitted=2,Quoted=1,Bound=1,AvgPremium=15_900} }
-            },
-            new MarketRow
-            {
-                Carrier="Employers Holdings",        Program="Employers Commercial",
-                UnderwriterName="?",                 Tier=0,
-                AppetiteScore=45, TurnaroundDays=15, HitRatioPct=35, BindRatioPct=28, ProducerPreference=2, CommissionPct=11.0m,
-                Submitted=false,
-                StrategyNote="Lower appetite score. Use as last resort.",
-                AppetiteDetails=new(){ new("Mfg GL","Conditional"), new("Max Revenue","$4M"), new("State","TX") },
-                History=new(){ new(){Year="2024",Submitted=2,Quoted=1,Bound=0,AvgPremium=0} }
-            },
-        });
-    }
+            var context = await CurrentUser.RequireAsync();
+            _tenantId = context.TenantId;
+            _currentUserId = context.UserId;
 
-    void SetTier(MarketRow m, int tier) => m.Tier = tier;
-    void OnKanbanDragStop(Syncfusion.Blazor.Kanban.DragEventArgs<MarketRow> args)
-    {
-        // Tier update is driven by TierKey changes handled by SfKanban internally;
-        // re-sync Tier int from the current TierKey on each dragged item.
-        foreach (var item in args.Data)
-        {
-            item.Tier = item.TierKey switch
+            var submission = await Api.GetSubmissionByIdAsync(SubmissionId);
+            if (submission is not null)
             {
-                "T1"         => 1,
-                "T2"         => 2,
-                "Watch"      => 3,
-                "Unassigned" => 0,
-                _            => item.Tier,
-            };
+                _submissionNo = submission.SubmissionNumber;
+                _account = submission.AccountName;
+                _lob = submission.LineOfBusiness;
+            }
+
+            var markets = await Api.GetSubmissionMarketsAsync(SubmissionId) ?? [];
+            _markets.Clear();
+            _markets.AddRange(markets.Select(ToMarketRow));
+        }
+        catch (Exception ex)
+        {
+            await _toast.ShowAsync(new ToastModel { Title = "Load failed", Content = ex.Message, CssClass = "enterprise-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
         }
     }
+
+    static MarketRow ToMarketRow(SubmissionMarketDto market) => new()
+    {
+        SubmissionMarketId = market.SubmissionMarketId,
+        CarrierId = market.CarrierId,
+        Carrier = market.CarrierName,
+        Program = string.IsNullOrWhiteSpace(market.LatestQuoteNumber) ? market.Status : $"{market.LatestQuoteNumber} - {market.LatestQuoteStatus}",
+        UnderwriterName = market.UnderwriterName ?? string.Empty,
+        UnderwriterEmail = market.UnderwriterEmail,
+        UnderwriterPhone = market.UnderwriterPhone,
+        DueDateUtc = market.DueDateUtc,
+        RequestedCoverageSummary = market.RequestedCoverageSummary,
+        RequestedLimits = market.RequestedLimits,
+        SubmissionMethodCode = market.SubmissionMethodCode,
+        QuoteRequestScopeCode = market.QuoteRequestScopeCode,
+        RequestedPremium = market.RequestedPremium,
+        IsPastDue = market.IsPastDue,
+        DaysPastDue = market.DaysPastDue,
+        RequestedLines = market.RequestedLines.ToList(),
+        LatestCarrierTransmissionId = market.LatestCarrierTransmissionId,
+        LatestTransmissionStatusCode = market.LatestTransmissionStatusCode,
+        LatestTransmissionChannelCode = market.LatestTransmissionChannelCode,
+        LatestTransmissionConnectorName = market.LatestTransmissionConnectorName,
+        LatestTransmissionExternalReferenceNumber = market.LatestTransmissionExternalReferenceNumber,
+        LatestTransmissionSentDateUtc = market.LatestTransmissionSentDateUtc,
+        LatestTransmissionConfirmedDateUtc = market.LatestTransmissionConfirmedDateUtc,
+        LatestTransmissionFailedDateUtc = market.LatestTransmissionFailedDateUtc,
+        LatestTransmissionBounceDateUtc = market.LatestTransmissionBounceDateUtc,
+        LatestTransmissionLastError = market.LatestTransmissionLastError,
+        LatestInboundResponseStatusCode = market.LatestInboundResponseStatusCode,
+        LatestInboundResponseTypeCode = market.LatestInboundResponseTypeCode,
+        LatestInboundResponseReceivedDateUtc = market.LatestInboundResponseReceivedDateUtc,
+        Tier = market.Status switch { "In Review" or "Quoted" => 1, "Pending" or "Current Market" => 2, "Declined" or "Blocked" => 3, _ => 0 },
+        AppetiteScore = market.AppetiteScore,
+        TurnaroundDays = market.RespondedDateUtc.HasValue ? Math.Max(0, (int)Math.Round((market.RespondedDateUtc.Value - market.AddedDateUtc).TotalDays)) : 0,
+        HitRatioPct = market.LatestQuoteId.HasValue ? 100 : 0,
+        BindRatioPct = market.LatestQuoteStatus is "Accepted" or "Bound" ? 100 : 0,
+        ProducerPreference = market.IsRecommended ? 5 : 1,
+        CommissionPct = 0,
+        Submitted = market.Status is "In Review" or "Quoted" or "Declined" or "Bound",
+        StrategyNote = market.DeclineReason ?? market.LatestQuoteStatus ?? market.Status,
+        AppetiteDetails = new() { new("Market Status", market.Status), new("Latest Quote", market.LatestQuoteNumber ?? "Not received"), new("Recommended", market.IsRecommended ? "Yes" : "No"), new("Documents Sent", market.SubmittedDateUtc.HasValue ? "Yes" : "Not yet"), new("Carrier Delivered", market.LatestTransmissionConfirmedDateUtc.HasValue ? "Yes" : "No"), new("Inbound Response", market.LatestInboundResponseReceivedDateUtc.HasValue ? "Yes" : "No"), new("No Response", market.Status == "No Response" ? "Yes" : "No"), new("Past Due", market.IsPastDue ? "Yes" : "No") },
+        History = new()
+    };
+
+    static string LatestInboundSummary(MarketRow market)
+        => market.LatestInboundResponseReceivedDateUtc.HasValue
+            ? $"{(string.IsNullOrWhiteSpace(market.LatestInboundResponseTypeCode) ? "Response" : market.LatestInboundResponseTypeCode)} / {(string.IsNullOrWhiteSpace(market.LatestInboundResponseStatusCode) ? "Received" : market.LatestInboundResponseStatusCode)} on {market.LatestInboundResponseReceivedDateUtc.Value.ToLocalTime():MMM d, yyyy h:mm tt}"
+            : "No inbound response";
+
+    static string TransmissionScore(string? statusCode)
+        => statusCode switch
+        {
+            "Delivered" or "ResponseReceived" => "ok",
+            "Failed" or "Bounced" => "low",
+            "AwaitingExternalConnector" or "Queued" => "high",
+            _ => "low"
+        };
+
+    void SetTier(MarketRow m, int tier) => m.Tier = tier;
     void OpenDetail(MarketRow m) => _detailMarket = m;
+    void RecordResponse(MarketRow m) => Nav.NavigateTo($"/submissions/{SubmissionId}");
     void ResetFilters() { _search = ""; _filterTier = -1; _minAppetite = 0; }
     void GoBack() => Nav.NavigateTo($"/submissions/{SubmissionId}");
 
     async Task SubmitSelected()
     {
         var tier1 = _markets.Where(m => m.Tier == 1 && !m.Submitted).ToList();
-        foreach (var m in tier1) m.Submitted = true;
+        foreach (var m in tier1)
+        {
+            await Api.SubmitSubmissionToMarketAsync(SubmissionId, new SubmitSubmissionToMarketRequest(_tenantId, m.CarrierId, $"Submitted from market selection board by user {_currentUserId}."));
+        }
+        await LoadAsync();
         await _toast.ShowAsync(new ToastModel
         {
             Title    = "Submitted",
             Content  = $"{tier1.Count} market{(tier1.Count==1?"":"s")} submitted.",
-            CssClass = "e-toast-success"
+            CssClass = "enterprise-toast-success"
         });
     }
 
     static string ScoreRing(int score) =>
         score >= 80 ? "high" : score >= 60 ? "ok" : score >= 40 ? "low" : "poor";
+
+    static string SafeValue(string? value) => string.IsNullOrWhiteSpace(value) ? "Not set" : value;
 
     // -- Cell renderers ---------------------------------------------
     RenderFragment CarrierCell(MarketRow r) =>

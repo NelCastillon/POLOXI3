@@ -137,36 +137,6 @@ BEGIN
     IF COL_LENGTH(N'Commission.CommissionPlan', N'ModifiedDateUtc') IS NULL ALTER TABLE Commission.CommissionPlan ADD ModifiedDateUtc DATETIME2 NULL;
     IF COL_LENGTH(N'Commission.CommissionPlan', N'ModifiedByUserId') IS NULL ALTER TABLE Commission.CommissionPlan ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
     IF COL_LENGTH(N'Commission.CommissionPlan', N'IsDeleted') IS NULL ALTER TABLE Commission.CommissionPlan ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPlan_IsDeleted DEFAULT 0;
-END
-
-IF @TenantId IS NOT NULL AND @TenantId <> '00000000-0000-0000-0000-000000000000'
-BEGIN
-    IF COL_LENGTH(N'Commission.CommissionPlan', N'StatusCodeId') IS NOT NULL
-    BEGIN
-        EXEC sp_executesql N'
-        IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
-        BEGIN
-            INSERT INTO Commission.CommissionPlan (CommissionPlanId, TenantId, PlanCode, PlanName, PlanTypeCode, NewBusinessRatePct, RenewalRatePct, EffectiveStartDate, StatusCode, StatusCodeId, AllowSplit, HouseAccountRules, BranchOverrideEligible, CreatedDateUtc, IsDeleted)
-            VALUES
-            (NEWID(), @SeedTenantId, N''COMM-STD'', N''Standard Producer Plan'', N''Standard'', 10, 8, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 1, 0, 0, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-SR'', N''Senior Producer Plan'', N''Senior Producer'', 12.5, 10, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 1, 0, 0, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-BR-OVR'', N''Branch Manager Override Plan'', N''Branch Manager'', 2, 1.5, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 0, 0, 1, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-HOUSE'', N''House Account Plan'', N''House Account'', 5, 5, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 0, 1, 0, SYSUTCDATETIME(), 0);
-        END', N'@SeedTenantId UNIQUEIDENTIFIER', @SeedTenantId = @TenantId;
-    END
-    ELSE
-    BEGIN
-        EXEC sp_executesql N'
-        IF NOT EXISTS (SELECT 1 FROM Commission.CommissionPlan WHERE TenantId = @SeedTenantId AND IsDeleted = 0)
-        BEGIN
-            INSERT INTO Commission.CommissionPlan (CommissionPlanId, TenantId, PlanCode, PlanName, PlanTypeCode, NewBusinessRatePct, RenewalRatePct, EffectiveStartDate, StatusCode, AllowSplit, HouseAccountRules, BranchOverrideEligible, CreatedDateUtc, IsDeleted)
-            VALUES
-            (NEWID(), @SeedTenantId, N''COMM-STD'', N''Standard Producer Plan'', N''Standard'', 10, 8, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 0, 0, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-SR'', N''Senior Producer Plan'', N''Senior Producer'', 12.5, 10, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 1, 0, 0, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-BR-OVR'', N''Branch Manager Override Plan'', N''Branch Manager'', 2, 1.5, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 0, 0, 1, SYSUTCDATETIME(), 0),
-            (NEWID(), @SeedTenantId, N''COMM-HOUSE'', N''House Account Plan'', N''House Account'', 5, 5, DATEFROMPARTS(YEAR(GETUTCDATE()), 1, 1), N''Active'', 0, 1, 0, SYSUTCDATETIME(), 0);
-        END', N'@SeedTenantId UNIQUEIDENTIFIER', @SeedTenantId = @TenantId;
-    END
 END";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);

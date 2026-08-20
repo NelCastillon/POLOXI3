@@ -37,6 +37,20 @@ public sealed class OpportunitiesController : ControllerBase
         return item is null ? NotFound() : Ok(item);
     }
 
+    [HttpGet("{id:guid}/conversion-launch")]
+    public async Task<IActionResult> GetConversionLaunch(Guid id, CancellationToken cancellationToken)
+    {
+        var item = await _service.GetConversionLaunchAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet("competitor-lookups")]
+    public async Task<IActionResult> SearchCompetitorLookups([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken cancellationToken = default)
+    {
+        var result = await _service.SearchCompetitorLookupsAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+        return Ok(result);
+    }
+
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOpportunityRequest request, CancellationToken cancellationToken)
     {
@@ -47,7 +61,35 @@ public sealed class OpportunitiesController : ControllerBase
     [HttpPut("{id:guid}/stage")]
     public async Task<IActionResult> UpdateStage(Guid id, [FromBody] Ams.Application.Features.Opportunities.UpdateOpportunityStageRequest request, CancellationToken cancellationToken)
     {
-        await _service.UpdateStageAsync(id, request, cancellationToken);
+        return Ok(await _service.UpdateStageAsync(id, request, cancellationToken));
+    }
+
+    [HttpPost("{id:guid}/lines")]
+    public async Task<IActionResult> UpsertLine(Guid id, [FromBody] UpsertOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        request.OpportunityId = id;
+        return Ok(await _service.UpsertLineAsync(request, cancellationToken));
+    }
+
+    [HttpPut("{id:guid}/lines/{lineId:guid}")]
+    public async Task<IActionResult> UpdateLine(Guid id, Guid lineId, [FromBody] UpsertOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        request.OpportunityId = id;
+        request.OpportunityLineId = lineId;
+        return Ok(await _service.UpsertLineAsync(request, cancellationToken));
+    }
+
+    [HttpPatch("{id:guid}/lines/{lineId:guid}/primary")]
+    public async Task<IActionResult> SetPrimaryLine(Guid id, Guid lineId, [FromBody] SetPrimaryOpportunityLineRequest request, CancellationToken cancellationToken)
+    {
+        await _service.SetPrimaryLineAsync(id, lineId, request.UserId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("lines/{lineId:guid}")]
+    public async Task<IActionResult> DeleteLine(Guid lineId, [FromQuery] Guid? modifiedByUserId, CancellationToken cancellationToken)
+    {
+        await _service.DeleteLineAsync(lineId, modifiedByUserId, cancellationToken);
         return NoContent();
     }
 

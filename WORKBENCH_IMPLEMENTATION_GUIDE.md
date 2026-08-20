@@ -71,8 +71,8 @@ new("workbench", "Workbench", "bi bi-grid-1x2",
 
 **Components Used:**
 - `AppPageHeader` - Page title and actions
-- `SfGrid` - Data grids for leads/opportunities
-- `SfKanban` - Kanban board view for pipeline
+- `AppGrid` - Data grids for leads/opportunities
+- `enterprise kanban board` - Kanban board view for pipeline
 
 **Data Models:**
 - `ProducerCounts` - KPI counters
@@ -315,11 +315,11 @@ Nav.NavigateTo(_selected.DetailUrl);
 var data = await Api.GetWorkbenchDataAsync(workbenchType);
 ```
 
-### 4. Syncfusion Components
-- `SfGrid` - Data tables with sorting, filtering, paging
-- `SfKanban` - Kanban board view
-- `SfDropDownList` - Filter dropdowns
-- `SfToast` - Notifications
+### 4. Enterprise native components
+- `AppGrid` - Data tables with sorting, filtering, paging
+- `enterprise kanban board` - Kanban board view
+- `native select` - Filter dropdowns
+- `enterprise toast` - Notifications
 
 ---
 

@@ -77,21 +77,27 @@ WHERE  i.IntakeId = @Id AND i.IsDeleted = 0;";
     public async Task<Guid> CreateAsync(CreateSubmissionIntakeRequest request, CancellationToken cancellationToken = default)
     {
         const string sql = @"
+IF @SourceIdempotencyKey IS NOT NULL
+BEGIN
+    DECLARE @ExistingIntakeId UNIQUEIDENTIFIER = (SELECT IntakeId FROM Submissions.SubmissionIntake WITH (UPDLOCK, HOLDLOCK) WHERE TenantId = @TenantId AND SourceIdempotencyKey = @SourceIdempotencyKey AND IsDeleted = 0);
+    IF @ExistingIntakeId IS NOT NULL BEGIN SELECT @ExistingIntakeId; RETURN; END;
+END;
 DECLARE @IntakeNumber NVARCHAR(50) = N'INT-' + FORMAT(GETUTCDATE(), 'yyyyMMdd') + '-' + RIGHT('0000' + CAST(NEXT VALUE FOR Submissions.IntakeSeq AS VARCHAR), 4);
 INSERT INTO Submissions.SubmissionIntake
     (IntakeId, TenantId, IntakeNumber, Source, ReceivedDate, ApplicantName, BusinessName, Fein, Email, Phone,
      AddressLine, City, [State], PostalCode, ExistingPolicyNumber, ProducerCode, LineOfBusiness,
      RequestedEffectiveDate, EstimatedPremium, Attachments, RawPayload, Notes, IntakeStatus,
-     AssignedToUserId, CreatedDateUtc, CreatedByUserId, IsDeleted)
+     AssignedToUserId, SourceIdempotencyKey, CreatedDateUtc, CreatedByUserId, IsDeleted)
 VALUES
     (@IntakeId, @TenantId, @IntakeNumber, @Source, SYSUTCDATETIME(), @ApplicantName, @BusinessName, @Fein, @Email, @Phone,
      @AddressLine, @City, @State, @PostalCode, @ExistingPolicyNumber, @ProducerCode, @LineOfBusiness,
      @RequestedEffectiveDate, @EstimatedPremium, @Attachments, @RawPayload, @Notes, 'Pending',
-     @AssignedToUserId, SYSUTCDATETIME(), @CreatedByUserId, 0);";
+      @AssignedToUserId, @SourceIdempotencyKey, SYSUTCDATETIME(), @CreatedByUserId, 0);
+SELECT @IntakeId;";
 
         var id = Guid.NewGuid();
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await cn.ExecuteAsync(new CommandDefinition(sql, new
+        return await cn.ExecuteScalarAsync<Guid>(new CommandDefinition(sql, new
         {
             IntakeId = id,
             request.TenantId,
@@ -114,9 +120,9 @@ VALUES
             request.RawPayload,
             request.Notes,
             request.AssignedToUserId,
+            request.SourceIdempotencyKey,
             request.CreatedByUserId
         }, cancellationToken: cancellationToken));
-        return id;
     }
 
     public async Task UpdateAsync(Guid id, UpdateSubmissionIntakeRequest request, CancellationToken cancellationToken = default)

@@ -48,41 +48,44 @@ WHERE ar.TenantId = @TenantId AND ar.IsDeleted = 0 AND ar.TotalOutstanding > 0
 UNION ALL
 
 SELECT
-    pr.PortalAdminRecordId AS ItemId,
-    JSON_VALUE(pr.JsonData, '$.queueCode') AS QueueCode,
-    pr.Name AS Title,
-    pr.Code AS RefNumber,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.accountName'), '') AS AccountName,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.policyNumber'), '') AS PolicyNumber,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.carrierName'), '') AS CarrierName,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.producerName'), '') AS ProducerName,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.category'), '') AS Category,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.assignedTo'), 'Tenant Admin') AS AssignedTo,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.priority'), 'Normal') AS Priority,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.slaStatus'), 'On Track') AS SlaStatus,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.status'), pr.Status) AS Status,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.agingBucket'), 'Current') AS AgingBucket,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.paymentMethod'), '') AS PaymentMethod,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.reason'), '') AS Reason,
-    COALESCE(TRY_CONVERT(DECIMAL(18,2), JSON_VALUE(pr.JsonData, '$.amount')), 0) AS Amount,
-    COALESCE(TRY_CONVERT(DECIMAL(18,2), JSON_VALUE(pr.JsonData, '$.variance')), 0) AS Variance,
-    COALESCE(TRY_CONVERT(DATETIME2, JSON_VALUE(pr.JsonData, '$.dueDate')), pr.CreatedDateUtc) AS DueDate,
-    TRY_CONVERT(DATETIME2, JSON_VALUE(pr.JsonData, '$.receivedDate')) AS ReceivedDate,
-    TRY_CONVERT(DATETIME2, JSON_VALUE(pr.JsonData, '$.completedAt')) AS CompletedAt,
-    COALESCE(TRY_CONVERT(INT, JSON_VALUE(pr.JsonData, '$.ageDays')), DATEDIFF(DAY, pr.CreatedDateUtc, SYSUTCDATETIME())) AS AgeDays,
-    COALESCE(JSON_VALUE(pr.JsonData, '$.notes'), '') AS Notes,
-    CASE JSON_VALUE(pr.JsonData, '$.queueCode')
-        WHEN 'reconciliation' THEN '/billing/reconciliation'
-        WHEN 'unapplied-payments' THEN '/billing/payments'
-        WHEN 'commission-adj' THEN '/commissions/exceptions'
-        WHEN 'direct-bill' THEN '/billing/reconciliation'
-        WHEN 'month-end' THEN '/finance/accounting-periods'
-        ELSE COALESCE(NULLIF(JSON_VALUE(pr.JsonData, '$.detailUrl'), ''), '/workbench/accounting')
-    END AS DetailUrl
-FROM Portal.AdminRecord pr
-WHERE pr.TenantId = @TenantId
-  AND pr.Kind = 'AccountingWorkbench'
-  AND pr.IsDeleted = 0
+    w.PolicyAccountingWorkItemId AS ItemId,
+    w.QueueCode,
+    w.Title,
+    w.ReferenceNumber AS RefNumber,
+    COALESCE(a.AccountName, '') AS AccountName,
+    COALESCE(bp.PolicyNumber, '') AS PolicyNumber,
+    COALESCE(c.CarrierName, '') AS CarrierName,
+    COALESCE(u.FullName, u.DisplayName, '') AS ProducerName,
+    CASE WHEN w.QueueCode = 'new-policy-billing' THEN 'New Policies Awaiting Billing' WHEN w.QueueCode = 'accounting-failures' THEN 'Accounting Exception' ELSE 'Policy Accounting' END AS Category,
+    COALESCE(au.FullName, au.DisplayName, 'Unassigned') AS AssignedTo,
+    w.PriorityCode AS Priority,
+    CASE WHEN w.DueDateUtc < SYSUTCDATETIME() THEN 'Breached' WHEN w.DueDateUtc < DATEADD(day, 1, SYSUTCDATETIME()) THEN 'At Risk' ELSE 'On Track' END AS SlaStatus,
+    w.StatusCode AS Status,
+    CASE WHEN w.DueDateUtc < SYSUTCDATETIME() THEN 'Past Due' ELSE 'Current' END AS AgingBucket,
+    '' AS PaymentMethod,
+    w.WorkItemTypeCode AS Reason,
+    w.Amount,
+    CAST(0 AS DECIMAL(18,2)) AS Variance,
+    COALESCE(w.DueDateUtc, w.CreatedDateUtc) AS DueDate,
+    NULL AS ReceivedDate,
+    w.CompletedDateUtc AS CompletedAt,
+    CASE WHEN w.DueDateUtc IS NULL THEN 0 ELSE DATEDIFF(day, w.DueDateUtc, SYSUTCDATETIME()) END AS AgeDays,
+    w.Notes,
+    COALESCE(NULLIF(w.DetailUrl, ''), CONCAT('/policies/', CONVERT(NVARCHAR(36), w.PolicyId))) AS DetailUrl
+FROM Accounting.PolicyAccountingWorkItem w
+JOIN Submissions.BoundPolicy bp ON bp.TenantId=w.TenantId AND bp.PolicyId=w.PolicyId AND bp.IsDeleted=0
+LEFT JOIN Client.Account a ON a.TenantId=bp.TenantId AND a.AccountId=bp.AccountId AND a.IsDeleted=0
+LEFT JOIN Agency.Carrier c ON c.TenantId=bp.TenantId AND c.CarrierId=bp.CarrierId AND c.IsDeleted=0
+LEFT JOIN Policy.PolicyAssignment pa ON pa.TenantId=w.TenantId AND pa.PolicyId=w.PolicyId AND pa.IsDeleted=0
+LEFT JOIN IAM.[User] u ON u.TenantId=w.TenantId AND u.UserId=pa.ProducerId AND u.IsDeleted=0
+LEFT JOIN IAM.[User] au ON au.TenantId=w.TenantId AND au.UserId=w.AssignedToUserId AND au.IsDeleted=0
+WHERE w.TenantId=@TenantId AND w.IsDeleted=0
+
+UNION ALL SELECT i.InvoiceId,'invoices-due',CONCAT('Invoice due - ',i.InvoiceNumber),i.InvoiceNumber,COALESCE(a.AccountName,''),COALESCE(bp.PolicyNumber,''),'','','Invoice','Unassigned',CASE WHEN i.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'High' ELSE 'Normal' END,CASE WHEN i.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Breached' ELSE 'On Track' END,i.StatusCode,CASE WHEN i.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Past Due' ELSE 'Current' END,'','Open invoice balance',i.BalanceAmount,0,CONVERT(datetime2,i.DueDate),NULL,NULL,DATEDIFF(day,i.DueDate,CONVERT(date,SYSUTCDATETIME())),'Persisted policy invoice requires collection or review.',CONCAT('/policies/',CONVERT(nvarchar(36),i.PolicyId)) FROM Billing.Invoice i LEFT JOIN Client.Account a ON a.TenantId=i.TenantId AND a.AccountId=i.AccountId AND a.IsDeleted=0 LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId=i.TenantId AND bp.PolicyId=i.PolicyId AND bp.IsDeleted=0 WHERE i.TenantId=@TenantId AND i.IsDeleted=0 AND i.BalanceAmount>0 AND i.StatusCode NOT IN('Paid','Void','Cancelled')
+UNION ALL SELECT cp.CarrierPayableId,'carrier-remittance',CONCAT('Carrier remittance - ',cp.PayableNumber),cp.PayableNumber,COALESCE(a.AccountName,''),COALESCE(bp.PolicyNumber,''),COALESCE(c.CarrierName,''),'','Carrier Payable','Unassigned',CASE WHEN cp.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Critical' ELSE 'High' END,CASE WHEN cp.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Breached' ELSE 'At Risk' END,cp.StatusCode,CASE WHEN cp.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Past Due' ELSE 'Current' END,'','Premium trust remittance due',cp.PayableAmount-cp.PaidAmount,0,CONVERT(datetime2,cp.DueDate),NULL,cp.RemittedDateUtc,DATEDIFF(day,cp.DueDate,CONVERT(date,SYSUTCDATETIME())),'Remit cleared premium trust funds to the carrier.',CONCAT('/policies/',CONVERT(nvarchar(36),cp.PolicyId)) FROM Accounting.CarrierPayable cp JOIN Submissions.BoundPolicy bp ON bp.TenantId=cp.TenantId AND bp.PolicyId=cp.PolicyId AND bp.IsDeleted=0 LEFT JOIN Client.Account a ON a.TenantId=bp.TenantId AND a.AccountId=bp.AccountId AND a.IsDeleted=0 LEFT JOIN Agency.Carrier c ON c.TenantId=cp.TenantId AND c.CarrierId=cp.CarrierId AND c.IsDeleted=0 WHERE cp.TenantId=@TenantId AND cp.IsDeleted=0 AND cp.PayableAmount>cp.PaidAmount AND cp.StatusCode<>'Remitted'
+UNION ALL SELECT p.PaymentId,'failed-payment',CONCAT('Failed payment - ',COALESCE(p.PaymentNumber,CONVERT(nvarchar(36),p.PaymentId))),COALESCE(p.PaymentNumber,CONVERT(nvarchar(36),p.PaymentId)),COALESCE(a.AccountName,''),'','','','Payment','Unassigned','High','At Risk',p.StatusCode,'Current',p.PaymentMethodCode,'Payment processing failed',p.Amount,0,p.PaymentDate,NULL,NULL,DATEDIFF(day,p.PaymentDate,SYSUTCDATETIME()),COALESCE(p.Notes,'Payment requires exception review.'),'/billing/payments' FROM Billing.Payment p LEFT JOIN Client.Account a ON a.TenantId=p.TenantId AND a.AccountId=p.AccountId AND a.IsDeleted=0 WHERE p.TenantId=@TenantId AND p.IsDeleted=0 AND p.StatusCode IN('Failed','Declined','Rejected','Returned')
+UNION ALL SELECT fa.FinanceAgreementId,'premium-finance',CONCAT('Premium finance funding - ',fa.AgreementNumber),fa.AgreementNumber,COALESCE(a.AccountName,''),COALESCE(bp.PolicyNumber,''),'','','Premium Finance','Unassigned',CASE WHEN fa.ExpectedFundingDate<CONVERT(date,SYSUTCDATETIME()) THEN 'High' ELSE 'Normal' END,CASE WHEN fa.ExpectedFundingDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Breached' ELSE 'On Track' END,fa.FundingStatusCode,CASE WHEN fa.ExpectedFundingDate<CONVERT(date,SYSUTCDATETIME()) THEN 'Past Due' ELSE 'Current' END,'','Funding confirmation pending',fa.FinancedAmount,0,CONVERT(datetime2,COALESCE(fa.ExpectedFundingDate,CONVERT(date,fa.CreatedDateUtc))),NULL,NULL,DATEDIFF(day,COALESCE(fa.ExpectedFundingDate,CONVERT(date,fa.CreatedDateUtc)),CONVERT(date,SYSUTCDATETIME())),'Confirm premium finance funding and cancellation protection.',CONCAT('/policies/',CONVERT(nvarchar(36),r.PolicyId)) FROM Billing.FinanceAgreement fa JOIN Billing.AgencyBillReceivable r ON r.TenantId=fa.TenantId AND r.AgencyBillReceivableId=fa.AgencyBillReceivableId AND r.IsDeleted=0 LEFT JOIN Client.Account a ON a.TenantId=r.TenantId AND a.AccountId=r.AccountId AND a.IsDeleted=0 LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId=r.TenantId AND bp.PolicyId=r.PolicyId AND bp.IsDeleted=0 WHERE fa.TenantId=@TenantId AND fa.IsDeleted=0 AND fa.StatusCode='Active' AND fa.FundingStatusCode='Pending'
+UNION ALL SELECT cp.CommissionPayableId,'commission-approval',CONCAT('Commission approval - ',cp.PayableNumber),cp.PayableNumber,'','','','','Commission Payable','Unassigned','Normal','On Track',cp.StatusCode,'Current','','Commission payable pending approval',cp.NetPayableAmount,0,CONVERT(datetime2,cp.AccountingDate),NULL,NULL,DATEDIFF(day,cp.AccountingDate,CONVERT(date,SYSUTCDATETIME())),'Approve reconciled commission payable for payout.','/commissions/accounting' FROM Commission.CommissionPayable cp WHERE cp.TenantId=@TenantId AND cp.IsDeleted=0 AND cp.StatusCode='PendingApproval'
 ORDER BY DueDate, Priority;";
 
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -94,6 +97,13 @@ ORDER BY DueDate, Priority;";
         var commission = items.Where(i => i.QueueCode == "commission-adj").ToList();
         var directBill = items.Where(i => i.QueueCode == "direct-bill").ToList();
         var monthEnd = items.Where(i => i.QueueCode == "month-end").ToList();
+        var newPolicyBilling = items.Where(i => i.QueueCode == "new-policy-billing").ToList();
+        var accountingFailures = items.Where(i => i.QueueCode == "accounting-failures").ToList();
+        var invoicesDue = items.Where(i => i.QueueCode == "invoices-due").ToList();
+        var carrierRemittances = items.Where(i => i.QueueCode == "carrier-remittance").ToList();
+        var failedPayments = items.Where(i => i.QueueCode == "failed-payment").ToList();
+        var premiumFinance = items.Where(i => i.QueueCode == "premium-finance").ToList();
+        var commissionApprovals = items.Where(i => i.QueueCode == "commission-approval").ToList();
 
         return new AccountingWorkbenchDto
         {
@@ -109,6 +119,16 @@ ORDER BY DueDate, Priority;";
                 DirectBillExceptions = directBill.Count,
                 MonthEndOpen = monthEnd.Count(i => i.Status != "Complete"),
                 MonthEndComplete = monthEnd.Count(i => i.Status == "Complete"),
+                NewPoliciesAwaitingBilling = newPolicyBilling.Count(i => i.Status != "Complete"),
+                NewPolicyBillingAmount = newPolicyBilling.Where(i => i.Status != "Complete").Sum(i => i.Amount),
+                AccountingFailures = accountingFailures.Count(i => i.Status != "Complete"),
+                InvoicesDue = invoicesDue.Count,
+                InvoicesDueAmount = invoicesDue.Sum(i => i.Amount),
+                CarrierRemittances = carrierRemittances.Count,
+                CarrierRemittanceAmount = carrierRemittances.Sum(i => i.Amount),
+                FailedPayments = failedPayments.Count,
+                PremiumFinancePending = premiumFinance.Count,
+                CommissionApprovals = commissionApprovals.Count,
             },
             Reconciliation = reconciliation,
             ArAging = arAging,
@@ -116,6 +136,13 @@ ORDER BY DueDate, Priority;";
             CommissionAdjustments = commission,
             DirectBillExceptions = directBill,
             MonthEnd = monthEnd,
+            NewPolicyBilling = newPolicyBilling,
+            AccountingFailures = accountingFailures,
+            InvoicesDue = invoicesDue,
+            CarrierRemittances = carrierRemittances,
+            FailedPayments = failedPayments,
+            PremiumFinance = premiumFinance,
+            CommissionApprovals = commissionApprovals,
         };
     }
 }

@@ -9,8 +9,10 @@ public sealed class UpdateUserRequest
     public string? DisplayName { get; set; }
     [AmsPhone]
     public string? PhoneNumber { get; set; }
+    public Guid? DepartmentId { get; set; }
     public string? Department { get; set; }
     public string? Region { get; set; }
+    public Guid? JobTitleId { get; set; }
     public string? JobTitle { get; set; }
     public string? TimeZoneCode { get; set; }
     public string? LocaleCode { get; set; }

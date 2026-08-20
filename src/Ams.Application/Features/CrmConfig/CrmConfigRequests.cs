@@ -50,6 +50,24 @@ public sealed record UpdateOpportunityStageRequest(
     bool IsWonStage,
     bool IsActive);
 
+public sealed record CreateOpportunityForecastCategoryRequest(
+    Guid TenantId,
+    [Required, StringLength(80)] string CategoryCode,
+    [Required, StringLength(100)] string CategoryName,
+    [Range(0, int.MaxValue)] int SortOrder,
+    [Range(0, 100)] decimal? DefaultProbabilityPercent,
+    bool IsClosedCategory,
+    bool IsDefault);
+
+public sealed record UpdateOpportunityForecastCategoryRequest(
+    [Required, StringLength(80)] string CategoryCode,
+    [Required, StringLength(100)] string CategoryName,
+    [Range(0, int.MaxValue)] int SortOrder,
+    [Range(0, 100)] decimal? DefaultProbabilityPercent,
+    bool IsClosedCategory,
+    bool IsDefault,
+    bool IsActive);
+
 public sealed record UpdatePipelineSettingRequest(
     [Required] string SettingValue);
 

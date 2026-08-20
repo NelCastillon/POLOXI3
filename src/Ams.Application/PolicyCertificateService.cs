@@ -18,8 +18,10 @@ public sealed class PolicyCertificateService : IPolicyCertificateService
     public Task<PagedResult<PolicyCertificateDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? certificateType, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, status, certificateType, pageNumber, pageSize, cancellationToken);
 
-    public Task<PolicyCertificateDto?> GetByIdAsync(Guid certificateId, CancellationToken cancellationToken = default)
-        => _repository.GetByIdAsync(certificateId, cancellationToken);
+    public Task<PolicyCertificateDto?> GetByIdAsync(Guid tenantId, Guid certificateId, CancellationToken cancellationToken = default)
+        => tenantId == Guid.Empty || certificateId == Guid.Empty
+            ? throw new ArgumentException("Tenant and certificate are required.")
+            : _repository.GetByIdAsync(tenantId, certificateId, cancellationToken);
 
     public Task<PolicyCertificateDto?> GetByNumberAsync(Guid tenantId, string certificateNumber, CancellationToken cancellationToken = default)
         => _repository.GetByNumberAsync(tenantId, certificateNumber, cancellationToken);

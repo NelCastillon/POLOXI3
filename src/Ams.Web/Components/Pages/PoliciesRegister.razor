@@ -25,7 +25,7 @@
         <div class="mt-modal pr-action-modal" role="dialog" aria-modal="true" aria-labelledby="pr-form-title" @onclick:stopPropagation="true">
             <div class="um-modal-header">
                 <i class="bi bi-shield-plus" aria-hidden="true"></i>
-                <span id="pr-form-title">@(_policyForm.Id == Guid.Empty ? "New Policy" : $"Edit {_policyForm.PolicyNumber}")</span>
+                <span id="pr-form-title">Edit @_policyForm.PolicyNumber</span>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="ClosePolicyForm" disabled="@_actionBusy"><i class="bi bi-x-lg"></i></button>
             </div>
             <EditForm Model="_policyForm" OnValidSubmit="SavePolicyAsync" OnInvalidSubmit="NotifyFormValidationAsync">
@@ -47,6 +47,15 @@
                                 @foreach (var status in PolicyStatuses)
                                 {
                                     <option value="@status">@status</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="um-field">
+                            <label>Policy Source <span class="text-danger">*</span></label>
+                            <InputSelect TValue="string" class="form-select" Value="@_policyForm.PolicySourceCode" ValueChanged="@((string value) => OnPolicySourceChanged(value))" ValueExpression="@(() => _policyForm.PolicySourceCode)">
+                                @foreach (var source in DirectPolicySources)
+                                {
+                                    <option value="@source.SourceCode">@source.SourceName</option>
                                 }
                             </InputSelect>
                         </div>
@@ -167,6 +176,14 @@
                             <label>Notes</label>
                             <InputTextArea class="form-control" rows="3" @bind-Value="_policyForm.Notes" />
                         </div>
+                        @if (SelectedPolicySource?.RequiresReason == true)
+                        {
+                            <div class="um-field um-field--full">
+                                <label>Policy Source Reason <span class="text-danger">*</span></label>
+                                <InputTextArea class="form-control" rows="3" @bind-Value="_policyForm.PolicySourceReason" placeholder="Explain why this policy is being entered without quote-bound workflow." />
+                                <ValidationMessage For="() => _policyForm.PolicySourceReason" class="text-danger" />
+                            </div>
+                        }
                     </div>
                 </div>
                 <div class="um-modal-footer">
@@ -308,7 +325,6 @@
         </div>
         <div class="pr-hero-actions">
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "pr-spin" : "")"></i> Refresh</button>
-            <button class="um-btn um-btn-primary um-btn-sm" @onclick="OpenNewPolicy"><i class="bi bi-plus-lg"></i> New Policy</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/endorsements")'><i class="bi bi-pen"></i> Endorsements</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/cancellations")'><i class="bi bi-x-circle"></i> Cancellations</button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo("/policies/documents")'><i class="bi bi-folder2"></i> Documents</button>
@@ -334,38 +350,36 @@
     </div>
 
     <div class="pr-workflow-strip" aria-label="Policy workflow shortcuts">
-        <button type="button" class="pr-workflow-card" @onclick="OpenEndorsements" title="Open Endorsements">
+        <button type="button" class="pr-workflow-card pr-workflow-endorsements" @onclick="OpenEndorsements" title="Open Endorsements">
             <i class="bi bi-pen" aria-hidden="true"></i>
             <div><strong>Endorsements</strong><span>Policy changes, limits, locations, and insured updates</span></div>
         </button>
-        <button type="button" class="pr-workflow-card" @onclick="OpenCancellations" title="Open Cancellations">
+        <button type="button" class="pr-workflow-card pr-workflow-cancellations" @onclick="OpenCancellations" title="Open Cancellations">
             <i class="bi bi-x-circle" aria-hidden="true"></i>
             <div><strong>Cancellations</strong><span>Notices, reinstatements, rescissions, and cancellation review</span></div>
         </button>
-        <button type="button" class="pr-workflow-card" @onclick="OpenDocuments" title="Open Documents">
+        <button type="button" class="pr-workflow-card pr-workflow-documents" @onclick="OpenDocuments" title="Open Documents">
             <i class="bi bi-folder2-open" aria-hidden="true"></i>
             <div><strong>Documents</strong><span>Declarations, binders, certificates, forms, and policy files</span></div>
         </button>
-        <button type="button" class="pr-workflow-card" @onclick="OpenCompliance" title="Open Compliance">
+        <button type="button" class="pr-workflow-card pr-workflow-compliance" @onclick="OpenCompliance" title="Open Compliance">
             <i class="bi bi-patch-check" aria-hidden="true"></i>
             <div><strong>Compliance</strong><span>Compliance policies, attestations, and retained evidence</span></div>
         </button>
     </div>
 
-    <div class="pr-enterprise-search" role="search" aria-label="Search policies">
-        <div class="pr-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
-        <div class="pr-search-body">
-            <label for="pr-search-input">Enterprise search</label>
-            <input id="pr-search-input" class="pr-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every policy field: policy #, account, carrier, LOB, status, premium, dates, producer, CSR, branch, IDs..." />
-            <div class="pr-search-hint">Searches all visible and supporting policy fields as you type.</div>
+    <div class="um-search-row" role="search" aria-label="Search policies">
+        <div class="um-search-box">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input id="pr-search-input" class="um-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search every policy field: policy #, account, carrier, LOB, status, premium, dates, producer, CSR, branch, IDs..." />
         </div>
-        <div class="pr-search-result">
+        <div class="um-search-result">
             <strong>@FilteredRows.Count()</strong>
             <span>matches</span>
         </div>
         @if (!string.IsNullOrWhiteSpace(_searchText))
         {
-            <button type="button" class="um-btn um-btn-ghost um-btn-sm pr-search-clear" @onclick="ClearFilters">
+            <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="ClearFilters">
                 <i class="bi bi-x-lg" aria-hidden="true"></i> Clear
             </button>
         }
@@ -411,26 +425,6 @@
                     </button>
                 </div>
 
-                @if (IsGroupingTab)
-                {
-                    <div class="pr-group-board">
-                        @foreach (var group in GroupedRows)
-                        {
-                            <button type="button" class="pr-group-card" @onclick="() => ApplyGroupSearch(group.Key)">
-                                <div>
-                                    <span>@GroupTitle</span>
-                                    <strong>@group.Key</strong>
-                                </div>
-                                <div class="pr-group-metrics">
-                                    <span><b>@group.Count()</b> policies</span>
-                                    <span><b>@group.Sum(x => x.WrittenPremium).ToString("C0")</b> premium</span>
-                                </div>
-                                <div class="pr-group-meter"><i style="width:@Percent(group.Count(), Math.Max(FilteredRows.Count(), 1))%"></i></div>
-                            </button>
-                        }
-                    </div>
-                }
-
                 <div class="pr-table-scroll">
                     <table class="pr-table" aria-label="Policies register">
                     <thead>
@@ -440,6 +434,7 @@
                             <th>LOB</th>
                             <th>Carrier</th>
                             <th>Status</th>
+                            <th>Source</th>
                             <th>Effective</th>
                             <th>Expires</th>
                             <th class="pr-num">Premium</th>
@@ -453,7 +448,7 @@
                     <tbody>
                         @foreach (var row in PagedRows)
                         {
-                            <tr class="pr-table-row @(_selected.Id == row.Id ? "pr-row-selected" : null)" @onclick="() => SelectPolicy(row)" @ondblclick="() => OpenPolicy(row)">
+                            <tr class="pr-table-row pr-row-@CssKey(row.Status) @(_selected.Id == row.Id ? "pr-row-selected" : null)" @onclick="() => SelectPolicy(row)" @ondblclick="() => OpenPolicy(row)">
                                 <td>@PolicyNoLink(row)</td>
                                 <td>
                                     <div class="pr-account-cell">
@@ -467,6 +462,7 @@
                                 <td>@LobChip(row.Lob)</td>
                                 <td>@row.Carrier</td>
                                 <td>@StatusChip(row.Status)</td>
+                                <td>@SourceChip(row)</td>
                                 <td>@row.EffDate.ToString("MM/dd/yyyy")</td>
                                 <td>@ExpiryCell(row.ExpDate)</td>
                                 <td class="pr-num">@PremiumCell(row.WrittenPremium)</td>
@@ -484,6 +480,74 @@
                     <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="PreviousPage" disabled="@(_page <= 1)"><i class="bi bi-chevron-left"></i> Previous</button>
                     <span class="pr-page-chip">@PageSummary</span>
                     <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="NextPage" disabled="@(_page >= TotalPages)">Next <i class="bi bi-chevron-right"></i></button>
+                </div>
+
+                @if (IsGroupingTab)
+                {
+                    <div class="pr-group-board pr-analytics-list">
+                        @foreach (var group in GroupedRows)
+                        {
+                            <button type="button" class="pr-group-card" @onclick="() => ApplyGroupSearch(group.Key)">
+                                <div>
+                                    <span>@GroupTitle</span>
+                                    <strong>@group.Key</strong>
+                                </div>
+                                <div class="pr-group-metrics">
+                                    <span><b>@group.Count()</b> policies</span>
+                                    <span><b>@group.Sum(x => x.WrittenPremium).ToString("C0")</b> premium</span>
+                                </div>
+                                <div class="pr-group-meter pr-progress-track"><i class="pr-progress-fill" style="width:@Percent(group.Count(), Math.Max(FilteredRows.Count(), 1))%"></i></div>
+                            </button>
+                        }
+                    </div>
+                }
+
+                <div class="pr-indicator-board pr-analytics-list" aria-label="Policy distribution indicators">
+                    <section class="pr-indicator-panel pr-pie-panel">
+                        <h3><i class="bi bi-pie-chart-fill" aria-hidden="true"></i> Line of business mix</h3>
+                        <div class="pr-policy-pie" style="background:@LobPieGradient" role="img" aria-label="Line of business distribution">
+                            <span>@LobCount</span>
+                            <small>LOBs</small>
+                        </div>
+                        <div class="pr-pie-legend">
+                            @foreach (var item in LobIndicators)
+                            {
+                                <button type="button" @onclick="() => ApplyGroupSearch(item.Label)" title="Filter by @item.Label">
+                                    <i style="background:@LobColor(item.Label)" aria-hidden="true"></i>
+                                    <span>@item.Label</span>
+                                    <strong>@item.Value</strong>
+                                </button>
+                            }
+                        </div>
+                    </section>
+                    <section class="pr-indicator-panel">
+                        <h3><i class="bi bi-activity" aria-hidden="true"></i> Status mix</h3>
+                        @foreach (var item in StatusIndicators)
+                        {
+                            @IndicatorRow(item)
+                        }
+                    </section>
+                    <section class="pr-indicator-panel">
+                        <h3><i class="bi bi-layers" aria-hidden="true"></i> Line of business</h3>
+                        @foreach (var item in LobIndicators)
+                        {
+                            @IndicatorRow(item)
+                        }
+                    </section>
+                    <section class="pr-indicator-panel">
+                        <h3><i class="bi bi-building" aria-hidden="true"></i> Carrier premium</h3>
+                        @foreach (var item in CarrierIndicators)
+                        {
+                            @IndicatorRow(item)
+                        }
+                    </section>
+                    <section class="pr-indicator-panel">
+                        <h3><i class="bi bi-arrow-repeat" aria-hidden="true"></i> Renewal stage</h3>
+                        @foreach (var item in RenewalIndicators)
+                        {
+                            @IndicatorRow(item)
+                        }
+                    </section>
                 </div>
             }
         </div>
@@ -513,9 +577,20 @@
                         <div><span>LOB</span><strong>@_selected.Lob</strong></div>
                         <div><span>Premium</span><strong>@_selected.WrittenPremium.ToString("C0")</strong></div>
                         <div><span>Expires</span><strong>@_selected.ExpDate.ToString("MM/dd/yyyy")</strong></div>
+                        <div><span>Source</span><strong>@_selected.PolicySourceName</strong></div>
+                        <div><span>Bind status</span><strong>@_selected.BindStatusName</strong></div>
+                        <div><span>Coverage status</span><strong>@_selected.CoverageStatus</strong></div>
+                        <div><span>Issued</span><strong>@(_selected.IssuedDateUtc?.ToString("MM/dd/yyyy") ?? "Pending carrier issue")</strong></div>
                         <div><span>Producer</span><strong>@_selected.Producer</strong></div>
                         <div><span>CSR</span><strong>@_selected.Csr</strong></div>
                     </div>
+                    @if (!string.IsNullOrWhiteSpace(_selected.PolicySourceReason))
+                    {
+                        <div class="pr-work-card">
+                            <span>Source reason</span>
+                            <strong>@_selected.PolicySourceReason</strong>
+                        </div>
+                    }
                     <div class="pr-work-card">
                         <span>Last action</span>
                         <strong>@_selected.LastAction</strong>
@@ -570,8 +645,9 @@
 
     readonly List<PolicyRow> _rows = [];
     readonly List<AccountOption> _accountOptions = [];
+    readonly List<PolicyCreationSourceDto> _policyCreationSources = [];
 
-    static readonly string[] PolicyStatuses = ["Active", "Pending", "Cancelled", "Expired", "Non-Renewed"];
+    static readonly string[] PolicyStatuses = ["PendingIssue", "Issued", "Active", "Cancelled", "Expired", "Non-Renewed"];
     static readonly string[] LinesOfBusiness = ["Commercial Auto", "Commercial Property", "General Liability", "Workers Comp", "Professional Liability", "Umbrella", "Cyber", "Directors & Officers", "Personal Auto", "Homeowners", "Life", "Health", "Flood"];
     static readonly string[] RenewalStages = ["Not Started", "Pre-Renewal", "Marketing", "Quoted", "Bound", "Lost"];
 
@@ -628,6 +704,8 @@
     IEnumerable<PolicyRow> FilteredRows => ApplyEnterpriseFilters(BaseTabRows);
     IEnumerable<string> CarrierOptions => _rows.Select(r => r.Carrier).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x);
     IEnumerable<string> BranchOptions => _rows.Select(r => r.Branch).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).DefaultIfEmpty("HQ").OrderBy(x => x);
+    IEnumerable<PolicyCreationSourceDto> DirectPolicySources => _policyCreationSources.Where(x => x.IsActive && x.AllowsDirectPolicyEntry && !x.RequiresQuote).OrderBy(x => x.SortOrder).ThenBy(x => x.SourceName);
+    PolicyCreationSourceDto? SelectedPolicySource => _policyCreationSources.FirstOrDefault(x => string.Equals(x.SourceCode, _policyForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
     IEnumerable<AccountOption> FilteredAccountOptions
     {
         get
@@ -660,6 +738,57 @@
         "lob" => FilteredRows.GroupBy(r => r.Lob).OrderByDescending(g => g.Count()),
         _ => Enumerable.Empty<IGrouping<string, PolicyRow>>()
     };
+    IEnumerable<PolicyIndicator> StatusIndicators => PolicyStatuses
+        .Select(status => new PolicyIndicator(status, FilteredRows.Count(r => r.Status == status), FilteredRows.Count(), PolicyTone(status), "policies"))
+        .Where(x => x.Value > 0);
+    IEnumerable<PolicyIndicator> LobIndicators => FilteredRows
+        .GroupBy(r => r.Lob)
+        .OrderByDescending(g => g.Count())
+        .Take(6)
+        .Select(g => new PolicyIndicator(g.Key, g.Count(), FilteredRows.Count(), PolicyTone(g.Key), "policies"));
+    IEnumerable<PolicyIndicator> CarrierIndicators
+    {
+        get
+        {
+            var rows = FilteredRows.ToList();
+            var totalPremium = rows.Sum(r => r.WrittenPremium);
+            return rows.GroupBy(r => r.Carrier)
+                .OrderByDescending(g => g.Sum(r => r.WrittenPremium))
+                .Take(6)
+                .Select(g => new PolicyIndicator(g.Key, (int)Math.Round(g.Sum(r => r.WrittenPremium)), (int)Math.Max(1, Math.Round(totalPremium)), PolicyTone(g.Key), "premium"));
+        }
+    }
+    IEnumerable<PolicyIndicator> RenewalIndicators => RenewalStages
+        .Select(stage => new PolicyIndicator(stage, FilteredRows.Count(r => r.RenewalStage == stage), FilteredRows.Count(), PolicyTone(stage), "policies"))
+        .Where(x => x.Value > 0);
+    int LobCount => FilteredRows.Select(r => r.Lob).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+    string LobPieGradient
+    {
+        get
+        {
+            var total = FilteredRows.Count();
+            if (total <= 0)
+            {
+                return "conic-gradient(#e2e8f0 0deg 360deg)";
+            }
+
+            var start = 0m;
+            var segments = new List<string>();
+            foreach (var item in LobIndicators)
+            {
+                if (item.Value <= 0)
+                {
+                    continue;
+                }
+
+                var end = start + (item.Value * 360m / total);
+                segments.Add($"{LobColor(item.Label)} {FormatDeg(start)}deg {FormatDeg(end)}deg");
+                start = end;
+            }
+
+            return $"conic-gradient({string.Join(", ", segments)})";
+        }
+    }
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
     string PageSummary
     {
@@ -688,8 +817,11 @@
         {
             var result = await Api.SearchPolicyRegisterAsync(_tenantId, pageSize: 250);
             var accounts = await Api.SearchAccountsAsync(_tenantId, pageSize: 250);
+            var sources = await Api.GetPolicyCreationSourcesAsync(_tenantId);
             _rows.Clear();
             _rows.AddRange((result?.Items ?? []).Select(MapRegisterPolicy));
+            _policyCreationSources.Clear();
+            _policyCreationSources.AddRange((sources ?? []).Where(s => s.IsActive).OrderBy(s => s.SortOrder).ThenBy(s => s.SourceName));
             BuildAccountOptions(accounts?.Items ?? []);
             BuildAccountOptionsFromRows();
             RefreshSelectedPolicy();
@@ -742,7 +874,9 @@
         AccountId = p.AccountId,
         Carrier = p.CarrierName,
         Lob = string.IsNullOrWhiteSpace(p.LineOfBusiness) ? "General Liability" : p.LineOfBusiness,
-        Status = p.Status == "Bound" ? "Active" : p.Status,
+        Status = string.IsNullOrWhiteSpace(p.IssueStatus) ? p.Status : p.IssueStatus,
+        CoverageStatus = string.IsNullOrWhiteSpace(p.CoverageStatus) ? "Bound" : p.CoverageStatus,
+        IssuedDateUtc = p.IssuedDateUtc,
         EffDate = p.EffectiveDate,
         ExpDate = p.ExpirationDate,
         WrittenPremium = p.WrittenPremium,
@@ -754,7 +888,12 @@
         Activities = Math.Max(1, p.ActivityCount),
         Endorsements = Math.Max(0, p.EndorsementCount),
         RenewalStage = string.IsNullOrWhiteSpace(p.RenewalStage) ? "Not Started" : p.RenewalStage,
-        LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction
+        LastAction = string.IsNullOrWhiteSpace(p.LastAction) ? "Policy synchronized from bound policy workflow." : p.LastAction,
+        PolicySourceCode = p.PolicySourceCode,
+        PolicySourceName = p.PolicySourceName,
+        PolicySourceReason = p.PolicySourceReason,
+        BindStatusCode = p.BindStatusCode,
+        BindStatusName = p.BindStatusName
     };
 
     void RefreshSelectedPolicy()
@@ -783,6 +922,12 @@
                 || Contains(r.Carrier, term)
                 || Contains(r.Lob, term)
                 || Contains(r.Status, term)
+                || Contains(r.CoverageStatus, term)
+                || Contains(r.PolicySourceCode, term)
+                || Contains(r.PolicySourceName, term)
+                || Contains(r.PolicySourceReason, term)
+                || Contains(r.BindStatusCode, term)
+                || Contains(r.BindStatusName, term)
                 || Contains(r.EffDate.ToString("MM/dd/yyyy"), term)
                 || Contains(r.EffDate.ToString("yyyy-MM-dd"), term)
                 || Contains(r.ExpDate.ToString("MM/dd/yyyy"), term)
@@ -892,28 +1037,6 @@
 
     void OpenPolicy(PolicyRow row) => Nav.NavigateTo($"/policies/{row.Id}");
 
-    void OpenNewPolicy()
-    {
-        var firstAccount = _accountOptions.FirstOrDefault();
-        _policyForm = new PolicyForm
-        {
-            PolicyNumber = $"POL-{DateTime.Today:yyyy}-{_rows.Count + 1:D4}",
-            EffDate = DateTime.Today,
-            ExpDate = DateTime.Today.AddYears(1),
-            Status = "Active",
-            Lob = "General Liability",
-            Carrier = CarrierOptions.FirstOrDefault() ?? string.Empty,
-            Branch = BranchOptions.FirstOrDefault() ?? "HQ",
-            RenewalStage = "Not Started",
-            AccountId = firstAccount?.Id ?? Guid.Empty,
-            Account = firstAccount?.Name ?? string.Empty,
-            AccountType = firstAccount?.Type ?? "Commercial"
-        };
-        _accountSearchText = _policyForm.Account;
-        _accountDropdownOpen = false;
-        _showForm = true;
-    }
-
     void ClosePolicyForm()
     {
         if (_actionBusy) return;
@@ -952,20 +1075,18 @@
 
     async Task SavePolicyAsync()
     {
+        if (_policyForm.Id == Guid.Empty)
+        {
+            ShowToast("Policies are created automatically from confirmed bind requests. Use the Bind Center to record carrier confirmation.", "danger");
+            return;
+        }
+
         _actionBusy = true;
         try
         {
             var request = ToUpsertRequest(_policyForm);
-            if (_policyForm.Id == Guid.Empty)
-            {
-                var id = await Api.CreatePolicyRegisterAsync(request);
-                _selected.Id = id;
-            }
-            else
-            {
-                await Api.UpdatePolicyRegisterAsync(_policyForm.Id, request);
-                _selected.Id = _policyForm.Id;
-            }
+            await Api.UpdatePolicyRegisterAsync(_policyForm.Id, request);
+            _selected.Id = _policyForm.Id;
 
             _showForm = false;
             _page = 1;
@@ -990,6 +1111,8 @@
         AccountName = form.Account.Trim(),
         AccountType = form.AccountType.Trim(),
         CarrierName = form.Carrier.Trim(),
+        PolicySourceCode = form.PolicySourceCode.Trim(),
+        PolicySourceReason = form.PolicySourceReason,
         LineOfBusiness = form.Lob.Trim(),
         Status = form.Status.Trim(),
         EffectiveDate = form.EffDate,
@@ -1003,6 +1126,20 @@
         Notes = form.Notes,
         ModifiedByUserId = _tenantAdminUserId
     };
+
+    Task OnPolicySourceChanged(string value)
+    {
+        _policyForm.PolicySourceCode = value;
+        _policyForm.PolicySourceRequiresReason = SelectedSourceRequiresReason(value);
+        if (!_policyForm.PolicySourceRequiresReason)
+        {
+            _policyForm.PolicySourceReason = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    bool SelectedSourceRequiresReason(string? sourceCode) => _policyCreationSources.Any(x => x.IsActive && x.RequiresReason && string.Equals(x.SourceCode, sourceCode, StringComparison.OrdinalIgnoreCase));
 
     Task NotifyFormValidationAsync()
     {
@@ -1027,6 +1164,7 @@
                 break;
             case "Edit":
                 _policyForm = PolicyForm.From(_selected);
+                _policyForm.PolicySourceRequiresReason = SelectedSourceRequiresReason(_policyForm.PolicySourceCode);
                 _accountSearchText = _policyForm.Account;
                 _accountDropdownOpen = false;
                 _showForm = true;
@@ -1160,10 +1298,13 @@
         @<button class="pr-link um-btn um-btn-ghost um-btn-xs" @onclick:stopPropagation="true" @onclick="() => OpenPolicy(row)">@row.PolicyNumber</button>;
 
     RenderFragment LobChip(string lob) =>
-        @<span class="pr-lob-chip">@lob</span>;
+        @<span class="pr-lob-chip pr-lob-@CssKey(lob)">@lob</span>;
 
     RenderFragment StatusChip(string status) =>
-        @<span class="pr-status pr-status-@status.ToLowerInvariant().Replace(" ", "-")">@status</span>;
+        @<span class="pr-status pr-status-@CssKey(status)">@status</span>;
+
+    RenderFragment SourceChip(PolicyRow row) =>
+        @<span class="pr-source-chip pr-source-@CssKey(row.PolicySourceName)" title="Bind status: @row.BindStatusName">@row.PolicySourceName</span>;
 
     RenderFragment PremiumCell(decimal premium) =>
         premium <= 0 ? @<span class="pr-prem-none">-</span> : @<span class="pr-prem">@premium.ToString("C0")</span>;
@@ -1171,9 +1312,42 @@
     RenderFragment ExpiryCell(DateTime exp)
     {
         var days = DaysToExp(exp);
-        var css = days < 0 ? "pr-exp-past" : days <= 30 ? "pr-exp-30" : days <= 60 ? "pr-exp-60" : string.Empty;
+        var css = days < 0 ? "pr-exp-past" : days <= 30 ? "pr-exp-30" : days <= 60 ? "pr-exp-60" : days <= 90 ? "pr-exp-90" : "pr-exp-safe";
         return @<span class="@css">@exp.ToString("MM/dd/yyyy")</span>;
     }
+
+    static string CssKey(string value) =>
+        string.Join("-", value.ToLowerInvariant().Split([' ', '/', '&', '.', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    static string PolicyTone(string value)
+    {
+        var key = CssKey(value);
+        if (key.Contains("cancel", StringComparison.Ordinal) || key.Contains("exp30", StringComparison.Ordinal)) return "danger";
+        if (key.Contains("pending", StringComparison.Ordinal) || key.Contains("marketing", StringComparison.Ordinal) || key.Contains("quoted", StringComparison.Ordinal)) return "warning";
+        if (key.Contains("expire", StringComparison.Ordinal) || key.Contains("lost", StringComparison.Ordinal)) return "muted";
+        if (key.Contains("cyber", StringComparison.Ordinal) || key.Contains("professional", StringComparison.Ordinal) || key.Contains("directors", StringComparison.Ordinal)) return "purple";
+        if (key.Contains("auto", StringComparison.Ordinal) || key.Contains("property", StringComparison.Ordinal) || key.Contains("carrier", StringComparison.Ordinal)) return "blue";
+        return "success";
+    }
+
+    static string PolicyColor(string value) => CssKey(value) switch
+    {
+        "active" => "#22c55e",
+        "pending" => "#f59e0b",
+        "cancelled" => "#ef4444",
+        "expired" => "#64748b",
+        "non-renewed" => "#8b5cf6",
+        _ => "#2563eb"
+    };
+
+    static string LobColor(string value)
+    {
+        var palette = new[] { "#2563eb", "#22c55e", "#f59e0b", "#8b5cf6", "#06b6d4", "#ef4444", "#14b8a6", "#f97316" };
+        var hash = Math.Abs(CssKey(value).Aggregate(0, (current, ch) => (current * 31) + ch));
+        return palette[hash % palette.Length];
+    }
+
+    static string FormatDeg(decimal value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     RenderFragment CtxBtn(PolicyRow row) =>
         @<div class="pr-action-menu-wrap" @onclick:stopPropagation="true">
@@ -1209,6 +1383,13 @@
         </button>;
     }
 
+    RenderFragment IndicatorRow(PolicyIndicator item) =>
+        @<button type="button" class="pr-indicator-row pr-indicator-@item.Tone" @onclick="() => ApplyGroupSearch(item.Label)" title="Filter by @item.Label">
+            <span><strong>@item.Label</strong><small>@item.ValueLabel</small></span>
+            <div class="pr-indicator-track pr-progress-track" aria-hidden="true"><i class="pr-progress-fill" style="width:@Percent(item.Value, item.Total)%"></i></div>
+            <em>@Percent(item.Value, item.Total)%</em>
+        </button>;
+
     RenderFragment WorkflowCard(string icon, string title, string description, string url) =>
         @<button type="button" class="pr-workflow-card" @onclick="() => Nav.NavigateTo(url)" title="Open @title">
             <i class="bi @icon" aria-hidden="true"></i>
@@ -1233,12 +1414,16 @@
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionItem(string Text, string IconCss);
     sealed record AccountOption(Guid Id, string Name, string Type, string Number);
+    sealed record PolicyIndicator(string Label, int Value, int Total, string Tone, string Unit)
+    {
+        public string ValueLabel => Unit == "premium" ? Value.ToString("C0") : $"{Value} {Unit}";
+    }
 
     sealed class PolicyRow
     {
         public Guid Id { get; set; }
-        public Guid SubmissionId { get; set; }
-        public Guid QuoteId { get; set; }
+        public Guid? SubmissionId { get; set; }
+        public Guid? QuoteId { get; set; }
         public string PolicyNumber { get; set; } = string.Empty;
         public string Account { get; set; } = string.Empty;
         public string AccountType { get; set; } = "Commercial";
@@ -1246,6 +1431,8 @@
         public string Carrier { get; set; } = string.Empty;
         public string Lob { get; set; } = string.Empty;
         public string Status { get; set; } = "Active";
+        public string CoverageStatus { get; set; } = "Bound";
+        public DateTime? IssuedDateUtc { get; set; }
         public DateTime EffDate { get; set; }
         public DateTime ExpDate { get; set; }
         public decimal WrittenPremium { get; set; }
@@ -1259,6 +1446,11 @@
         public string RenewalStage { get; set; } = "Not Started";
         public string LastAction { get; set; } = string.Empty;
         public string Notes { get; set; } = string.Empty;
+        public string PolicySourceCode { get; set; } = "ManualEntry";
+        public string PolicySourceName { get; set; } = "Manual Policy Entry";
+        public string? PolicySourceReason { get; set; }
+        public string BindStatusCode { get; set; } = "Bound";
+        public string BindStatusName { get; set; } = "Bound";
 
     }
 
@@ -1272,6 +1464,9 @@
         [Required, StringLength(120)] public string Carrier { get; set; } = string.Empty;
         [Required, StringLength(80)] public string Lob { get; set; } = string.Empty;
         [Required, StringLength(40)] public string Status { get; set; } = "Active";
+        [Required, StringLength(50)] public string PolicySourceCode { get; set; } = "ManualEntry";
+        [StringLength(500)] public string? PolicySourceReason { get; set; }
+        public bool PolicySourceRequiresReason { get; set; }
         [Required] public DateTime EffDate { get; set; } = DateTime.Today;
         [Required] public DateTime ExpDate { get; set; } = DateTime.Today.AddYears(1);
         [Range(0, 100000000)] public decimal WrittenPremium { get; set; }
@@ -1300,6 +1495,8 @@
             Csr = row.Csr,
             Branch = row.Branch,
             RenewalStage = row.RenewalStage,
+            PolicySourceCode = row.PolicySourceCode,
+            PolicySourceReason = row.PolicySourceReason,
             Notes = row.Notes
         };
 
@@ -1309,6 +1506,10 @@
                 yield return new ValidationResult("Expiration date must be after effective date.", [nameof(ExpDate)]);
             if (AccountId == Guid.Empty)
                 yield return new ValidationResult("Select an account from the account list.", [nameof(Account)]);
+            if (string.IsNullOrWhiteSpace(PolicySourceCode))
+                yield return new ValidationResult("Policy source is required.", [nameof(PolicySourceCode)]);
+            if (PolicySourceRequiresReason && string.IsNullOrWhiteSpace(PolicySourceReason))
+                yield return new ValidationResult("Policy source reason is required.", [nameof(PolicySourceReason)]);
         }
     }
 

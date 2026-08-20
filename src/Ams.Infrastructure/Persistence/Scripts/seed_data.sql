@@ -654,12 +654,14 @@ IF NOT EXISTS (SELECT 1 FROM Billing.Invoice WHERE InvoiceId = @InvId4)
 
 -- Payments
 -- PaymentStatusCodeId: 1=Pending, 2=Applied, 3=Voided
+DECLARE @PaymentId1 UNIQUEIDENTIFIER = '71000000-0000-0000-0000-000000000001';
+DECLARE @PaymentId2 UNIQUEIDENTIFIER = '71000000-0000-0000-0000-000000000002';
 IF NOT EXISTS (SELECT 1 FROM Billing.Payment WHERE TenantId = @TenantId AND ReferenceNumber = 'PAY-2024-001')
     INSERT INTO Billing.Payment
         (PaymentId, TenantId, AccountId, PaymentNumber, PaymentDate, PaymentMethodCode,
          CurrencyCode, TotalAmount, Amount, ReferenceNumber, PaymentStatusCodeId, IsDeleted, CreatedDateUtc)
     VALUES
-        (NEWID(), @TenantId, @AccId2, 'PAY-2024-001', DATEADD(DAY, -5, @Now), 'ACH',
+        (@PaymentId1, @TenantId, @AccId2, 'PAY-2024-001', DATEADD(DAY, -5, @Now), 'ACH',
          'USD', 27000.00, 27000.00, 'PAY-2024-001', 2, 0, DATEADD(DAY, -5, @Now));
 
 IF NOT EXISTS (SELECT 1 FROM Billing.Payment WHERE TenantId = @TenantId AND ReferenceNumber = 'PAY-2024-002')
@@ -667,8 +669,20 @@ IF NOT EXISTS (SELECT 1 FROM Billing.Payment WHERE TenantId = @TenantId AND Refe
         (PaymentId, TenantId, AccountId, PaymentNumber, PaymentDate, PaymentMethodCode,
          CurrencyCode, TotalAmount, Amount, ReferenceNumber, PaymentStatusCodeId, IsDeleted, CreatedDateUtc)
     VALUES
-        (NEWID(), @TenantId, @AccId3, 'PAY-2024-002', DATEADD(DAY, -15, @Now), 'Check',
+        (@PaymentId2, @TenantId, @AccId3, 'PAY-2024-002', DATEADD(DAY, -15, @Now), 'Check',
          'USD', 22500.00, 22500.00, 'PAY-2024-002', 2, 0, DATEADD(DAY, -15, @Now));
+
+-- Applied payments must use the authoritative PaymentApplication bridge.
+SELECT @PaymentId1=PaymentId FROM Billing.Payment WHERE TenantId=@TenantId AND ReferenceNumber='PAY-2024-001' AND IsDeleted=0;
+SELECT @PaymentId2=PaymentId FROM Billing.Payment WHERE TenantId=@TenantId AND ReferenceNumber='PAY-2024-002' AND IsDeleted=0;
+
+IF NOT EXISTS (SELECT 1 FROM Billing.PaymentApplication WHERE PaymentId=@PaymentId1 AND InvoiceId=@InvId2)
+    INSERT Billing.PaymentApplication(PaymentApplicationId,PaymentId,InvoiceId,AppliedAmount,AppliedDateUtc,CreatedByUserId)
+    VALUES('72000000-0000-0000-0000-000000000001',@PaymentId1,@InvId2,27000.00,DATEADD(DAY,-5,@Now),@UserId);
+
+IF NOT EXISTS (SELECT 1 FROM Billing.PaymentApplication WHERE PaymentId=@PaymentId2 AND InvoiceId=@InvId3)
+    INSERT Billing.PaymentApplication(PaymentApplicationId,PaymentId,InvoiceId,AppliedAmount,AppliedDateUtc,CreatedByUserId)
+    VALUES('72000000-0000-0000-0000-000000000002',@PaymentId2,@InvId3,22500.00,DATEADD(DAY,-15,@Now),@UserId);
 
 -- =============================================================================
 -- DOCUMENT WORKFLOW TEMPLATES

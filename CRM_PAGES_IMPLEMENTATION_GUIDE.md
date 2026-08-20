@@ -22,7 +22,7 @@ This document provides complete implementation details for the CRM module pages,
 - `SegmentModel` record with properties: SegmentId, Name, Description, SegmentType, Color, IsAutomated, AccountCount, TotalPremium, AvgPremium, RetentionRate, LossRatio, AvgRelationshipYears
 - `SegmentAccount` record for account listing
 - Dialog-based add/edit forms
-- SfGrid for account display with sorting and pagination
+- AppGrid for account display with sorting and pagination
 
 ---
 
@@ -42,7 +42,7 @@ This document provides complete implementation details for the CRM module pages,
 - `SegmentationRuleForm` for creating/editing rules
 - `SegmentationCriterion` for individual scoring criteria
 - Dynamic criterion addition/removal
-- SfGrid display with filtering and sorting
+- AppGrid display with filtering and sorting
 
 **Data Model Example:**
 ```
@@ -98,7 +98,7 @@ This document provides complete implementation details for the CRM module pages,
 - `EnrichmentJobModel`: JobId, JobName, ProviderName, Status, RecordsRequested, RecordsEnriched, SuccessRate, StartedAt, CompletedAt
 - `ProviderConfigModel`: ApiKey, SelectedFields, EnableAutoEnrich
 - Provider card grid with connection status
-- Job history SfGrid with filtering
+- Job history AppGrid with filtering
 
 **Supported Providers:**
 - **ZoomInfo** - Company and contact intelligence
@@ -215,7 +215,7 @@ GET    /api/crm/enrichment/jobs/{id}            - Get job details
 - Bulk action buttons (disabled state management)
 
 ### Data Grids
-- Syncfusion SfGrid components
+- enterprise CSS AppGrid components
 - Configurable pagination (10-25 items per page)
 - Sorting on all columns
 - Hover effects on rows
@@ -348,7 +348,7 @@ src/Ams.Web/Components/Pages/Crm/
 
 ## Performance Considerations
 
-1. **Pagination:** Use SfGrid paging (15 items per page) for large datasets
+1. **Pagination:** Use AppGrid paging (15 items per page) for large datasets
 2. **Filtering:** Client-side filtering for now, migrate to server when dataset grows
 3. **Caching:** Consider caching provider list and rules periodically
 4. **Debouncing:** Implement search debouncing to reduce filter operations

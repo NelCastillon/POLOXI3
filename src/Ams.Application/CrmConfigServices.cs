@@ -39,6 +39,17 @@ public sealed class OpportunityStageService : IOpportunityStageService
     public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
 }
 
+public sealed class OpportunityForecastCategoryService : IOpportunityForecastCategoryService
+{
+    private readonly IOpportunityForecastCategoryRepository _repo;
+    public OpportunityForecastCategoryService(IOpportunityForecastCategoryRepository repo) => _repo = repo;
+    public Task<OpportunityForecastCategoryDto?> GetByIdAsync(Guid id, CancellationToken ct = default) => _repo.GetByIdAsync(id, ct);
+    public Task<PagedResult<OpportunityForecastCategoryDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default) => _repo.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct);
+    public Task<Guid> CreateAsync(CreateOpportunityForecastCategoryRequest request, CancellationToken ct = default) => _repo.CreateAsync(request, ct);
+    public Task UpdateAsync(Guid id, UpdateOpportunityForecastCategoryRequest request, CancellationToken ct = default) => _repo.UpdateAsync(id, request, ct);
+    public Task DeleteAsync(Guid id, CancellationToken ct = default) => _repo.DeleteAsync(id, ct);
+}
+
 public sealed class PipelineSettingService : IPipelineSettingService
 {
     private readonly IPipelineSettingRepository _repo;

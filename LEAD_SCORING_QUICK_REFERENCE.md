@@ -192,13 +192,13 @@ private async Task DeleteRule(Guid ruleId)
 ### Grid not displaying
 - Check if data source is bound correctly: `DataSource="_filteredLeads"`
 - Verify grid columns match data model properties
-- Check SfGrid reference is not null
+- Check AppGrid reference is not null
 
 ## Performance Tips
 
 1. **Pagination**: Grid shows 25 items per page by default
 2. **Filtering**: Applied client-side, consider server-side for 1000+ leads
-3. **Sorting**: SfGrid supports multi-column sorting
+3. **Sorting**: AppGrid supports multi-column sorting
 4. **Caching**: Consider caching scoring rules (change infrequently)
 
 ## Future Enhancements

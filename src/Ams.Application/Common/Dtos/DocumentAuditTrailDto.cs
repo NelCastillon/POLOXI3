@@ -4,6 +4,7 @@ public sealed record DocumentAuditTrailDto
 {
     public Guid AuditId { get; init; }
     public Guid TenantId { get; init; }
+    public string TenantName { get; init; } = string.Empty;
     public Guid DocumentId { get; init; }
     public Guid? WorkflowInstanceId { get; init; }
     public string EventType { get; init; } = string.Empty;

@@ -12,15 +12,24 @@ public sealed class SubmissionService : ISubmissionService
     private readonly ISubmissionRepository _repository;
     private readonly IAccountRepository _accountRepository;
     private readonly IOpportunityRepository _opportunityRepository;
+    private readonly IPolicyCreationService _policyCreationService;
+    private readonly IUserRepository _userRepository;
+    private readonly ISubmissionReferenceOptionRepository _referenceOptionRepository;
 
     public SubmissionService(
         ISubmissionRepository repository,
         IAccountRepository accountRepository,
-        IOpportunityRepository opportunityRepository)
+        IOpportunityRepository opportunityRepository,
+        IPolicyCreationService policyCreationService,
+        IUserRepository userRepository,
+        ISubmissionReferenceOptionRepository referenceOptionRepository)
     {
         _repository = repository;
         _accountRepository = accountRepository;
         _opportunityRepository = opportunityRepository;
+        _policyCreationService = policyCreationService;
+        _userRepository = userRepository;
+        _referenceOptionRepository = referenceOptionRepository;
     }
 
     public Task<PagedResult<SubmissionDto>> SearchAsync(Guid tenantId, string? searchTerm, string? status, string? lineOfBusiness, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
@@ -43,7 +52,49 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent opportunity is not linked to the supplied account; the submission chain is inconsistent.");
         }
 
+        var opportunityDetail = await _opportunityRepository.GetDetailAsync(request.OpportunityId, cancellationToken);
+        if (opportunityDetail is null || opportunityDetail.Lines.Count == 0)
+        {
+            throw new InvalidOperationException("The selected opportunity must have at least one database-backed line of business before a submission can be created.");
+        }
+
+        if (opportunityDetail.Lines.Any(line => line.LobId is null))
+        {
+            throw new InvalidOperationException("Every opportunity line must reference an active Line of Business configuration record before a submission can be created.");
+        }
+
+        var referenceOptions = await _referenceOptionRepository.GetAllAsync(request.TenantId, cancellationToken: cancellationToken);
+        if (!referenceOptions.Any(option => option.OptionGroup == "SubmissionPriority" && option.OptionCode == request.Priority && option.IsActive))
+        {
+            throw new InvalidOperationException("The selected submission priority is not active for this tenant.");
+        }
+
+        if (!referenceOptions.Any(option => option.OptionGroup == "RiskState" && option.OptionCode == request.RiskState && option.IsActive))
+        {
+            throw new InvalidOperationException("The selected risk state is not active for this tenant.");
+        }
+
+        await EnsureActiveTenantUserAsync(request.AssignedToUserId, request.TenantId, "Producer", cancellationToken);
+        await EnsureActiveTenantUserAsync(request.CsrUserId, request.TenantId, "CSR", cancellationToken);
+
         return await _repository.CreateAsync(request, cancellationToken);
+    }
+
+    private async Task EnsureActiveTenantUserAsync(Guid? userId, Guid tenantId, string roleName, CancellationToken cancellationToken)
+    {
+        if (!userId.HasValue)
+        {
+            return;
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId.Value, cancellationToken);
+        var roleCodes = user?.AssignedRoleCodes?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        var roleNames = user?.AssignedRoleNames?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        if (user is null || user.TenantId != tenantId || !string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase)
+            || (!roleCodes.Contains(roleName, StringComparer.OrdinalIgnoreCase) && !roleNames.Contains(roleName, StringComparer.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"The selected {roleName} is not an active tenant user with the required role.");
+        }
     }
 
     public Task UpdateAsync(Guid id, UpdateSubmissionRequest request, CancellationToken cancellationToken = default)
@@ -52,11 +103,89 @@ public sealed class SubmissionService : ISubmissionService
     public Task AssignAsync(Guid id, AssignSubmissionRequest request, CancellationToken cancellationToken = default)
         => _repository.AssignAsync(id, request, cancellationToken);
 
-    public Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
-        => _repository.SubmitToMarketAsync(id, request, cancellationToken);
+    public Task<IReadOnlyList<SubmissionActivityDto>> GetActivitiesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetActivitiesAsync(submissionId, cancellationToken);
 
-    public Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
-        => _repository.RequestQuoteAsync(id, request, cancellationToken);
+    public Task<Guid> AddNoteAsync(Guid submissionId, AddSubmissionNoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.AddNoteAsync(submissionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<DocumentDto>> GetDocumentsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetDocumentsAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskDto>> GetTasksAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetTasksAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<Guid> CreateFollowUpTaskAsync(Guid submissionId, CreateSubmissionFollowUpTaskRequest request, CancellationToken cancellationToken = default)
+        => _repository.CreateFollowUpTaskAsync(submissionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionLineDto>> GetLinesAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetLinesAsync(submissionId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionIntakeQuestionDto>> GetIntakeAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetIntakeAsync(submissionId, cancellationToken);
+
+    public Task UpdateIntakeQuestionAsync(Guid submissionId, Guid intakeQuestionId, UpdateSubmissionIntakeQuestionRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateIntakeQuestionAsync(submissionId, intakeQuestionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionReadinessEvidenceDocumentDto>> GetReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessEvidenceDocumentsAsync(submissionId, intakeQuestionId, tenantId, cancellationToken);
+
+    public Task ReplaceReadinessEvidenceDocumentsAsync(Guid submissionId, Guid intakeQuestionId, ReplaceSubmissionReadinessEvidenceRequest request, CancellationToken cancellationToken = default)
+        => _repository.ReplaceReadinessEvidenceDocumentsAsync(submissionId, intakeQuestionId, request, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionDocumentChecklistDto>> GetDocumentChecklistAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetDocumentChecklistAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<SubmissionReadinessDto> GetReadinessAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<BindCommissionEstimateDto> GetBindCommissionEstimateAsync(Guid submissionId, Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindCommissionEstimateAsync(submissionId, quoteId, tenantId, cancellationToken);
+
+    public Task<SubmissionReadinessDto> GetMarketReadinessAsync(Guid submissionId, Guid submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetMarketReadinessAsync(submissionId, submissionMarketId, tenantId, cancellationToken);
+
+    public Task<SubmissionPackagePreviewDto> GetSubmissionPackagePreviewAsync(Guid submissionId, Guid? submissionMarketId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetSubmissionPackagePreviewAsync(submissionId, submissionMarketId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionReadinessRequirementDto>> GetReadinessRequirementsAsync(Guid tenantId, string? searchTerm, CancellationToken cancellationToken = default)
+        => _repository.GetReadinessRequirementsAsync(tenantId, searchTerm, cancellationToken);
+
+    public Task<Guid> UpsertReadinessRequirementAsync(Guid? readinessRequirementId, UpsertSubmissionReadinessRequirementRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertReadinessRequirementAsync(readinessRequirementId, request, cancellationToken);
+
+    public Task DeleteReadinessRequirementAsync(Guid readinessRequirementId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteReadinessRequirementAsync(readinessRequirementId, tenantId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<SubmissionTaskTemplateDto>> GetTaskTemplatesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetTaskTemplatesAsync(tenantId, cancellationToken);
+
+    public Task<SubmissionMetricsDto> GetMetricsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetMetricsAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<PolicyCreationSourceDto>> GetPolicyCreationSourcesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyCreationSourcesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<PolicyBindStatusDto>> GetPolicyBindStatusesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyBindStatusesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<BindQueueItemDto>> GetBindQueueAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindQueueAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<PolicyBindTransactionDto>> GetPolicyBindTransactionsAsync(Guid submissionId, CancellationToken cancellationToken = default)
+        => _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken);
+
+    public async Task<SubmissionActionResult> SubmitToMarketAsync(Guid id, SubmitSubmissionToMarketRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
+        return await _repository.SubmitToMarketAsync(id, request, cancellationToken);
+    }
+
+    public async Task<SubmissionActionResult> RequestQuoteAsync(Guid id, RequestSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
+        return await _repository.RequestQuoteAsync(id, request, cancellationToken);
+    }
 
     public Task<SubmissionActionResult> CopyAsync(Guid id, CopySubmissionRequest request, CancellationToken cancellationToken = default)
         => _repository.CopyAsync(id, request, cancellationToken);
@@ -75,6 +204,7 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Submission belongs to a different tenant; a policy cannot be created from it.");
         }
 
+        await EnsureSubmissionIsOpenAsync(id, request.TenantId, cancellationToken);
         return await _repository.CreatePolicyAsync(id, request, cancellationToken);
     }
 
@@ -90,20 +220,125 @@ public sealed class SubmissionService : ISubmissionService
     public Task UpdateMarketStatusAsync(Guid submissionMarketId, UpdateSubmissionMarketStatusRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateMarketStatusAsync(submissionMarketId, request, cancellationToken);
 
+    public Task UpdateMarketPackageAsync(UpdateSubmissionMarketPackageRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateMarketPackageAsync(request, cancellationToken);
+
     public Task RemoveMarketAsync(Guid submissionMarketId, CancellationToken cancellationToken = default)
         => _repository.RemoveMarketAsync(submissionMarketId, cancellationToken);
 
-    public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, CancellationToken cancellationToken = default)
-        => _repository.GetQuoteComparisonAsync(submissionId, cancellationToken);
+    public Task<int> SynchronizeOverdueMarketRequestsAsync(CancellationToken cancellationToken = default)
+        => _repository.SynchronizeOverdueMarketRequestsAsync(cancellationToken);
 
-    public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, CancellationToken cancellationToken = default)
-        => _repository.GetQuoteByIdAsync(quoteId, cancellationToken);
+    public Task<IReadOnlyList<SubmissionQuoteRegisterDto>> GetQuoteRegisterAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetQuoteRegisterAsync(tenantId, cancellationToken);
 
-    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, CancellationToken cancellationToken = default)
-        => _repository.GetProposalByIdAsync(proposalId, cancellationToken);
+    public Task<IReadOnlyList<QuoteComparisonDto>> GetQuoteComparisonAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetQuoteComparisonAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<QuoteComparisonDto?> GetQuoteByIdAsync(Guid quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetQuoteByIdAsync(quoteId, tenantId, cancellationToken);
+
+    public async Task<SubmissionActionResult> RecordQuoteResponseAsync(Guid submissionId, RecordSubmissionQuoteResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(submissionId, request.TenantId, cancellationToken);
+        return await _repository.RecordQuoteResponseAsync(submissionId, request, cancellationToken);
+    }
+
+    public Task<Guid> RecordCarrierInboundResponseAsync(Guid submissionId, RecordCarrierInboundResponseRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordCarrierInboundResponseAsync(submissionId, request, cancellationToken);
+
+    public Task UpdateQuoteAsync(Guid quoteId, UpdateSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateQuoteAsync(quoteId, request, cancellationToken);
+
+    public async Task SelectQuoteAsync(Guid submissionId, SelectSubmissionQuoteRequest request, CancellationToken cancellationToken = default)
+    {
+        await EnsureSubmissionIsOpenAsync(submissionId, request.TenantId, cancellationToken);
+        await _repository.SelectQuoteAsync(submissionId, request, cancellationToken);
+    }
+
+    public Task<ProposalDto?> GetProposalByIdAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalByIdAsync(proposalId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalWorkflowDto>> GetProposalsAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalsAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<ProposalWorkflowLaunchDto> GetProposalWorkflowLaunchAsync(Guid opportunityId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalWorkflowLaunchAsync(opportunityId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalWorkflowOptionDto>> GetProposalWorkflowOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalWorkflowOptionsAsync(tenantId, cancellationToken);
 
     public Task<Guid> GenerateProposalAsync(GenerateProposalRequest request, CancellationToken cancellationToken = default)
         => _repository.GenerateProposalAsync(request, cancellationToken);
+
+    public Task SubmitProposalReviewAsync(Guid proposalId, SubmitProposalReviewRequest request, CancellationToken cancellationToken = default)
+        => _repository.SubmitProposalReviewAsync(proposalId, request, cancellationToken);
+
+    public Task DecideProposalReviewAsync(Guid proposalId, DecideProposalReviewRequest request, CancellationToken cancellationToken = default)
+        => _repository.DecideProposalReviewAsync(proposalId, request, cancellationToken);
+
+    public Task<Guid> UpsertProposalRecipientAsync(Guid proposalId, UpsertProposalRecipientRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertProposalRecipientAsync(proposalId, request, cancellationToken);
+
+    public Task DeleteProposalRecipientAsync(Guid proposalId, Guid recipientId, Guid tenantId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteProposalRecipientAsync(proposalId, recipientId, tenantId, modifiedByUserId, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalSlaPolicyDto>> GetProposalSlaPoliciesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalSlaPoliciesAsync(tenantId, cancellationToken);
+
+    public Task<Guid> UpsertProposalSlaPolicyAsync(UpsertProposalSlaPolicyRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertProposalSlaPolicyAsync(request, cancellationToken);
+
+    public Task<Guid> ProcessProposalProviderCallbackAsync(ProposalProviderCallbackRequest request, CancellationToken cancellationToken = default)
+        => _repository.ProcessProposalProviderCallbackAsync(request, cancellationToken);
+
+    public Task<ProposalDeliveryDispatchDto> DeliverProposalAsync(Guid proposalId, ProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.DeliverProposalAsync(proposalId, request, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalDeliveryMonitorDto>> GetProposalDeliveryMonitorAsync(Guid tenantId, string? status, string? searchTerm, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveryMonitorAsync(tenantId, status, searchTerm, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalDeliveryDispatchDto>> GetProposalDeliveriesAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveriesAsync(proposalId, tenantId, cancellationToken);
+
+    public Task<ProposalDeliveryDispatchDto> RetryProposalDeliveryAsync(Guid dispatchId, RetryProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.RetryProposalDeliveryAsync(dispatchId, request, cancellationToken);
+
+    public Task<ProposalDeliveryDispatchDto> UpdateProposalDeliveryRecipientAsync(Guid dispatchId, UpdateProposalDeliveryRecipientRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateProposalDeliveryRecipientAsync(dispatchId, request, cancellationToken);
+
+    public Task<ProposalDeliveryDispatchDto> ResendProposalDeliveryAsync(Guid dispatchId, ResendProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.ResendProposalDeliveryAsync(dispatchId, request, cancellationToken);
+
+    public Task DeleteProposalDeliveryAsync(Guid dispatchId, DeleteProposalDeliveryRequest request, CancellationToken cancellationToken = default)
+        => _repository.DeleteProposalDeliveryAsync(dispatchId, request, cancellationToken);
+
+    public Task<IReadOnlyList<ProposalDeliveryProviderDto>> GetProposalDeliveryProvidersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalDeliveryProvidersAsync(tenantId, cancellationToken);
+
+    public Task UpdateProposalDeliveryProviderAsync(Guid providerId, UpdateProposalDeliveryProviderRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpdateProposalDeliveryProviderAsync(providerId, request, cancellationToken);
+
+    public Task PresentProposalAsync(Guid proposalId, ProposalPresentationRequest request, CancellationToken cancellationToken = default)
+        => _repository.PresentProposalAsync(proposalId, request, cancellationToken);
+
+    public Task<ProposalBindContinuationDto> GetProposalBindContinuationAsync(Guid proposalId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetProposalBindContinuationAsync(proposalId, tenantId, cancellationToken);
+
+    public Task<ClientAcceptanceReadinessDto> GetClientAcceptanceReadinessAsync(Guid proposalId, Guid? quoteId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetClientAcceptanceReadinessAsync(proposalId, quoteId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<ClientAcceptanceDto>> GetClientAcceptancesAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetClientAcceptancesAsync(submissionId, tenantId, cancellationToken);
+
+    public Task<ClientAcceptanceDto?> GetClientAcceptanceByIdAsync(Guid clientAcceptanceId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetClientAcceptanceByIdAsync(clientAcceptanceId, tenantId, cancellationToken);
+
+    public Task<Guid> RecordClientAcceptanceAsync(RecordClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+        => _repository.RecordClientAcceptanceAsync(request, cancellationToken);
+
+    public Task WithdrawClientAcceptanceAsync(Guid clientAcceptanceId, WithdrawClientAcceptanceRequest request, CancellationToken cancellationToken = default)
+        => _repository.WithdrawClientAcceptanceAsync(clientAcceptanceId, request, cancellationToken);
 
     public Task<IReadOnlyList<AppetiteMatchDto>> SearchAppetiteAsync(AppetiteSearchRequest request, CancellationToken cancellationToken = default)
         => _repository.SearchAppetiteAsync(request, cancellationToken);
@@ -117,8 +352,20 @@ public sealed class SubmissionService : ISubmissionService
     public Task<PolicyRegisterDto?> GetPolicyByIdAsync(Guid policyId, CancellationToken cancellationToken = default)
         => _repository.GetPolicyByIdAsync(policyId, cancellationToken);
 
-    public Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
-        => _repository.CreatePolicyRegisterAsync(request, cancellationToken);
+    public async Task<Guid> CreatePolicyRegisterAsync(UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        var bindTransactionId = await _repository.CreatePolicyRegisterAsync(request, cancellationToken);
+        return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, bindTransactionId, request.ModifiedByUserId), cancellationToken);
+    }
+
+    private async Task EnsureSubmissionIsOpenAsync(Guid submissionId, Guid tenantId, CancellationToken cancellationToken)
+    {
+        var submission = await _repository.GetByIdAsync(submissionId, cancellationToken)
+            ?? throw new InvalidOperationException("Submission was not found.");
+        if (submission.TenantId != tenantId) throw new InvalidOperationException("Submission belongs to a different tenant.");
+        if ((await _repository.GetPolicyBindTransactionsAsync(submissionId, cancellationToken)).Any(x => x.TenantId == tenantId && x.PolicyId.HasValue))
+            throw new InvalidOperationException("This submission is historical because policy generation is complete. Continue in the policy workspace.");
+    }
 
     public Task UpdatePolicyRegisterAsync(Guid policyId, UpsertPolicyRegisterRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdatePolicyRegisterAsync(policyId, request, cancellationToken);
@@ -130,12 +377,23 @@ public sealed class SubmissionService : ISubmissionService
     {
         // Enterprise rule: binding a policy must trace back to a real submission within the
         // same tenant and the same account so the Policy is never orphaned or cross-tenant.
-        if (request.SubmissionId == Guid.Empty)
+        if (!request.SubmissionId.HasValue || request.SubmissionId.Value == Guid.Empty)
         {
-            throw new InvalidOperationException("Binding a policy requires a parent Submission. SubmissionId was not supplied.");
+            if (request.AccountId == Guid.Empty)
+            {
+                throw new InvalidOperationException("Direct policy binding requires an Account when no parent Submission is supplied.");
+            }
+
+            var directBindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
+            if (await BindStatusCreatesPolicyAsync(request.TenantId, request.BindStatusCode, cancellationToken))
+            {
+                return await _policyCreationService.CreatePolicyFromConfirmedBindAsync(new PolicyCreationFromConfirmedBindRequest(request.TenantId, directBindTransactionId, request.RequestedByUserId), cancellationToken);
+            }
+
+            return directBindTransactionId;
         }
 
-        var submission = await _repository.GetByIdAsync(request.SubmissionId, cancellationToken)
+        var submission = await _repository.GetByIdAsync(request.SubmissionId.Value, cancellationToken)
             ?? throw new InvalidOperationException($"Parent submission '{request.SubmissionId}' was not found.");
 
         if (request.TenantId != Guid.Empty && submission.TenantId != request.TenantId)
@@ -148,7 +406,103 @@ public sealed class SubmissionService : ISubmissionService
             throw new InvalidOperationException("Parent submission is not linked to the supplied account; the bind chain is inconsistent.");
         }
 
-        return await _repository.BindPolicyAsync(request, cancellationToken);
+        if (!string.Equals(request.BindStatusCode, "Draft", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("A new submission bind request must start in Draft. Validate it and use the configured workflow transitions to continue.");
+        }
+
+        var bindTransactionId = await _repository.BindPolicyAsync(request, cancellationToken);
+        await _repository.ValidateBindRequestAsync(bindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.RequestedByUserId), cancellationToken);
+        return bindTransactionId;
+    }
+
+    public Task<BindRequestDetailDto?> GetBindRequestDetailAsync(Guid policyBindTransactionId, Guid tenantId, CancellationToken cancellationToken = default)
+        => _repository.GetBindRequestDetailAsync(policyBindTransactionId, tenantId, cancellationToken);
+
+    public Task<IReadOnlyList<BindValidationResultDto>> ValidateBindRequestAsync(Guid policyBindTransactionId, ValidateBindRequestRequest request, CancellationToken cancellationToken = default)
+        => _repository.ValidateBindRequestAsync(policyBindTransactionId, request, cancellationToken);
+
+    public async Task UpdateBindRequestStatusAsync(Guid policyBindTransactionId, UpdateBindRequestStatusRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var current = detail.Request.BindStatusCode;
+        var next = request.StatusCode;
+        if (string.Equals(current, next, StringComparison.OrdinalIgnoreCase)) return;
+
+        var currentStatus = (await _repository.GetPolicyBindStatusesAsync(request.TenantId, cancellationToken))
+            .SingleOrDefault(x => string.Equals(x.StatusCode, current, StringComparison.OrdinalIgnoreCase));
+        if (currentStatus?.IsTerminal == true)
+            throw new InvalidOperationException($"A terminal bind request in '{currentStatus.StatusName}' cannot transition to another status.");
+        if (string.Equals(next, "Bound", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Bound status can only be recorded through an authoritative carrier response.");
+
+        var transition = detail.AllowedTransitions.SingleOrDefault(x => string.Equals(x.ToStatusCode, next, StringComparison.OrdinalIgnoreCase));
+        if (transition is null || transition.RequiresCarrierResponse)
+            throw new InvalidOperationException($"Transition from '{current}' to '{next}' is not allowed through a manual status change.");
+
+        if (transition.RequiresValidation)
+        {
+            var validations = await _repository.ValidateBindRequestAsync(policyBindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.ChangedByUserId), cancellationToken);
+            var blockers = validations.Where(x => x.IsBlocking && x.StatusCode is not ("Passed" or "Waived")).ToArray();
+            if (blockers.Length > 0)
+                throw new InvalidOperationException("Bind request is blocked: " + string.Join("; ", blockers.Select(x => x.Message ?? x.RequirementName)));
+            if (detail.Request.ApprovalRequired && !detail.Approvals.Any(x => x.StatusCode == "Approved"))
+                throw new InvalidOperationException("Required manager approval has not been completed.");
+            if (detail.Request.PaymentRequired && !detail.Request.PaymentVerified)
+                throw new InvalidOperationException("Required payment has not been verified.");
+        }
+
+        await _repository.UpdateBindRequestStatusAsync(policyBindTransactionId, request, cancellationToken);
+    }
+
+    public Task<Guid> RequestBindApprovalAsync(Guid policyBindTransactionId, RequestBindApprovalRequest request, CancellationToken cancellationToken = default)
+        => _repository.RequestBindApprovalAsync(policyBindTransactionId, request, cancellationToken);
+
+    public Task DecideBindApprovalAsync(Guid policyBindTransactionId, Guid bindApprovalId, DecideBindApprovalRequest request, CancellationToken cancellationToken = default)
+        => _repository.DecideBindApprovalAsync(policyBindTransactionId, bindApprovalId, request, cancellationToken);
+
+    public async Task<Guid?> RecordBindCarrierResponseAsync(Guid policyBindTransactionId, RecordBindCarrierResponseRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var createsPolicy = await BindStatusCreatesPolicyAsync(request.TenantId, request.StatusCode, cancellationToken);
+        var transition = detail.AllowedTransitions.SingleOrDefault(x => string.Equals(x.ToStatusCode, request.StatusCode, StringComparison.OrdinalIgnoreCase));
+        if (transition is null || !transition.RequiresCarrierResponse)
+            throw new InvalidOperationException($"Carrier response cannot transition this bind request from '{detail.Request.BindStatusCode}' to '{request.StatusCode}'.");
+        if (createsPolicy)
+        {
+            if (!request.ConfirmationCertified || string.IsNullOrWhiteSpace(request.ConfirmationSourceCode))
+                throw new InvalidOperationException("Certified carrier confirmation and its source are required before coverage can be marked bound.");
+            if (string.IsNullOrWhiteSpace(request.CarrierReferenceNumber) && string.IsNullOrWhiteSpace(request.BinderNumber) && !request.ConfirmationDocumentId.HasValue)
+                throw new InvalidOperationException("Carrier confirmation requires a carrier reference, binder number, or confirmation document.");
+        }
+
+        await _repository.RecordBindCarrierResponseAsync(policyBindTransactionId, request, cancellationToken);
+
+        if (request.StatusCode == "NeedInformation")
+        {
+            await _repository.CreateFollowUpTaskAsync(detail.Request.SubmissionId, new CreateSubmissionFollowUpTaskRequest(request.TenantId, "Carrier requested bind information", request.MessageBody, "High", detail.Request.RequestedByUserId, DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)), request.RecordedByUserId), cancellationToken);
+        }
+
+        return null;
+    }
+
+    public async Task<BindPackageDto> PrepareBindPackageAsync(Guid policyBindTransactionId, PrepareBindPackageRequest request, CancellationToken cancellationToken = default)
+    {
+        var detail = await _repository.GetBindRequestDetailAsync(policyBindTransactionId, request.TenantId, cancellationToken)
+            ?? throw new InvalidOperationException("Bind request was not found for this tenant.");
+        var validations = await _repository.ValidateBindRequestAsync(policyBindTransactionId, new ValidateBindRequestRequest(request.TenantId, request.PreparedByUserId), cancellationToken);
+        var missingDocuments = validations.Where(x => x.RequirementTypeCode == "Document" && x.IsBlocking && x.StatusCode is not ("Passed" or "Waived")).ToArray();
+        if (missingDocuments.Length > 0)
+            throw new InvalidOperationException("Binder package cannot be prepared until required documents are available: " + string.Join(", ", missingDocuments.Select(x => x.RequirementName)));
+        return await _repository.PrepareBindPackageAsync(policyBindTransactionId, request, cancellationToken);
+    }
+
+    private async Task<bool> BindStatusCreatesPolicyAsync(Guid tenantId, string statusCode, CancellationToken cancellationToken)
+    {
+        var statuses = await _repository.GetPolicyBindStatusesAsync(tenantId, cancellationToken);
+        return statuses.Any(status => status.IsActive && status.CreatesPolicy && string.Equals(status.StatusCode, statusCode, StringComparison.OrdinalIgnoreCase));
     }
 }
 

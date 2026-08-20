@@ -47,13 +47,18 @@
         </div>
     }
 
-    <section class="qde-kpi-strip" aria-label="Quote KPIs">
-        @KpiCard("all", "Total Quotes", TotalQuoteCount.ToString(), "All quote options in the register", "bi-stack", "blue")
-        @KpiCard("priority", "Priority", PriorityQuoteCount.ToString(), "Expiring, high-premium, pending, or accepted quotes", "bi-exclamation-octagon", "red")
-        @KpiCard("pending", "Pending", PendingQuoteCount.ToString(), "Quotes awaiting review or client decision", "bi-hourglass-split", "amber")
-        @KpiCard("accepted", "Accepted", AcceptedQuoteCount.ToString(), "Selected quote options ready for bind", "bi-check-circle", "green")
-        @KpiCard("expiring", "Expiring Soon", ExpiringQuoteCount.ToString(), "Quote options expiring within seven days", "bi-clock-history", "orange")
-        @KpiCard("premium", "Quoted Premium", QuotedPremium.ToString("C0"), "Total premium across visible quote options", "bi-cash-stack", "emerald")
+    <section class="quote-kpi-strip" aria-label="Quote KPIs">
+        @foreach (var metric in Metrics)
+        {
+            <button type="button" class="@MetricCardClass(metric)" title="@metric.Tooltip" @onclick="() => SetKpi(metric.Filter)">
+                <span class="quote-kpi__icon"><i class="bi @metric.Icon" aria-hidden="true"></i></span>
+                <span class="quote-kpi__body">
+                    <span class="quote-kpi__val">@metric.Value</span>
+                    <span class="quote-kpi__lbl">@metric.Label</span>
+                    <small>@metric.Caption</small>
+                </span>
+            </button>
+        }
     </section>
 
     <section class="qde-workflows" aria-label="Quote workflows">
@@ -79,10 +84,12 @@
         </button>
     </section>
 
-    <section class="qde-filter-panel" aria-label="Quote filters">
-        <div class="qde-search">
-            <i class="bi bi-search" aria-hidden="true"></i>
-            <input @bind="SearchText" @bind:event="oninput" placeholder="Search quote #, submission, account, LOB, carrier, status, producer, premium, deductible, limits..." />
+    <section class="qde-search-row" aria-label="Quote filters">
+        <div class="qde-search-wrap">
+            <span class="qde-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
+            <div class="qde-search-body">
+                <input class="qde-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search quote #, submission, account, LOB, carrier, status, producer, premium, deductible, limits..." aria-label="Search quotes" />
+            </div>
         </div>
         <div class="qde-filter-grid">
             <label>
@@ -126,9 +133,6 @@
                 </select>
             </label>
         </div>
-        <button type="button" class="qde-btn qde-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
-            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-        </button>
     </section>
 
     <nav class="qde-tabs" aria-label="Quote views">
@@ -235,14 +239,14 @@
                         <tbody>
                             @foreach (var row in PagedRows)
                             {
-                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)">
+                                <tr class="@RowClass(row)" @onclick="() => SelectRow(row)" @ondblclick="() => OpenQuote(row)" title="Double-click to open quote">
                                     <td>@ImportanceBadge(row)</td>
                                     <td>
                                         <button type="button" class="qde-link-button" @onclick:stopPropagation="true" @onclick="() => OpenQuote(row)">@row.QuoteNo</button>
                                         <small>Quoted @row.QuotedDateUtc.ToString("MMM d, yyyy")</small>
                                     </td>
                                     <td>
-                                        <button type="button" class="qde-sub-link" @onclick:stopPropagation="true" @onclick="() => OpenQuote(row)">@row.SubmissionNo</button>
+                                        <button type="button" class="qde-sub-link" @onclick:stopPropagation="true" @onclick="() => OpenSubmission(row)">@row.SubmissionNo</button>
                                     </td>
                                     <td><strong>@row.Account</strong></td>
                                     <td><span class="qde-lob-pill">@Safe(row.Lob, "Unknown")</span></td>
@@ -317,8 +321,29 @@
                             <div><dt>Expires</dt><dd>@_selected.ExpiryDate.ToString("MMM d, yyyy")</dd></div>
                             <div><dt>Producer</dt><dd>@Safe(_selected.Producer, "Unassigned")</dd></div>
                         </dl>
+                        @if (_selected.Lines.Count > 0)
+                        {
+                            <details class="qde-line-package">
+                                <summary><span><i class="bi bi-layers" aria-hidden="true"></i> Coverage lines</span><strong>@_selected.Lines.Count</strong></summary>
+                                <div class="qde-line-package__list">
+                                    @foreach (var line in _selected.Lines.OrderBy(line => line.SortOrder).ThenBy(line => line.LineOfBusiness))
+                                    {
+                                        <article>
+                                            <header><strong>@Safe(line.LineOfBusiness, "Coverage line")</strong><span>@Safe(line.Status, "Quoted")</span></header>
+                                            <dl>
+                                                <div><dt>Premium</dt><dd>@line.QuotedPremium.ToString("C0")</dd></div>
+                                                <div><dt>Deductible</dt><dd>@MoneyOrDash(line.Deductible)</dd></div>
+                                                <div><dt>Limit</dt><dd>@MoneyOrDash(line.Limit)</dd></div>
+                                                <div><dt>Commission</dt><dd>@FormatPercent(line.CommissionPercent)</dd></div>
+                                            </dl>
+                                        </article>
+                                    }
+                                </div>
+                            </details>
+                        }
                         <div class="qde-selected-actions">
-                            <button type="button" class="qde-btn qde-btn--primary" @onclick="() => OpenQuote(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Submission</button>
+                            <button type="button" class="qde-btn qde-btn--primary" @onclick="() => OpenQuote(_selected)"><i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> Open Quote</button>
+                            <button type="button" class="qde-btn qde-btn--ghost" @onclick="() => OpenSubmission(_selected)"><i class="bi bi-send" aria-hidden="true"></i> Open Submission</button>
                             <button type="button" class="qde-btn qde-btn--ghost" @onclick="OpenCompareDialogAsync"><i class="bi bi-columns-gap" aria-hidden="true"></i> Compare</button>
                             <button type="button" class="qde-btn qde-btn--ghost" @onclick='() => OpenActionDialog("Bind")'><i class="bi bi-shield-check" aria-hidden="true"></i> Bind</button>
                         </div>
@@ -488,6 +513,9 @@
 </div>
 
 @code {
+    [SupplyParameterFromQuery(Name = "readiness")]
+    public string? RequestedReadiness { get; set; }
+
     bool _loading;
     bool _showActionDialog;
     bool _showConfirmDialog;
@@ -517,6 +545,7 @@
     string _confirmTitle = "Confirm action";
     string _confirmMessage = "Confirm this quote action?";
     string _confirmIcon = "bi-question-circle";
+    Guid? _currentUserId = null;
 
     readonly List<QuoteRow> _rows = [];
     readonly List<QuoteRow> _compareRows = [];
@@ -557,6 +586,15 @@
     int PendingQuoteCount => _rows.Count(r => r.Status == "Pending");
     int AcceptedQuoteCount => _rows.Count(r => r.Status == "Accepted");
     int ExpiringQuoteCount => ExpiringRows.Count();
+    IEnumerable<QuoteMetric> Metrics =>
+    [
+        new("blue", "all", "bi-stack", "Total Quotes", TotalQuoteCount.ToString(), "All quote options", "All quote options in the register"),
+        new("red", "priority", "bi-exclamation-octagon", "Priority", PriorityQuoteCount.ToString(), "High-importance quotes", "Expiring, high-premium, pending, or accepted quotes"),
+        new("amber", "pending", "bi-hourglass-split", "Pending", PendingQuoteCount.ToString(), "Awaiting decision", "Quotes awaiting review or client decision"),
+        new("green", "accepted", "bi-check-circle", "Accepted", AcceptedQuoteCount.ToString(), "Ready for bind", "Selected quote options ready for bind"),
+        new("orange", "expiring", "bi-clock-history", "Expiring Soon", ExpiringQuoteCount.ToString(), "Within seven days", "Quote options expiring within seven days"),
+        new("slate", "premium", "bi-cash-stack", "Quoted Premium", QuotedPremium.ToString("C0"), "Visible premium", "Total premium across visible quote options")
+    ];
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_carrierFilter) || !string.IsNullOrWhiteSpace(_lobFilter);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
@@ -583,6 +621,8 @@
         "declined" => _rows.Where(r => r.Status == "Declined"),
         _ => _rows
     };
+
+    bool ShowBlockedReadinessOnly => string.Equals(RequestedReadiness, "blocked", StringComparison.OrdinalIgnoreCase);
 
     IEnumerable<QuoteRow> FilteredRows => SortRows(ApplyFilters(TabRows));
     IEnumerable<QuoteRow> PagedRows => FilteredRows.Skip((_page - 1) * PageSize).Take(PageSize);
@@ -622,8 +662,7 @@
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("Quotes", "/submissions/quotes"));
-        await LoadReferenceDataAsync();
-        await LoadAsync();
+        await Task.WhenAll(LoadReferenceDataAsync(), LoadAsync());
     }
 
     async Task LoadReferenceDataAsync()
@@ -641,18 +680,30 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 500);
+            var quotes = await Api.GetSubmissionQuoteRegisterAsync(_tenantId) ?? [];
             _rows.Clear();
-            var submissions = (result?.Items ?? [])
-                .Where(s => s.QuoteCount > 0 || s.Status is "Quoted" or "Bound" or "Declined")
-                .OrderByDescending(s => s.CreatedDateUtc)
-                .ToList();
-
-            foreach (var submission in submissions)
+            _rows.AddRange(quotes.Select(q => new QuoteRow
             {
-                var quoteRows = await BuildQuoteRowsAsync(submission);
-                _rows.AddRange(quoteRows);
-            }
+                QuoteId = q.QuoteId,
+                QuoteNo = q.QuoteNumber,
+                SubmissionNo = q.SubmissionNumber,
+                SubId = q.SubmissionId,
+                Account = q.AccountName,
+                Lob = q.LineOfBusiness,
+                CarrierId = q.CarrierId,
+                SubmissionMarketId = q.SubmissionMarketId,
+                Carrier = q.CarrierName,
+                Status = NormalizeQuoteStatus(q.Status, q.ExpiresDateUtc),
+                QuotedPremium = q.AnnualPremium,
+                Deductible = q.Deductible,
+                Limit = q.Limit,
+                CoverageNotes = q.CoverageNotes,
+                QuotedDateUtc = q.QuoteReceivedDateUtc ?? q.QuotedDateUtc,
+                EffDate = q.EffectiveDate,
+                ExpiryDate = q.ExpiresDateUtc,
+                Producer = q.AssignedToUserName ?? "Unassigned",
+                Lines = q.Lines
+            }));
 
             _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.QuoteId == _selected.QuoteId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
             _page = Math.Min(_page, TotalPages);
@@ -669,64 +720,10 @@
         }
     }
 
-    async Task<IReadOnlyList<QuoteRow>> BuildQuoteRowsAsync(SubmissionDto submission)
-    {
-        try
-        {
-            var quotes = await Api.GetSubmissionQuoteComparisonAsync(submission.SubmissionId);
-            if (quotes?.Count > 0)
-            {
-                return quotes.Select(q => new QuoteRow
-                {
-                    QuoteId = q.QuoteId,
-                    QuoteNo = q.QuoteNumber,
-                    SubmissionNo = submission.SubmissionNumber,
-                    SubId = submission.SubmissionId,
-                    Account = submission.AccountName,
-                    Lob = submission.LineOfBusiness,
-                    CarrierId = q.CarrierId,
-                    Carrier = q.CarrierName,
-                    Status = NormalizeQuoteStatus(q.Status, q.ExpiresDateUtc),
-                    QuotedPremium = q.AnnualPremium,
-                    Deductible = q.Deductible,
-                    Limit = q.Limit,
-                    CoverageNotes = q.CoverageNotes,
-                    QuotedDateUtc = q.QuotedDateUtc,
-                    EffDate = submission.EffectiveDate,
-                    ExpiryDate = q.ExpiresDateUtc,
-                    Producer = submission.AssignedToUserName ?? "Unassigned"
-                }).ToList();
-            }
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Quote comparison unavailable for {submission.SubmissionNumber}: {ex.Message}", "qde-toast--danger");
-        }
-
-        var x = ToQuoteRow(submission);
-        return
-        [
-            new QuoteRow
-            {
-                QuoteId = x.QuoteId,
-                QuoteNo = x.QuoteNo,
-                SubmissionNo = x.SubmissionNo,
-                SubId = x.SubId,
-                Account = x.Account,
-                Lob = x.Lob,
-                Carrier = x.Carrier,
-                Status = x.Status,
-                QuotedPremium = x.QuotedPremium,
-                EffDate = x.EffDate,
-                ExpiryDate = x.ExpiryDate,
-                Producer = x.Producer,
-                QuotedDateUtc = submission.ModifiedDateUtc ?? submission.CreatedDateUtc
-            }
-        ];
-    }
-
     IEnumerable<QuoteRow> ApplyFilters(IEnumerable<QuoteRow> rows)
     {
+        if (ShowBlockedReadinessOnly)
+            rows = rows.Where(row => !row.IsProposalReady);
         rows = _activeKpi switch
         {
             "priority" => rows.Where(r => ImportanceLevel(r) is "Critical" or "High"),
@@ -881,7 +878,8 @@
         _openActionMenuFor = null;
     }
 
-    void OpenQuote(QuoteRow row) => Nav.NavigateTo($"/submissions/{row.SubId}");
+    void OpenQuote(QuoteRow row) => Nav.NavigateTo($"/submissions/quotes/{row.QuoteId}");
+    void OpenSubmission(QuoteRow row) => Nav.NavigateTo($"/submissions/{row.SubId}?tab=quotes");
     void OpenSelectedSubmission()
     {
         if (_selected is not null)
@@ -951,7 +949,7 @@
         {
             "Accept Quote" => ($"Accept {_selected.QuoteNo}", "bi-check-circle", "Accept Quote"),
             "Request Revision" => ($"Request Revision for {_selected.QuoteNo}", "bi-pencil", "Request Revision"),
-            "Bind" => ($"Bind {_selected.QuoteNo}", "bi-shield-check", "Bind Policy"),
+            "Bind" => ($"Continue {_selected.QuoteNo} to Proposal", "bi-file-earmark-richtext", "Open Proposal Workflow"),
             "Download PDF" => ($"Generate Proposal for {_selected.QuoteNo}", "bi-file-earmark-pdf", "Generate Proposal"),
             _ => ("Quote Action", "bi-file-earmark-text", "Continue")
         };
@@ -959,7 +957,7 @@
         {
             "Accept Quote" => "Confirm the selected quote as the accepted market option before binding.",
             "Request Revision" => "Send a revised quote request using the updated notes and premium target.",
-            "Bind" => "Create a bound policy from this quote using the premium and effective date.",
+            "Bind" => "Select this quote, then complete proposal presentation and customer acceptance before requesting bind.",
             "Download PDF" => "Generate a proposal record for this quote so it can be opened from the submission record.",
             _ => "Review the quote action details and confirm before changes are applied."
         };
@@ -994,7 +992,7 @@
             "Accept Quote" => ($"Accept {_selected.QuoteNo}?", "This will create or refresh a quote request and keep the submission in quoted status.", "bi-check-circle"),
             "Decline Quote" => ($"Decline {_selected.QuoteNo}?", "This will mark the submission as declined from the quote register.", "bi-exclamation-triangle"),
             "Request Revision" => ($"Request revision for {_selected.QuoteNo}?", "This will create a new quote request with the revision notes entered.", "bi-pencil"),
-            "Bind" => ($"Bind {_selected.QuoteNo}?", "This will create a bound policy from the selected quote.", "bi-shield-check"),
+            "Bind" => ($"Continue {_selected.QuoteNo} to proposal workflow?", "This selects the quote and opens the governed proposal and customer acceptance workflow required before bind.", "bi-file-earmark-richtext"),
             "Download PDF" => ($"Generate proposal for {_selected.QuoteNo}?", "This will create a proposal record for the selected quote and keep you on the quote register.", "bi-file-earmark-pdf"),
             _ => ("Confirm action", "Confirm this quote action?", "bi-question-circle")
         };
@@ -1009,26 +1007,18 @@
 
     void CloseCompareDialog() => _showCompareDialog = false;
 
-    async Task OpenCompareDialogAsync()
+    Task OpenCompareDialogAsync()
     {
-        if (_selected is null) return;
+        if (_selected is null) return Task.CompletedTask;
 
         _compareRows.Clear();
-        try
-        {
-            var submission = await Api.GetSubmissionByIdAsync(_selected.SubId);
-            if (submission is not null)
-                _compareRows.AddRange(await BuildQuoteRowsAsync(submission));
-        }
-        catch (Exception ex)
-        {
-            ShowToast($"Compare failed: {ex.Message}", "qde-toast--danger");
-        }
+        _compareRows.AddRange(_rows.Where(row => row.SubId == _selected.SubId));
 
         if (_compareRows.Count == 0)
             _compareRows.Add(_selected);
 
         _showCompareDialog = true;
+        return Task.CompletedTask;
     }
 
     async Task ExecuteConfirmedActionAsync()
@@ -1038,15 +1028,36 @@
         _actionBusy = true;
         try
         {
-            var result = _pendingAction switch
+            SubmissionActionResult result;
+            if (_pendingAction == "Accept Quote")
             {
-            "Accept Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes ?? "Quote accepted from quote command center.")),
-            "Request Revision" => await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes)),
-            "Bind" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubId, new CreatePolicyFromSubmissionRequest(_tenantId, _selected.QuoteId == Guid.Empty ? null : _selected.QuoteId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
-            "Decline Quote" => await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}.")),
-                "Download PDF" => await GenerateProposalAsync(),
-                _ => new SubmissionActionResult(_selected.SubId, "No action executed.")
-            };
+                await Api.UpdateSubmissionQuoteAsync(_selected.SubId, _selected.QuoteId, new UpdateSubmissionQuoteRequest(_tenantId, "Received", _actionForm.AnnualPremium ?? _selected.QuotedPremium, _selected.Deductible, _selected.Limit, null, null, null, null, null, null, null, null, null, null, _actionForm.Notes ?? _selected.CoverageNotes, _selected.ExpiryDate, _currentUserId, "ManualEntry", null, _currentUserId, _selected.SubmissionMarketId));
+                await Api.SelectSubmissionQuoteAsync(_selected.SubId, new SelectSubmissionQuoteRequest(_tenantId, _selected.QuoteId, true, _actionForm.Notes ?? $"Accepted quote {_selected.QuoteNo} from quote command center.", _currentUserId));
+                result = new SubmissionActionResult(_selected.SubId, $"Quote {_selected.QuoteNo} accepted and selected.");
+            }
+            else if (_pendingAction == "Request Revision")
+            {
+                result = await Api.RequestSubmissionQuoteAsync(_selected.SubId, new RequestSubmissionQuoteRequest(_tenantId, _selected.CarrierId == Guid.Empty ? null : _selected.CarrierId, _actionForm.AnnualPremium, _selected.Deductible, _selected.Limit, _actionForm.Notes, _currentUserId, null, _selected.SubmissionMarketId));
+            }
+            else if (_pendingAction == "Bind")
+            {
+                await Api.SelectSubmissionQuoteAsync(_selected.SubId, new SelectSubmissionQuoteRequest(_tenantId, _selected.QuoteId, true, _actionForm.Notes ?? $"Selected for bind request from quote command center: {_selected.QuoteNo}.", _currentUserId));
+                result = new SubmissionActionResult(_selected.SubId, $"Quote {_selected.QuoteNo} selected. Complete proposal presentation and customer acceptance before requesting bind.");
+                Nav.NavigateTo($"/submissions/{_selected.SubId}/proposals");
+            }
+            else if (_pendingAction == "Decline Quote")
+            {
+                await Api.UpdateSubmissionQuoteAsync(_selected.SubId, _selected.QuoteId, new UpdateSubmissionQuoteRequest(_tenantId, "Declined", _actionForm.AnnualPremium ?? _selected.QuotedPremium, _selected.Deductible, _selected.Limit, null, null, null, null, null, null, null, null, null, null, _actionForm.Notes ?? _selected.CoverageNotes, _selected.ExpiryDate, _currentUserId, "ManualEntry", null, _currentUserId, _selected.SubmissionMarketId));
+                result = await Api.DeclineSubmissionAsync(_selected.SubId, new DeclineSubmissionRequest(_tenantId, $"Quote declined from quote command center: {_selected.QuoteNo}."));
+            }
+            else if (_pendingAction == "Download PDF")
+            {
+                result = await GenerateProposalAsync();
+            }
+            else
+            {
+                result = new SubmissionActionResult(_selected.SubId, "No action executed.");
+            }
 
             _showActionDialog = false;
             _showConfirmDialog = false;
@@ -1089,19 +1100,9 @@
 
     string RowClass(QuoteRow row) => _selected?.QuoteId == row.QuoteId ? "qde-row qde-row--selected" : "qde-row";
 
-    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "qde-menu-item qde-menu-item--danger" : "qde-menu-item";
+    string MetricCardClass(QuoteMetric metric) => $"quote-kpi quote-kpi--{metric.Tone} {(_activeKpi == metric.Filter ? "quote-kpi--active" : string.Empty)}";
 
-    RenderFragment KpiCard(string key, string label, string value, string subtitle, string icon, string tone)
-    {
-        var active = _activeKpi == key;
-        var cardClass = active ? $"qde-kpi qde-kpi--{tone} qde-kpi--active" : $"qde-kpi qde-kpi--{tone}";
-        var title = active ? "Clear KPI filter" : subtitle;
-        return @<button type="button" class="@cardClass" @onclick="() => SetKpi(key)" title="@title">
-            <span><i class="bi @icon" aria-hidden="true"></i>@label</span>
-            <strong>@value</strong>
-            <small>@subtitle</small>
-        </button>;
-    }
+    static string ActionMenuItemClass(ActionDef action) => action.IsDanger ? "qde-menu-item qde-menu-item--danger" : "qde-menu-item";
 
     RenderFragment WorkflowButton(string title, string description, string icon, System.Action callback) => @<button type="button" class="qde-workflow" @onclick="() => callback()">
         <i class="bi @icon" aria-hidden="true"></i>
@@ -1126,6 +1127,8 @@
 
     string FormatMoney(decimal? value) => value is > 0 ? value.Value.ToString("C0") : "-";
 
+    string FormatPercent(decimal? value) => value.HasValue ? $"{value.Value:0.##}%" : "-";
+
     string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
     string CompareCardClass(QuoteRow row) => _selected?.QuoteId == row.QuoteId ? "qde-compare-card qde-compare-card--active" : "qde-compare-card";
@@ -1143,21 +1146,6 @@
     static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
     static IEnumerable<string> MergeOptions(IEnumerable<string> configured, IEnumerable<string> observed) => configured.Concat(observed).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
     static List<SubmissionOption> ToOptions(IEnumerable<SubmissionReferenceOptionDto> options, string group) => options.Where(o => string.Equals(o.OptionGroup, group, StringComparison.OrdinalIgnoreCase)).OrderBy(o => o.SortOrder).ThenBy(o => o.OptionName).Select(o => new SubmissionOption(o.OptionCode, o.OptionName, o.IsDefault)).ToList();
-    static QuoteRegisterRow ToQuoteRow(SubmissionDto dto) => new()
-    {
-        QuoteId = dto.SubmissionId,
-        QuoteNo = $"QUO-{dto.SubmissionNumber.Replace("SUB-", string.Empty)}",
-        SubmissionNo = dto.SubmissionNumber,
-        SubId = dto.SubmissionId,
-        Account = dto.AccountName,
-        Lob = dto.LineOfBusiness,
-        Carrier = dto.QuoteCount > 0 ? "Multiple Markets" : "Pending Market",
-        Status = dto.Status == "Bound" ? "Accepted" : dto.Status == "Declined" ? "Declined" : dto.QuoteCount > 0 ? "Pending" : "Expired",
-        QuotedPremium = dto.TargetPremium ?? 0,
-        EffDate = dto.EffectiveDate,
-        ExpiryDate = dto.ExpirationDate,
-        Producer = dto.AssignedToUserName ?? "Unassigned"
-    };
 
     sealed record SubmissionOption(string Code, string Name, bool IsDefault);
 
@@ -1179,13 +1167,18 @@
 
     sealed class QuoteRow : QuoteRegisterRow
     {
+        public Guid? SubmissionMarketId { get; set; }
         public Guid CarrierId { get; set; }
         public decimal? Deductible { get; set; }
         public decimal? Limit { get; set; }
         public string? CoverageNotes { get; set; }
         public DateTime QuotedDateUtc { get; set; }
+        public IReadOnlyList<SubmissionQuoteLineDto> Lines { get; set; } = [];
+        public bool IsProposalReady { get; set; }
+        public IReadOnlyList<ProposalReadinessFactorDto> ProposalReadinessFactors { get; set; } = [];
     }
 
+    sealed record QuoteMetric(string Tone, string Filter, string Icon, string Label, string Value, string Caption, string Tooltip);
     sealed record TabDef(string Key, string Label, string Icon);
     sealed record ActionDef(string Key, string Label, string Icon, bool IsDanger);
     sealed record GroupSummary(string Name, int Count, decimal Premium, int Accepted, int Expiring, int Percent);

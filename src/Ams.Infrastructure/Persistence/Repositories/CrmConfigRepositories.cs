@@ -148,6 +148,63 @@ public sealed class OpportunityStageRepository : IOpportunityStageRepository
     }
 }
 
+public sealed class OpportunityForecastCategoryRepository : IOpportunityForecastCategoryRepository
+{
+    private readonly ISqlConnectionFactory _cf;
+    public OpportunityForecastCategoryRepository(ISqlConnectionFactory cf) => _cf = cf;
+    private const string Cols = "OpportunityForecastCategoryId, TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault, IsActive, CreatedDateUtc";
+
+    public async Task<OpportunityForecastCategoryDto?> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        return await cn.QuerySingleOrDefaultAsync<OpportunityForecastCategoryDto>(new CommandDefinition($"SELECT {Cols} FROM CRM.OpportunityForecastCategory WHERE OpportunityForecastCategoryId=@Id AND IsDeleted=0;", new { Id = id }, cancellationToken: ct));
+    }
+
+    public async Task<PagedResult<OpportunityForecastCategoryDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
+    {
+        var sql = RepositorySql.BuildPagedSearchSql("CRM.OpportunityForecastCategory", Cols, "CategoryName LIKE '%'+@SearchTerm+'%' OR CategoryCode LIKE '%'+@SearchTerm+'%'", "SortOrder ASC, CategoryName ASC");
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        using var multi = await cn.QueryMultipleAsync(new CommandDefinition(sql, new { TenantId = tenantId, SearchTerm = searchTerm ?? "", Offset = (Math.Max(pageNumber, 1) - 1) * pageSize, PageSize = pageSize }, cancellationToken: ct));
+        var items = (await multi.ReadAsync<OpportunityForecastCategoryDto>()).AsList();
+        var total = await multi.ReadSingleAsync<int>();
+        return new PagedResult<OpportunityForecastCategoryDto> { Items = items, TotalCount = total, PageNumber = pageNumber, PageSize = pageSize };
+    }
+
+    public async Task<Guid> CreateAsync(CreateOpportunityForecastCategoryRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+IF @IsDefault = 1
+    UPDATE CRM.OpportunityForecastCategory SET IsDefault = 0, ModifiedDateUtc = SYSUTCDATETIME() WHERE TenantId = @TenantId AND IsDeleted = 0;
+
+INSERT INTO CRM.OpportunityForecastCategory (OpportunityForecastCategoryId,TenantId,CategoryCode,CategoryName,SortOrder,DefaultProbabilityPercent,IsClosedCategory,IsDefault,IsActive,IsDeleted,CreatedDateUtc)
+VALUES (@Id,@TenantId,@CategoryCode,@CategoryName,@SortOrder,@DefaultProbabilityPercent,@IsClosedCategory,@IsDefault,1,0,SYSUTCDATETIME());";
+        var id = Guid.NewGuid();
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.TenantId, r.CategoryCode, r.CategoryName, r.SortOrder, r.DefaultProbabilityPercent, r.IsClosedCategory, r.IsDefault }, cancellationToken: ct));
+        return id;
+    }
+
+    public async Task UpdateAsync(Guid id, UpdateOpportunityForecastCategoryRequest r, CancellationToken ct = default)
+    {
+        const string sql = @"
+DECLARE @TenantId UNIQUEIDENTIFIER = (SELECT TenantId FROM CRM.OpportunityForecastCategory WHERE OpportunityForecastCategoryId = @Id AND IsDeleted = 0);
+IF @IsDefault = 1 AND @TenantId IS NOT NULL
+    UPDATE CRM.OpportunityForecastCategory SET IsDefault = 0, ModifiedDateUtc = SYSUTCDATETIME() WHERE TenantId = @TenantId AND OpportunityForecastCategoryId <> @Id AND IsDeleted = 0;
+
+UPDATE CRM.OpportunityForecastCategory
+SET CategoryCode=@CategoryCode,CategoryName=@CategoryName,SortOrder=@SortOrder,DefaultProbabilityPercent=@DefaultProbabilityPercent,IsClosedCategory=@IsClosedCategory,IsDefault=@IsDefault,IsActive=@IsActive,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE OpportunityForecastCategoryId=@Id AND IsDeleted=0;";
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition(sql, new { Id = id, r.CategoryCode, r.CategoryName, r.SortOrder, r.DefaultProbabilityPercent, r.IsClosedCategory, r.IsDefault, r.IsActive }, cancellationToken: ct));
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        using var cn = await _cf.CreateOpenConnectionAsync(ct);
+        await cn.ExecuteAsync(new CommandDefinition("UPDATE CRM.OpportunityForecastCategory SET IsDeleted=1, IsActive=0, ModifiedDateUtc=SYSUTCDATETIME() WHERE OpportunityForecastCategoryId=@Id;", new { Id = id }, cancellationToken: ct));
+    }
+}
+
 public sealed class PipelineSettingRepository : IPipelineSettingRepository
 {
     private readonly ISqlConnectionFactory _cf;

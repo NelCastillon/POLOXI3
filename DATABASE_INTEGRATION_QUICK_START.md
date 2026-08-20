@@ -147,12 +147,12 @@ private async Task DeleteInviteAsync(PortalInviteDto invite)
     try
     {
         await Api.DeletePortalInviteAsync(invite.PortalInviteId);  // Uncomment when implemented
-        await _toast!.ShowAsync(new ToastModel { Content = "Invite deleted.", CssClass = "e-toast-success" });
+        await _toast!.ShowAsync(new ToastModel { Content = "Invite deleted.", CssClass = "enterprise-toast-success" });
         await LoadAsync();
     }
     catch (Exception ex)
     {
-        await _toast!.ShowAsync(new ToastModel { Content = $"Error: {ex.Message}", CssClass = "e-toast-danger" });
+        await _toast!.ShowAsync(new ToastModel { Content = $"Error: {ex.Message}", CssClass = "enterprise-toast-danger" });
     }
 }
 ```
@@ -165,12 +165,12 @@ private async Task DeleteNoteAsync(AccountNoteDto note)
     try
     {
         await Api.DeleteAccountNoteAsync(note.AccountNoteId);  // Uncomment when implemented
-        await _toast!.ShowAsync(new ToastModel { Content = "Note deleted.", CssClass = "e-toast-success" });
+        await _toast!.ShowAsync(new ToastModel { Content = "Note deleted.", CssClass = "enterprise-toast-success" });
         await LoadAsync();
     }
     catch (Exception ex)
     {
-        await _toast!.ShowAsync(new ToastModel { Content = $"Error: {ex.Message}", CssClass = "e-toast-danger" });
+        await _toast!.ShowAsync(new ToastModel { Content = $"Error: {ex.Message}", CssClass = "enterprise-toast-danger" });
     }
 }
 ```
@@ -309,7 +309,7 @@ Page refreshes with new data
 - Verify database connection
 
 ### Pagination not working
-- Check SfGrid configuration
+- Check AppGrid configuration
 - Verify PageSize property
 - Check data volume
 

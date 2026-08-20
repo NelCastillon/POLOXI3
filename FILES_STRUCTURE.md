@@ -236,11 +236,11 @@ Api.SearchAccountsAsync(_tenantId, searchTerm)
 ## Dependencies
 
 ### NuGet Packages
-- Syncfusion.Blazor.Grids - Data grid component
-- Syncfusion.Blazor.Dialogs - Modal dialogs
-- Syncfusion.Blazor.Dropdowns - Dropdown selects
-- Syncfusion.Blazor.Inputs - Text boxes, numeric inputs
-- Syncfusion.Blazor.Toast - Toast notifications
+- enterprise CSS.Blazor.Grids - Data grid component
+- enterprise CSS.Blazor.Dialogs - Modal dialogs
+- enterprise CSS.Blazor.Dropdowns - Dropdown selects
+- enterprise CSS.Blazor.Inputs - Text boxes, numeric inputs
+- enterprise CSS.Blazor.Toast - Toast notifications
 
 ### Bootstrap Icons
 - bi-sticky - Notes

@@ -24,16 +24,33 @@ public sealed partial class DatabaseMigrator
 
     public async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureMigrationsTableAsync(cancellationToken);
+        using var lockConnection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var lockResult = await lockConnection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "DECLARE @Result INT; EXEC @Result = sys.sp_getapplock @Resource = N'Ams.DatabaseMigrator', @LockMode = N'Exclusive', @LockOwner = N'Session', @LockTimeout = 120000; SELECT @Result;",
+            commandTimeout: 130,
+            cancellationToken: cancellationToken));
+        if (lockResult < 0)
+            throw new InvalidOperationException($"Could not acquire the database migration lock. SQL application lock result: {lockResult}.");
 
-        foreach (var migration in AllMigrations)
+        try
         {
-            if (await HasBeenAppliedAsync(migration.Name, cancellationToken))
-                continue;
+            await EnsureMigrationsTableAsync(cancellationToken);
 
-            _logger.LogInformation("Applying migration: {Name}", migration.Name);
-            await ApplyAsync(migration, cancellationToken);
-            _logger.LogInformation("Migration applied: {Name}", migration.Name);
+            foreach (var migration in AllMigrations)
+            {
+                if (await HasBeenAppliedAsync(migration.Name, cancellationToken))
+                    continue;
+
+                _logger.LogInformation("Applying migration: {Name}", migration.Name);
+                await ApplyAsync(migration, cancellationToken);
+                _logger.LogInformation("Migration applied: {Name}", migration.Name);
+            }
+        }
+        finally
+        {
+            await lockConnection.ExecuteAsync(new CommandDefinition(
+                "EXEC sys.sp_releaseapplock @Resource = N'Ams.DatabaseMigrator', @LockOwner = N'Session';",
+                cancellationToken: cancellationToken));
         }
     }
 
@@ -235,6 +252,152 @@ public sealed partial class DatabaseMigrator
         new("0197_Enterprise_AmsCapabilityMatrix", Migration0197_EnterpriseAmsCapabilityMatrix),
         new("0198_Enterprise_AmsCapabilityGapExtensions", Migration0198_EnterpriseAmsCapabilityGapExtensions),
         new("0199_CRM_LeadEngagement_CommunicationCampaignEnterprise", Migration0199_CrmLeadEngagementCommunicationCampaignEnterprise),
+        new("0200_DMS_CrmProcessDocumentGroupSeed", Migration0200_DmsCrmProcessDocumentGroupSeed),
+        new("0201_DMS_RemoveCrmDocumentGroupsSeedLead", Migration0201_DmsRemoveCrmDocumentGroupsSeedLead),
+        new("0202_DMS_DocumentCategoryEnterpriseSeed", Migration0202_DmsDocumentCategoryEnterpriseSeed),
+        new("0203_DMS_DocumentCategoryGroupSchemaCleanup", Migration0203_DmsDocumentCategoryGroupSchemaCleanup),
+        new("0204_CRM_LeadConversion_EnterpriseWorkflow", Migration0204_CrmLeadConversionEnterpriseWorkflow),
+        new("0205_CRM_LeadConversion_SubmissionDraftLink", Migration0205_CrmLeadConversionSubmissionDraftLink),
+        new("0206_CRM_OpportunityConversionLaunchActions", Migration0206_CrmOpportunityConversionLaunchActions),
+        new("0207_CRM_OpportunityForecastCategory_Config", Migration0207_CrmOpportunityForecastCategoryConfig),
+        new("0208_CRM_OpportunityMultiLineEnterprise", Migration0208_CrmOpportunityMultiLineEnterprise),
+        new("0209_Submissions_PostCreateAutomation_Schema", Migration0209_SubmissionsPostCreateAutomationSchema),
+        new("0210_Submissions_SubmitToMarketDispatch", Migration0210_SubmissionsSubmitToMarketDispatch),
+        new("0211_Submissions_CurrentMarketCarrierSeed", Migration0211_SubmissionsCurrentMarketCarrierSeed),
+        new("0212_CRM_LeadContext_AccountContact", Migration0212_CrmLeadContextAccountContact),
+        new("0213_Submissions_PolicyCreationSource_FlexibleMode", Migration0213_SubmissionsPolicyCreationSourceFlexibleMode),
+        new("0214_Submissions_PolicyBindTransaction_Enterprise", Migration0214_SubmissionsPolicyBindTransactionEnterprise),
+        new("0215_Submissions_DirectPolicyIntake_Enterprise", Migration0215_SubmissionsDirectPolicyIntakeEnterprise),
+        new("0216_PolicyEndorsements_EnterpriseSchemaOptions", Migration0216_PolicyEndorsementsEnterpriseSchemaOptions),
+        new("0217_Submissions_QuoteMarketResponseLink", Migration0217_SubmissionsQuoteMarketResponseLink),
+        new("0218_Submissions_QuoteMarketResponseIntegrity", Migration0218_SubmissionsQuoteMarketResponseIntegrity),
+        new("0219_Submissions_EnterpriseMarketQuoteFields", Migration0219_SubmissionsEnterpriseMarketQuoteFields),
+        new("0220_Core_CarrierMarketSuggestionPreference", Migration0220_CoreCarrierMarketSuggestionPreference),
+        new("0221_Submissions_QuoteRequestScopeLines", Migration0221_SubmissionsQuoteRequestScopeLines),
+        new("0222_Submissions_CarrierExternalTransmission", Migration0222_SubmissionsCarrierExternalTransmission),
+        new("0223_Submissions_QuoteRequestWorkflow", Migration0223_SubmissionsQuoteRequestWorkflow),
+        new("0224_Submissions_ReadinessRequirements_Enterprise", Migration0224_SubmissionsReadinessRequirementsEnterprise),
+        new("0225_Submissions_MarketScopedReadiness_Enterprise", Migration0225_SubmissionsMarketScopedReadinessEnterprise),
+        new("0226_Submissions_SubmitToMarketDispatchCompletion", Migration0226_SubmissionsSubmitToMarketDispatchCompletion),
+        new("0227_Submissions_CommonExternalCarrierDeliverySettings", Migration0227_SubmissionsCommonExternalCarrierDeliverySettings),
+        new("0228_Submissions_ReadinessEvidenceDocuments", Migration0228_SubmissionsReadinessEvidenceDocuments),
+        new("0229_Submissions_QuoteRequest_BusinessObject", Migration0229_SubmissionsQuoteRequestBusinessObject),
+        new("0230_Policy_ManualExistingPolicyWorkflow", Migration0230PolicyManualExistingPolicyWorkflow),
+        new("0231_Policy_PolicyLine_MultiLineManual", Migration0231PolicyPolicyLineMultiLineManual),
+        new("0232_Submissions_BoundPolicy_StatusColumnRepair", Migration0232SubmissionsBoundPolicyStatusColumnRepair),
+        new("0233_Submissions_PolicyBindTransaction_EnterpriseColumnRepair", Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair),
+        new("0234_Policy_LifecycleServicing_Enterprise", Migration0234PolicyLifecycleServicingEnterprise),
+        new("0235_Policy_LifecycleServicing_Hardening", Migration0235PolicyLifecycleServicingHardening),
+        new("0236_Client_Account360_ExposureDepth", Migration0236ClientAccount360ExposureDepth),
+        new("0237_Client_Account360_SchemaCompatibilityRepair", Migration0237ClientAccount360SchemaCompatibilityRepair),
+        new("0238_Client_AccountRelationship_AccountIdRepair", Migration0238ClientAccountRelationshipAccountIdRepair),
+        new("0239_Client_Account360_SupportTablesRepair", Migration0239ClientAccount360SupportTablesRepair),
+        new("0240_Policy_CertificateDocumentWorkflow_Enterprise", Migration0240PolicyCertificateDocumentWorkflowEnterprise),
+        new("0241_Commission_AccountingReconciliation_Enterprise", Migration0241CommissionAccountingReconciliationEnterprise),
+        new("0242_Commission_ReceivablePayeeAllocations", Migration0242CommissionReceivablePayeeAllocations),
+        new("0243_Billing_AgencyBillReceivables_Enterprise", Migration0243BillingAgencyBillReceivablesEnterprise),
+        new("0244_Claims_Servicing_Enterprise", Migration0244ClaimsServicingEnterprise),
+        new("0245_Enterprise_WorkflowRelationshipIntegrity", Migration0245EnterpriseWorkflowRelationshipIntegrity),
+        new("0246_CRM_Lead_DoNotCall_Compliance", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0056_LeadDoNotCallCompliance.sql")),
+        new("0247_CRM_Lead_DoNotCall_Compliance_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0057_LeadDoNotCallComplianceHardening.sql")),
+        new("0248_CRM_LeadPriority_SeedSync", Migration0248CrmLeadPrioritySeedSync),
+        new("0249_CRM_Lead_PhoneCompliance_CanonicalLinks", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0058_LeadPhoneComplianceCanonicalLinks.sql")),
+        new("0250_Client_AccountType_Constraint_Modernization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0059_AccountTypeConstraintModernization.sql")),
+        new("0251_Proposal_Renewal_Lifecycle", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0060_ProposalRenewalLifecycle.sql")),
+        new("0252_Proposal_Workflow_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0061_ProposalWorkflowCompletion.sql")),
+        new("0253_Submission_Quote_Line_Terms", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0062_SubmissionQuoteLineTerms.sql")),
+        new("0254_Submission_Multi_Line_Quote_Demo_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0063_SubmissionMultiLineQuoteDemoSeed.sql")),
+        new("0255_Client_Acceptance_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0064_ClientAcceptanceWorkflow.sql")),
+        new("0256_Enterprise_Proposal_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0065_EnterpriseProposalWorkflow.sql")),
+        new("0257_Enterprise_Proposal_Workflow_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0066_EnterpriseProposalWorkflowHardening.sql")),
+        new("0258_Enterprise_Bind_Request_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0259_Binder_Review_Policy_Generation_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0260_Binder_To_Policy_Gap_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0068_EnterpriseBindRequestWorkflow.sql")),
+        new("0261_PolicyCreated_Accounting_Lifecycle", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0069_PolicyCreatedAccountingLifecycle.sql")),
+        new("0262_Delivery_Categories_Commission_Snapshots", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0070_DeliveryCategoriesAndCommissionSnapshots.sql")),
+        new("0263_Enterprise_Policy_Servicing_Workspace", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0071_EnterprisePolicyServicingWorkspace.sql")),
+        new("0264_DocuSign_Envelope_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0072_DocuSignEnvelopeWorkflow.sql")),
+        new("0265_Enterprise_Policy_Endorsement_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0073_EnterprisePolicyEndorsementWorkflow.sql")),
+        new("0266_Enterprise_Policy_Endorsement_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0074_EnterprisePolicyEndorsementCompletion.sql")),
+        new("0267_Carrier_Product_Rules", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0075_CarrierProductRules.sql")),
+        new("0268_Carrier_Rule_Editor_Lookups", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0076_CarrierRuleEditorLookups.sql")),
+        new("0269_Bind_Commission_Demo_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0077_BindCommissionDemoSeed.sql")),
+        new("0270_Enterprise_AI_Document_Intake", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0078_EnterpriseAiDocumentIntake.sql")),
+        new("0271_Submission_Intake_AI_Idempotency", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0079_SubmissionIntakeAiIdempotency.sql")),
+        new("0272_Document_Intake_Production_Readiness", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0080_DocumentIntakeProductionReadiness.sql")),
+        new("0273_Enterprise_Intelligence_Platform", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0081_EnterpriseIntelligencePlatform.sql")),
+        new("0274_Intelligence_Search_Intent", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0082_IntelligenceSearchIntent.sql")),
+        new("0275_AgencyBinder_Intelligence_Pillars", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0083_AgencyBinderIntelligencePillars.sql")),
+        new("0276_Intelligence_Scenario_Coverage", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0084_IntelligenceScenarioCoverage.sql")),
+        new("0277_Intelligence_Platform_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0085_IntelligencePlatformCompletion.sql")),
+        new("0278_Intelligence_Discovery_Configuration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0086_IntelligenceDiscoveryConfiguration.sql")),
+        new("0279_Intelligence_Scenario_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0087_IntelligenceScenarioCompletion.sql")),
+        new("0280_Platform_Architecture_Foundation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0088_PlatformArchitectureFoundation.sql")),
+        new("0281_Platform_Runtime_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0089_PlatformRuntimeCompletion.sql")),
+        new("0282_Platform_Gap_Remediation", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0090_PlatformGapRemediation.sql")),
+        new("0283_Search_Matching_Platform", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0091_SearchMatchingPlatform.sql")),
+        new("0284_Search_Matching_Platform_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0092_SearchMatchingPlatformCompletion.sql")),
+        new("0285_Search_Matching_Administration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0093_SearchMatchingAdministration.sql")),
+        new("0286_Search_Matching_Operational_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0094_SearchMatchingOperationalCompletion.sql")),
+        new("0287_Unified_Intelligence_Search", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0095_UnifiedIntelligenceSearch.sql")),
+        new("0288_Unified_Search_Explanation_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0096_UnifiedSearchExplanationCompletion.sql")),
+        new("0289_Intelligence_Search_Projection_Backfill", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0097_IntelligenceSearchProjectionBackfill.sql")),
+        new("0290_Search_Intent_Patterns", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0098_SearchIntentPatterns.sql")),
+        new("0291_Search_Intent_Interpretation_Log", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0099_SearchIntentInterpretationLog.sql")),
+        new("0292_Tiered_Quick_Search", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0100_TieredQuickSearch.sql")),
+        new("0293_Submission_Opportunity_LOB_Synchronization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0101_SubmissionOpportunityLobSynchronization.sql")),
+        new("0294_Document_Intake_Submission_Promotion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0102_DocumentIntakeSubmissionPromotion.sql")),
+        new("0295_Enterprise_Policy_Endorsement_Catalog", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0103_EnterprisePolicyEndorsementCatalog.sql")),
+        new("0296_Enterprise_Policy_Endorsement_Catalog_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0104_EnterprisePolicyEndorsementCatalogCompletion.sql")),
+        new("0297_Enterprise_Policy_Endorsement_Review_Status_Normalization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0105_EnterprisePolicyEndorsementReviewStatusNormalization.sql")),
+        new("0298_Enterprise_Policy_Endorsement_Type_Normalization", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0106_EnterprisePolicyEndorsementTypeNormalization.sql")),
+        new("0299_Enterprise_Policy_Endorsement_InReview_Decisions", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0107_EnterprisePolicyEndorsementInReviewDecisions.sql")),
+        new("0300_Enterprise_Policy_Endorsement_Type_Aliases", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0108_EnterprisePolicyEndorsementTypeAliases.sql")),
+        new("0301_Enterprise_Policy_Endorsement_Approval_And_Rfi_Routing", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0109_EnterprisePolicyEndorsementApprovalAndRfiRouting.sql")),
+        new("0302_Enterprise_Policy_Endorsement_Document_Work_Definitions", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0110_EnterprisePolicyEndorsementDocumentWorkDefinitions.sql")),
+        new("0303_Enterprise_Policy_Endorsement_Conditional_Approval", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0111_EnterprisePolicyEndorsementConditionalApproval.sql")),
+        new("0304_Enterprise_IAM_Job_Title_Catalog", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0112_EnterpriseIamJobTitleCatalog.sql")),
+        new("0304A_Enterprise_Department_Prerequisites", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentPrerequisites.sql")),
+        new("0305_Enterprise_Department_Job_Title_Mapping", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0113_EnterpriseDepartmentJobTitleMapping.sql")),
+        new("0306_Enterprise_Agency_Team_Prerequisite", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0114_EnterpriseAgencyTeamPrerequisite.sql")),
+        new("0307_CRM_Lead_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0116_CrmLeadRelatedSearchIndexes.sql")),
+        new("0308_Submissions_Related_Search_Indexes", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0117_SubmissionRelatedSearchIndexes.sql")),
+        new("0309_Address_Location_Engine", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0120_AddressLocationEngine.sql")),
+        new("0310_Address_Location_Api_Version_Fix", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0311_Address_Location_Endpoint_Fix", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0312_Address_Location_Typeahead_Endpoint", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0121_AddressLocationApiVersionFix.sql")),
+        new("0313_Geo_Reference_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0122_GeoReferenceData.sql")),
+        new("0314_Geo_City_Seed_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0123_GeoCitySeedData.sql")),
+        new("0315_Geo_City_Full_Us_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0124_GeoCityFullUsSeed.sql")),
+        new("0316_Policy_Checking_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0125_PolicyCheckingWorkflow.sql")),
+        new("0317_NonRenewal_Workflow", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0126_NonRenewalWorkflow.sql")),
+        new("0318_Premium_Finance_Management", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0127_PremiumFinanceManagement.sql")),
+        new("0319_Premium_Finance_Seed_Data", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0128_PremiumFinanceSeedData.sql")),
+        new("0320_Premium_Finance_Integrity_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0129_PremiumFinanceIntegrityHardening.sql")),
+        new("0321_Document_Intake_Workflow_Hardening", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0130_DocumentIntakeWorkflowHardening.sql")),
+        new("0322_Premium_Finance_Source_Types", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0131_PremiumFinanceSourceTypes.sql")),
+        new("0323_Premium_Finance_Workflow_Completion", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0132_PremiumFinanceWorkflowCompletion.sql")),
+        new("0324_Premium_Finance_Source_Type_Repair", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0133_PremiumFinanceSourceTypeRepair.sql")),
+        new("0325_Enterprise_Document_Intelligence_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0135_EnterpriseDocumentIntelligenceRouteSeed.sql")),
+        new("0326_Configure_Document_Intelligence_Endpoint", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0136_ConfigureDocumentIntelligenceEndpoint.sql")),
+        new("0327_Document_Intake_Ai_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0137_DocumentIntakeAiRouteSeed.sql")),
+        new("0328_Intelligence_Search_Ai_Route_Seed", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0138_IntelligenceSearchAiRouteSeed.sql")),
+        new("0329_Intelligent_Search_EPH", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0139_IntelligentSearchEph.sql")),
+        new("0330_Configure_Shared_Azure_OpenAI_Route", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0140_ConfigureSharedAzureOpenAiRoute.sql")),
+        new("0331_EPH_Hierarchy_Deterministic_Temperature", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0141_EphHierarchyDeterministicTemperature.sql")),
+        new("0332_Intelligence_Wide_Dynamic_Hierarchy", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0142_IntelligenceWideDynamicHierarchy.sql")),
+        new("0333_Intelligence_Wide_Answer_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0143_IntelligenceWideAnswerOutputBudget.sql")),
+        new("0334_Intelligence_Wide_External_Knowledge", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0144_IntelligenceWideExternalKnowledge.sql")),
+        new("0335_Intelligence_Wide_Answer_Input_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0145_IntelligenceWideAnswerInputBudget.sql")),
+        new("0336_Intelligence_Wide_V21", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0146_IntelligenceWideV21.sql")),
+        new("0337_Intelligence_Wide_Concurrency", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0147_IntelligenceWideConcurrency.sql")),
+        new("0338_Intelligence_Wide_Hierarchy_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0148_IntelligenceWideHierarchyOutputBudget.sql")),
+        new("0339_Intelligence_Wide_Information_Value", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0149_IntelligenceWideInformationValue.sql")),
+        new("0340_Intelligence_Wide_Semantic_Entropy", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0150_IntelligenceWideSemanticEntropy.sql")),
+        new("0341_Intelligence_Wide_Entropy_Audit", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0151_IntelligenceWideEntropyAudit.sql")),
+        new("0342_Intelligence_Wide_Clarification", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0152_IntelligenceWideClarification.sql")),
+        new("0343_Intelligence_Wide_Clarification_Calibration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0153_IntelligenceWideClarificationCalibration.sql")),
+        new("0344_Intelligence_Safety_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0154_IntelligenceSafetyOutputBudget.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
@@ -266,6 +429,160 @@ BEGIN
         ModifiedByUserId UNIQUEIDENTIFIER NULL,
         IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Tenant_IsDeleted DEFAULT 0
     );
+END;
+
+IF COL_LENGTH(N'Client.Account', N'DbaName') IS NULL ALTER TABLE Client.Account ADD DbaName NVARCHAR(200) NULL;
+
+IF OBJECT_ID(N'Client.AccountActivity', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountActivity
+    (
+        ActivityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountActivity_0236 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ActivityType NVARCHAR(50) NOT NULL,
+        [Subject] NVARCHAR(200) NOT NULL,
+        Notes NVARCHAR(MAX) NULL,
+        OccurredAtUtc DATETIME2 NOT NULL,
+        Outcome NVARCHAR(100) NULL,
+        DurationMinutes INT NULL,
+        RelatedEntityType NVARCHAR(100) NULL,
+        RelatedEntityId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountActivity_Created_0236 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountActivity_Deleted_0236 DEFAULT 0,
+        CONSTRAINT FK_AccountActivity_Account_0236 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId)
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Client.AccountActivity', N'ActivityType') IS NULL ALTER TABLE Client.AccountActivity ADD ActivityType NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Subject') IS NULL ALTER TABLE Client.AccountActivity ADD [Subject] NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Notes') IS NULL ALTER TABLE Client.AccountActivity ADD Notes NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'OccurredAtUtc') IS NULL ALTER TABLE Client.AccountActivity ADD OccurredAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Outcome') IS NULL ALTER TABLE Client.AccountActivity ADD Outcome NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'DurationMinutes') IS NULL ALTER TABLE Client.AccountActivity ADD DurationMinutes INT NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityType') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityId') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ModifiedDateUtc') IS NULL ALTER TABLE Client.AccountActivity ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ModifiedByUserId') IS NULL ALTER TABLE Client.AccountActivity ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Title') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), [Subject]=COALESCE([Subject],Title,N''Account activity''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR [Subject] IS NULL OR OccurredAtUtc IS NULL;';
+    ELSE
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), [Subject]=COALESCE([Subject],N''Account activity''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR [Subject] IS NULL OR OccurredAtUtc IS NULL;';
+    IF COL_LENGTH(N'Client.AccountActivity', N'Description') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET Notes=COALESCE(Notes,Description) WHERE Notes IS NULL;';
+END;
+
+IF OBJECT_ID(N'Client.AccountRelationship', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountRelationship
+    (
+        RelationshipId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountRelationship_0236 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        RelatedAccountId UNIQUEIDENTIFIER NOT NULL,
+        RelationshipType NVARCHAR(50) NOT NULL,
+        [Description] NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountRelationship_Active_0236 DEFAULT 1,
+        StartedAtUtc DATETIME2 NULL,
+        EndedAtUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountRelationship_Created_0236 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountRelationship_Deleted_0236 DEFAULT 0,
+        CONSTRAINT FK_AccountRelationship_Account_0236 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountRelationship_Related_0236 FOREIGN KEY (RelatedAccountId) REFERENCES Client.Account(AccountId)
+    );
+END
+ELSE
+BEGIN
+    IF COL_LENGTH(N'Client.AccountRelationship', N'AccountId') IS NULL ALTER TABLE Client.AccountRelationship ADD AccountId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'StartedAtUtc') IS NULL ALTER TABLE Client.AccountRelationship ADD StartedAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'EndedAtUtc') IS NULL ALTER TABLE Client.AccountRelationship ADD EndedAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountRelationship', N'SourceAccountId') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountRelationship SET AccountId=COALESCE(AccountId,SourceAccountId) WHERE AccountId IS NULL;';
+END;
+
+IF OBJECT_ID(N'Client.AccountStakeholder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountStakeholder
+    (
+        AccountStakeholderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountStakeholder PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        StakeholderRoleCode NVARCHAR(50) NOT NULL,
+        OwnershipPercentage DECIMAL(5,2) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Primary DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountStakeholder_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountStakeholder_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountStakeholder_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT CK_AccountStakeholder_Ownership CHECK (OwnershipPercentage IS NULL OR (OwnershipPercentage >= 0 AND OwnershipPercentage <= 100))
+    );
+    CREATE UNIQUE INDEX UX_AccountStakeholder_Role ON Client.AccountStakeholder(TenantId,AccountId,ContactId,StakeholderRoleCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountCommunicationPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountCommunicationPreference
+    (
+        AccountCommunicationPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountCommunicationPreference PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        CommunicationPurposeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        PreferenceStatusCode NVARCHAR(50) NOT NULL,
+        PreferredTimeZoneCode NVARCHAR(100) NULL,
+        PreferredStartTime TIME NULL,
+        PreferredEndTime TIME NULL,
+        ConsentSourceCode NVARCHAR(50) NULL,
+        ConsentDateUtc DATETIME2 NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountCommunicationPreference_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountCommunicationPreference_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE UNIQUE INDEX UX_AccountCommunicationPreference ON Client.AccountCommunicationPreference(TenantId,AccountId,ContactId,CommunicationPurposeCode,ChannelCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountServiceAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountServiceAssignment
+    (
+        AccountServiceAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountServiceAssignment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        AssignmentRoleCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Primary DEFAULT 0,
+        EffectiveDate DATE NOT NULL CONSTRAINT DF_AccountServiceAssignment_Effective DEFAULT CONVERT(date,SYSUTCDATETIME()),
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountServiceAssignment_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountServiceAssignment_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountServiceAssignment_User FOREIGN KEY (UserId) REFERENCES IAM.[User](UserId)
+    );
+    CREATE UNIQUE INDEX UX_AccountServiceAssignment ON Client.AccountServiceAssignment(TenantId,AccountId,UserId,AssignmentRoleCode) WHERE IsDeleted=0;
 END;
 
 IF OBJECT_ID(N'Core.Branch', N'U') IS NULL
@@ -1344,6 +1661,11 @@ BEGIN
     CREATE TABLE Submissions.Proposal (ProposalId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_Proposal PRIMARY KEY DEFAULT NEWID(), SubmissionId UNIQUEIDENTIFIER NOT NULL, TenantId UNIQUEIDENTIFIER NOT NULL, Title NVARCHAR(200) NOT NULL, Status NVARCHAR(50) NOT NULL, PdfUrl NVARCHAR(500) NULL, HtmlContent NVARCHAR(MAX) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Submissions_Proposal_Created_0125 DEFAULT SYSUTCDATETIME(), GeneratedDateUtc DATETIME2 NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_Submissions_Proposal_IsDeleted_0125 DEFAULT 0);
 END
 
+IF OBJECT_ID(N'Submissions.CustomerAuthorization', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CustomerAuthorization (CustomerAuthorizationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CustomerAuthorization PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL, SubmissionId UNIQUEIDENTIFIER NOT NULL, QuoteId UNIQUEIDENTIFIER NOT NULL, ProposalId UNIQUEIDENTIFIER NULL, AuthorizationMethodCode NVARCHAR(50) NOT NULL, AuthorizationReference NVARCHAR(200) NULL, AuthorizationNotes NVARCHAR(2000) NULL, AuthorizedByName NVARCHAR(200) NULL, AuthorizedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerAuthorization_Authorized_0125 DEFAULT SYSUTCDATETIME(), DocumentId UNIQUEIDENTIFIER NULL, PolicyBindTransactionId UNIQUEIDENTIFIER NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CustomerAuthorization_Created_0125 DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL, ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CustomerAuthorization_IsDeleted_0125 DEFAULT 0);
+END
+
 IF OBJECT_ID(N'Submissions.SubmissionActionLog', N'U') IS NULL
 BEGIN
     CREATE TABLE Submissions.SubmissionActionLog (ActionLogId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionActionLog PRIMARY KEY DEFAULT NEWID(), SubmissionId UNIQUEIDENTIFIER NOT NULL, TenantId UNIQUEIDENTIFIER NOT NULL, ActionCode NVARCHAR(80) NOT NULL, Notes NVARCHAR(1000) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionActionLog_Created_0125 DEFAULT SYSUTCDATETIME(), IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionActionLog_IsDeleted_0125 DEFAULT 0);
@@ -1356,6 +1678,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissio
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarket') AND name = N'IX_SubmissionMarket_Submission') CREATE INDEX IX_SubmissionMarket_Submission ON Submissions.SubmissionMarket(SubmissionId, IsDeleted, IsRecommended DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_Submission') CREATE INDEX IX_Submissions_Quote_Submission ON Submissions.Quote(SubmissionId, IsDeleted, AnnualPremium DESC);
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.BoundPolicy') AND name = N'IX_BoundPolicy_Submission') CREATE INDEX IX_BoundPolicy_Submission ON Submissions.BoundPolicy(SubmissionId, IsDeleted);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CustomerAuthorization') AND name = N'IX_CustomerAuthorization_Submission') CREATE INDEX IX_CustomerAuthorization_Submission ON Submissions.CustomerAuthorization(TenantId, SubmissionId, QuoteId, IsDeleted, AuthorizedDateUtc DESC);
 
 -- Direct Submission Intake staging table: captures submissions arriving outside the CRM lead path
 -- (email, portal, API, producer upload, carrier request, walk-in) and normalizes them into
@@ -3665,12 +3988,14 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
         try
         {
             var sql = NormalizeMigrationSql(migration.Sql);
-            if (!string.IsNullOrWhiteSpace(sql))
-                await cn.ExecuteAsync(sql, transaction: tx);
+            foreach (var batch in SplitMigrationBatches(sql))
+            {
+                await cn.ExecuteAsync(new CommandDefinition(batch, transaction: tx, commandTimeout: 600, cancellationToken: cancellationToken));
+            }
 
-            await cn.ExecuteAsync(
+            await cn.ExecuteAsync(new CommandDefinition(
                 "INSERT INTO dbo._Migrations (Name) VALUES (@Name);",
-                new { migration.Name }, transaction: tx);
+                new { migration.Name }, transaction: tx, cancellationToken: cancellationToken));
             tx.Commit();
         }
         catch (SqlException ex) when (CanSkipMissingObjectMigration(migration, ex))
@@ -3700,8 +4025,31 @@ IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '_Migrations' AND schema_id
             match => $"{match.Groups["indent"].Value}IF OBJECT_ID(N'{match.Groups["table"].Value}', N'U') IS NOT NULL AND COL_LENGTH(N'{match.Groups["table"].Value}', N'{match.Groups["column"].Value}') IS NULL ALTER TABLE");
     }
 
+    private static IEnumerable<string> SplitMigrationBatches(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+            yield break;
+
+        foreach (var batch in SqlBatchSeparatorRegex().Split(sql))
+        {
+            if (!string.IsNullOrWhiteSpace(batch))
+                yield return batch;
+        }
+    }
+
+    private static string LoadEmbeddedMigration(string resourceName)
+    {
+        using var stream = typeof(DatabaseMigrator).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded migration resource '{resourceName}' was not found.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     [GeneratedRegex(@"(?m)^(?<indent>\s*)IF\s+COL_LENGTH\(N'(?<table>[^']+)'\s*,\s*N'(?<column>[^']+)'\)\s+IS\s+NULL\s+ALTER\s+TABLE", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex UnguardedAlterTableRegex();
+
+    [GeneratedRegex(@"(?im)^\s*GO\s*(?:--[^\r\n]*)?\r?$", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlBatchSeparatorRegex();
 
     private static bool CanSkipMissingObjectMigration(Migration migration, SqlException exception)
     {
@@ -5563,6 +5911,260 @@ INSERT INTO Portal.AdminRecord (PortalAdminRecordId,TenantId,Kind,Code,Name,Stat
 (NEWID(),@TenantId,N''PortalActivity'',N''act-003'',N''Failed login attempt'',N''Warning'',N''{"occurredAt":"2025-04-12T08:30:00","userName":"Unknown","userEmail":"hacker@spam.net","accountName":"—","eventType":"Login","detail":"Failed login attempt — invalid credentials (3×)","severity":"Warning","ipAddress":"45.33.32.156"}'',DATEADD(minute,-90,@Now),0);
 END
 ');
+""";
+
+    private const string Migration0241CommissionAccountingReconciliationEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'Commission') EXEC(N'CREATE SCHEMA Commission');
+
+IF OBJECT_ID(N'Commission.CommissionAccountingOption',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionAccountingOption
+ (
+  CommissionAccountingOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccountingOption PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, OptionGroupCode NVARCHAR(80) NOT NULL, OptionCode NVARCHAR(100) NOT NULL,
+  DisplayName NVARCHAR(200) NOT NULL, Description NVARCHAR(1000) NULL, IsDefault BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Default DEFAULT 0,
+  IsActive BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Active DEFAULT 1, SortOrder INT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Sort DEFAULT 0,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccountingOption_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionAccountingOption_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierStatementImportProfile',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierStatementImportProfile
+ (
+  CarrierStatementImportProfileId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierStatementImportProfile PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierId UNIQUEIDENTIFIER NULL, ProfileCode NVARCHAR(80) NOT NULL, ProfileName NVARCHAR(200) NOT NULL,
+  FileFormatCode NVARCHAR(40) NOT NULL, Delimiter NVARCHAR(10) NULL, HasHeaderRow BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Header DEFAULT 1,
+  ColumnMappingJson NVARCHAR(MAX) NOT NULL, DateFormat NVARCHAR(40) NULL, CultureCode NVARCHAR(20) NULL, IsActive BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Active DEFAULT 1,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierStatementImportProfile_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionExpectedReceivable',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionExpectedReceivable
+ (
+  CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionExpectedReceivable PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, SourceLedgerId UNIQUEIDENTIFIER NULL, PolicyId UNIQUEIDENTIFIER NULL, AccountId UNIQUEIDENTIFIER NULL, CarrierId UNIQUEIDENTIFIER NULL,
+  PolicyNumber NVARCHAR(80) NOT NULL, AccountName NVARCHAR(200) NULL, CarrierName NVARCHAR(200) NULL, LineOfBusinessCode NVARCHAR(100) NULL,
+  BusinessTypeCode NVARCHAR(50) NOT NULL, BillingTypeCode NVARCHAR(50) NOT NULL, TransactionTypeCode NVARCHAR(50) NOT NULL,
+  EffectiveDate DATE NULL, StatementPeriodStart DATE NOT NULL, StatementPeriodEnd DATE NOT NULL, PremiumAmount DECIMAL(18,2) NOT NULL,
+  ExpectedRatePct DECIMAL(9,4) NOT NULL, ExpectedCommissionAmount DECIMAL(18,2) NOT NULL, ReceivedCommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Received DEFAULT 0,
+  ReconciledCommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Reconciled DEFAULT 0, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Currency DEFAULT N'USD',
+  StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Status DEFAULT N'Expected', DueDate DATE NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionExpectedReceivable_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierCommissionStatement',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierCommissionStatement
+ (
+  CarrierCommissionStatementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierCommissionStatement PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierId UNIQUEIDENTIFIER NULL, ImportProfileId UNIQUEIDENTIFIER NULL, StatementNumber NVARCHAR(100) NOT NULL,
+  StatementDate DATE NOT NULL, PeriodStartDate DATE NULL, PeriodEndDate DATE NULL, BillingTypeCode NVARCHAR(50) NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Currency DEFAULT N'USD',
+  GrossPremiumAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Premium DEFAULT 0, CommissionAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Commission DEFAULT 0,
+  ChargebackAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Chargeback DEFAULT 0, NetReceivedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Net DEFAULT 0,
+  SourceFileName NVARCHAR(260) NULL, SourceFileHash NVARCHAR(128) NULL, ImportStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_ImportStatus DEFAULT N'Uploaded',
+  ReconciliationStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatement_ReconStatus DEFAULT N'Unreconciled', ImportedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Imported DEFAULT SYSUTCDATETIME(),
+  ImportedByUserId UNIQUEIDENTIFIER NULL, ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Created DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL,
+  IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierCommissionStatement_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CarrierCommissionStatementLine',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CarrierCommissionStatementLine
+ (
+  CarrierCommissionStatementLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CarrierCommissionStatementLine PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementId UNIQUEIDENTIFIER NOT NULL, LineNumber INT NOT NULL, ExternalTransactionId NVARCHAR(120) NULL,
+  PolicyNumber NVARCHAR(80) NULL, InsuredName NVARCHAR(200) NULL, ProducerCode NVARCHAR(80) NULL, LineOfBusinessCode NVARCHAR(100) NULL,
+  TransactionTypeCode NVARCHAR(50) NOT NULL, BillingTypeCode NVARCHAR(50) NULL, TransactionDate DATE NULL, EffectiveDate DATE NULL,
+  PremiumAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Premium DEFAULT 0, CommissionRatePct DECIMAL(9,4) NULL,
+  CommissionAmount DECIMAL(18,2) NOT NULL, ChargebackAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Chargeback DEFAULT 0,
+  NetAmount DECIMAL(18,2) NOT NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Currency DEFAULT N'USD',
+  MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_MatchStatus DEFAULT N'Unmatched', RawDataJson NVARCHAR(MAX) NULL,
+  ValidationErrorsJson NVARCHAR(MAX) NULL, CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Created DEFAULT SYSUTCDATETIME(), IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierCommissionStatementLine_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionReconciliationMatch',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReconciliationMatch
+ (
+  CommissionReconciliationMatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReconciliationMatch PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementLineId UNIQUEIDENTIFIER NOT NULL, CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL,
+  MatchMethodCode NVARCHAR(50) NOT NULL, MatchScore DECIMAL(9,4) NULL, MatchedAmount DECIMAL(18,2) NOT NULL, VarianceAmount DECIMAL(18,2) NOT NULL,
+  StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Status DEFAULT N'Proposed', MatchedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Date DEFAULT SYSUTCDATETIME(),
+  MatchedByUserId UNIQUEIDENTIFIER NULL, ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL, Notes NVARCHAR(1000) NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Created DEFAULT SYSUTCDATETIME(), ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL,
+  IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReconciliationMatch_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionReconciliationException',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReconciliationException
+ (
+  CommissionReconciliationExceptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReconciliationException PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CarrierCommissionStatementId UNIQUEIDENTIFIER NULL, CarrierCommissionStatementLineId UNIQUEIDENTIFIER NULL,
+  CommissionExpectedReceivableId UNIQUEIDENTIFIER NULL, ExceptionNumber NVARCHAR(80) NOT NULL, ExceptionTypeCode NVARCHAR(80) NOT NULL,
+  SeverityCode NVARCHAR(30) NOT NULL, StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReconciliationException_Status DEFAULT N'Open',
+  ExpectedAmount DECIMAL(18,2) NULL, ReceivedAmount DECIMAL(18,2) NULL, VarianceAmount DECIMAL(18,2) NULL, Description NVARCHAR(1000) NOT NULL,
+  ResolutionNotes NVARCHAR(2000) NULL, AssignedToUserId UNIQUEIDENTIFIER NULL, ResolvedDateUtc DATETIME2 NULL, ResolvedByUserId UNIQUEIDENTIFIER NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReconciliationException_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReconciliationException_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionPayable',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionPayable
+ (
+  CommissionPayableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPayable PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL,
+  PayeeId UNIQUEIDENTIFIER NOT NULL, CommissionReconciliationMatchId UNIQUEIDENTIFIER NULL, CommissionTransactionId UNIQUEIDENTIFIER NULL, ClawbackId UNIQUEIDENTIFIER NULL,
+  PayoutBatchId UNIQUEIDENTIFIER NULL, PayableNumber NVARCHAR(80) NOT NULL, PayableTypeCode NVARCHAR(50) NOT NULL, AccountingDate DATE NOT NULL,
+  GrossPayableAmount DECIMAL(18,2) NOT NULL, AdjustmentAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_CommissionPayable_Adjustment DEFAULT 0,
+  NetPayableAmount DECIMAL(18,2) NOT NULL, CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_CommissionPayable_Currency DEFAULT N'USD', StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionPayable_Status DEFAULT N'PendingApproval',
+  ApprovedDateUtc DATETIME2 NULL, ApprovedByUserId UNIQUEIDENTIFIER NULL, PaidDateUtc DATETIME2 NULL,
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPayable_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPayable_Deleted DEFAULT 0
+ );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionAccountingAuditEvent',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionAccountingAuditEvent
+ (
+  CommissionAccountingAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccountingAuditEvent PRIMARY KEY DEFAULT NEWID(), TenantId UNIQUEIDENTIFIER NOT NULL,
+  EntityTypeCode NVARCHAR(80) NOT NULL, EntityId UNIQUEIDENTIFIER NOT NULL, EventTypeCode NVARCHAR(80) NOT NULL, EventDescription NVARCHAR(1000) NOT NULL,
+  OldValueJson NVARCHAR(MAX) NULL, NewValueJson NVARCHAR(MAX) NULL, ActorUserId UNIQUEIDENTIFIER NULL, CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CommissionAccountingAuditEvent_Correlation DEFAULT NEWID(),
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccountingAuditEvent_Created DEFAULT SYSUTCDATETIME()
+ );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionAccountingOption') AND name=N'UX_CommissionAccountingOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_CommissionAccountingOption_Tenant_Group_Code ON Commission.CommissionAccountingOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierStatementImportProfile') AND name=N'UX_CarrierStatementImportProfile_Tenant_Code') CREATE UNIQUE INDEX UX_CarrierStatementImportProfile_Tenant_Code ON Commission.CarrierStatementImportProfile(TenantId,ProfileCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionExpectedReceivable') AND name=N'IX_CommissionExpectedReceivable_Reconciliation') CREATE INDEX IX_CommissionExpectedReceivable_Reconciliation ON Commission.CommissionExpectedReceivable(TenantId,StatusCode,CarrierId,PolicyNumber,StatementPeriodEnd) INCLUDE(ExpectedCommissionAmount,ReceivedCommissionAmount,ReconciledCommissionAmount,BillingTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatement') AND name=N'UX_CarrierCommissionStatement_Tenant_Number') CREATE UNIQUE INDEX UX_CarrierCommissionStatement_Tenant_Number ON Commission.CarrierCommissionStatement(TenantId,StatementNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatement') AND name=N'UX_CarrierCommissionStatement_Tenant_Hash') CREATE UNIQUE INDEX UX_CarrierCommissionStatement_Tenant_Hash ON Commission.CarrierCommissionStatement(TenantId,SourceFileHash) WHERE IsDeleted=0 AND SourceFileHash IS NOT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatementLine') AND name=N'UX_CarrierCommissionStatementLine_Statement_Line') CREATE UNIQUE INDEX UX_CarrierCommissionStatementLine_Statement_Line ON Commission.CarrierCommissionStatementLine(CarrierCommissionStatementId,LineNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CarrierCommissionStatementLine') AND name=N'IX_CarrierCommissionStatementLine_Matching') CREATE INDEX IX_CarrierCommissionStatementLine_Matching ON Commission.CarrierCommissionStatementLine(TenantId,MatchStatusCode,PolicyNumber,TransactionDate) INCLUDE(CommissionAmount,NetAmount,TransactionTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionReconciliationException') AND name=N'IX_CommissionReconciliationException_WorkQueue') CREATE INDEX IX_CommissionReconciliationException_WorkQueue ON Commission.CommissionReconciliationException(TenantId,StatusCode,SeverityCode,CreatedDateUtc DESC) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionPayable') AND name=N'IX_CommissionPayable_WorkQueue') CREATE INDEX IX_CommissionPayable_WorkQueue ON Commission.CommissionPayable(TenantId,StatusCode,AccountingDate,PayeeId) INCLUDE(NetPayableAmount,PayoutBatchId) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionAccountingAuditEvent') AND name=N'IX_CommissionAccountingAuditEvent_Entity') CREATE INDEX IX_CommissionAccountingAuditEvent_Entity ON Commission.CommissionAccountingAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionExpectedReceivable_Rate') ALTER TABLE Commission.CommissionExpectedReceivable ADD CONSTRAINT CK_CommissionExpectedReceivable_Rate CHECK(ExpectedRatePct BETWEEN -100 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionExpectedReceivable_Period') ALTER TABLE Commission.CommissionExpectedReceivable ADD CONSTRAINT CK_CommissionExpectedReceivable_Period CHECK(StatementPeriodEnd>=StatementPeriodStart);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReconciliationMatch_Score') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT CK_CommissionReconciliationMatch_Score CHECK(MatchScore IS NULL OR MatchScore BETWEEN 0 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionPayable_Net') ALTER TABLE Commission.CommissionPayable ADD CONSTRAINT CK_CommissionPayable_Net CHECK(NetPayableAmount=GrossPayableAmount+AdjustmentAmount);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CarrierStatementLine_Statement') ALTER TABLE Commission.CarrierCommissionStatementLine ADD CONSTRAINT FK_CarrierStatementLine_Statement FOREIGN KEY(CarrierCommissionStatementId) REFERENCES Commission.CarrierCommissionStatement(CarrierCommissionStatementId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReconciliationMatch_Line') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT FK_CommissionReconciliationMatch_Line FOREIGN KEY(CarrierCommissionStatementLineId) REFERENCES Commission.CarrierCommissionStatementLine(CarrierCommissionStatementLineId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReconciliationMatch_Expected') ALTER TABLE Commission.CommissionReconciliationMatch ADD CONSTRAINT FK_CommissionReconciliationMatch_Expected FOREIGN KEY(CommissionExpectedReceivableId) REFERENCES Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionPayable_Match') ALTER TABLE Commission.CommissionPayable ADD CONSTRAINT FK_CommissionPayable_Match FOREIGN KEY(CommissionReconciliationMatchId) REFERENCES Commission.CommissionReconciliationMatch(CommissionReconciliationMatchId);
+
+SELECT DISTINCT TenantId INTO #CommissionAccountingTenants FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0;
+CREATE TABLE #CommissionAccountingOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(100),DisplayName NVARCHAR(200),Description NVARCHAR(1000),IsDefault BIT,SortOrder INT);
+INSERT INTO #CommissionAccountingOptions VALUES
+(N'BillingType',N'DirectBill',N'Direct Bill',N'Carrier bills insured; agency recognizes commission receivable from carrier statement.',1,10),
+(N'BillingType',N'AgencyBill',N'Agency Bill',N'Agency invoices premium and reconciles carrier payable and commission.',0,20),
+(N'TransactionType',N'NewBusiness',N'New Business',N'Initial policy commission.',1,10),(N'TransactionType',N'Renewal',N'Renewal',N'Renewal policy commission.',0,20),
+(N'TransactionType',N'Endorsement',N'Endorsement',N'Premium-bearing policy change.',0,30),(N'TransactionType',N'Cancellation',N'Cancellation',N'Return commission or chargeback.',0,40),
+(N'MatchMethod',N'ExactPolicyAmount',N'Exact Policy and Amount',N'Exact normalized policy number and amount.',1,10),(N'MatchMethod',N'PolicyTolerance',N'Policy with Tolerance',N'Policy number matched within configured amount tolerance.',0,20),
+(N'MatchMethod',N'Manual',N'Manual',N'User-approved allocation.',0,30),(N'ExceptionSeverity',N'Critical',N'Critical',N'Blocks statement approval and payable creation.',0,10),
+(N'ExceptionSeverity',N'High',N'High',N'Requires accounting review.',1,20),(N'ExceptionSeverity',N'Medium',N'Medium',N'Review before period close.',0,30),
+(N'ExceptionType',N'UnmatchedStatementLine',N'Unmatched Statement Line',N'Carrier line has no expected commission.',1,10),(N'ExceptionType',N'MissingStatementLine',N'Missing Statement Line',N'Expected commission has not been received.',0,20),
+(N'ExceptionType',N'AmountVariance',N'Amount Variance',N'Received amount differs from expected amount.',0,30),(N'ExceptionType',N'DuplicateImport',N'Duplicate Import',N'Statement file was previously imported.',0,40),
+(N'PayableStatus',N'PendingApproval',N'Pending Approval',N'Calculated producer payable awaiting approval.',1,10),(N'PayableStatus',N'Approved',N'Approved',N'Eligible for payout batch.',0,20),
+(N'PayableStatus',N'Paid',N'Paid',N'Settled through a payout batch.',0,30),(N'ImportStatus',N'Uploaded',N'Uploaded',N'File received and awaiting validation.',1,10),
+(N'ImportStatus',N'Validated',N'Validated',N'All rows normalized and validation complete.',0,20),(N'ImportStatus',N'Failed',N'Failed',N'Import contains blocking validation errors.',0,30);
+INSERT INTO Commission.CommissionAccountingOption(CommissionAccountingOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0 FROM #CommissionAccountingTenants t CROSS JOIN #CommissionAccountingOptions o
+WHERE NOT EXISTS(SELECT 1 FROM Commission.CommissionAccountingOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+IF OBJECT_ID(N'Commission.CommissionLedger',N'U') IS NOT NULL
+BEGIN
+ INSERT INTO Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId,TenantId,SourceLedgerId,PolicyNumber,AccountName,CarrierName,LineOfBusinessCode,BusinessTypeCode,BillingTypeCode,TransactionTypeCode,StatementPeriodStart,StatementPeriodEnd,PremiumAmount,ExpectedRatePct,ExpectedCommissionAmount,ReceivedCommissionAmount,ReconciledCommissionAmount,CurrencyCode,StatusCode,CreatedDateUtc,IsDeleted)
+ SELECT NEWID(),l.TenantId,l.CommissionId,l.PolicyNumber,NULLIF(l.AccountName,N''),NULLIF(l.Carrier,N''),NULLIF(l.LineOfBusiness,N''),COALESCE(NULLIF(l.BusinessType,N''),N'Policy'),
+        COALESCE(NULLIF(REPLACE(s.BillingModeCode,N' ',N''),N''),N'Unspecified'),CASE WHEN l.BusinessType LIKE N'%Renew%' THEN N'Renewal' ELSE N'NewBusiness' END,
+        DATEFROMPARTS(YEAR(l.TransactionDate),MONTH(l.TransactionDate),1),EOMONTH(l.TransactionDate),l.GrossAmount,l.CommissionPct,l.AgencyAmount,
+        CASE WHEN l.Status=N'Paid' THEN l.AgencyAmount ELSE 0 END,CASE WHEN l.Status=N'Paid' THEN l.AgencyAmount ELSE 0 END,N'USD',CASE WHEN l.Status=N'Paid' THEN N'Reconciled' ELSE N'Expected' END,l.CreatedDateUtc,0
+ FROM Commission.CommissionLedger l
+ LEFT JOIN Submissions.BoundPolicy bp ON bp.TenantId=l.TenantId AND bp.PolicyNumber=l.PolicyNumber AND bp.IsDeleted=0
+ LEFT JOIN Billing.AccountSettings s ON s.TenantId=bp.TenantId AND s.AccountId=bp.AccountId AND s.IsDeleted=0
+ WHERE l.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Commission.CommissionExpectedReceivable e WHERE e.TenantId=l.TenantId AND e.SourceLedgerId=l.CommissionId AND e.IsDeleted=0);
+END;
+
+INSERT INTO Commission.CommissionAccountingAuditEvent(CommissionAccountingAuditEventId,TenantId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,CreatedDateUtc)
+SELECT NEWID(),e.TenantId,N'ExpectedReceivable',e.CommissionExpectedReceivableId,N'LegacySynchronized',N'Existing commission ledger row synchronized into enterprise reconciliation.',JSON_OBJECT(N'PolicyNumber':e.PolicyNumber,N'ExpectedAmount':e.ExpectedCommissionAmount,N'BillingType':e.BillingTypeCode),SYSUTCDATETIME()
+FROM Commission.CommissionExpectedReceivable e WHERE e.SourceLedgerId IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Commission.CommissionAccountingAuditEvent a WHERE a.TenantId=e.TenantId AND a.EntityTypeCode=N'ExpectedReceivable' AND a.EntityId=e.CommissionExpectedReceivableId AND a.EventTypeCode=N'LegacySynchronized');
+""";
+    private const string Migration0242CommissionReceivablePayeeAllocations = """
+IF OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation',N'U') IS NULL
+BEGIN
+ CREATE TABLE Commission.CommissionReceivablePayeeAllocation
+ (
+  CommissionReceivablePayeeAllocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionReceivablePayeeAllocation PRIMARY KEY DEFAULT NEWID(),
+  TenantId UNIQUEIDENTIFIER NOT NULL, CommissionExpectedReceivableId UNIQUEIDENTIFIER NOT NULL, PayeeId UNIQUEIDENTIFIER NOT NULL,
+  AllocationTypeCode NVARCHAR(50) NOT NULL, SplitPercentage DECIMAL(9,4) NOT NULL, EffectiveDate DATE NOT NULL,
+  EffectiveEndDate DATE NULL, StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Status DEFAULT N'Active',
+  CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Created DEFAULT SYSUTCDATETIME(), CreatedByUserId UNIQUEIDENTIFIER NULL,
+  ModifiedDateUtc DATETIME2 NULL, ModifiedByUserId UNIQUEIDENTIFIER NULL, IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionReceivablePayeeAllocation_Deleted DEFAULT 0
+ );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation') AND name=N'UX_CommissionReceivablePayeeAllocation_Active')
+ CREATE UNIQUE INDEX UX_CommissionReceivablePayeeAllocation_Active ON Commission.CommissionReceivablePayeeAllocation(TenantId,CommissionExpectedReceivableId,PayeeId,AllocationTypeCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReceivablePayeeAllocation_Split')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT CK_CommissionReceivablePayeeAllocation_Split CHECK(SplitPercentage BETWEEN 0 AND 100);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name=N'CK_CommissionReceivablePayeeAllocation_Dates')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT CK_CommissionReceivablePayeeAllocation_Dates CHECK(EffectiveEndDate IS NULL OR EffectiveEndDate>=EffectiveDate);
+
+IF EXISTS
+(
+ SELECT 1
+ FROM Commission.CommissionPayee
+ GROUP BY TenantId,PayeeId
+ HAVING COUNT_BIG(*)>1
+)
+ THROW 51000,N'Commission payee data contains duplicate tenant/payee identifiers and cannot be referenced safely.',1;
+
+IF NOT EXISTS
+(
+ SELECT 1
+ FROM sys.indexes i
+ JOIN sys.index_columns ic1 ON ic1.object_id=i.object_id AND ic1.index_id=i.index_id AND ic1.key_ordinal=1
+ JOIN sys.columns c1 ON c1.object_id=ic1.object_id AND c1.column_id=ic1.column_id AND c1.name=N'TenantId'
+ JOIN sys.index_columns ic2 ON ic2.object_id=i.object_id AND ic2.index_id=i.index_id AND ic2.key_ordinal=2
+ JOIN sys.columns c2 ON c2.object_id=ic2.object_id AND c2.column_id=ic2.column_id AND c2.name=N'PayeeId'
+ WHERE i.object_id=OBJECT_ID(N'Commission.CommissionPayee') AND i.is_unique=1 AND i.has_filter=0 AND i.is_disabled=0
+   AND NOT EXISTS(SELECT 1 FROM sys.index_columns extra WHERE extra.object_id=i.object_id AND extra.index_id=i.index_id AND extra.key_ordinal>2)
+)
+ CREATE UNIQUE INDEX UX_CommissionPayee_Tenant_Payee ON Commission.CommissionPayee(TenantId,PayeeId);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionReceivablePayeeAllocation_Expected')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT FK_CommissionReceivablePayeeAllocation_Expected FOREIGN KEY(CommissionExpectedReceivableId) REFERENCES Commission.CommissionExpectedReceivable(CommissionExpectedReceivableId);
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE parent_object_id=OBJECT_ID(N'Commission.CommissionReceivablePayeeAllocation') AND name=N'FK_CommissionReceivablePayeeAllocation_Payee')
+ ALTER TABLE Commission.CommissionReceivablePayeeAllocation DROP CONSTRAINT FK_CommissionReceivablePayeeAllocation_Payee;
+ALTER TABLE Commission.CommissionReceivablePayeeAllocation ADD CONSTRAINT FK_CommissionReceivablePayeeAllocation_Payee FOREIGN KEY(TenantId,PayeeId) REFERENCES Commission.CommissionPayee(TenantId,PayeeId);
+
+IF OBJECT_ID(N'Commission.CommissionLedger',N'U') IS NOT NULL AND OBJECT_ID(N'IAM.[User]',N'U') IS NOT NULL
+BEGIN
+ INSERT Commission.CommissionReceivablePayeeAllocation(CommissionReceivablePayeeAllocationId,TenantId,CommissionExpectedReceivableId,PayeeId,AllocationTypeCode,SplitPercentage,EffectiveDate,StatusCode,CreatedDateUtc,IsDeleted)
+ SELECT NEWID(),e.TenantId,e.CommissionExpectedReceivableId,p.PayeeId,COALESCE(NULLIF(p.PayeeTypeCode,N''),N'Producer'),
+        CASE WHEN e.ExpectedCommissionAmount=0 THEN 0 ELSE ROUND(ABS(l.ProducerAmount/e.ExpectedCommissionAmount)*100,4) END,
+        COALESCE(e.EffectiveDate,e.StatementPeriodStart),N'Active',SYSUTCDATETIME(),0
+ FROM Commission.CommissionExpectedReceivable e
+ JOIN Commission.CommissionLedger l ON l.TenantId=e.TenantId AND l.CommissionId=e.SourceLedgerId AND l.IsDeleted=0
+ JOIN IAM.[User] u ON u.TenantId=e.TenantId AND u.IsDeleted=0 AND l.Producer IN(NULLIF(u.FullName,N''),NULLIF(u.DisplayName,N''),NULLIF(u.UserName,N''))
+ JOIN Commission.CommissionPayee p ON p.TenantId=e.TenantId AND p.UserId=u.UserId AND p.IsDeleted=0 AND p.StatusCode=N'Active'
+ WHERE e.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Commission.CommissionReceivablePayeeAllocation a WHERE a.TenantId=e.TenantId AND a.CommissionExpectedReceivableId=e.CommissionExpectedReceivableId AND a.PayeeId=p.PayeeId AND a.IsDeleted=0);
+END;
 """;
     private const string Migration0089_PortalMyAccountFullSeed = """
 IF OBJECT_ID(N'Portal.AdminRecord') IS NOT NULL
@@ -11181,11 +11783,11 @@ BEGIN
                CONCAT(N'QT-', s.LeadNumber) AS QuoteNumber,
                CONCAT(N'POL-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), s.LeadId), N'-', N''), 8)) AS PolicyNumber,
                CASE
-                   WHEN s.RowNum % 5 = 1 THEN N'New'
-                   WHEN s.RowNum % 5 = 2 THEN N'In Review'
-                   WHEN s.RowNum % 5 = 3 THEN N'Quoted'
+                    WHEN s.RowNum % 5 = 1 THEN N'In Progress'
+                    WHEN s.RowNum % 5 = 2 THEN N'Marketing'
+                    WHEN s.RowNum % 5 = 3 THEN N'Quotes Received'
                    WHEN s.RowNum % 5 = 4 THEN N'Bound'
-                   ELSE N'Declined'
+                    ELSE N'Lost'
                END AS SubmissionStatus
         INTO #LeadWorkflowChain
         FROM #LeadWorkflowSource s
@@ -11200,8 +11802,8 @@ BEGIN
         (SubmissionId, TenantId, AccountId, OpportunityId, SubmissionNumber, LineOfBusiness, Status, Priority, AssignedToUserId, EffectiveDate, ExpirationDate, TargetPremium, MarketCount, QuoteCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
         SELECT c.SubmissionId, @TenantId, c.AccountId, c.OpportunityId, c.SubmissionNumber, c.LineOfBusiness, c.SubmissionStatus, c.Priority, c.AssignedToUserId,
                DATEADD(day, 30 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), DATEADD(day, 395 + c.RowNum, CAST(SYSUTCDATETIME() AS date)), c.TargetPremium,
-               CASE WHEN c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined') THEN 1 ELSE 0 END,
-               CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN 1 ELSE 0 END,
+               CASE WHEN c.SubmissionStatus IN (N'Marketing', N'Quotes Received', N'Bound', N'Lost') THEN 1 ELSE 0 END,
+               CASE WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound') THEN 1 ELSE 0 END,
                SYSUTCDATETIME(), @AdminUserId, 0
         FROM #LeadWorkflowChain c
         WHERE NOT EXISTS (SELECT 1 FROM Submissions.Submission s WHERE s.SubmissionId = c.SubmissionId);
@@ -11225,12 +11827,12 @@ BEGIN
         BEGIN
             INSERT INTO Submissions.SubmissionMarket (SubmissionMarketId, SubmissionId, CarrierId, Status, AppetiteScore, IsRecommended, AddedDateUtc, RespondedDateUtc, DeclineReason, IsDeleted)
             SELECT NEWID(), c.SubmissionId, @DefaultCarrierId,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus IN (N'Quoted', N'Bound') THEN N'Quoted' ELSE N'Submitted' END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Declined' WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound') THEN N'Quoted' ELSE N'Submitted' END,
                    CASE WHEN c.Priority = N'High' THEN 88 ELSE 76 END, 1, DATEADD(day, -7, SYSUTCDATETIME()),
-                   CASE WHEN c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Lead-sourced market declined during qualification.' ELSE NULL END, 0
+                   CASE WHEN c.SubmissionStatus IN (N'Quotes Received', N'Bound', N'Lost') THEN DATEADD(day, -2, SYSUTCDATETIME()) ELSE NULL END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Lead-sourced market declined during qualification.' ELSE NULL END, 0
             FROM #LeadWorkflowChain c
-            WHERE c.SubmissionStatus IN (N'In Review', N'Quoted', N'Bound', N'Declined')
+            WHERE c.SubmissionStatus IN (N'Marketing', N'Quotes Received', N'Bound', N'Lost')
               AND NOT EXISTS (SELECT 1 FROM Submissions.SubmissionMarket sm WHERE sm.SubmissionId = c.SubmissionId AND sm.CarrierId = @DefaultCarrierId AND sm.IsDeleted = 0);
         END
 
@@ -11238,10 +11840,10 @@ BEGIN
         BEGIN
             INSERT INTO Submissions.Quote (QuoteId, SubmissionId, CarrierId, QuoteNumber, Status, AnnualPremium, Deductible, [Limit], CoverageNotes, QuotedDateUtc, ExpiresDateUtc, CreatedDateUtc, IsDeleted)
             SELECT c.QuoteId, c.SubmissionId, @DefaultCarrierId, c.QuoteNumber,
-                   CASE WHEN c.SubmissionStatus = N'Declined' THEN N'Declined' WHEN c.SubmissionStatus = N'Bound' THEN N'Accepted' ELSE N'Presented' END,
+                   CASE WHEN c.SubmissionStatus = N'Lost' THEN N'Declined' WHEN c.SubmissionStatus = N'Bound' THEN N'Bound' ELSE N'Presented' END,
                    c.TargetPremium, 5000, 1000000, CONCAT(N'Quote synced from lead ', c.LeadNumber, N' workflow.'), DATEADD(day, -3, SYSUTCDATETIME()), DATEADD(day, 27, SYSUTCDATETIME()), SYSUTCDATETIME(), 0
             FROM #LeadWorkflowChain c
-            WHERE c.SubmissionStatus IN (N'Quoted', N'Bound', N'Declined')
+            WHERE c.SubmissionStatus IN (N'Quotes Received', N'Bound', N'Lost')
               AND NOT EXISTS (SELECT 1 FROM Submissions.Quote q WHERE q.QuoteId = c.QuoteId);
 
             INSERT INTO Submissions.BoundPolicy (PolicyId, SubmissionId, QuoteId, TenantId, AccountId, CarrierId, PolicyNumber, Status, AnnualPremium, EffectiveDate, ExpirationDate, BoundDateUtc, IsDeleted)
@@ -15049,7 +15651,7 @@ INSERT INTO @Groups (KindCode, GroupCode, GroupName, CategoryCode, CategoryName,
 (N'DocumentCategory', N'APPLICATION', N'Application', N'INTAKE', N'Intake', N'Inbound client and prospect document intake.', N'Client, prospect, policy, and carrier application documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"EnterpriseSeed"}', 10),
 (N'DocumentCategory', N'QUOTE', N'Quote', N'SALES', N'Sales', N'Sales and producer-facing documentation.', N'Carrier quotes, indications, premium options, and coverage comparisons.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"QuoteReview","source":"EnterpriseSeed"}', 20),
 (N'DocumentCategory', N'PROPOSAL', N'Proposal', N'SALES', N'Sales', N'Sales and producer-facing documentation.', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{"portalVisible":true,"requiresIndexing":true,"packetEligible":true,"source":"EnterpriseSeed"}', 30),
-(N'DocumentCategory', N'CARRIER_SUB', N'Carrier Submission', N'SUBMISSIONS', N'Submissions', N'Carrier submission and market placement records.', N'Carrier submission packets, applications, supplements, and market submissions.', N'{"portalVisible":false,"requiresIndexing":true,"legacyValue":"Carrier Sub","source":"EnterpriseSeed"}', 40),
+(N'DocumentCategory', N'CARRIER_SUB', N'Carrier Submission', N'SUBMISSION', N'Submission', N'Carrier submission and market placement records.', N'Carrier submission packets, applications, supplements, and market submissions.', N'{"portalVisible":false,"requiresIndexing":true,"legacyValue":"Carrier Sub","source":"EnterpriseSeed"}', 40),
 (N'DocumentCategory', N'BINDER', N'Binder', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Binders, subjectivities, bind orders, and pre-policy coverage evidence.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"EnterpriseSeed"}', 50),
 (N'DocumentCategory', N'POLICY', N'Policy', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"EnterpriseSeed"}', 60),
 (N'DocumentCategory', N'ENDORSEMENT', N'Endorsement', N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'Policy endorsements, change requests, and carrier confirmations.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"EndorsementReview","source":"EnterpriseSeed"}', 70),
@@ -15733,5 +16335,6873 @@ BEGIN
     N'@DefaultTenant UNIQUEIDENTIFIER, @TargetLeadId UNIQUEIDENTIFIER, @CampaignId UNIQUEIDENTIFIER, @AdminUserId UNIQUEIDENTIFIER',
     @DefaultTenant = @DefaultTenant, @TargetLeadId = @TargetLeadId, @CampaignId = @CampaignId, @AdminUserId = @AdminUserId;
 END;
+""";
+
+    private const string Migration0236ClientAccount360ExposureDepth = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client') EXEC(N'CREATE SCHEMA Client');
+
+IF OBJECT_ID(N'Client.AccountNamedInsured', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountNamedInsured
+    (
+        AccountNamedInsuredId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountNamedInsured PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        InsuredTypeCode NVARCHAR(50) NOT NULL,
+        LegalName NVARCHAR(200) NOT NULL,
+        DbaName NVARCHAR(200) NULL,
+        TaxIdentifier NVARCHAR(50) NULL,
+        RelationshipCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountNamedInsured_IsPrimary DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountNamedInsured_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountNamedInsured_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountNamedInsured_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountNamedInsured_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE INDEX IX_AccountNamedInsured_Account ON Client.AccountNamedInsured(TenantId, AccountId, IsPrimary DESC) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountLocation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountLocation
+    (
+        AccountLocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountLocation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        LocationNumber NVARCHAR(50) NOT NULL,
+        LocationTypeCode NVARCHAR(50) NOT NULL,
+        LocationName NVARCHAR(200) NOT NULL,
+        AddressLine1 NVARCHAR(200) NOT NULL,
+        AddressLine2 NVARCHAR(200) NULL,
+        City NVARCHAR(100) NOT NULL,
+        StateCode NVARCHAR(50) NOT NULL,
+        PostalCode NVARCHAR(20) NOT NULL,
+        CountryCode NVARCHAR(10) NOT NULL CONSTRAINT DF_AccountLocation_Country DEFAULT N'US',
+        County NVARCHAR(100) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountLocation_Primary DEFAULT 0,
+        IsMailingAddress BIT NOT NULL CONSTRAINT DF_AccountLocation_Mailing DEFAULT 0,
+        Latitude DECIMAL(10,7) NULL,
+        Longitude DECIMAL(10,7) NULL,
+        OccupancyCode NVARCHAR(80) NULL,
+        AnnualRevenue DECIMAL(18,2) NULL,
+        EmployeeCount INT NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountLocation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountLocation_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountLocation_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT UQ_AccountLocation_Number UNIQUE (TenantId, AccountId, LocationNumber)
+    );
+    CREATE INDEX IX_AccountLocation_Account ON Client.AccountLocation(TenantId, AccountId, LocationName) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountVehicle', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountVehicle
+    (
+        AccountVehicleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountVehicle PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NULL,
+        VehicleNumber NVARCHAR(50) NOT NULL,
+        Vin NVARCHAR(17) NOT NULL,
+        ModelYear INT NOT NULL,
+        Make NVARCHAR(80) NOT NULL,
+        Model NVARCHAR(100) NOT NULL,
+        VehicleTypeCode NVARCHAR(50) NOT NULL,
+        UseTypeCode NVARCHAR(50) NOT NULL,
+        GaragingStateCode NVARCHAR(50) NULL,
+        GaragingPostalCode NVARCHAR(20) NULL,
+        RadiusMiles INT NULL,
+        AnnualMileage INT NULL,
+        CostNew DECIMAL(18,2) NULL,
+        StatedValue DECIMAL(18,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountVehicle_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountVehicle_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountVehicle_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountVehicle_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountVehicle_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountVehicle_Vin UNIQUE (TenantId, Vin)
+    );
+    CREATE INDEX IX_AccountVehicle_Account ON Client.AccountVehicle(TenantId, AccountId, IsActive) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountDriver', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountDriver
+    (
+        AccountDriverId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountDriver PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        DriverNumber NVARCHAR(50) NOT NULL,
+        FirstName NVARCHAR(100) NOT NULL,
+        LastName NVARCHAR(100) NOT NULL,
+        DateOfBirth DATE NOT NULL,
+        LicenseNumber NVARCHAR(80) NOT NULL,
+        LicenseStateCode NVARCHAR(50) NOT NULL,
+        LicenseClassCode NVARCHAR(50) NULL,
+        LicenseExpirationDate DATE NULL,
+        HireDate DATE NULL,
+        YearsExperience INT NULL,
+        DriverStatusCode NVARCHAR(50) NOT NULL,
+        IsExcluded BIT NOT NULL CONSTRAINT DF_AccountDriver_Excluded DEFAULT 0,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountDriver_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountDriver_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountDriver_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountDriver_Contact FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT UQ_AccountDriver_License UNIQUE (TenantId, LicenseStateCode, LicenseNumber)
+    );
+    CREATE INDEX IX_AccountDriver_Account ON Client.AccountDriver(TenantId, AccountId, DriverStatusCode) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountProperty', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountProperty
+    (
+        AccountPropertyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountProperty PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NOT NULL,
+        PropertyNumber NVARCHAR(50) NOT NULL,
+        PropertyTypeCode NVARCHAR(50) NOT NULL,
+        ConstructionTypeCode NVARCHAR(50) NULL,
+        OccupancyCode NVARCHAR(80) NULL,
+        YearBuilt INT NULL,
+        SquareFeet INT NULL,
+        NumberOfStories INT NULL,
+        BuildingValue DECIMAL(18,2) NULL,
+        ContentsValue DECIMAL(18,2) NULL,
+        BusinessIncomeValue DECIMAL(18,2) NULL,
+        ProtectionClassCode NVARCHAR(50) NULL,
+        RoofTypeCode NVARCHAR(50) NULL,
+        RoofYear INT NULL,
+        SprinkleredPercentage DECIMAL(5,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountProperty_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountProperty_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountProperty_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountProperty_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountProperty_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountProperty_Number UNIQUE (TenantId, AccountId, PropertyNumber)
+    );
+    CREATE INDEX IX_AccountProperty_Account ON Client.AccountProperty(TenantId, AccountId, IsActive) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountScheduleItem', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountScheduleItem
+    (
+        AccountScheduleItemId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountScheduleItem PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        AccountLocationId UNIQUEIDENTIFIER NULL,
+        ScheduleTypeCode NVARCHAR(50) NOT NULL,
+        ItemNumber NVARCHAR(50) NOT NULL,
+        ItemDescription NVARCHAR(300) NOT NULL,
+        Manufacturer NVARCHAR(100) NULL,
+        Model NVARCHAR(100) NULL,
+        SerialNumber NVARCHAR(100) NULL,
+        AcquisitionDate DATE NULL,
+        AppraisalDate DATE NULL,
+        ScheduledValue DECIMAL(18,2) NOT NULL,
+        DeductibleAmount DECIMAL(18,2) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_AccountScheduleItem_Active DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountScheduleItem_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountScheduleItem_Deleted DEFAULT 0,
+        CONSTRAINT FK_AccountScheduleItem_Account FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountScheduleItem_Location FOREIGN KEY (AccountLocationId) REFERENCES Client.AccountLocation(AccountLocationId),
+        CONSTRAINT UQ_AccountScheduleItem_Number UNIQUE (TenantId, AccountId, ScheduleTypeCode, ItemNumber)
+    );
+    CREATE INDEX IX_AccountScheduleItem_Account ON Client.AccountScheduleItem(TenantId, AccountId, ScheduleTypeCode) WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Client.AccountReferenceOption', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountReferenceOption', N'CreatedByUserId') IS NULL ALTER TABLE Client.AccountReferenceOption ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountReferenceOption', N'ModifiedByUserId') IS NULL ALTER TABLE Client.AccountReferenceOption ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+    ;WITH Options AS
+    (
+        SELECT * FROM (VALUES
+            (N'InsuredType', N'BUSINESS', N'Business', 10), (N'InsuredType', N'INDIVIDUAL', N'Individual', 20), (N'InsuredType', N'TRUST', N'Trust', 30),
+            (N'AccountType', N'COMMERCIAL', N'Commercial', 10), (N'AccountType', N'PERSONAL', N'Personal', 20), (N'AccountType', N'NON_PROFIT', N'Non-Profit', 30), (N'AccountType', N'GOVERNMENT', N'Government', 40), (N'AccountType', N'PARTNER', N'Partner', 50),
+            (N'InsuredRelationship', N'PRIMARY', N'Primary Named Insured', 10), (N'InsuredRelationship', N'ADDITIONAL', N'Additional Named Insured', 20), (N'InsuredRelationship', N'DBA', N'Doing Business As', 30),
+            (N'LocationType', N'HEADQUARTERS', N'Headquarters', 10), (N'LocationType', N'BRANCH', N'Branch', 20), (N'LocationType', N'WAREHOUSE', N'Warehouse', 30), (N'LocationType', N'JOB_SITE', N'Job Site', 40), (N'LocationType', N'RESIDENCE', N'Residence', 50),
+            (N'VehicleType', N'PRIVATE_PASSENGER', N'Private Passenger', 10), (N'VehicleType', N'LIGHT_TRUCK', N'Light Truck', 20), (N'VehicleType', N'HEAVY_TRUCK', N'Heavy Truck', 30), (N'VehicleType', N'TRAILER', N'Trailer', 40),
+            (N'VehicleUse', N'BUSINESS', N'Business Use', 10), (N'VehicleUse', N'COMMUTE', N'Commute', 20), (N'VehicleUse', N'SERVICE', N'Service', 30), (N'VehicleUse', N'DELIVERY', N'Delivery', 40),
+            (N'DriverStatus', N'ACTIVE', N'Active', 10), (N'DriverStatus', N'RESTRICTED', N'Restricted', 20), (N'DriverStatus', N'EXCLUDED', N'Excluded', 30), (N'DriverStatus', N'INACTIVE', N'Inactive', 40),
+            (N'PropertyType', N'BUILDING', N'Building', 10), (N'PropertyType', N'UNIT', N'Unit', 20), (N'PropertyType', N'DWELLING', N'Dwelling', 30), (N'PropertyType', N'OTHER_STRUCTURE', N'Other Structure', 40),
+            (N'ScheduleType', N'EQUIPMENT', N'Equipment', 10), (N'ScheduleType', N'INLAND_MARINE', N'Inland Marine', 20), (N'ScheduleType', N'FINE_ARTS', N'Fine Arts', 30), (N'ScheduleType', N'JEWELRY', N'Jewelry', 40),
+            (N'ActivityType', N'CALL', N'Call', 10), (N'ActivityType', N'EMAIL', N'Email', 20), (N'ActivityType', N'MEETING', N'Meeting', 30), (N'ActivityType', N'NOTE', N'Note', 40), (N'ActivityType', N'TASK', N'Task', 50),
+            (N'CommunicationChannel', N'EMAIL', N'Email', 10), (N'CommunicationChannel', N'PHONE', N'Phone', 20), (N'CommunicationChannel', N'SMS', N'SMS', 30), (N'CommunicationChannel', N'PORTAL', N'Portal', 40)
+            ,(N'StakeholderRole', N'OWNER', N'Owner', 10), (N'StakeholderRole', N'OFFICER', N'Officer', 20), (N'StakeholderRole', N'PARTNER', N'Partner', 30), (N'StakeholderRole', N'TRUSTEE', N'Trustee', 40)
+            ,(N'CommunicationPurpose', N'SERVICE', N'Service', 10), (N'CommunicationPurpose', N'BILLING', N'Billing', 20), (N'CommunicationPurpose', N'CLAIMS', N'Claims', 30), (N'CommunicationPurpose', N'MARKETING', N'Marketing', 40), (N'CommunicationPurpose', N'RENEWAL', N'Renewal', 50)
+            ,(N'PreferenceStatus', N'OPTED_IN', N'Opted In', 10), (N'PreferenceStatus', N'OPTED_OUT', N'Opted Out', 20), (N'PreferenceStatus', N'REQUIRED_ONLY', N'Required Communications Only', 30)
+            ,(N'ServiceAssignmentRole', N'PRODUCER', N'Producer', 10), (N'ServiceAssignmentRole', N'CSR', N'CSR', 20), (N'ServiceAssignmentRole', N'ACCOUNT_MANAGER', N'Account Manager', 30), (N'ServiceAssignmentRole', N'CLAIMS_ADVOCATE', N'Claims Advocate', 40), (N'ServiceAssignmentRole', N'BILLING_SPECIALIST', N'Billing Specialist', 50)
+        ) value(OptionGroup, OptionCode, OptionName, SortOrder)
+    )
+    INSERT INTO Client.AccountReferenceOption (AccountReferenceOptionId, TenantId, OptionGroup, OptionCode, OptionName, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tenant.TenantId, optionData.OptionGroup, optionData.OptionCode, optionData.OptionName, CASE WHEN optionData.SortOrder = 10 THEN 1 ELSE 0 END, 1, optionData.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant tenant
+    CROSS JOIN Options optionData
+    WHERE tenant.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1 FROM Client.AccountReferenceOption existing
+          WHERE existing.TenantId = tenant.TenantId AND existing.OptionGroup = optionData.OptionGroup AND existing.OptionCode = optionData.OptionCode
+      );
+END;
+""";
+
+    private const string Migration0237ClientAccount360SchemaCompatibilityRepair = """
+IF OBJECT_ID(N'Client.Account', N'U') IS NOT NULL
+   AND COL_LENGTH(N'Client.Account', N'DbaName') IS NULL
+    ALTER TABLE Client.Account ADD DbaName NVARCHAR(200) NULL;
+
+IF OBJECT_ID(N'Client.AccountActivity', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountActivity', N'TenantId') IS NULL ALTER TABLE Client.AccountActivity ADD TenantId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'AccountId') IS NULL ALTER TABLE Client.AccountActivity ADD AccountId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'ActivityType') IS NULL ALTER TABLE Client.AccountActivity ADD ActivityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Subject') IS NULL ALTER TABLE Client.AccountActivity ADD [Subject] NVARCHAR(255) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Notes') IS NULL ALTER TABLE Client.AccountActivity ADD Notes NVARCHAR(MAX) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'OccurredAtUtc') IS NULL ALTER TABLE Client.AccountActivity ADD OccurredAtUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'Outcome') IS NULL ALTER TABLE Client.AccountActivity ADD Outcome NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'DurationMinutes') IS NULL ALTER TABLE Client.AccountActivity ADD DurationMinutes INT NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityType') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'RelatedEntityId') IS NULL ALTER TABLE Client.AccountActivity ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'CreatedDateUtc') IS NULL ALTER TABLE Client.AccountActivity ADD CreatedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'CreatedByUserId') IS NULL ALTER TABLE Client.AccountActivity ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Client.AccountActivity', N'IsDeleted') IS NULL ALTER TABLE Client.AccountActivity ADD IsDeleted BIT NOT NULL CONSTRAINT DF_AccountActivity_IsDeleted_0237 DEFAULT 0;
+
+    IF COL_LENGTH(N'Client.AccountActivity', N'Title') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET [Subject]=COALESCE([Subject],Title,N''Account activity'') WHERE [Subject] IS NULL;';
+    ELSE
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET [Subject]=COALESCE([Subject],N''Account activity'') WHERE [Subject] IS NULL;';
+
+    IF COL_LENGTH(N'Client.AccountActivity', N'Description') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountActivity SET Notes=COALESCE(Notes,Description) WHERE Notes IS NULL;';
+
+    EXEC sp_executesql N'UPDATE Client.AccountActivity SET ActivityType=COALESCE(ActivityType,N''OTHER''), OccurredAtUtc=COALESCE(OccurredAtUtc,CreatedDateUtc,SYSUTCDATETIME()), CreatedDateUtc=COALESCE(CreatedDateUtc,OccurredAtUtc,SYSUTCDATETIME()) WHERE ActivityType IS NULL OR OccurredAtUtc IS NULL OR CreatedDateUtc IS NULL;';
+END;
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'OPS.TaskItem', N'TenantId') IS NULL
+    BEGIN
+        ALTER TABLE OPS.TaskItem ADD TenantId UNIQUEIDENTIFIER NULL;
+        EXEC sp_executesql N'
+            DECLARE @FallbackTenantId UNIQUEIDENTIFIER = (SELECT TOP (1) TenantId FROM Core.Tenant WHERE IsDeleted=0 ORDER BY CreatedDateUtc);
+            UPDATE OPS.TaskItem SET TenantId=@FallbackTenantId WHERE TenantId IS NULL;';
+    END;
+    IF COL_LENGTH(N'OPS.TaskItem', N'AccountId') IS NULL ALTER TABLE OPS.TaskItem ADD AccountId UNIQUEIDENTIFIER NULL;
+END;
+""";
+
+    private const string Migration0238ClientAccountRelationshipAccountIdRepair = """
+IF OBJECT_ID(N'Client.AccountRelationship', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.AccountRelationship', N'AccountId') IS NULL
+        ALTER TABLE Client.AccountRelationship ADD AccountId UNIQUEIDENTIFIER NULL;
+
+    IF COL_LENGTH(N'Client.AccountRelationship', N'SourceAccountId') IS NOT NULL
+        EXEC sp_executesql N'UPDATE Client.AccountRelationship SET AccountId=SourceAccountId WHERE AccountId IS NULL;';
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM sys.indexes
+        WHERE object_id=OBJECT_ID(N'Client.AccountRelationship')
+          AND name=N'IX_AccountRelationship_Account_0238'
+    )
+        EXEC(N'CREATE INDEX IX_AccountRelationship_Account_0238 ON Client.AccountRelationship(TenantId,AccountId,IsActive) WHERE IsDeleted=0;');
+END;
+""";
+
+    private const string Migration0239ClientAccount360SupportTablesRepair = """
+IF OBJECT_ID(N'Client.AccountStakeholder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountStakeholder
+    (
+        AccountStakeholderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountStakeholder_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        StakeholderRoleCode NVARCHAR(50) NOT NULL,
+        OwnershipPercentage DECIMAL(5,2) NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Primary_0239 DEFAULT 0,
+        EffectiveDate DATE NULL,
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountStakeholder_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountStakeholder_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountStakeholder_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountStakeholder_Contact_0239 FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId),
+        CONSTRAINT CK_AccountStakeholder_Ownership_0239 CHECK (OwnershipPercentage IS NULL OR (OwnershipPercentage >= 0 AND OwnershipPercentage <= 100))
+    );
+    CREATE UNIQUE INDEX UX_AccountStakeholder_Role_0239 ON Client.AccountStakeholder(TenantId,AccountId,ContactId,StakeholderRoleCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountCommunicationPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountCommunicationPreference
+    (
+        AccountCommunicationPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountCommunicationPreference_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        CommunicationPurposeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        PreferenceStatusCode NVARCHAR(50) NOT NULL,
+        PreferredTimeZoneCode NVARCHAR(100) NULL,
+        PreferredStartTime TIME NULL,
+        PreferredEndTime TIME NULL,
+        ConsentSourceCode NVARCHAR(50) NULL,
+        ConsentDateUtc DATETIME2 NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountCommunicationPreference_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountCommunicationPreference_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountCommunicationPreference_Contact_0239 FOREIGN KEY (ContactId) REFERENCES Client.Contact(ContactId)
+    );
+    CREATE UNIQUE INDEX UX_AccountCommunicationPreference_0239 ON Client.AccountCommunicationPreference(TenantId,AccountId,ContactId,CommunicationPurposeCode,ChannelCode) WHERE IsDeleted=0;
+END;
+
+IF OBJECT_ID(N'Client.AccountServiceAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountServiceAssignment
+    (
+        AccountServiceAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AccountServiceAssignment_0239 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        UserId UNIQUEIDENTIFIER NOT NULL,
+        AssignmentRoleCode NVARCHAR(50) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Primary_0239 DEFAULT 0,
+        EffectiveDate DATE NOT NULL CONSTRAINT DF_AccountServiceAssignment_Effective_0239 DEFAULT CONVERT(date,SYSUTCDATETIME()),
+        ExpirationDate DATE NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AccountServiceAssignment_Created_0239 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AccountServiceAssignment_Deleted_0239 DEFAULT 0,
+        CONSTRAINT FK_AccountServiceAssignment_Account_0239 FOREIGN KEY (AccountId) REFERENCES Client.Account(AccountId),
+        CONSTRAINT FK_AccountServiceAssignment_User_0239 FOREIGN KEY (UserId) REFERENCES IAM.[User](UserId)
+    );
+    CREATE UNIQUE INDEX UX_AccountServiceAssignment_0239 ON Client.AccountServiceAssignment(TenantId,AccountId,UserId,AssignmentRoleCode) WHERE IsDeleted=0;
+END;
+""";
+
+    private const string Migration0235PolicyLifecycleServicingHardening = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyTerm', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyTerm ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyTerm ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyTerm', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyTerm ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyLine', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyLine', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyLine ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyLine', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyLine ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAuditEvent', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyTermId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyTermId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'PolicyTransactionId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'CreatedByUserId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyAuditEvent', N'ModifiedByUserId') IS NULL ALTER TABLE Policy.PolicyAuditEvent ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyEndorsement', N'PolicyTransactionId') IS NULL
+    ALTER TABLE Policy.PolicyEndorsement ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyCancellation', N'PolicyTransactionId') IS NULL
+    ALTER TABLE Policy.PolicyCancellation ADD PolicyTransactionId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'Policy.PolicyTransactionTransition', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionTransition
+    (
+        PolicyTransactionTransitionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionTransition PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionTypeCode NVARCHAR(80) NULL,
+        FromStatusCode NVARCHAR(80) NOT NULL,
+        ToStatusCode NVARCHAR(80) NOT NULL,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Document DEFAULT 0,
+        RequiresApproval BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Approval DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionTransition_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionTransition') AND name = N'UX_PolicyTransactionTransition_Route')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyTransactionTransition_Route ON Policy.PolicyTransactionTransition(TenantId, FromStatusCode, ToStatusCode, TransactionTypeCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyEndorsement') AND name = N'IX_PolicyEndorsement_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyEndorsement_Transaction ON Policy.PolicyEndorsement(TenantId, PolicyTransactionId) WHERE IsDeleted = 0 AND PolicyTransactionId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyCancellation') AND name = N'IX_PolicyCancellation_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyCancellation_Transaction ON Policy.PolicyCancellation(TenantId, PolicyTransactionId) WHERE IsDeleted = 0 AND PolicyTransactionId IS NOT NULL;');
+
+IF OBJECT_ID(N'tempdb..#LifecycleHardeningTenants') IS NOT NULL DROP TABLE #LifecycleHardeningTenants;
+CREATE TABLE #LifecycleHardeningTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO #LifecycleHardeningTenants (TenantId)
+SELECT DISTINCT TenantId FROM Policy.PolicyLifecycleOption WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM #LifecycleHardeningTenants) AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO #LifecycleHardeningTenants (TenantId) SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+
+IF OBJECT_ID(N'tempdb..#LifecycleHardeningOptions') IS NOT NULL DROP TABLE #LifecycleHardeningOptions;
+CREATE TABLE #LifecycleHardeningOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsTerminal BIT NOT NULL,
+    IsPremiumBearing BIT NOT NULL,
+    RequiresDocument BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #LifecycleHardeningOptions VALUES
+(N'PolicyTermStatus', N'Draft', N'Draft', N'Term is being prepared.', 0, 0, 0, 1, 10),
+(N'PolicyTermStatus', N'Active', N'Active', N'Term is in force.', 0, 1, 0, 0, 20),
+(N'PolicyTermStatus', N'PendingRenewal', N'Pending Renewal', N'Term is in renewal processing.', 0, 0, 0, 0, 30),
+(N'PolicyTermStatus', N'Renewed', N'Renewed', N'Term was superseded by a renewal term.', 1, 1, 1, 0, 40),
+(N'PolicyTermStatus', N'Expired', N'Expired', N'Term expired without continuation.', 1, 0, 0, 0, 50),
+(N'PolicyTermStatus', N'Cancelled', N'Cancelled', N'Term was cancelled.', 1, 1, 1, 0, 60),
+(N'PolicyTermStatus', N'NonRenewed', N'Non-Renewed', N'Term will not renew.', 1, 0, 1, 0, 70),
+(N'PolicyTermStatus', N'Rewritten', N'Rewritten', N'Term was replaced by a rewrite.', 1, 1, 1, 0, 80),
+(N'PolicyLineStatus', N'Active', N'Active', N'Policy line is active.', 0, 1, 0, 1, 10),
+(N'PolicyLineStatus', N'Cancelled', N'Cancelled', N'Policy line was cancelled.', 1, 1, 1, 0, 20),
+(N'PolicyLineStatus', N'NonRenewed', N'Non-Renewed', N'Policy line will not renew.', 1, 0, 1, 0, 30),
+(N'PolicyLineStatus', N'Rewritten', N'Rewritten', N'Policy line was rewritten.', 1, 1, 1, 0, 40),
+(N'PolicyTransactionSource', N'PolicyLifecycle', N'Policy Lifecycle', N'Created by the policy lifecycle workbench.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionSource', N'PolicyDetail', N'Policy Detail', N'Created from policy detail servicing.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionSource', N'EndorsementWorkbench', N'Endorsement Workbench', N'Synchronized from endorsement servicing.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionSource', N'CancellationCenter', N'Cancellation Center', N'Synchronized from cancellation servicing.', 0, 0, 0, 0, 40),
+(N'PolicyTransactionSource', N'CarrierDownload', N'Carrier Download', N'Created from carrier download processing.', 0, 0, 0, 0, 50),
+(N'PolicyTransactionReason', N'InsuredRequest', N'Insured Request', N'Requested by the insured.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionReason', N'CarrierRequest', N'Carrier Request', N'Requested by the carrier or market.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionReason', N'AgencyCorrection', N'Agency Correction', N'Agency correction or servicing adjustment.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionReason', N'Underwriting', N'Underwriting', N'Underwriting-driven change.', 0, 0, 0, 0, 40),
+(N'PolicyTransactionReason', N'NonPayment', N'Non-Payment', N'Premium non-payment.', 0, 0, 0, 0, 50),
+(N'PolicyTransactionReason', N'ExposureChange', N'Exposure Change', N'Change in insured exposure.', 0, 0, 0, 0, 60),
+(N'PolicyTransactionReason', N'RenewalProcessing', N'Renewal Processing', N'Annual renewal processing.', 0, 0, 0, 0, 70),
+(N'PolicyTransactionReason', N'PremiumAudit', N'Premium Audit', N'Premium or exposure audit.', 0, 0, 0, 0, 80),
+(N'PolicyTransactionReason', N'Other', N'Other', N'Other documented lifecycle reason.', 0, 0, 0, 0, 90);
+
+INSERT INTO Policy.PolicyLifecycleOption
+    (PolicyLifecycleOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsTerminal, o.IsPremiumBearing, o.RequiresDocument, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #LifecycleHardeningTenants t CROSS JOIN #LifecycleHardeningOptions o
+WHERE NOT EXISTS (SELECT 1 FROM Policy.PolicyLifecycleOption e WHERE e.TenantId = t.TenantId AND e.OptionGroupCode = o.OptionGroupCode AND e.OptionCode = o.OptionCode AND e.IsDeleted = 0);
+
+IF OBJECT_ID(N'tempdb..#LifecycleTransitions') IS NOT NULL DROP TABLE #LifecycleTransitions;
+CREATE TABLE #LifecycleTransitions (FromStatusCode NVARCHAR(80), ToStatusCode NVARCHAR(80), RequiresDocument BIT, RequiresApproval BIT, SortOrder INT);
+INSERT INTO #LifecycleTransitions VALUES
+(N'Draft', N'PendingReview', 0, 0, 10),
+(N'Draft', N'Withdrawn', 0, 0, 20),
+(N'PendingReview', N'Approved', 0, 1, 30),
+(N'PendingReview', N'Declined', 0, 1, 40),
+(N'PendingReview', N'Withdrawn', 0, 0, 50),
+(N'Approved', N'Issued', 1, 1, 60),
+(N'Approved', N'Withdrawn', 0, 1, 70),
+(N'Issued', N'Completed', 0, 0, 80),
+(N'Issued', N'Superseded', 0, 1, 90),
+(N'Completed', N'Superseded', 0, 1, 100);
+
+INSERT INTO Policy.PolicyTransactionTransition
+    (PolicyTransactionTransitionId, TenantId, TransactionTypeCode, FromStatusCode, ToStatusCode, RequiresDocument, RequiresApproval, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, x.FromStatusCode, x.ToStatusCode, x.RequiresDocument, x.RequiresApproval, 1, x.SortOrder, SYSUTCDATETIME(), 0
+FROM #LifecycleHardeningTenants t CROSS JOIN #LifecycleTransitions x
+WHERE NOT EXISTS
+(
+    SELECT 1 FROM Policy.PolicyTransactionTransition e
+    WHERE e.TenantId = t.TenantId AND e.TransactionTypeCode IS NULL AND e.FromStatusCode = x.FromStatusCode AND e.ToStatusCode = x.ToStatusCode AND e.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyEndorsement', N'PolicyTransactionId') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate, ExpirationDate,
+         RequestedDateUtc, ApprovedDateUtc, IssuedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TaxesChange, TotalCostChange,
+         ReasonCode, SourceCode, ExternalReference, CarrierTransactionNumber, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), e.TenantId, e.PolicyId, pt.PolicyTermId, e.EndorsementNumber, N''Endorsement'',
+           CASE e.Status WHEN N''Pending'' THEN N''Draft'' WHEN N''In Review'' THEN N''PendingReview'' WHEN N''Info Needed'' THEN N''PendingReview'' WHEN N''Approved'' THEN N''Approved'' WHEN N''Issued'' THEN N''Issued'' WHEN N''Declined'' THEN N''Declined'' ELSE N''Draft'' END,
+           CONVERT(date, e.EffectiveDate), CONVERT(date, e.ExpirationDate), e.RequestedDateUtc, e.ApprovedDateUtc, e.IssuedDateUtc,
+           CASE WHEN e.Status = N''Issued'' THEN e.IssuedDateUtc ELSE NULL END, bp.AnnualPremium - e.PremiumDelta, e.PremiumDelta, bp.AnnualPremium,
+           e.TaxFeeDelta, e.TotalCostDelta, e.Reason, N''EndorsementWorkbench'', CONVERT(nvarchar(36), e.EndorsementId), e.CarrierReferenceNumber,
+           e.Description, COALESCE(e.InternalNotes, e.ClientFacingNotes), 1, 0, e.CreatedDateUtc, e.CreatedByUserId, 0
+    FROM Policy.PolicyEndorsement e
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = e.TenantId AND bp.PolicyId = e.PolicyId AND bp.IsDeleted = 0
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = e.TenantId AND pt.PolicyId = e.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC) pt
+    WHERE e.IsDeleted = 0 AND e.PolicyId IS NOT NULL AND e.PolicyTransactionId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction tx WHERE tx.TenantId = e.TenantId AND tx.SourceCode = N''EndorsementWorkbench'' AND tx.ExternalReference = CONVERT(nvarchar(36), e.EndorsementId) AND tx.IsDeleted = 0);
+
+    UPDATE e SET PolicyTransactionId = tx.PolicyTransactionId, ModifiedDateUtc = COALESCE(e.ModifiedDateUtc, SYSUTCDATETIME())
+    FROM Policy.PolicyEndorsement e
+    INNER JOIN Policy.PolicyTransaction tx ON tx.TenantId = e.TenantId AND tx.SourceCode = N''EndorsementWorkbench'' AND tx.ExternalReference = CONVERT(nvarchar(36), e.EndorsementId) AND tx.IsDeleted = 0
+    WHERE e.PolicyTransactionId IS NULL;';
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCancellation', N'U') IS NOT NULL AND COL_LENGTH(N'Policy.PolicyCancellation', N'PolicyTransactionId') IS NOT NULL
+BEGIN
+    EXEC sp_executesql N'
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate,
+         RequestedDateUtc, ApprovedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TotalCostChange,
+         ReasonCode, SourceCode, ExternalReference, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), c.TenantId, c.PolicyId, pt.PolicyTermId, c.CancellationNumber,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN N''Reinstatement'' ELSE N''Cancellation'' END,
+           CASE c.Status WHEN N''Pending'' THEN N''Draft'' WHEN N''Reinstatement Pending'' THEN N''Draft'' WHEN N''Under Review'' THEN N''PendingReview'' WHEN N''Approved'' THEN N''Approved'' WHEN N''Cancelled'' THEN N''Completed'' WHEN N''Reinstated'' THEN N''Completed'' WHEN N''Denied'' THEN N''Declined'' WHEN N''Rescinded'' THEN N''Withdrawn'' ELSE N''Draft'' END,
+           CONVERT(date, c.EffectiveDate), c.RequestDateUtc, c.ApprovedDateUtc,
+           CASE WHEN c.Status IN (N''Cancelled'', N''Reinstated'') THEN COALESCE(c.ApprovedDateUtc, c.ModifiedDateUtc) ELSE NULL END,
+           bp.AnnualPremium, CASE WHEN c.RequestType = N''Reinstatement'' THEN ABS(c.ReturnPremium) ELSE -ABS(c.ReturnPremium) END,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN bp.AnnualPremium ELSE bp.AnnualPremium - ABS(c.ReturnPremium) END,
+           CASE WHEN c.RequestType = N''Reinstatement'' THEN ABS(c.ReturnPremium) ELSE -ABS(c.ReturnPremium) END,
+           c.CancellationReason, N''CancellationCenter'', CONVERT(nvarchar(36), c.CancellationId), CONCAT(c.RequestType, N'' for '', c.PolicyNumber), c.Notes,
+           1, 0, c.CreatedDateUtc, c.CreatedByUserId, 0
+    FROM Policy.PolicyCancellation c
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = c.TenantId AND bp.PolicyId = c.PolicyId AND bp.IsDeleted = 0
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = c.TenantId AND pt.PolicyId = c.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC) pt
+    WHERE c.IsDeleted = 0 AND c.PolicyId IS NOT NULL AND c.PolicyTransactionId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction tx WHERE tx.TenantId = c.TenantId AND tx.SourceCode = N''CancellationCenter'' AND tx.ExternalReference = CONVERT(nvarchar(36), c.CancellationId) AND tx.IsDeleted = 0);
+
+    UPDATE c SET PolicyTransactionId = tx.PolicyTransactionId, ModifiedDateUtc = COALESCE(c.ModifiedDateUtc, SYSUTCDATETIME())
+    FROM Policy.PolicyCancellation c
+    INNER JOIN Policy.PolicyTransaction tx ON tx.TenantId = c.TenantId AND tx.SourceCode = N''CancellationCenter'' AND tx.ExternalReference = CONVERT(nvarchar(36), c.CancellationId) AND tx.IsDeleted = 0
+    WHERE c.PolicyTransactionId IS NULL;';
+END;
+""";
+
+    private const string Migration0200_DmsCrmProcessDocumentGroupSeed = """
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL OR OBJECT_ID(N'Master.Category', N'U') IS NULL
+    RETURN;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across CRM, account, opportunity, submission, quote, policy, and service workflows.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+DECLARE @CrmCategories TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL,
+    CategoryName NVARCHAR(200) NOT NULL,
+    CategoryDescription NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (CategoryCode)
+);
+
+INSERT INTO @CrmCategories (CategoryCode, CategoryName, CategoryDescription, ConfigurationJson, SortOrder) VALUES
+(N'CRM_INTAKE', N'CRM Intake', N'Lead, prospect, and inbound inquiry documents captured at the start of the CRM process.', N'{"crmStage":"Lead","documentGroup":"Lead","workflow":"LeadIntake","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 300),
+(N'CRM_QUALIFICATION', N'CRM Qualification', N'Lead qualification, activity, and discovery documents used before account or opportunity conversion.', N'{"crmStage":"LeadQualification","documentGroup":"Lead","workflow":"LeadQualification","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 310),
+(N'CRM_ACCOUNT', N'CRM Account', N'Account discovery and relationship documents used after lead conversion.', N'{"crmStage":"Account","documentGroup":"Lead","workflow":"AccountDiscovery","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 320),
+(N'CRM_OPPORTUNITY', N'CRM Opportunity', N'Opportunity needs analysis, coverage review, and sales pursuit documents.', N'{"crmStage":"Opportunity","documentGroup":"Lead","workflow":"OpportunityDiscovery","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 330),
+(N'CRM_SUBMISSION', N'CRM Submission', N'Submission readiness and market placement documents produced from CRM opportunities.', N'{"crmStage":"Submission","documentGroup":"Lead","workflow":"SubmissionReadiness","portalVisible":false,"requiresIndexing":true,"packetEligible":true,"source":"CrmProcessSeed"}', 340),
+(N'CRM_MARKET_APPETITE', N'CRM Market Appetite', N'Market appetite and placement strategy documents produced from CRM opportunities.', N'{"crmStage":"Submission","documentGroup":"Lead","workflow":"MarketSelection","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 350),
+(N'CRM_QUOTE', N'CRM Quote', N'Quote comparison, proposal, and sales presentation documents for CRM opportunities.', N'{"crmStage":"Quote","documentGroup":"Lead","workflow":"QuoteReview","portalVisible":true,"requiresIndexing":true,"source":"CrmProcessSeed"}', 360),
+(N'CRM_CONVERSION', N'CRM Conversion', N'Conversion handoff documents used when CRM opportunities become bound accounts, policies, or service work.', N'{"crmStage":"Conversion","documentGroup":"Lead","workflow":"ConversionHandoff","portalVisible":false,"requiresIndexing":true,"source":"CrmProcessSeed"}', 370);
+
+MERGE Master.Category AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           c.CategoryCode,
+           c.CategoryName,
+           c.CategoryDescription AS Description,
+           c.ConfigurationJson,
+           c.SortOrder
+    FROM @CrmCategories c
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN UPDATE SET CategoryName = source.CategoryName, Description = source.Description, ConfigurationJson = COALESCE(target.ConfigurationJson, source.ConfigurationJson), IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (CategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+INNER JOIN DMS.DocumentKind dk ON dk.DocumentKindId = g.DocumentKindId AND dk.KindCode = N'DocumentCategory'
+WHERE g.GroupCode LIKE N'CRM[_]%'
+  AND g.GroupCode <> N'LEAD'
+  AND g.IsDeleted = 0;
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           mc.CategoryId,
+           N'LEAD' AS GroupCode,
+           N'Lead' AS GroupName,
+           N'Lead CRM process document group linked to CRM-prefixed document categories for intake, qualification, account, opportunity, submission, quote, and conversion workflows.' AS Description,
+           N'{"crmProcess":true,"linkedCategoryCodes":["CRM_INTAKE","CRM_QUALIFICATION","CRM_ACCOUNT","CRM_OPPORTUNITY","CRM_SUBMISSION","CRM_MARKET_APPETITE","CRM_QUOTE","CRM_CONVERSION"],"source":"CrmProcessSeed"}' AS ConfigurationJson,
+           300 AS SortOrder
+    FROM DMS.DocumentKind dk
+    INNER JOIN Master.Category mc ON mc.TenantId = dk.TenantId
+                                  AND mc.DocumentKindId = dk.DocumentKindId
+                                  AND mc.CategoryCode = N'CRM_INTAKE'
+                                  AND mc.IsDeleted = 0
+    WHERE dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0201_DmsRemoveCrmDocumentGroupsSeedLead = """
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across upload, portal, CRM, policy, and servicing screens.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+INNER JOIN DMS.DocumentKind dk ON dk.DocumentKindId = g.DocumentKindId AND dk.KindCode = N'DocumentCategory'
+WHERE g.IsDeleted = 0
+  AND g.GroupCode <> N'LEAD'
+  AND (g.GroupCode LIKE N'CRM%' OR g.GroupName LIKE N'CRM%');
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId,
+           dk.DocumentKindId,
+           CAST(NULL AS UNIQUEIDENTIFIER) AS CategoryId,
+           N'LEAD' AS GroupCode,
+           N'Lead' AS GroupName,
+           N'Lead document group for CRM lead process documents.' AS Description,
+           N'{"crmProcess":true,"source":"LeadSeed"}' AS ConfigurationJson,
+           300 AS SortOrder
+    FROM DMS.DocumentKind dk
+    INNER JOIN @Tenants t ON t.TenantId = dk.TenantId
+    WHERE dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+""";
+
+    private const string Migration0202_DmsDocumentCategoryEnterpriseSeed = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'DMS.DocumentKind', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF OBJECT_ID(N'DMS.DocumentCategory', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentCategory
+    (
+        DocumentCategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_DocumentCategory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentKindId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        ConfigurationJson NVARCHAR(4000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_DocumentCategory_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_DocumentCategory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'DMS.DocumentGroup', N'ConfigurationJson') IS NULL
+    ALTER TABLE DMS.DocumentGroup ADD ConfigurationJson NVARCHAR(4000) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'UX_DMS_DocumentCategory_TenantKindCode')
+    CREATE UNIQUE INDEX UX_DMS_DocumentCategory_TenantKindCode ON DMS.DocumentCategory(TenantId, DocumentKindId, CategoryCode) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'IX_DMS_DocumentCategory_TenantKindSort')
+    CREATE INDEX IX_DMS_DocumentCategory_TenantKindSort ON DMS.DocumentCategory(TenantId, DocumentKindId, IsDeleted, SortOrder, CategoryName);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentCategory_DocumentKind')
+    ALTER TABLE DMS.DocumentCategory ADD CONSTRAINT FK_DMS_DocumentCategory_DocumentKind FOREIGN KEY (DocumentKindId) REFERENCES DMS.DocumentKind(DocumentKindId);
+
+DECLARE @DropDocumentGroupCategoryFksSql NVARCHAR(MAX) = N'';
+SELECT @DropDocumentGroupCategoryFksSql = @DropDocumentGroupCategoryFksSql + N'ALTER TABLE DMS.DocumentGroup DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+FROM sys.foreign_keys fk
+INNER JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+INNER JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+WHERE fk.parent_object_id = OBJECT_ID(N'DMS.DocumentGroup')
+  AND c.name = N'CategoryId';
+
+IF @DropDocumentGroupCategoryFksSql <> N''
+    EXEC sp_executesql @DropDocumentGroupCategoryFksSql;
+
+DECLARE @Tenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+INSERT INTO @Tenants (TenantId)
+SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0 AND IsActive = 1
+UNION SELECT DISTINCT TenantId FROM DMS.DocumentKind WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM @Tenants)
+    INSERT INTO @Tenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+MERGE DMS.DocumentKind AS target
+USING
+(
+    SELECT TenantId,
+           N'DocumentCategory' AS KindCode,
+           N'Document Categories' AS KindName,
+           N'Enterprise document category and group taxonomy used across upload, portal, CRM, policy, claims, billing, and servicing workflows.' AS Description,
+           10 AS SortOrder
+    FROM @Tenants
+) AS source
+ON target.TenantId = source.TenantId AND target.KindCode = source.KindCode
+WHEN MATCHED THEN UPDATE SET KindName = source.KindName, Description = source.Description, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentKindId, TenantId, KindCode, KindName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.KindCode, source.KindName, source.Description, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+DECLARE @Categories TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL PRIMARY KEY,
+    CategoryName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @Categories (CategoryCode, CategoryName, Description, ConfigurationJson, SortOrder) VALUES
+(N'INTAKE', N'Intake', N'Inbound client, prospect, and policy intake documents.', N'{"source":"DmsDocumentCategorySeed","area":"Intake"}', 10),
+(N'CRM', N'CRM', N'Lead, account, opportunity, submission, quote, and conversion documents.', N'{"source":"DmsDocumentCategorySeed","area":"CRM"}', 20),
+(N'SALES', N'Sales', N'Sales and producer-facing documents, proposals, and quote presentations.', N'{"source":"DmsDocumentCategorySeed","area":"Sales"}', 30),
+(N'SUBMISSION', N'Submission', N'Carrier submission and market placement records.', N'{"source":"DmsDocumentCategorySeed","area":"Submissions"}', 40),
+(N'POLICY', N'Policy', N'Coverage evidence and policy lifecycle documents.', N'{"source":"DmsDocumentCategorySeed","area":"Policy"}', 50),
+(N'SERVICING', N'Servicing', N'Client service documents and evidence of insurance.', N'{"source":"DmsDocumentCategorySeed","area":"Servicing"}', 60),
+(N'BILLING', N'Billing', N'Billing, premium, invoice, and receivable documents.', N'{"source":"DmsDocumentCategorySeed","area":"Billing"}', 70),
+(N'ACCOUNTING', N'Accounting', N'Accounting, finance, commission, and reconciliation records.', N'{"source":"DmsDocumentCategorySeed","area":"Accounting"}', 80),
+(N'CLAIMS', N'Claims', N'Claims, loss history, incidents, and legal hold records.', N'{"source":"DmsDocumentCategorySeed","area":"Claims"}', 90),
+(N'COMMUNICATIONS', N'Communications', N'Email, letter, note, and communication records.', N'{"source":"DmsDocumentCategorySeed","area":"Communications"}', 100),
+(N'FORMS', N'Forms', N'Forms, supplements, checklists, and signed acknowledgements.', N'{"source":"DmsDocumentCategorySeed","area":"Forms"}', 110),
+(N'COMPLIANCE', N'Compliance', N'Compliance, licensing, contracts, audit, and regulatory records.', N'{"source":"DmsDocumentCategorySeed","area":"Compliance"}', 120),
+(N'PORTAL', N'Portal', N'Client portal delivery, upload, and sharing documents.', N'{"source":"DmsDocumentCategorySeed","area":"Portal"}', 130),
+(N'MARKETING', N'Marketing', N'Marketing campaign, cross-sell, referral, and nurture documents.', N'{"source":"DmsDocumentCategorySeed","area":"Marketing"}', 140),
+(N'GENERAL', N'General', N'General document management and miscellaneous records.', N'{"source":"DmsDocumentCategorySeed","area":"General"}', 990);
+
+MERGE DMS.DocumentCategory AS target
+USING
+(
+    SELECT dk.TenantId, dk.DocumentKindId, c.CategoryCode, c.CategoryName, c.Description, c.ConfigurationJson, c.SortOrder
+    FROM @Categories c
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.CategoryCode = source.CategoryCode
+WHEN MATCHED THEN UPDATE SET CategoryName = source.CategoryName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentCategoryId, TenantId, DocumentKindId, CategoryCode, CategoryName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryCode, source.CategoryName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE DMS.DocumentGroup
+SET IsDeleted = 1,
+    CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHERE IsDeleted = 0 OR CategoryId IS NOT NULL;
+
+DECLARE @Groups TABLE
+(
+    CategoryCode NVARCHAR(80) NOT NULL,
+    GroupCode NVARCHAR(120) NOT NULL,
+    GroupName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    ConfigurationJson NVARCHAR(4000) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (GroupCode)
+);
+
+INSERT INTO @Groups (CategoryCode, GroupCode, GroupName, Description, ConfigurationJson, SortOrder) VALUES
+(N'INTAKE', N'APPLICATION', N'Application', N'Client, prospect, policy, and carrier application documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 10),
+(N'CRM', N'LEAD', N'Lead', N'Lead CRM process documents and supporting artifacts.', N'{"crmProcess":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 20),
+(N'SALES', N'QUOTE', N'Quote', N'Carrier quotes, indications, premium options, and coverage comparisons.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"QuoteReview","source":"DmsDocumentCategorySeed"}', 30),
+(N'SALES', N'PROPOSAL', N'Proposal', N'Proposal, quote presentation, renewal proposal, and option comparison documents.', N'{"portalVisible":true,"requiresIndexing":true,"packetEligible":true,"source":"DmsDocumentCategorySeed"}', 40),
+(N'SUBMISSION', N'CARRIER_SUBMISSION', N'Carrier Submission', N'Carrier submission packets, applications, supplements, and market submissions.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 50),
+(N'POLICY', N'BINDER', N'Binder', N'Binders, subjectivities, bind orders, and pre-policy coverage evidence.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"DmsDocumentCategorySeed"}', 60),
+(N'POLICY', N'POLICY', N'Policy', N'Policy declarations, forms, endorsements, binders, and policy documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"CoverageRecord","source":"DmsDocumentCategorySeed"}', 70),
+(N'POLICY', N'ENDORSEMENT', N'Endorsement', N'Policy endorsements, change requests, and carrier confirmations.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"EndorsementReview","source":"DmsDocumentCategorySeed"}', 80),
+(N'POLICY', N'ID_CARD', N'ID Card', N'Auto ID cards and proof-of-coverage identification documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"DmsDocumentCategorySeed"}', 90),
+(N'SERVICING', N'CERTIFICATE', N'Certificate', N'Certificates of insurance, evidence forms, holder schedules, and delivery documents.', N'{"portalVisible":true,"requiresIndexing":true,"externalShareAllowed":true,"source":"DmsDocumentCategorySeed"}', 100),
+(N'SERVICING', N'SCHEDULE', N'Schedule', N'Vehicle, property, location, equipment, driver, and exposure schedules.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 110),
+(N'SERVICING', N'RENEWAL', N'Renewal', N'Renewal strategy, exposure updates, renewal applications, and remarketing documentation.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"RenewalReview","source":"DmsDocumentCategorySeed"}', 120),
+(N'BILLING', N'INVOICE', N'Invoice', N'Premium, agency bill, direct bill, commission, and service invoices.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 130),
+(N'ACCOUNTING', N'STATEMENT', N'Statement', N'Billing, premium, account, and carrier statement documents.', N'{"portalVisible":true,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 140),
+(N'ACCOUNTING', N'FINANCIAL', N'Financial', N'Financial statements, schedules, worksheets, and finance documents.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"FinancialRecord","source":"DmsDocumentCategorySeed"}', 150),
+(N'CLAIMS', N'LOSS_RUN', N'Loss Run', N'Carrier loss run reports and loss history documents.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 160),
+(N'CLAIMS', N'CLAIM', N'Claim', N'Claim notices, adjuster correspondence, photos, estimates, and claim documents.', N'{"portalVisible":true,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 170),
+(N'CLAIMS', N'INSPECTION', N'Inspection', N'Inspection reports, risk engineering documents, photos, and recommendations.', N'{"portalVisible":false,"requiresIndexing":true,"workflow":"RiskReview","source":"DmsDocumentCategorySeed"}', 180),
+(N'COMMUNICATIONS', N'CORRESPONDENCE', N'Correspondence', N'Email, letter, note, and other document correspondence.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 190),
+(N'COMMUNICATIONS', N'NOTICE', N'Notice', N'Carrier, insured, regulator, cancellation, nonrenewal, and compliance notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"DmsDocumentCategorySeed"}', 200),
+(N'FORMS', N'FORM', N'Form', N'General forms, supplemental forms, signed forms, and intake forms.', N'{"portalVisible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 210),
+(N'FORMS', N'ACORD', N'ACORD Form', N'ACORD forms and standardized insurance application forms.', N'{"portalVisible":false,"requiresIndexing":true,"ocrProfile":"AcordDefault","source":"DmsDocumentCategorySeed"}', 220),
+(N'FORMS', N'SIGNATURE', N'Signature / E-Sign', N'Signed forms, e-signature evidence, signer certificates, and consent records.', N'{"portalVisible":true,"requiresIndexing":true,"esignEvidence":true,"source":"DmsDocumentCategorySeed"}', 230),
+(N'COMPLIANCE', N'CONTRACT', N'Contract', N'Agency, vendor, producer, carrier, and client contracts.', N'{"portalVisible":false,"requiresApproval":true,"retentionBasis":"ContractRecord","source":"DmsDocumentCategorySeed"}', 240),
+(N'COMPLIANCE', N'LICENSE', N'License', N'Producer, agency, carrier appointment, and regulatory licensing records.', N'{"portalVisible":false,"requiresIndexing":true,"retentionBasis":"ComplianceRecord","source":"DmsDocumentCategorySeed"}', 250),
+(N'COMPLIANCE', N'AUDIT', N'Audit', N'Audit requests, responses, evidence, findings, and remediation records.', N'{"portalVisible":false,"legalHoldEligible":true,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 260),
+(N'POLICY', N'CANCELLATION', N'Cancellation / Nonrenewal', N'Cancellation, reinstatement, nonrenewal, intent-to-cancel, and lapse notices.', N'{"portalVisible":true,"requiresIndexing":true,"notifyOnUpload":true,"source":"DmsDocumentCategorySeed"}', 270),
+(N'PORTAL', N'PORTAL_UPLOAD', N'Portal Upload', N'Client portal uploads and shared documents pending agency review.', N'{"portalVisible":true,"requiresIndexing":true,"workflow":"PortalUploadReview","source":"DmsDocumentCategorySeed"}', 280),
+(N'MARKETING', N'MARKETING_CAMPAIGN', N'Marketing Campaign', N'Campaign, nurture, cross-sell, referral, and marketing collateral documents.', N'{"portalVisible":false,"requiresIndexing":true,"source":"DmsDocumentCategorySeed"}', 290),
+(N'GENERAL', N'PACKET', N'Packet', N'Generated packets, assembled delivery bundles, and packet manifests.', N'{"portalVisible":true,"packetEligible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 300),
+(N'GENERAL', N'ATTACHMENT', N'Attachment', N'Supporting attachments and related supplemental files.', N'{"portalVisible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 310),
+(N'GENERAL', N'OTHER', N'Other', N'General document category for records that do not fit a standard category.', N'{"portalVisible":true,"requiresIndexing":false,"source":"DmsDocumentCategorySeed"}', 990);
+
+MERGE DMS.DocumentGroup AS target
+USING
+(
+    SELECT dk.TenantId, dk.DocumentKindId, dc.DocumentCategoryId AS CategoryId, g.GroupCode, g.GroupName, g.Description, g.ConfigurationJson, g.SortOrder
+    FROM @Groups g
+    INNER JOIN DMS.DocumentKind dk ON dk.KindCode = N'DocumentCategory' AND dk.IsDeleted = 0
+    INNER JOIN DMS.DocumentCategory dc ON dc.TenantId = dk.TenantId AND dc.DocumentKindId = dk.DocumentKindId AND dc.CategoryCode = g.CategoryCode AND dc.IsDeleted = 0
+) AS source
+ON target.TenantId = source.TenantId AND target.DocumentKindId = source.DocumentKindId AND target.GroupCode = source.GroupCode
+WHEN MATCHED THEN UPDATE SET CategoryId = source.CategoryId, GroupName = source.GroupName, Description = source.Description, ConfigurationJson = source.ConfigurationJson, IsActive = 1, SortOrder = source.SortOrder, IsDeleted = 0, ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (DocumentGroupId, TenantId, DocumentKindId, CategoryId, GroupCode, GroupName, Description, ConfigurationJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, source.DocumentKindId, source.CategoryId, source.GroupCode, source.GroupName, source.Description, source.ConfigurationJson, 1, source.SortOrder, SYSUTCDATETIME(), 0);
+
+UPDATE g
+SET CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+WHERE g.CategoryId IS NOT NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM DMS.DocumentCategory dc
+      WHERE dc.DocumentCategoryId = g.CategoryId
+  );
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
+""";
+
+    private const string Migration0213_SubmissionsPolicyCreationSourceFlexibleMode = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyCreationSource
+    (
+        PolicyCreationSourceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyCreationSource PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SourceCode NVARCHAR(50) NOT NULL,
+        SourceName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        RequiresQuote BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresQuote_0213 DEFAULT 0,
+        RequiresReason BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresReason_0213 DEFAULT 1,
+        RequiresPolicyNumber BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresPolicyNumber_0213 DEFAULT 1,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDefault_0213 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsActive_0213 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyCreationSource_SortOrder_0213 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCreationSource_Created_0213 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDeleted_0213 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'TenantId') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyCreationSource_TenantId_0213 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'SourceCode') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD SourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCreationSource_SourceCode_0213 DEFAULT N'ManualEntry';
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'SourceName') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD SourceName NVARCHAR(100) NOT NULL CONSTRAINT DF_PolicyCreationSource_SourceName_0213 DEFAULT N'Manual Entry';
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'Description') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD Description NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresQuote') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresQuote BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresQuoteB_0213 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresReason') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresReason BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresReasonB_0213 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresPolicyNumber') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresPolicyNumber BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresPolicyNumberB_0213 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsDefault') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsDefault BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDefaultB_0213 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsActive') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsActive BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsActiveB_0213 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'SortOrder') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD SortOrder INT NOT NULL CONSTRAINT DF_PolicyCreationSource_SortOrderB_0213 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCreationSource_CreatedB_0213 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsDeleted') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsDeletedB_0213 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_PolicySourceCode_0213 DEFAULT N'QuoteBound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceReason') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceReason NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicySourceNotes') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicySourceNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0213 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0213 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+    UPDATE Submissions.BoundPolicy
+    SET IssueStatus = CASE WHEN Status IN (N'Issued', N'Active') THEN N'Issued' ELSE COALESCE(NULLIF(IssueStatus, N''), N'PendingIssue') END,
+        CoverageStatus = CASE WHEN Status IN (N'Cancelled', N'Expired', N'Non-Renewed') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''), N'Bound') END
+    WHERE IsDeleted = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyCreationSource') AND name = N'UX_PolicyCreationSource_Tenant_Code_0213')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyCreationSource_Tenant_Code_0213 ON Submissions.PolicyCreationSource(TenantId, SourceCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'tempdb..#PolicyCreationSourceTenants') IS NOT NULL DROP TABLE #PolicyCreationSourceTenants;
+CREATE TABLE #PolicyCreationSourceTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #PolicyCreationSourceTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #PolicyCreationSourceTenants)
+    INSERT INTO #PolicyCreationSourceTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#PolicyCreationSources') IS NOT NULL DROP TABLE #PolicyCreationSources;
+CREATE TABLE #PolicyCreationSources
+(
+    SourceCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    SourceName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    RequiresQuote BIT NOT NULL,
+    RequiresReason BIT NOT NULL,
+    RequiresPolicyNumber BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #PolicyCreationSources (SourceCode, SourceName, Description, RequiresQuote, RequiresReason, RequiresPolicyNumber, IsDefault, SortOrder) VALUES
+(N'QuoteBound', N'Quote Bound', N'Policy is created from an accepted or selected quote.', 1, 0, 0, 1, 10),
+(N'AlreadyBound', N'Already Bound Outside System', N'Carrier or broker already bound coverage outside the platform; policy is entered for record synchronization.', 0, 1, 1, 0, 20),
+(N'ManualEntry', N'Manual Policy Entry', N'Policy is manually entered with required audit reason and policy details.', 0, 1, 1, 0, 30),
+(N'Imported', N'Imported Policy', N'Policy is imported from a carrier, conversion, or data migration source.', 0, 1, 1, 0, 40),
+(N'BOR', N'Broker of Record / Takeover', N'Policy is entered after a broker-of-record or book-of-business takeover.', 0, 1, 1, 0, 50);
+
+EXEC(N'
+INSERT INTO Submissions.PolicyCreationSource
+(PolicyCreationSourceId, TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresReason, RequiresPolicyNumber, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, s.SourceCode, s.SourceName, s.Description, s.RequiresQuote, s.RequiresReason, s.RequiresPolicyNumber, s.IsDefault, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM #PolicyCreationSourceTenants t
+CROSS JOIN #PolicyCreationSources s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.PolicyCreationSource existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.SourceCode = s.SourceCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET SourceName = s.SourceName,
+    Description = s.Description,
+    RequiresQuote = s.RequiresQuote,
+    RequiresReason = s.RequiresReason,
+    RequiresPolicyNumber = s.RequiresPolicyNumber,
+    IsDefault = s.IsDefault,
+    IsActive = 1,
+    SortOrder = s.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.PolicyCreationSource existing
+INNER JOIN #PolicyCreationSources s ON s.SourceCode = existing.SourceCode
+WHERE existing.IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE Submissions.BoundPolicy
+    SET PolicySourceCode = COALESCE(NULLIF(PolicySourceCode, N''''), CASE WHEN QuoteId IS NULL OR QuoteId = ''00000000-0000-0000-0000-000000000000'' THEN N''ManualEntry'' ELSE N''QuoteBound'' END)
+    WHERE IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0214_SubmissionsPolicyBindTransactionEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.PolicyBindStatus', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyBindStatus
+    (
+        PolicyBindStatusId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyBindStatus PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        StatusName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsTerminal BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsTerminal_0214 DEFAULT 0,
+        CreatesPolicy BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_CreatesPolicy_0214 DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDefault_0214 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsActive_0214 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyBindStatus_SortOrder_0214 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindStatus_Created_0214 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDeleted_0214 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'TenantId') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindStatus_TenantId_0214 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'StatusCode') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindStatus_StatusCode_0214 DEFAULT N'Draft';
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'StatusName') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD StatusName NVARCHAR(100) NOT NULL CONSTRAINT DF_PolicyBindStatus_StatusName_0214 DEFAULT N'Draft';
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'Description') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD Description NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'IsTerminal') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD IsTerminal BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsTerminalB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'CreatesPolicy') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD CreatesPolicy BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_CreatesPolicyB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'IsDefault') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD IsDefault BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDefaultB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'IsActive') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD IsActive BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsActiveB_0214 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'SortOrder') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD SortOrder INT NOT NULL CONSTRAINT DF_PolicyBindStatus_SortOrderB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindStatus_CreatedB_0214 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindStatus', N'IsDeleted') IS NULL ALTER TABLE Submissions.PolicyBindStatus ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindStatus_IsDeletedB_0214 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyBindTransaction
+    (
+        PolicyBindTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyBindTransaction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_QuoteId_0214 DEFAULT '00000000-0000-0000-0000-000000000000',
+        PolicyId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Source_0214 DEFAULT N'QuoteBound',
+        BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Status_0214 DEFAULT N'Pending',
+        PolicyNumber NVARCHAR(80) NULL,
+        AnnualPremium DECIMAL(18,2) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        BindReason NVARCHAR(500) NULL,
+        Notes NVARCHAR(1000) NULL,
+        RequestedEffectiveTime TIME NULL,
+        ConfirmationSourceCode NVARCHAR(50) NULL,
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        BinderNumber NVARCHAR(120) NULL,
+        FinalPremium DECIMAL(18,2) NULL,
+        DownPaymentAmount DECIMAL(18,2) NULL,
+        SubjectivitiesOutstanding NVARCHAR(2000) NULL,
+        ConfirmationNotes NVARCHAR(2000) NULL,
+        ConfirmationDocumentId UNIQUEIDENTIFIER NULL,
+        ConfirmationReceivedFrom NVARCHAR(320) NULL,
+        ConfirmationMessageId NVARCHAR(200) NULL,
+        UnderwriterContactId UNIQUEIDENTIFIER NULL,
+        UnderwriterName NVARCHAR(200) NULL,
+        UnderwriterCompany NVARCHAR(200) NULL,
+        CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NULL,
+        CommissionPlanVersionId UNIQUEIDENTIFIER NULL,
+        CommissionPayeeId UNIQUEIDENTIFIER NULL,
+        CommissionSplitRuleId UNIQUEIDENTIFIER NULL,
+        CommissionBusinessTypeCode NVARCHAR(50) NULL,
+        CommissionRatePct DECIMAL(9,4) NULL,
+        CommissionSplitPct DECIMAL(9,4) NULL,
+        CommissionablePremium DECIMAL(18,2) NULL,
+        EstimatedGrossCommission DECIMAL(18,2) NULL,
+        EstimatedProducerCommission DECIMAL(18,2) NULL,
+        FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_0214 DEFAULT 0,
+        IntegrationCorrelationId NVARCHAR(120) NULL,
+        ExternalTransactionId NVARCHAR(120) NULL,
+        ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_0214 DEFAULT 0,
+        ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_0214 DEFAULT 0,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_Requested_0214 DEFAULT SYSUTCDATETIME(),
+        ApprovedByUserId UNIQUEIDENTIFIER NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        BoundByUserId UNIQUEIDENTIFIER NULL,
+        BoundDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_Created_0214 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_IsDeleted_0214 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'TenantId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_TenantId_0214 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubmissionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_SubmissionId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'QuoteId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_QuoteIdB_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ProposalId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ProposalId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CustomerAuthorizationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CustomerAuthorizationId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedEffectiveTime') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedEffectiveTime TIME NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationSourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationSourceCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BinderNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BinderNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FinalPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FinalPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'DownPaymentAmount') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD DownPaymentAmount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubjectivitiesOutstanding') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubjectivitiesOutstanding NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationNotes NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterContactId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterContactId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanApplicabilityId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanApplicabilityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPlanVersionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPlanVersionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionPayeeId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionPayeeId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitRuleId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionBusinessTypeCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionBusinessTypeCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionRatePct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionRatePct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionSplitPct') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionSplitPct DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CommissionablePremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CommissionablePremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedGrossCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedGrossCommission DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EstimatedProducerCommission') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EstimatedProducerCommission DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWrittenB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManuallyB_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_CertifiedB_0214 DEFAULT 0;
+DECLARE @PolicyBindStatusDefaultName SYSNAME;
+SELECT @PolicyBindStatusDefaultName = dc.name
+FROM sys.default_constraints dc
+INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+WHERE dc.parent_object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction')
+  AND c.name = N'BindStatusCode'
+  AND dc.definition LIKE N'%Bound%';
+IF @PolicyBindStatusDefaultName IS NOT NULL
+BEGIN
+    DECLARE @DropPolicyBindStatusDefaultSql NVARCHAR(MAX) = N'ALTER TABLE Submissions.PolicyBindTransaction DROP CONSTRAINT ' + QUOTENAME(@PolicyBindStatusDefaultName);
+    EXEC sp_executesql @DropPolicyBindStatusDefaultSql;
+    ALTER TABLE Submissions.PolicyBindTransaction ADD CONSTRAINT DF_PolicyBindTransaction_Status_Pending_0214 DEFAULT N'Pending' FOR BindStatusCode;
+END;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicyId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicyId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'AccountId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_AccountId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_PolicyBindTransaction_CarrierId_0214 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicySourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicySourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_SourceB_0214 DEFAULT N'QuoteBound';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BindStatusCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BindStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyBindTransaction_StatusB_0214 DEFAULT N'Pending';
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'PolicyNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD PolicyNumber NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'AnnualPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD AnnualPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyBindTransaction_Premium_0214 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'EffectiveDate') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD EffectiveDate DATE NOT NULL CONSTRAINT DF_PolicyBindTransaction_Effective_0214 DEFAULT CONVERT(date, SYSUTCDATETIME());
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExpirationDate') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExpirationDate DATE NOT NULL CONSTRAINT DF_PolicyBindTransaction_Expiration_0214 DEFAULT DATEADD(year, 1, CONVERT(date, SYSUTCDATETIME()));
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BindReason') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BindReason NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'Notes') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_RequestedB_0214 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ApprovedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ApprovedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ApprovedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ApprovedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BoundByUserId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BoundByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BoundDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BoundDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyBindTransaction_CreatedB_0214 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IsDeleted') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_IsDeletedB_0214 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL AND COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyBindTransactionId') IS NULL
+    ALTER TABLE Submissions.BoundPolicy ADD PolicyBindTransactionId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindStatus') AND name = N'UX_PolicyBindStatus_Tenant_Code_0214')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyBindStatus_Tenant_Code_0214 ON Submissions.PolicyBindStatus(TenantId, StatusCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_Submission_0214')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_Submission_0214 ON Submissions.PolicyBindTransaction(SubmissionId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_BindQueue')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_BindQueue ON Submissions.PolicyBindTransaction(TenantId, SubmissionId, QuoteId, CreatedDateUtc DESC) INCLUDE (PolicyBindTransactionId, PolicyId, PolicyNumber, BindStatusCode, BindReason, Notes) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_Policy_0214')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_Policy_0214 ON Submissions.PolicyBindTransaction(PolicyId) WHERE IsDeleted = 0 AND PolicyId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyBindTransaction') AND name = N'IX_PolicyBindTransaction_UnderwriterContact')
+    EXEC(N'CREATE INDEX IX_PolicyBindTransaction_UnderwriterContact ON Submissions.PolicyBindTransaction(TenantId, UnderwriterContactId, CreatedDateUtc DESC) WHERE IsDeleted = 0 AND UnderwriterContactId IS NOT NULL;');
+
+IF OBJECT_ID(N'Agency.CarrierContact', N'U') IS NOT NULL
+   AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_PolicyBindTransaction_UnderwriterContact')
+    ALTER TABLE Submissions.PolicyBindTransaction WITH CHECK
+        ADD CONSTRAINT FK_PolicyBindTransaction_UnderwriterContact FOREIGN KEY (UnderwriterContactId) REFERENCES Agency.CarrierContact(CarrierContactId);
+
+IF OBJECT_ID(N'Commission.CommissionPlanApplicability', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionPlanApplicability
+    (
+        CommissionPlanApplicabilityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPlanApplicability PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(160) NULL,
+        BusinessTypeCode NVARCHAR(50) NOT NULL,
+        EffectiveStartDate DATE NOT NULL,
+        EffectiveEndDate DATE NULL,
+        Priority INT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_Priority DEFAULT 100,
+        IsActive BIT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPlanApplicability_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPlanApplicability_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionPlanVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionPlanVersion
+    (
+        PlanVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionPlanVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        PlanName NVARCHAR(200) NOT NULL,
+        BaseRatePct DECIMAL(9,4) NOT NULL,
+        EffectiveStartDate DATE NOT NULL,
+        EffectiveEndDate DATE NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionPlanVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionPlanVersion_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionPlanVersion') AND name = N'IX_CommissionPlanVersion_Effective')
+    CREATE INDEX IX_CommissionPlanVersion_Effective ON Commission.CommissionPlanVersion(TenantId, CommissionPlanId, StatusCode, EffectiveStartDate, EffectiveEndDate, VersionNumber DESC) INCLUDE (BaseRatePct, PlanName) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionPlanApplicability') AND name = N'IX_CommissionPlanApplicability_Resolve')
+    CREATE INDEX IX_CommissionPlanApplicability_Resolve ON Commission.CommissionPlanApplicability(TenantId, CarrierId, BusinessTypeCode, IsActive, IsDeleted, EffectiveStartDate, EffectiveEndDate, Priority) INCLUDE (CommissionPlanId, LineOfBusiness);
+
+IF OBJECT_ID(N'Commission.CommissionCalculationResult', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionCalculationResult
+    (
+        CalculationResultId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionCalculationResult PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionId UNIQUEIDENTIFIER NOT NULL,
+        PayeeId UNIQUEIDENTIFIER NOT NULL,
+        CommissionPlanId UNIQUEIDENTIFIER NOT NULL,
+        BaseAmount DECIMAL(18,2) NOT NULL,
+        RatePct DECIMAL(9,4) NOT NULL,
+        SplitPct DECIMAL(9,4) NOT NULL,
+        CalculatedAmount DECIMAL(18,2) NOT NULL,
+        AdjustedAmount DECIMAL(18,2) NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CalculatedDateUtc DATETIME2 NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionCalculationResult_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionCalculationResult_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Commission.CommissionAccrualEntry', N'U') IS NULL
+BEGIN
+    CREATE TABLE Commission.CommissionAccrualEntry
+    (
+        AccrualEntryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CommissionAccrualEntry PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TransactionId UNIQUEIDENTIFIER NOT NULL,
+        GLAccountId UNIQUEIDENTIFIER NULL,
+        AccrualDate DATE NOT NULL,
+        AccruedAmount DECIMAL(18,2) NOT NULL,
+        ReversalDate DATE NULL,
+        ReversedAmount DECIMAL(18,2) NULL,
+        JournalEntryId UNIQUEIDENTIFIER NULL,
+        StatusCode NVARCHAR(50) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CommissionAccrualEntry_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CommissionAccrualEntry_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionTransaction') AND name = N'UX_CommissionTransaction_PolicyPayee')
+    CREATE UNIQUE INDEX UX_CommissionTransaction_PolicyPayee ON Commission.CommissionTransaction(TenantId, SourceEntityName, SourceEntityId, PayeeId) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionCalculationResult') AND name = N'UX_CommissionCalculationResult_TransactionPayee')
+    CREATE UNIQUE INDEX UX_CommissionCalculationResult_TransactionPayee ON Commission.CommissionCalculationResult(TenantId, TransactionId, PayeeId) WHERE IsDeleted = 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Commission.CommissionAccrualEntry') AND name = N'UX_CommissionAccrualEntry_Transaction')
+    CREATE UNIQUE INDEX UX_CommissionAccrualEntry_Transaction ON Commission.CommissionAccrualEntry(TenantId, TransactionId) WHERE IsDeleted = 0;
+
+IF OBJECT_ID(N'tempdb..#PolicyBindTenants') IS NOT NULL DROP TABLE #PolicyBindTenants;
+CREATE TABLE #PolicyBindTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #PolicyBindTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #PolicyBindTenants)
+    INSERT INTO #PolicyBindTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#PolicyBindStatuses') IS NOT NULL DROP TABLE #PolicyBindStatuses;
+CREATE TABLE #PolicyBindStatuses
+(
+    StatusCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    StatusName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsTerminal BIT NOT NULL,
+    CreatesPolicy BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #PolicyBindStatuses (StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, SortOrder) VALUES
+(N'Pending', N'Pending', N'Bind request has been captured and is pending carrier submission or review.', 0, 0, 1, 10),
+(N'CarrierReviewing', N'Carrier Reviewing', N'Carrier is reviewing the bind request before confirmation.', 0, 0, 0, 20),
+(N'WaitingPayment', N'Waiting Payment', N'Carrier requires down payment before binding.', 0, 0, 0, 30),
+(N'WaitingDocuments', N'Waiting Documents', N'Carrier requires signed application or additional documents before binding.', 0, 0, 0, 40),
+(N'Approved', N'Approved', N'Carrier approved the bind request but policy issuance is not complete.', 0, 0, 0, 50),
+(N'Bound', N'Bound', N'Carrier confirmed coverage is bound; policy creation may proceed.', 1, 1, 0, 60),
+(N'Declined', N'Declined', N'Carrier declined the bind request.', 1, 0, 0, 50),
+(N'Cancelled', N'Cancelled', N'Bind transaction was cancelled before policy creation.', 1, 0, 0, 55),
+(N'Failed', N'Failed', N'Bind request failed validation or carrier processing.', 1, 0, 0, 60);
+
+EXEC(N'
+INSERT INTO Submissions.PolicyBindStatus
+(PolicyBindStatusId, TenantId, StatusCode, StatusName, Description, IsTerminal, CreatesPolicy, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, s.StatusCode, s.StatusName, s.Description, s.IsTerminal, s.CreatesPolicy, s.IsDefault, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM #PolicyBindTenants t
+CROSS JOIN #PolicyBindStatuses s
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.PolicyBindStatus existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.StatusCode = s.StatusCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET StatusName = s.StatusName,
+    Description = s.Description,
+    IsTerminal = s.IsTerminal,
+    CreatesPolicy = s.CreatesPolicy,
+    IsDefault = s.IsDefault,
+    IsActive = 1,
+    SortOrder = s.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.PolicyBindStatus existing
+INNER JOIN #PolicyBindStatuses s ON s.StatusCode = existing.StatusCode
+WHERE existing.IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.PolicyBindTransaction
+    (PolicyBindTransactionId, TenantId, SubmissionId, QuoteId, PolicyId, AccountId, CarrierId, PolicySourceCode, BindStatusCode, PolicyNumber, AnnualPremium, EffectiveDate, ExpirationDate, BindReason, Notes, RequestedDateUtc, ApprovedDateUtc, BoundDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), bp.TenantId, bp.SubmissionId, COALESCE(bp.QuoteId, ''00000000-0000-0000-0000-000000000000''), bp.PolicyId, bp.AccountId, bp.CarrierId,
+           COALESCE(NULLIF(bp.PolicySourceCode, N''''), CASE WHEN bp.QuoteId IS NULL OR bp.QuoteId = ''00000000-0000-0000-0000-000000000000'' THEN N''ManualEntry'' ELSE N''QuoteBound'' END),
+           N''Bound'', bp.PolicyNumber, bp.AnnualPremium, bp.EffectiveDate, bp.ExpirationDate, bp.PolicySourceReason, bp.PolicySourceNotes,
+           COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), 0
+    FROM Submissions.BoundPolicy bp
+    WHERE bp.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.PolicyBindTransaction pbt
+          WHERE pbt.PolicyId = bp.PolicyId
+            AND pbt.IsDeleted = 0
+      );
+
+    UPDATE bp
+    SET PolicyBindTransactionId = pbt.PolicyBindTransactionId
+    FROM Submissions.BoundPolicy bp
+    INNER JOIN Submissions.PolicyBindTransaction pbt ON pbt.PolicyId = bp.PolicyId AND pbt.IsDeleted = 0
+    WHERE bp.IsDeleted = 0
+      AND bp.PolicyBindTransactionId IS NULL;');
+END;
+""";
+
+    private const string Migration0215_SubmissionsDirectPolicyIntakeEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresSubmission') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresSubmission BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresSubmission_0215 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresAccount') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresAccount BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_RequiresAccount_0215 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'AllowsDirectPolicyEntry') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD AllowsDirectPolicyEntry BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_AllowsDirect_0215 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsImportSource') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsImportSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsImport_0215 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'IsConversionSource') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD IsConversionSource BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_IsConversion_0215 DEFAULT 0;
+END;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    DECLARE @BoundPolicyObjectId INT = OBJECT_ID(N'Submissions.BoundPolicy');
+    DECLARE @BoundPolicySubmissionConstraint NVARCHAR(256);
+    DECLARE @BoundPolicyQuoteConstraint NVARCHAR(256);
+    DECLARE @BoundPolicyDropSql NVARCHAR(MAX);
+
+    SELECT TOP 1 @BoundPolicySubmissionConstraint = dc.name
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = @BoundPolicyObjectId AND c.name = N'SubmissionId';
+
+    IF @BoundPolicySubmissionConstraint IS NOT NULL
+    BEGIN
+        SET @BoundPolicyDropSql = N'ALTER TABLE Submissions.BoundPolicy DROP CONSTRAINT ' + QUOTENAME(@BoundPolicySubmissionConstraint);
+        EXEC sp_executesql @BoundPolicyDropSql;
+    END;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'SubmissionId') IS NOT NULL ALTER TABLE Submissions.BoundPolicy ALTER COLUMN SubmissionId UNIQUEIDENTIFIER NULL;
+
+    SELECT TOP 1 @BoundPolicyQuoteConstraint = dc.name
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = @BoundPolicyObjectId AND c.name = N'QuoteId';
+
+    IF @BoundPolicyQuoteConstraint IS NOT NULL
+    BEGIN
+        SET @BoundPolicyDropSql = N'ALTER TABLE Submissions.BoundPolicy DROP CONSTRAINT ' + QUOTENAME(@BoundPolicyQuoteConstraint);
+        EXEC sp_executesql @BoundPolicyDropSql;
+    END;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'QuoteId') IS NOT NULL ALTER TABLE Submissions.BoundPolicy ALTER COLUMN QuoteId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NOT NULL
+BEGIN
+    DECLARE @PolicyBindObjectId INT = OBJECT_ID(N'Submissions.PolicyBindTransaction');
+    DECLARE @PolicyBindSubmissionConstraint NVARCHAR(256);
+    DECLARE @PolicyBindQuoteConstraint NVARCHAR(256);
+    DECLARE @PolicyBindDropSql NVARCHAR(MAX);
+
+    SELECT TOP 1 @PolicyBindSubmissionConstraint = dc.name
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = @PolicyBindObjectId AND c.name = N'SubmissionId';
+
+    IF @PolicyBindSubmissionConstraint IS NOT NULL
+    BEGIN
+        SET @PolicyBindDropSql = N'ALTER TABLE Submissions.PolicyBindTransaction DROP CONSTRAINT ' + QUOTENAME(@PolicyBindSubmissionConstraint);
+        EXEC sp_executesql @PolicyBindDropSql;
+    END;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubmissionId') IS NOT NULL ALTER TABLE Submissions.PolicyBindTransaction ALTER COLUMN SubmissionId UNIQUEIDENTIFIER NULL;
+
+    SELECT TOP 1 @PolicyBindQuoteConstraint = dc.name
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+    WHERE dc.parent_object_id = @PolicyBindObjectId AND c.name = N'QuoteId';
+
+    IF @PolicyBindQuoteConstraint IS NOT NULL
+    BEGIN
+        SET @PolicyBindDropSql = N'ALTER TABLE Submissions.PolicyBindTransaction DROP CONSTRAINT ' + QUOTENAME(@PolicyBindQuoteConstraint);
+        EXEC sp_executesql @PolicyBindDropSql;
+    END;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'QuoteId') IS NOT NULL ALTER TABLE Submissions.PolicyBindTransaction ALTER COLUMN QuoteId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'tempdb..#DirectPolicyTenants') IS NOT NULL DROP TABLE #DirectPolicyTenants;
+CREATE TABLE #DirectPolicyTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #DirectPolicyTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #DirectPolicyTenants)
+    INSERT INTO #DirectPolicyTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#DirectPolicySources') IS NOT NULL DROP TABLE #DirectPolicySources;
+CREATE TABLE #DirectPolicySources
+(
+    SourceCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    SourceName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    RequiresQuote BIT NOT NULL,
+    RequiresSubmission BIT NOT NULL,
+    RequiresAccount BIT NOT NULL,
+    RequiresReason BIT NOT NULL,
+    RequiresPolicyNumber BIT NOT NULL,
+    AllowsDirectPolicyEntry BIT NOT NULL,
+    IsImportSource BIT NOT NULL,
+    IsConversionSource BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #DirectPolicySources (SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, SortOrder) VALUES
+(N'QuoteBound', N'Quote Bound', N'Policy is created from an accepted or selected quote in the normal new-business flow.', 1, 1, 1, 0, 0, 0, 0, 0, 1, 10),
+(N'AlreadyBound', N'Already Bound Outside System', N'Carrier or broker already bound coverage outside the platform; policy is entered for record synchronization.', 0, 0, 1, 1, 1, 1, 0, 0, 0, 20),
+(N'ManualEntry', N'Manual Policy Entry', N'Policy is manually entered with required audit reason and policy details.', 0, 0, 1, 1, 1, 1, 0, 0, 0, 30),
+(N'Imported', N'Imported Policy', N'Policy is imported from a carrier, conversion, or data migration source.', 0, 0, 1, 1, 1, 1, 1, 1, 0, 40),
+(N'BOR', N'Broker of Record / Takeover', N'Policy is entered after a broker-of-record or book-of-business takeover.', 0, 0, 1, 1, 1, 1, 0, 1, 0, 50),
+(N'RenewalImport', N'Renewal Import', N'Renewal policy was imported from carrier, prior AMS, or external renewal file.', 0, 0, 1, 1, 1, 1, 1, 1, 0, 60),
+(N'CarrierIssuedAfterFact', N'Carrier Issued After the Fact', N'Carrier issued the policy before the policy was entered in AMS.', 0, 0, 1, 1, 1, 1, 0, 0, 0, 70),
+(N'EndorsementCleanup', N'Endorsement / Conversion Cleanup', N'Policy is entered or corrected to clean up endorsement, conversion, or historical data.', 0, 0, 1, 1, 1, 1, 0, 1, 0, 80);
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.PolicyCreationSource
+    (PolicyCreationSourceId, TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), t.TenantId, s.SourceCode, s.SourceName, s.Description, s.RequiresQuote, s.RequiresSubmission, s.RequiresAccount, s.RequiresReason, s.RequiresPolicyNumber, s.AllowsDirectPolicyEntry, s.IsImportSource, s.IsConversionSource, s.IsDefault, 1, s.SortOrder, SYSUTCDATETIME(), 0
+    FROM #DirectPolicyTenants t
+    CROSS JOIN #DirectPolicySources s
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM Submissions.PolicyCreationSource existing
+        WHERE existing.TenantId = t.TenantId AND existing.SourceCode = s.SourceCode AND existing.IsDeleted = 0
+    );
+
+    UPDATE existing
+    SET SourceName = s.SourceName,
+        Description = s.Description,
+        RequiresQuote = s.RequiresQuote,
+        RequiresSubmission = s.RequiresSubmission,
+        RequiresAccount = s.RequiresAccount,
+        RequiresReason = s.RequiresReason,
+        RequiresPolicyNumber = s.RequiresPolicyNumber,
+        AllowsDirectPolicyEntry = s.AllowsDirectPolicyEntry,
+        IsImportSource = s.IsImportSource,
+        IsConversionSource = s.IsConversionSource,
+        IsDefault = s.IsDefault,
+        IsActive = 1,
+        SortOrder = s.SortOrder,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.PolicyCreationSource existing
+    INNER JOIN #DirectPolicySources s ON s.SourceCode = existing.SourceCode
+    WHERE existing.IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0216_PolicyEndorsementsEnterpriseSchemaOptions = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyEndorsement', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestSourceCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ChangeCategoryCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ChangeCategoryCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestedByEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestedByEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RequestedByPhone') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RequestedByPhone NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientContactPhone') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientContactPhone NVARCHAR(40) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ExpirationDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ExpirationDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'RetroactiveDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD RetroactiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'DiscoveryDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD DiscoveryDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierSubmissionDateUtc') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierSubmissionDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierResponseDueDate') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierResponseDueDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CarrierReferenceNumber') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CarrierReferenceNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'UnderwriterEmail') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD UnderwriterEmail NVARCHAR(254) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BrokerOfRecordRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BrokerOfRecordRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_BorRequired_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'AgentAuthorityCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD AgentAuthorityCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ApprovalLevelCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ApprovalLevelCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ApprovedByName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ApprovedByName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'IssuedByName') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD IssuedByName NVARCHAR(160) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BillingImpactCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BillingImpactCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CommissionImpactCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CommissionImpactCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'TaxFeeDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD TaxFeeDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_TaxFeeDelta_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'TotalCostDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD TotalCostDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_TotalCostDelta_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ProratedPremiumDelta') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ProratedPremiumDelta DECIMAL(18,2) NOT NULL CONSTRAINT DF_PolicyEndorsement_Proration_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'BillingInstruction') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD BillingInstruction NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'DocumentDeliveryCode') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD DocumentDeliveryCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'CertificateRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD CertificateRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_CertRequired_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'FormsRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD FormsRequired NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'AcordFormNumbers') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD AcordFormNumbers NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ExternalReferenceNumber') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ExternalReferenceNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ComplianceReviewRequired') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ComplianceReviewRequired BIT NOT NULL CONSTRAINT DF_PolicyEndorsement_Compliance_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'EoExposureNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD EoExposureNotes NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'InternalNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD InternalNotes NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Policy.PolicyEndorsement', N'ClientFacingNotes') IS NULL ALTER TABLE Policy.PolicyEndorsement ADD ClientFacingNotes NVARCHAR(2000) NULL;
+
+    EXEC(N'
+    UPDATE Policy.PolicyEndorsement
+    SET RequestSourceCode = COALESCE(NULLIF(RequestSourceCode, N''''), N''AgencyRequest''),
+        ChangeCategoryCode = COALESCE(NULLIF(ChangeCategoryCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NonPremium'' ELSE N''PremiumBearing'' END),
+        ApprovalLevelCode = COALESCE(NULLIF(ApprovalLevelCode, N''''), CASE WHEN ABS(PremiumDelta) >= 5000 THEN N''ManagerApproval'' ELSE N''StandardAuthority'' END),
+        BillingImpactCode = COALESCE(NULLIF(BillingImpactCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NoBillingImpact'' ELSE N''BillInstallment'' END),
+        CommissionImpactCode = COALESCE(NULLIF(CommissionImpactCode, N''''), CASE WHEN PremiumDelta = 0 THEN N''NoCommissionImpact'' ELSE N''RecalculateCommission'' END),
+        DocumentDeliveryCode = COALESCE(NULLIF(DocumentDeliveryCode, N''''), N''PortalEmail''),
+        AgentAuthorityCode = COALESCE(NULLIF(AgentAuthorityCode, N''''), N''CarrierApprovalRequired''),
+        TotalCostDelta = CASE WHEN TotalCostDelta = 0 THEN PremiumDelta + TaxFeeDelta ELSE TotalCostDelta END,
+        ProratedPremiumDelta = CASE WHEN ProratedPremiumDelta = 0 THEN PremiumDelta ELSE ProratedPremiumDelta END
+    WHERE IsDeleted = 0;');
+END;
+
+IF OBJECT_ID(N'Policy.PolicyEndorsementOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyEndorsementOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PolicyEndorsementOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(50) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsDefault DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyEndorsementOption_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyEndorsementOption_IsDeleted DEFAULT 0,
+        CONSTRAINT UQ_PolicyEndorsementOption_TenantGroupCode UNIQUE (TenantId, OptionGroupCode, OptionCode)
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyEndorsementOption') AND name = N'IX_PolicyEndorsementOption_TenantGroup')
+    CREATE INDEX IX_PolicyEndorsementOption_TenantGroup ON Policy.PolicyEndorsementOption(TenantId, OptionGroupCode, IsActive, IsDeleted, SortOrder);
+
+IF OBJECT_ID(N'tempdb..#EndorsementOptionTenants') IS NOT NULL DROP TABLE #EndorsementOptionTenants;
+CREATE TABLE #EndorsementOptionTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #EndorsementOptionTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #EndorsementOptionTenants)
+    INSERT INTO #EndorsementOptionTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'Policy.EndorsementType', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.EndorsementType
+    (
+        EndorsementTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_EndorsementType PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TypeCode NVARCHAR(50) NOT NULL,
+        TypeName NVARCHAR(120) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_IsActive DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_Policy_EndorsementType_SortOrder DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Policy_EndorsementType_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_IsDeleted DEFAULT 0,
+        CONSTRAINT UQ_Policy_EndorsementType_TenantCode UNIQUE (TenantId, TypeCode)
+    );
+END;
+
+IF OBJECT_ID(N'Policy.EndorsementType', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Policy.EndorsementType', N'EndorsementTypeId') IS NULL ALTER TABLE Policy.EndorsementType ADD EndorsementTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Policy_EndorsementType_Id_0216 DEFAULT NEWID();
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TenantId') IS NULL ALTER TABLE Policy.EndorsementType ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Policy_EndorsementType_Tenant_0216 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TypeCode') IS NULL ALTER TABLE Policy.EndorsementType ADD TypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Policy_EndorsementType_Code_0216 DEFAULT N'Change';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'TypeName') IS NULL ALTER TABLE Policy.EndorsementType ADD TypeName NVARCHAR(120) NOT NULL CONSTRAINT DF_Policy_EndorsementType_Name_0216 DEFAULT N'Policy Change';
+    IF COL_LENGTH(N'Policy.EndorsementType', N'Description') IS NULL ALTER TABLE Policy.EndorsementType ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'IsActive') IS NULL ALTER TABLE Policy.EndorsementType ADD IsActive BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Active_0216 DEFAULT 1;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'SortOrder') IS NULL ALTER TABLE Policy.EndorsementType ADD SortOrder INT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Sort_0216 DEFAULT 0;
+    IF COL_LENGTH(N'Policy.EndorsementType', N'CreatedDateUtc') IS NULL ALTER TABLE Policy.EndorsementType ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Policy_EndorsementType_Created_0216 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Policy.EndorsementType', N'IsDeleted') IS NULL ALTER TABLE Policy.EndorsementType ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Policy_EndorsementType_Deleted_0216 DEFAULT 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.EndorsementType') AND name = N'IX_Policy_EndorsementType_TenantActive')
+    CREATE INDEX IX_Policy_EndorsementType_TenantActive ON Policy.EndorsementType(TenantId, IsActive, IsDeleted, SortOrder, TypeName);
+
+IF OBJECT_ID(N'tempdb..#EnterpriseEndorsementTypes') IS NOT NULL DROP TABLE #EnterpriseEndorsementTypes;
+CREATE TABLE #EnterpriseEndorsementTypes
+(
+    TypeCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    TypeName NVARCHAR(120) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #EnterpriseEndorsementTypes (TypeCode, TypeName, Description, SortOrder) VALUES
+(N'AddCoverage', N'Add Coverage', N'Add coverage, coverage part, form, or endorsement.', 10),
+(N'RemoveCoverage', N'Remove Coverage', N'Remove coverage, coverage part, form, or endorsement.', 20),
+(N'ChangeLimit', N'Change Limit / Deductible', N'Change limits, deductibles, retentions, or sublimits.', 30),
+(N'NamedInsured', N'Named Insured Change', N'Add, remove, or correct a named insured.', 40),
+(N'AdditionalInterest', N'Additional Interest / Lienholder', N'Add, remove, or revise additional insured, lienholder, lender, or loss payee information.', 50),
+(N'ExposureSchedule', N'Exposure / Schedule Change', N'Change vehicle, driver, property, location, payroll, sales, equipment, or other exposure schedules.', 60),
+(N'AddressContact', N'Address / Contact Change', N'Change mailing, location, contact, or communication information.', 70),
+(N'PremiumAdjustment', N'Premium Adjustment', N'Premium, tax, fee, or billing-impact endorsement.', 80),
+(N'WaiverSubrogation', N'Waiver of Subrogation', N'Add or revise waiver of subrogation wording.', 90),
+(N'CertificateRelated', N'Certificate-Related Change', N'Policy change required to support certificate issuance.', 100),
+(N'ClassCodeChange', N'Class Code Change', N'Change class code, rating basis, territory, or underwriting classification.', 110),
+(N'RewriteRequest', N'Rewrite Request', N'Rewrite policy coverage, terms, carrier, or structure.', 120);
+
+INSERT INTO Policy.EndorsementType
+(EndorsementTypeId, TenantId, TypeCode, TypeName, Description, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, et.TypeCode, et.TypeName, et.Description, 1, et.SortOrder, SYSUTCDATETIME(), 0
+FROM #EndorsementOptionTenants t
+CROSS JOIN #EnterpriseEndorsementTypes et
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.EndorsementType existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.TypeCode = et.TypeCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET TypeName = et.TypeName,
+    Description = et.Description,
+    IsActive = 1,
+    SortOrder = et.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.EndorsementType existing
+INNER JOIN #EnterpriseEndorsementTypes et ON et.TypeCode = existing.TypeCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'tempdb..#EndorsementOptions') IS NOT NULL DROP TABLE #EndorsementOptions;
+CREATE TABLE #EndorsementOptions
+(
+    OptionGroupCode NVARCHAR(50) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #EndorsementOptions (OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, SortOrder) VALUES
+(N'Status', N'Pending', N'Pending', N'Request received and pending intake.', 1, 10),
+(N'Status', N'In Review', N'In Review', N'Underwriting or service review is in progress.', 0, 20),
+(N'Status', N'Info Needed', N'Info Needed', N'Additional client or carrier information is required.', 0, 30),
+(N'Status', N'Approved', N'Approved', N'Approved and pending issuance.', 0, 40),
+(N'Status', N'Issued', N'Issued', N'Issued and attached to the policy.', 0, 50),
+(N'Status', N'Declined', N'Declined', N'Declined or withdrawn.', 0, 60),
+(N'Priority', N'Low', N'Low', N'Routine low urgency request.', 0, 10),
+(N'Priority', N'Normal', N'Normal', N'Standard service priority.', 1, 20),
+(N'Priority', N'High', N'High', N'Expedited service required.', 0, 30),
+(N'Priority', N'Critical', N'Critical', N'Immediate action required for coverage or compliance.', 0, 40),
+(N'RequestSource', N'AgencyRequest', N'Agency Request', N'Created by agency staff.', 1, 10),
+(N'RequestSource', N'ClientPortal', N'Client Portal', N'Request submitted by insured through portal.', 0, 20),
+(N'RequestSource', N'CarrierDownload', N'Carrier Download', N'Received from carrier download or transaction.', 0, 30),
+(N'RequestSource', N'Email', N'Email', N'Received by email.', 0, 40),
+(N'RequestSource', N'Phone', N'Phone', N'Received by phone.', 0, 50),
+(N'ChangeCategory', N'CoverageChange', N'Coverage Change', N'Coverage, form, limit, deductible, or exclusion change.', 0, 10),
+(N'ChangeCategory', N'NamedInsured', N'Named Insured / Additional Interest', N'Named insured, additional insured, lender, or loss payee change.', 0, 20),
+(N'ChangeCategory', N'ExposureSchedule', N'Exposure / Schedule Change', N'Vehicle, driver, property, location, payroll, sales, or equipment schedule change.', 0, 30),
+(N'ChangeCategory', N'Administrative', N'Administrative Change', N'Mailing address, contact, billing, or non-coverage administrative change.', 0, 40),
+(N'ChangeCategory', N'PremiumBearing', N'Premium Bearing', N'Change has premium, tax, fee, or commission impact.', 1, 50),
+(N'ChangeCategory', N'NonPremium', N'Non-Premium', N'Change does not affect premium.', 0, 60),
+(N'WorkflowStage', N'Intake', N'Intake', N'Request intake and validation.', 1, 10),
+(N'WorkflowStage', N'Underwriting Review', N'Underwriting Review', N'Carrier or underwriting review.', 0, 20),
+(N'WorkflowStage', N'Awaiting Information', N'Awaiting Information', N'Waiting on missing data or documents.', 0, 30),
+(N'WorkflowStage', N'Approved Pending Issue', N'Approved Pending Issue', N'Approved and waiting for issuance.', 0, 40),
+(N'WorkflowStage', N'Issued to Policy', N'Issued to Policy', N'Issued and attached to policy.', 0, 50),
+(N'WorkflowStage', N'Closed Declined', N'Closed Declined', N'Closed as declined or withdrawn.', 0, 60),
+(N'BillingImpact', N'NoBillingImpact', N'No Billing Impact', N'No billing transaction required.', 1, 10),
+(N'BillingImpact', N'BillInstallment', N'Bill on Installment Plan', N'Apply delta to existing installment plan.', 0, 20),
+(N'BillingImpact', N'InvoiceImmediately', N'Invoice Immediately', N'Create immediate invoice or agency bill item.', 0, 30),
+(N'BillingImpact', N'RefundCredit', N'Refund / Credit', N'Create refund, credit, or return premium workflow.', 0, 40),
+(N'CommissionImpact', N'NoCommissionImpact', N'No Commission Impact', N'No commission recalculation required.', 1, 10),
+(N'CommissionImpact', N'RecalculateCommission', N'Recalculate Commission', N'Recalculate commission from premium delta.', 0, 20),
+(N'CommissionImpact', N'ManualCommissionReview', N'Manual Commission Review', N'Accounting must review commission handling.', 0, 30),
+(N'DocumentDelivery', N'PortalEmail', N'Portal + Email', N'Deliver through portal and email notification.', 1, 10),
+(N'DocumentDelivery', N'EmailOnly', N'Email Only', N'Deliver by email only.', 0, 20),
+(N'DocumentDelivery', N'PrintMail', N'Print / Mail', N'Print and mail policy documents.', 0, 30),
+(N'DocumentDelivery', N'CarrierPortal', N'Carrier Portal', N'Available through carrier portal.', 0, 40),
+(N'ApprovalLevel', N'StandardAuthority', N'Standard Authority', N'CSR or account manager authority.', 1, 10),
+(N'ApprovalLevel', N'ManagerApproval', N'Manager Approval', N'Manager approval required.', 0, 20),
+(N'ApprovalLevel', N'ProducerApproval', N'Producer Approval', N'Producer approval required.', 0, 30),
+(N'ApprovalLevel', N'ExecutiveApproval', N'Executive Approval', N'Executive or compliance approval required.', 0, 40),
+(N'AgentAuthority', N'AgencyAuthority', N'Agency Authority', N'Agency may issue within authority.', 0, 10),
+(N'AgentAuthority', N'CarrierApprovalRequired', N'Carrier Approval Required', N'Carrier approval required before issuance.', 1, 20),
+(N'AgentAuthority', N'BrokerOfRecordRequired', N'Broker of Record Required', N'BOR or authorization document required.', 0, 30),
+(N'ActivityType', N'Created', N'Created', N'Endorsement created.', 1, 10),
+(N'ActivityType', N'Status', N'Status Change', N'Status or workflow stage changed.', 0, 20),
+(N'ActivityType', N'Note', N'Workflow Note', N'Workflow note added.', 0, 30),
+(N'ActivityType', N'Carrier', N'Carrier Follow-up', N'Carrier submission or follow-up activity.', 0, 40),
+(N'ActivityType', N'Document', N'Document Activity', N'Document request, receipt, or delivery.', 0, 50);
+
+INSERT INTO Policy.PolicyEndorsementOption
+(OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #EndorsementOptionTenants t
+CROSS JOIN #EndorsementOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.PolicyEndorsementOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.PolicyEndorsementOption existing
+INNER JOIN #EndorsementOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
+""";
+
+    private const string Migration0217_SubmissionsQuoteMarketResponseLink = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.Quote', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.Quote ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'QuoteRequestDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD QuoteRequestDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'QuoteReceivedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD QuoteReceivedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ResponseVersion') IS NULL ALTER TABLE Submissions.Quote ADD ResponseVersion INT NOT NULL CONSTRAINT DF_Submissions_Quote_ResponseVersion_0217 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.Quote', N'ResponseSourceCode') IS NULL ALTER TABLE Submissions.Quote ADD ResponseSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.Quote ADD CarrierReferenceNumber NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'RequestedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD RequestedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ReceivedByUserId') IS NULL ALTER TABLE Submissions.Quote ADD ReceivedByUserId UNIQUEIDENTIFIER NULL;
+
+    IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+    BEGIN
+        EXEC(N'
+        UPDATE q
+        SET SubmissionMarketId = sm.SubmissionMarketId,
+            QuoteRequestDateUtc = COALESCE(q.QuoteRequestDateUtc, sm.SubmittedDateUtc, sm.AddedDateUtc, q.CreatedDateUtc),
+            QuoteReceivedDateUtc = COALESCE(q.QuoteReceivedDateUtc, CASE WHEN q.Status IN (N''Received'', N''Presented'', N''Accepted'', N''Bound'') THEN q.QuotedDateUtc ELSE NULL END),
+            ResponseSourceCode = COALESCE(NULLIF(q.ResponseSourceCode, N''''), CASE WHEN q.Status = N''Requested'' THEN N''RequestOnly'' ELSE N''ManualEntry'' END)
+        FROM Submissions.Quote q
+        INNER JOIN Submissions.SubmissionMarket sm ON sm.SubmissionId = q.SubmissionId AND sm.CarrierId = q.CarrierId AND sm.IsDeleted = 0
+        WHERE q.IsDeleted = 0
+          AND q.SubmissionMarketId IS NULL;');
+
+        EXEC(N'
+        UPDATE sm
+        SET Status = CASE
+                WHEN q.Status IN (N''Accepted'', N''Bound'') THEN N''Quoted''
+                WHEN q.Status IN (N''Received'', N''Presented'', N''Selected'') THEN N''Quoted''
+                WHEN q.Status = N''Requested'' AND sm.Status NOT IN (N''Bound'', N''Declined'', N''Quoted'') THEN N''In Review''
+                ELSE sm.Status
+            END,
+            RespondedDateUtc = CASE WHEN q.Status IN (N''Received'', N''Presented'', N''Accepted'', N''Bound'') THEN COALESCE(sm.RespondedDateUtc, q.QuoteReceivedDateUtc, q.QuotedDateUtc) ELSE sm.RespondedDateUtc END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        FROM Submissions.SubmissionMarket sm
+        INNER JOIN Submissions.Quote q ON q.SubmissionMarketId = sm.SubmissionMarketId AND q.IsDeleted = 0
+        WHERE sm.IsDeleted = 0;');
+    END;
+END;
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_SubmissionMarket')
+    EXEC(N'CREATE INDEX IX_Submissions_Quote_SubmissionMarket ON Submissions.Quote(SubmissionMarketId, IsDeleted, Status, QuoteReceivedDateUtc);');
+""";
+
+    private const string Migration0218_SubmissionsQuoteMarketResponseIntegrity = """
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE q
+    SET SubmissionMarketId = sm.SubmissionMarketId,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.Quote q
+    INNER JOIN Submissions.SubmissionMarket sm ON sm.SubmissionId = q.SubmissionId AND sm.CarrierId = q.CarrierId AND sm.IsDeleted = 0
+    WHERE q.IsDeleted = 0
+      AND q.SubmissionMarketId IS NULL;');
+
+    IF NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.Quote q
+        LEFT JOIN Submissions.SubmissionMarket sm ON sm.SubmissionMarketId = q.SubmissionMarketId AND sm.IsDeleted = 0
+        WHERE q.IsDeleted = 0
+          AND q.SubmissionMarketId IS NOT NULL
+          AND sm.SubmissionMarketId IS NULL
+    )
+    AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Submissions_Quote_SubmissionMarket')
+    BEGIN
+        ALTER TABLE Submissions.Quote WITH CHECK ADD CONSTRAINT FK_Submissions_Quote_SubmissionMarket
+            FOREIGN KEY (SubmissionMarketId) REFERENCES Submissions.SubmissionMarket(SubmissionMarketId);
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.Quote') AND name = N'IX_Submissions_Quote_Submission_Market_Status')
+        EXEC(N'CREATE INDEX IX_Submissions_Quote_Submission_Market_Status ON Submissions.Quote(SubmissionId, SubmissionMarketId, Status, IsDeleted);');
+END;
+""";
+
+    private const string Migration0219_SubmissionsEnterpriseMarketQuoteFields = """
+IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterName') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterName NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterEmail') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterEmail NVARCHAR(320) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'UnderwriterPhone') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD UnderwriterPhone NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'DueDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD DueDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedCoverageSummary') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedCoverageSummary NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedLimits') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedLimits NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmissionMethodCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmissionMethodCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'FollowUpTaskId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD FollowUpTaskId UNIQUEIDENTIFIER NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.Quote', N'EffectiveDate') IS NULL ALTER TABLE Submissions.Quote ADD EffectiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CoverageForms') IS NULL ALTER TABLE Submissions.Quote ADD CoverageForms NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'IsBindable') IS NULL ALTER TABLE Submissions.Quote ADD IsBindable BIT NOT NULL CONSTRAINT DF_Submissions_Quote_IsBindable_0219 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.Quote', N'CommissionPercent') IS NULL ALTER TABLE Submissions.Quote ADD CommissionPercent DECIMAL(9,4) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'Subjectivities') IS NULL ALTER TABLE Submissions.Quote ADD Subjectivities NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'Exclusions') IS NULL ALTER TABLE Submissions.Quote ADD Exclusions NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'CarrierRating') IS NULL ALTER TABLE Submissions.Quote ADD CarrierRating NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'PaymentTerms') IS NULL ALTER TABLE Submissions.Quote ADD PaymentTerms NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'MinimumEarnedPremium') IS NULL ALTER TABLE Submissions.Quote ADD MinimumEarnedPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'TaxesAndFees') IS NULL ALTER TABLE Submissions.Quote ADD TaxesAndFees DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'BrokerFee') IS NULL ALTER TABLE Submissions.Quote ADD BrokerFee DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'TriaIncluded') IS NULL ALTER TABLE Submissions.Quote ADD TriaIncluded BIT NULL;
+    IF COL_LENGTH(N'Submissions.Quote', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.Quote ADD ModifiedDateUtc DATETIME2 NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRevision
+    (
+        QuoteRevisionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRevision PRIMARY KEY DEFAULT NEWID(),
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ResponseVersion INT NOT NULL,
+        Status NVARCHAR(50) NOT NULL,
+        AnnualPremium DECIMAL(18,2) NOT NULL,
+        Deductible DECIMAL(18,2) NULL,
+        [Limit] DECIMAL(18,2) NULL,
+        CommissionPercent DECIMAL(9,4) NULL,
+        TaxesAndFees DECIMAL(18,2) NULL,
+        BrokerFee DECIMAL(18,2) NULL,
+        MinimumEarnedPremium DECIMAL(18,2) NULL,
+        EffectiveDate DATETIME2 NULL,
+        ExpiresDateUtc DATETIME2 NOT NULL,
+        CoverageForms NVARCHAR(2000) NULL,
+        Subjectivities NVARCHAR(2000) NULL,
+        Exclusions NVARCHAR(2000) NULL,
+        CarrierRating NVARCHAR(80) NULL,
+        PaymentTerms NVARCHAR(200) NULL,
+        IsBindable BIT NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_IsBindable DEFAULT 0,
+        CoverageNotes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Submissions_QuoteRevision_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRevision') AND name = N'IX_Submissions_QuoteRevision_Quote_Version')
+    EXEC(N'CREATE INDEX IX_Submissions_QuoteRevision_Quote_Version ON Submissions.QuoteRevision(QuoteId, ResponseVersion DESC, IsDeleted);');
+
+IF OBJECT_ID(N'Submissions.QuoteRevision', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.Quote', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_Submissions_QuoteRevision_Quote')
+    ALTER TABLE Submissions.QuoteRevision WITH CHECK ADD CONSTRAINT FK_Submissions_QuoteRevision_Quote FOREIGN KEY (QuoteId) REFERENCES Submissions.Quote(QuoteId);
+""";
+
+    private const string Migration0220_CoreCarrierMarketSuggestionPreference = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core') EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.CarrierMarketSuggestionPreference
+    (
+        CarrierMarketSuggestionPreferenceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_CarrierMarketSuggestionPreference PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_SortOrder DEFAULT 500,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'TenantId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_TenantId_0220 DEFAULT '00000000-0000-0000-0000-000000000001';
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CarrierId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_CarrierId_0220 DEFAULT '00000000-0000-0000-0000-000000000000';
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'LineOfBusiness') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD LineOfBusiness NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'SortOrder') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD SortOrder INT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_SortOrder_0220 DEFAULT 500;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'IsActive') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD IsActive BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsActive_0220 DEFAULT 1;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CreatedDateUtc') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_Created_0220 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'CreatedByUserId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'ModifiedDateUtc') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD ModifiedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'ModifiedByUserId') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Core.CarrierMarketSuggestionPreference', N'IsDeleted') IS NULL ALTER TABLE Core.CarrierMarketSuggestionPreference ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Core_CarrierMarketSuggestionPreference_IsDeleted_0220 DEFAULT 0;
+END;
+
+IF OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'UX_Core_CarrierMarketSuggestionPreference_Default')
+        EXEC(N'CREATE UNIQUE INDEX UX_Core_CarrierMarketSuggestionPreference_Default ON Core.CarrierMarketSuggestionPreference(TenantId, CarrierId) WHERE LineOfBusiness IS NULL AND IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'UX_Core_CarrierMarketSuggestionPreference_Line')
+        EXEC(N'CREATE UNIQUE INDEX UX_Core_CarrierMarketSuggestionPreference_Line ON Core.CarrierMarketSuggestionPreference(TenantId, CarrierId, LineOfBusiness) WHERE LineOfBusiness IS NOT NULL AND IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Core.CarrierMarketSuggestionPreference') AND name = N'IX_Core_CarrierMarketSuggestionPreference_Tenant_Sort')
+        EXEC(N'CREATE INDEX IX_Core_CarrierMarketSuggestionPreference_Tenant_Sort ON Core.CarrierMarketSuggestionPreference(TenantId, LineOfBusiness, IsActive, SortOrder, IsDeleted);');
+END;
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Core.CarrierMarketSuggestionPreference', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Core.CarrierMarketSuggestionPreference (TenantId, CarrierId, LineOfBusiness, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT c.TenantId,
+           c.CarrierId,
+           NULL,
+           COALESCE(p.SortOrder, 500 + ROW_NUMBER() OVER (PARTITION BY c.TenantId ORDER BY c.CarrierName)),
+           1,
+           SYSUTCDATETIME(),
+           0
+    FROM Core.Carrier c
+    LEFT JOIN (VALUES
+        (N'Travelers', 10),
+        (N'Chubb', 20),
+        (N'The Hartford', 30),
+        (N'Hartford', 30),
+        (N'Liberty Mutual', 40),
+        (N'CNA', 50),
+        (N'Zurich', 60),
+        (N'AIG', 70),
+        (N'Nationwide', 80),
+        (N'AmTrust', 90),
+        (N'Berkshire Hathaway GUARD', 100),
+        (N'The Hanover', 110),
+        (N'Selective', 120),
+        (N'Auto-Owners', 130),
+        (N'Cincinnati Insurance', 140),
+        (N'Markel', 150),
+        (N'Philadelphia Insurance Companies', 160),
+        (N'Great American Insurance Group', 170),
+        (N'Tokio Marine HCC', 180),
+        (N'Hiscox', 190),
+        (N'AXA XL', 200)
+    ) p(CarrierName, SortOrder) ON p.CarrierName = c.CarrierName
+    WHERE c.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Core.CarrierMarketSuggestionPreference existing
+          WHERE existing.TenantId = c.TenantId
+            AND existing.CarrierId = c.CarrierId
+            AND existing.LineOfBusiness IS NULL
+            AND existing.IsDeleted = 0
+      );
+END;
+""";
+
+    private const string Migration0221_SubmissionsQuoteRequestScopeLines = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarket', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionMarket', N'RequestedPremium') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD RequestedPremium DECIMAL(18,2) NULL;
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketLine
+    (
+        SubmissionMarketLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionMarketLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionLineId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionMarketLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketLine', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketLine') AND name = N'UX_SubmissionMarketLine_Market_Line')
+        EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketLine_Market_Line ON Submissions.SubmissionMarketLine(SubmissionMarketId, SubmissionLineId) WHERE IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketLine') AND name = N'IX_SubmissionMarketLine_Submission')
+        EXEC(N'CREATE INDEX IX_SubmissionMarketLine_Submission ON Submissions.SubmissionMarketLine(SubmissionId, TenantId, IsDeleted);');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT t.TenantId, 'QuoteRequestScope', v.Code, v.Name, v.Description, v.IsDefault, v.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0 UNION SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0) t
+    CROSS JOIN (VALUES
+        ('Package', 'Package / Multi-line', 'Request quote terms for the selected package of coverage lines.', CAST(1 AS bit), 10),
+        ('SingleLine', 'Single Line', 'Request quote terms for one selected coverage line.', CAST(0 AS bit), 20)
+    ) v(Code, Name, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = t.TenantId
+          AND existing.OptionGroup = 'QuoteRequestScope'
+          AND existing.OptionCode = v.Code
+          AND existing.IsDeleted = 0
+    );
+END;
+""";
+
+    private const string Migration0222_SubmissionsCarrierExternalTransmission = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierExternalConnector
+    (
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierExternalConnector PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        ConnectorCode NVARCHAR(100) NOT NULL,
+        ConnectorName NVARCHAR(200) NOT NULL,
+        ConnectorTypeCode NVARCHAR(50) NOT NULL,
+        ExecutionModeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Mode DEFAULT N'ExternalConnector',
+        EndpointUri NVARCHAR(1000) NULL,
+        DefaultChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Channel DEFAULT N'InternalQueue',
+        SupportsDocumentPackage BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_DocumentPackage DEFAULT 1,
+        SupportsDeliveryConfirmation BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Confirmation DEFAULT 1,
+        SupportsInboundResponse BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Inbound DEFAULT 1,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Config DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Ui DEFAULT N'{}',
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Sort DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierExternalConnector_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmission', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierTransmission
+    (
+        CarrierTransmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierTransmission PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketDispatchId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NULL,
+        TransmissionTypeCode NVARCHAR(50) NOT NULL,
+        ChannelCode NVARCHAR(50) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierTransmission_Status DEFAULT N'Queued',
+        Recipient NVARCHAR(500) NULL,
+        Subject NVARCHAR(300) NULL,
+        EndpointUri NVARCHAR(1000) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Payload DEFAULT N'{}',
+        DocumentPackageJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Docs DEFAULT N'[]',
+        ExternalReferenceNumber NVARCHAR(120) NULL,
+        AttemptCount INT NOT NULL CONSTRAINT DF_CarrierTransmission_Attempts DEFAULT 0,
+        LastAttemptDateUtc DATETIME2 NULL,
+        SentDateUtc DATETIME2 NULL,
+        ConfirmedDateUtc DATETIME2 NULL,
+        FailedDateUtc DATETIME2 NULL,
+        BounceDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierTransmission_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierTransmission_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmissionEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierTransmissionEvent
+    (
+        CarrierTransmissionEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierTransmissionEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierTransmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        EventCode NVARCHAR(80) NOT NULL,
+        EventMessage NVARCHAR(1000) NULL,
+        EventPayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_Payload DEFAULT N'{}',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierTransmissionEvent_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierInboundResponse', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.CarrierInboundResponse
+    (
+        CarrierInboundResponseId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_CarrierInboundResponse PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        CarrierTransmissionId UNIQUEIDENTIFIER NULL,
+        SourceChannelCode NVARCHAR(50) NOT NULL,
+        ResponseTypeCode NVARCHAR(50) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierInboundResponse_Status DEFAULT N'Received',
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierInboundResponse_Payload DEFAULT N'{}',
+        ReceivedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierInboundResponse_Received DEFAULT SYSUTCDATETIME(),
+        ProcessedDateUtc DATETIME2 NULL,
+        ProcessingError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierInboundResponse_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierInboundResponse_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierExternalConnector') AND name = N'UX_CarrierExternalConnector_Tenant_Code_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierExternalConnector_Tenant_Code_Carrier ON Agency.CarrierExternalConnector(TenantId, ConnectorCode, CarrierId) WHERE IsDeleted = 0;');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmission') AND name = N'IX_CarrierTransmission_Market_Status')
+    EXEC(N'CREATE INDEX IX_CarrierTransmission_Market_Status ON Submissions.CarrierTransmission(SubmissionMarketId, StatusCode, IsDeleted, CreatedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmissionEvent') AND name = N'IX_CarrierTransmissionEvent_Transmission')
+    EXEC(N'CREATE INDEX IX_CarrierTransmissionEvent_Transmission ON Submissions.CarrierTransmissionEvent(CarrierTransmissionId, IsDeleted, CreatedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierInboundResponse') AND name = N'IX_CarrierInboundResponse_Status')
+    EXEC(N'CREATE INDEX IX_CarrierInboundResponse_Status ON Submissions.CarrierInboundResponse(TenantId, StatusCode, IsDeleted, ReceivedDateUtc);');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierExternalConnector
+        (TenantId, CarrierId, ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT t.TenantId, NULL, v.ConnectorCode, v.ConnectorName, v.ConnectorTypeCode, v.ExecutionModeCode, v.EndpointUri, v.DefaultChannelCode, v.SupportsDocumentPackage, v.SupportsDeliveryConfirmation, v.SupportsInboundResponse, v.ConfigurationJson, v.UiSchemaJson, 1, v.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant t
+    CROSS JOIN (VALUES
+        (N'INTERNAL_QUEUE', N'Internal Queue Connector', N'InternalQueue', N'InternalQueue', NULL, N'InternalQueue', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"internal"}', N'{"icon":"bi-inbox","description":"Internal processing queue for market submissions and quote requests."}', 10),
+        (N'SANDBOX_EMAIL', N'Sandbox Email Connector', N'Email', N'Sandbox', N'mailbox://carrier-sandbox', N'Email', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"sandbox","requiresExternalCredentials":false}', N'{"icon":"bi-envelope-check","description":"DB-backed sandbox email connector for carrier delivery testing."}', 20),
+        (N'EXTERNAL_PORTAL', N'External Portal Handoff', N'Portal', N'ExternalConnector', NULL, N'Portal', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"handoff","requiresExternalCredentials":true}', N'{"icon":"bi-window-stack","description":"Carrier portal handoff connector requiring carrier-specific credentials."}', 30),
+        (N'EXTERNAL_API', N'External Carrier API Handoff', N'API', N'ExternalConnector', NULL, N'API', CAST(1 AS bit), CAST(1 AS bit), CAST(1 AS bit), N'{"mode":"handoff","requiresExternalCredentials":true}', N'{"icon":"bi-plug","description":"Carrier API connector requiring configured endpoint and credentials."}', 40)
+    ) v(ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, SortOrder)
+    WHERE t.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierExternalConnector existing WHERE existing.TenantId = t.TenantId AND existing.ConnectorCode = v.ConnectorCode AND existing.CarrierId IS NULL AND existing.IsDeleted = 0);
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL AND OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierSetting
+        (TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT t.TenantId, NULL, v.SettingCode, v.SettingName, N'CarrierTransmission', N'Tenant', v.DataTypeCode, v.SettingValue, v.DefaultValue, v.Description, v.ValidationJson, v.UiSchemaJson, N'CarrierExternalTransmission', v.IsRequired, v.IsSecret, 1, v.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Tenant t
+    CROSS JOIN (VALUES
+        (N'CARRIER_TRANSMISSION_DEFAULT_CONNECTOR', N'Default Carrier Transmission Connector', N'Select', N'INTERNAL_QUEUE', N'INTERNAL_QUEUE', N'Default connector used for carrier market package transmission.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"component":"select","icon":"bi-diagram-3"}', CAST(1 AS bit), CAST(0 AS bit), 10),
+        (N'CARRIER_TRANSMISSION_SANDBOX_CONFIRMATION', N'Sandbox Delivery Confirmation', N'Boolean', N'true', N'true', N'Automatically create DB-backed sandbox delivery confirmations.', N'{}', N'{"component":"switch","icon":"bi-check-circle"}', CAST(0 AS bit), CAST(0 AS bit), 20),
+        (N'CARRIER_INBOUND_RESPONSE_MODE', N'Inbound Carrier Response Mode', N'Select', N'ManualQueue', N'ManualQueue', N'Controls how inbound carrier responses are ingested.', N'{"options":["ManualQueue","MailboxConnector","ApiConnector"]}', N'{"component":"select","icon":"bi-inbox"}', CAST(1 AS bit), CAST(0 AS bit), 30)
+    ) v(SettingCode, SettingName, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, IsRequired, IsSecret, SortOrder)
+    WHERE t.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.SettingCode = v.SettingCode AND existing.CarrierId IS NULL AND existing.IsDeleted = 0);
+END;
+""";
+
+    private const string Migration0223_SubmissionsQuoteRequestWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRequestHistory
+    (
+        QuoteRequestHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRequestHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        QuoteRequestActionCode NVARCHAR(50) NOT NULL,
+        QuoteRequestReasonCode NVARCHAR(80) NULL,
+        QuoteRequestScopeCode NVARCHAR(50) NULL,
+        RequestedPremium DECIMAL(18,2) NULL,
+        CoverageNotes NVARCHAR(1000) NULL,
+        RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestVersion DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequestHistory_Status DEFAULT N'Open',
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestedDateUtc DEFAULT SYSUTCDATETIME(),
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequestHistory_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequestHistory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestMethodCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestMethodCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD QuoteRequestScopeCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestedPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'RequestVersion') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequestHistory_RequestVersion_0223 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.QuoteRequestHistory', N'StatusCode') IS NULL ALTER TABLE Submissions.QuoteRequestHistory ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequestHistory_Status_0223 DEFAULT N'Open';
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Market_Open')
+        EXEC(N'CREATE INDEX IX_QuoteRequestHistory_Market_Open ON Submissions.QuoteRequestHistory(SubmissionMarketId, StatusCode, IsDeleted, RequestedDateUtc DESC);');
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequestHistory') AND name = N'IX_QuoteRequestHistory_Submission')
+        EXEC(N'CREATE INDEX IX_QuoteRequestHistory_Submission ON Submissions.QuoteRequestHistory(SubmissionId, TenantId, IsDeleted, RequestedDateUtc DESC);');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT tenants.TenantId, seed.OptionGroup, seed.OptionCode, seed.OptionName, seed.Description, seed.IsDefault, seed.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0 UNION SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0) tenants
+    CROSS JOIN (VALUES
+        (N'QuoteRequestAction', N'InitialRequest', N'Initial quote request', N'First request for quote terms from this market and coverage scope.', CAST(1 AS bit), 10),
+        (N'QuoteRequestAction', N'ResendUpdate', N'Resend / update request', N'Updates or resends an open quote request when underwriting context changes.', CAST(0 AS bit), 20),
+        (N'QuoteRequestAction', N'RequestRevision', N'Request quote revision', N'Requests revised quote terms after a carrier quote response has been received.', CAST(0 AS bit), 30),
+        (N'QuoteRequestReason', N'UpdatedUnderwritingInfo', N'Updated underwriting information', N'Updated application, exposure, loss, or underwriting information changed the request.', CAST(1 AS bit), 10),
+        (N'QuoteRequestReason', N'CoverageChange', N'Coverage or limit change', N'Coverage, limit, deductible, or line selection changed.', CAST(0 AS bit), 20),
+        (N'QuoteRequestReason', N'PremiumTargetChange', N'Premium target change', N'Target premium or pricing expectation changed.', CAST(0 AS bit), 30),
+        (N'QuoteRequestReason', N'CarrierClarification', N'Carrier clarification', N'Carrier requested clarification or additional information.', CAST(0 AS bit), 40),
+        (N'QuoteRequestReason', N'MissingInformation', N'Missing information supplied', N'Previously missing information or documents are now available.', CAST(0 AS bit), 50),
+        (N'QuoteRequestReason', N'Other', N'Other', N'Other documented business reason.', CAST(0 AS bit), 90),
+        (N'QuoteRequestScope', N'Package', N'Package', N'Request quote terms for the full submission package.', CAST(1 AS bit), 10),
+        (N'QuoteRequestScope', N'SingleLine', N'Single coverage line', N'Request quote terms for one selected coverage line.', CAST(0 AS bit), 20),
+        (N'QuoteRequestOpenMarketStatus', N'In Review', N'In Review', N'Market has an open quote request workflow.', CAST(1 AS bit), 10),
+        (N'QuoteRequestOpenMarketStatus', N'Submitted', N'Submitted', N'Market submission has been sent and is awaiting quote activity.', CAST(0 AS bit), 20),
+        (N'QuoteRequestOpenMarketStatus', N'Awaiting Quote', N'Awaiting Quote', N'Market is awaiting carrier quote terms.', CAST(0 AS bit), 30),
+        (N'QuoteRequestOpenMarketStatus', N'Requested', N'Requested', N'Quote request is pending carrier response.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'Draft', N'Draft', N'Quote request is being prepared and has not been dispatched.', CAST(0 AS bit), 5),
+        (N'QuoteRequestStatus', N'ValidationRequired', N'Validation Required', N'Quote request is blocked until required submission information is completed.', CAST(0 AS bit), 8),
+        (N'QuoteRequestStatus', N'PendingDispatch', N'Pending Dispatch', N'Quote request was created and is waiting for dispatch.', CAST(1 AS bit), 10),
+        (N'QuoteRequestStatus', N'Submitted', N'Submitted', N'Quote request has been submitted to the market.', CAST(0 AS bit), 20),
+        (N'QuoteRequestStatus', N'Acknowledged', N'Acknowledged', N'Market acknowledged the quote request.', CAST(0 AS bit), 30),
+        (N'QuoteRequestStatus', N'UnderReview', N'Under Review', N'Market is underwriting or reviewing the quote request.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'MoreInformationRequired', N'More Information Required', N'Market requested more information before quoting.', CAST(0 AS bit), 50),
+        (N'QuoteRequestStatus', N'Quoted', N'Quoted', N'Market returned quote terms and a Quote record may exist.', CAST(0 AS bit), 70),
+        (N'QuoteRequestStatus', N'Declined', N'Declined', N'Market declined to quote.', CAST(0 AS bit), 80),
+        (N'QuoteRequestStatus', N'Expired', N'Expired', N'Quote request expired before receiving market terms.', CAST(0 AS bit), 90),
+        (N'QuoteRequestStatus', N'Cancelled', N'Cancelled', N'Quote request was cancelled before response.', CAST(0 AS bit), 100),
+        (N'QuoteRequestStatus', N'Failed', N'Failed', N'Quote request dispatch or processing failed.', CAST(0 AS bit), 110),
+        (N'QuoteResponseSource', N'ManualEntry', N'Manual Entry', N'Quote response was entered manually by an agency user.', CAST(1 AS bit), 10),
+        (N'QuoteResponseSource', N'CarrierPortal', N'Carrier Portal', N'Quote response was copied from a carrier, MGA, or wholesaler portal.', CAST(0 AS bit), 20),
+        (N'QuoteResponseSource', N'Email', N'Email', N'Quote response was received through email.', CAST(0 AS bit), 30),
+        (N'QuoteResponseSource', N'Api', N'API', N'Quote response was received through carrier or rater API integration.', CAST(0 AS bit), 40),
+        (N'CustomerAuthorizationMethod', N'SignedProposal', N'Signed Proposal', N'Customer accepted using a signed proposal.', CAST(1 AS bit), 10),
+        (N'CustomerAuthorizationMethod', N'EmailApproval', N'Email Approval', N'Customer accepted using written email approval.', CAST(0 AS bit), 20),
+        (N'CustomerAuthorizationMethod', N'RecordedCall', N'Recorded Call', N'Customer accepted using a recorded call.', CAST(0 AS bit), 30),
+        (N'CustomerAuthorizationMethod', N'ESignature', N'E-Signature', N'Customer accepted using an e-signature workflow.', CAST(0 AS bit), 40),
+        (N'CustomerAuthorizationMethod', N'PortalAcceptance', N'Portal Acceptance', N'Customer accepted through a portal workflow.', CAST(0 AS bit), 50),
+        (N'CustomerAuthorizationMethod', N'WrittenInstruction', N'Written Instruction', N'Customer accepted using written instruction outside a proposal.', CAST(0 AS bit), 60),
+        (N'BindConfirmationSource', N'Api', N'API', N'Carrier confirmation was received through API integration.', CAST(0 AS bit), 10),
+        (N'BindConfirmationSource', N'Webhook', N'Webhook', N'Carrier confirmation was received asynchronously by webhook or polling.', CAST(0 AS bit), 20),
+        (N'BindConfirmationSource', N'CarrierPortal', N'Carrier Portal', N'Agency user recorded confirmation from the carrier portal.', CAST(1 AS bit), 30),
+        (N'BindConfirmationSource', N'Email', N'Email', N'Carrier confirmation was received by email.', CAST(0 AS bit), 40),
+        (N'BindConfirmationSource', N'Phone', N'Phone', N'Carrier confirmation was received verbally by phone and requires documentation.', CAST(0 AS bit), 50),
+        (N'BindConfirmationSource', N'BinderDocument', N'Binder Document', N'Carrier binder document confirms coverage is bound.', CAST(0 AS bit), 60),
+        (N'BindConfirmationSource', N'Manual', N'Manual', N'Agency user manually recorded authoritative carrier confirmation.', CAST(0 AS bit), 70),
+        (N'QuoteRequestBlockedStatus', N'Bound', N'Bound', N'Bound submissions or markets cannot request additional quotes.', CAST(1 AS bit), 10),
+        (N'QuoteRequestBlockedStatus', N'Declined', N'Declined', N'Declined submissions or markets are blocked from additional quote requests.', CAST(0 AS bit), 20),
+        (N'QuoteRequestBlockedStatus', N'Withdrawn', N'Withdrawn', N'Withdrawn submissions are blocked from quote requests.', CAST(0 AS bit), 30),
+        (N'QuoteRequestBlockedStatus', N'Closed', N'Closed', N'Closed submissions or markets are blocked from quote requests.', CAST(0 AS bit), 40),
+        (N'QuoteRequestBlockedStatus', N'Lost', N'Lost', N'Lost submissions or markets are blocked from quote requests.', CAST(0 AS bit), 50)
+    ) seed(OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = tenants.TenantId
+          AND existing.OptionGroup = seed.OptionGroup
+          AND existing.OptionCode = seed.OptionCode
+          AND existing.IsDeleted = 0
+    );
+
+    UPDATE Submissions.SubmissionReferenceOption
+    SET IsActive = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE OptionGroup = N'QuoteRequestStatus'
+      AND OptionCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'Withdrawn', N'Closed', N'No Response')
+      AND IsDeleted = 0;
+
+    IF OBJECT_ID(N'Submissions.QuoteRequest', N'U') IS NOT NULL
+    BEGIN
+        UPDATE Submissions.QuoteRequest
+        SET StatusCode = CASE StatusCode
+                WHEN N'Open' THEN N'PendingDispatch'
+                WHEN N'CarrierProcessing' THEN N'UnderReview'
+                WHEN N'Referred' THEN N'UnderReview'
+                WHEN N'Received' THEN N'Quoted'
+                WHEN N'No Response' THEN N'Failed'
+                WHEN N'Withdrawn' THEN N'Cancelled'
+                WHEN N'Closed' THEN N'Cancelled'
+                ELSE StatusCode END,
+            ClosedDateUtc = CASE WHEN StatusCode IN (N'No Response', N'Withdrawn', N'Closed') THEN COALESCE(ClosedDateUtc, SYSUTCDATETIME()) ELSE ClosedDateUtc END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE StatusCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'No Response', N'Withdrawn', N'Closed')
+          AND IsDeleted = 0;
+    END;
+
+    IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+    BEGIN
+        UPDATE Submissions.QuoteRequestHistory
+        SET StatusCode = CASE StatusCode
+                WHEN N'Open' THEN N'PendingDispatch'
+                WHEN N'CarrierProcessing' THEN N'UnderReview'
+                WHEN N'Referred' THEN N'UnderReview'
+                WHEN N'Received' THEN N'Quoted'
+                WHEN N'No Response' THEN N'Failed'
+                WHEN N'Withdrawn' THEN N'Cancelled'
+                WHEN N'Closed' THEN N'Cancelled'
+                ELSE StatusCode END,
+            ModifiedDateUtc = SYSUTCDATETIME()
+        WHERE StatusCode IN (N'Open', N'CarrierProcessing', N'Referred', N'Received', N'No Response', N'Withdrawn', N'Closed')
+          AND IsDeleted = 0;
+    END;
+END;
+""";
+
+    private const string Migration0204_CrmLeadConversionEnterpriseWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadConversion
+    (
+        LeadConversionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_LeadConversion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LeadId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NULL,
+        ConversionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_Type DEFAULT N'AccountOpportunity',
+        AccountActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_AccountAction DEFAULT N'Created',
+        SubmissionNextStepCode NVARCHAR(50) NULL,
+        SourceLeadNumber NVARCHAR(50) NULL,
+        AccountNameSnapshot NVARCHAR(200) NOT NULL,
+        OpportunityNameSnapshot NVARCHAR(200) NOT NULL,
+        EstimatedAmount DECIMAL(18,2) NULL,
+        LineOfBusiness NVARCHAR(100) NULL,
+        Notes NVARCHAR(1000) NULL,
+        ConvertedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_ConvertedDate DEFAULT SYSUTCDATETIME(),
+        ConvertedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadConversion_IsDeleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'LeadConversionId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD LeadConversionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_Id_0204 DEFAULT NEWID();
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'TenantId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_TenantId_0204 DEFAULT '00000000-0000-0000-0000-000000000001';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'LeadId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD LeadId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_LeadId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'AccountId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_AccountId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.LeadConversion', N'OpportunityId') IS NULL
+    ALTER TABLE CRM.LeadConversion ADD OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_LeadConversion_OpportunityId_0204 DEFAULT '00000000-0000-0000-0000-000000000000';
+
+IF COL_LENGTH(N'CRM.LeadConversion', N'ContactId') IS NULL ALTER TABLE CRM.LeadConversion ADD ContactId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConversionTypeCode') IS NULL ALTER TABLE CRM.LeadConversion ADD ConversionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_Type_0204 DEFAULT N'AccountOpportunity';
+IF COL_LENGTH(N'CRM.LeadConversion', N'AccountActionCode') IS NULL ALTER TABLE CRM.LeadConversion ADD AccountActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LeadConversion_AccountAction_0204 DEFAULT N'Created';
+IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionNextStepCode') IS NULL ALTER TABLE CRM.LeadConversion ADD SubmissionNextStepCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'SourceLeadNumber') IS NULL ALTER TABLE CRM.LeadConversion ADD SourceLeadNumber NVARCHAR(50) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'AccountNameSnapshot') IS NULL ALTER TABLE CRM.LeadConversion ADD AccountNameSnapshot NVARCHAR(200) NOT NULL CONSTRAINT DF_LeadConversion_AccountName_0204 DEFAULT N'Converted Account';
+IF COL_LENGTH(N'CRM.LeadConversion', N'OpportunityNameSnapshot') IS NULL ALTER TABLE CRM.LeadConversion ADD OpportunityNameSnapshot NVARCHAR(200) NOT NULL CONSTRAINT DF_LeadConversion_OpportunityName_0204 DEFAULT N'Converted Opportunity';
+IF COL_LENGTH(N'CRM.LeadConversion', N'EstimatedAmount') IS NULL ALTER TABLE CRM.LeadConversion ADD EstimatedAmount DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'LineOfBusiness') IS NULL ALTER TABLE CRM.LeadConversion ADD LineOfBusiness NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'Notes') IS NULL ALTER TABLE CRM.LeadConversion ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConvertedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD ConvertedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_ConvertedDate_0204 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.LeadConversion', N'ConvertedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD ConvertedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadConversion_CreatedDate_0204 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.LeadConversion', N'CreatedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.LeadConversion ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.LeadConversion ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadConversion', N'IsDeleted') IS NULL ALTER TABLE CRM.LeadConversion ADD IsDeleted BIT NOT NULL CONSTRAINT DF_LeadConversion_IsDeleted_0204 DEFAULT 0;
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Lead', N'AccountId') IS NULL
+    ALTER TABLE CRM.Lead ADD AccountId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Opportunity', N'LeadId') IS NULL
+    ALTER TABLE CRM.Opportunity ADD LeadId UNIQUEIDENTIFIER NULL;
+
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'UX_LeadConversion_Lead_Active')
+        EXEC(N'CREATE UNIQUE INDEX UX_LeadConversion_Lead_Active ON CRM.LeadConversion(LeadId) WHERE IsDeleted = 0 AND LeadId <> ''00000000-0000-0000-0000-000000000000'';');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Tenant_Date')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Tenant_Date ON CRM.LeadConversion(TenantId, ConvertedDateUtc DESC, IsDeleted);');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Account_Opportunity')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Account_Opportunity ON CRM.LeadConversion(AccountId, OpportunityId, IsDeleted);');
+END;
+""";
+
+    private const string Migration0205_CrmLeadConversionSubmissionDraftLink = """
+IF OBJECT_ID(N'CRM.LeadConversion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionId') IS NULL
+        ALTER TABLE CRM.LeadConversion ADD SubmissionId UNIQUEIDENTIFIER NULL;
+
+    IF COL_LENGTH(N'CRM.LeadConversion', N'SubmissionNumber') IS NULL
+        ALTER TABLE CRM.LeadConversion ADD SubmissionNumber NVARCHAR(50) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadConversion') AND name = N'IX_LeadConversion_Submission')
+        EXEC(N'CREATE INDEX IX_LeadConversion_Submission ON CRM.LeadConversion(SubmissionId, IsDeleted) WHERE SubmissionId IS NOT NULL;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF OBJECT_ID(N'Submissions.SubmissionSeq', N'SO') IS NULL EXEC(N'CREATE SEQUENCE Submissions.SubmissionSeq AS INT START WITH 1000 INCREMENT BY 1');
+""";
+
+    private const string Migration0206_CrmOpportunityConversionLaunchActions = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.OpportunityConversionLaunchAction', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityConversionLaunchAction
+    (
+        OpportunityConversionLaunchActionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityConversionLaunchAction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ActionCode NVARCHAR(80) NOT NULL,
+        ActionTitle NVARCHAR(160) NOT NULL,
+        ActionDescription NVARCHAR(500) NULL,
+        IconCssClass NVARCHAR(100) NULL,
+        ButtonCssClass NVARCHAR(100) NULL,
+        RouteTemplate NVARCHAR(300) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_SortOrder DEFAULT 0,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsPrimary DEFAULT 0,
+        OpensNewContext BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_OpensNewContext DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_TenantId_0206 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionCode') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionCode NVARCHAR(80) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Code_0206 DEFAULT N'OPEN_OPPORTUNITY';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionTitle') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionTitle NVARCHAR(160) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Title_0206 DEFAULT N'Open opportunity';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ActionDescription') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ActionDescription NVARCHAR(500) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IconCssClass') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IconCssClass NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ButtonCssClass') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ButtonCssClass NVARCHAR(100) NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'RouteTemplate') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD RouteTemplate NVARCHAR(300) NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_Route_0206 DEFAULT N'/crm/opportunities/{OpportunityId}';
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'SortOrder') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD SortOrder INT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_SortOrder_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsPrimary') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsPrimary_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'OpensNewContext') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD OpensNewContext BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_OpensNewContext_0206 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsActive') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsActive BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsActive_0206 DEFAULT 1;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_CreatedDate_0206 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityConversionLaunchAction', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityConversionLaunchAction ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityConversionLaunchAction_IsDeleted_0206 DEFAULT 0;
+
+DECLARE @LaunchTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @LaunchTenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @LaunchTenants)
+    INSERT INTO @LaunchTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+;WITH Seed AS
+(
+    SELECT TenantId, ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext
+    FROM @LaunchTenants
+    CROSS APPLY (VALUES
+        (N'OPEN_OPPORTUNITY', N'Open new opportunity workspace', N'Review the converted opportunity, confirm stage, owner, estimated premium, close date, and workflow timeline.', N'bi-trophy-fill', N'um-btn um-btn-primary', N'/crm/opportunities/{OpportunityId}?from=lead-conversion&conversionId={LeadConversionId}', 10, CONVERT(bit, 1), CONVERT(bit, 0)),
+        (N'REVIEW_ACCOUNT', N'Review account 360', N'Validate the account profile, contacts, lifecycle stage, servicing ownership, and relationship context created or linked during conversion.', N'bi-building-check', N'um-btn um-btn-ghost', N'/accounts/{AccountId}?from=lead-conversion&opportunityId={OpportunityId}', 20, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'REVIEW_SUBMISSION', N'Continue submission draft', N'Open the persisted draft submission created during conversion and complete market-ready intake details.', N'bi-send-check', N'um-btn um-btn-ghost', N'/submissions/{SubmissionId}', 30, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'REVIEW_SOURCE_LEAD', N'Review source lead', N'Open the original lead for conversion audit, prior activities, communications, interest lines, and source history.', N'bi-person-lines-fill', N'um-btn um-btn-ghost', N'/crm/leads/{LeadId}', 40, CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'OPEN_PIPELINE', N'Back to opportunity pipeline', N'Return to the CRM opportunity pipeline with the converted opportunity context preserved.', N'bi-kanban', N'um-btn um-btn-ghost', N'/crm/opportunities?highlight={OpportunityId}', 50, CONVERT(bit, 0), CONVERT(bit, 0))
+    ) v(ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext)
+)
+MERGE CRM.OpportunityConversionLaunchAction AS target
+USING Seed AS source
+    ON target.TenantId = source.TenantId AND target.ActionCode = source.ActionCode
+WHEN MATCHED THEN UPDATE SET
+    ActionTitle = source.ActionTitle,
+    ActionDescription = source.ActionDescription,
+    IconCssClass = source.IconCssClass,
+    ButtonCssClass = source.ButtonCssClass,
+    RouteTemplate = source.RouteTemplate,
+    SortOrder = source.SortOrder,
+    IsPrimary = source.IsPrimary,
+    OpensNewContext = source.OpensNewContext,
+    IsActive = 1,
+    IsDeleted = 0,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (OpportunityConversionLaunchActionId, TenantId, ActionCode, ActionTitle, ActionDescription, IconCssClass, ButtonCssClass, RouteTemplate, SortOrder, IsPrimary, OpensNewContext, IsActive, CreatedDateUtc, IsDeleted)
+VALUES
+    (NEWID(), source.TenantId, source.ActionCode, source.ActionTitle, source.ActionDescription, source.IconCssClass, source.ButtonCssClass, source.RouteTemplate, source.SortOrder, source.IsPrimary, source.OpensNewContext, 1, SYSUTCDATETIME(), 0);
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityConversionLaunchAction') AND name = N'UX_OpportunityConversionLaunchAction_Tenant_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityConversionLaunchAction_Tenant_Code ON CRM.OpportunityConversionLaunchAction(TenantId, ActionCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityConversionLaunchAction') AND name = N'IX_OpportunityConversionLaunchAction_Tenant_Active')
+    EXEC(N'CREATE INDEX IX_OpportunityConversionLaunchAction_Tenant_Active ON CRM.OpportunityConversionLaunchAction(TenantId, IsActive, IsDeleted, SortOrder);');
+""";
+
+    private const string Migration0207_CrmOpportunityForecastCategoryConfig = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.OpportunityForecastCategory', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityForecastCategory
+    (
+        OpportunityForecastCategoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityForecastCategory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        CategoryName NVARCHAR(100) NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_SortOrder DEFAULT 0,
+        DefaultProbabilityPercent DECIMAL(5,2) NULL,
+        IsClosedCategory BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsClosed DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDefault DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityForecastCategory_CreatedDate DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityForecastCategory_TenantId_0207 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CategoryCode') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CategoryCode NVARCHAR(80) NOT NULL CONSTRAINT DF_OpportunityForecastCategory_Code_0207 DEFAULT N'PIPELINE';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CategoryName') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CategoryName NVARCHAR(100) NOT NULL CONSTRAINT DF_OpportunityForecastCategory_Name_0207 DEFAULT N'Pipeline';
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'SortOrder') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD SortOrder INT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_SortOrder_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'DefaultProbabilityPercent') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD DefaultProbabilityPercent DECIMAL(5,2) NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsClosedCategory') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsClosedCategory BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsClosed_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsDefault') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsDefault BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDefault_0207 DEFAULT 0;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsActive') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsActive BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsActive_0207 DEFAULT 1;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityForecastCategory_CreatedDate_0207 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityForecastCategory', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityForecastCategory ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityForecastCategory_IsDeleted_0207 DEFAULT 0;
+
+DECLARE @ForecastTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @ForecastTenants (TenantId)
+    SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @ForecastTenants (TenantId)
+    SELECT DISTINCT TenantId
+    FROM CRM.Opportunity
+    WHERE IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM @ForecastTenants t WHERE t.TenantId = CRM.Opportunity.TenantId);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @ForecastTenants)
+    INSERT INTO @ForecastTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+;WITH Seed AS
+(
+    SELECT TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault
+    FROM @ForecastTenants
+    CROSS APPLY (VALUES
+        (N'PIPELINE', N'Pipeline', 10, CONVERT(decimal(5,2), 35), CONVERT(bit, 0), CONVERT(bit, 1)),
+        (N'BEST_CASE', N'Best Case', 20, CONVERT(decimal(5,2), 60), CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'COMMIT', N'Commit', 30, CONVERT(decimal(5,2), 85), CONVERT(bit, 0), CONVERT(bit, 0)),
+        (N'CLOSED', N'Closed', 40, CONVERT(decimal(5,2), 100), CONVERT(bit, 1), CONVERT(bit, 0))
+    ) v(CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault)
+)
+MERGE CRM.OpportunityForecastCategory AS target
+USING Seed AS source
+    ON target.TenantId = source.TenantId AND target.CategoryCode = source.CategoryCode AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET
+    CategoryName = source.CategoryName,
+    SortOrder = source.SortOrder,
+    DefaultProbabilityPercent = source.DefaultProbabilityPercent,
+    IsClosedCategory = source.IsClosedCategory,
+    IsDefault = source.IsDefault,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (OpportunityForecastCategoryId, TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault, IsActive, CreatedDateUtc, IsDeleted)
+VALUES
+    (NEWID(), source.TenantId, source.CategoryCode, source.CategoryName, source.SortOrder, source.DefaultProbabilityPercent, source.IsClosedCategory, source.IsDefault, 1, SYSUTCDATETIME(), 0);
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    ;WITH ExistingForecast AS
+    (
+        SELECT DISTINCT TenantId,
+               CategoryName = LTRIM(RTRIM(COALESCE(NULLIF(ForecastCategoryCode, N''), N'Pipeline')))
+        FROM CRM.Opportunity
+        WHERE IsDeleted = 0
+    ), Normalized AS
+    (
+        SELECT TenantId,
+               CategoryName,
+               CategoryCode = UPPER(REPLACE(REPLACE(REPLACE(CategoryName, N' ', N'_'), N'-', N'_'), N'/', N'_'))
+        FROM ExistingForecast
+        WHERE CategoryName IS NOT NULL AND CategoryName <> N''
+    )
+    INSERT INTO CRM.OpportunityForecastCategory
+        (OpportunityForecastCategoryId, TenantId, CategoryCode, CategoryName, SortOrder, DefaultProbabilityPercent, IsClosedCategory, IsDefault, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), n.TenantId, LEFT(n.CategoryCode, 80), LEFT(n.CategoryName, 100), 100 + ROW_NUMBER() OVER (PARTITION BY n.TenantId ORDER BY n.CategoryName), NULL,
+           CASE WHEN n.CategoryName LIKE N'Closed%' THEN 1 ELSE 0 END, 0, 1, SYSUTCDATETIME(), 0
+    FROM Normalized n
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM CRM.OpportunityForecastCategory c
+        WHERE c.TenantId = n.TenantId
+          AND c.IsDeleted = 0
+          AND (c.CategoryName = n.CategoryName OR c.CategoryCode = LEFT(n.CategoryCode, 80))
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityForecastCategory') AND name = N'UX_OpportunityForecastCategory_Tenant_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityForecastCategory_Tenant_Code ON CRM.OpportunityForecastCategory(TenantId, CategoryCode) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityForecastCategory') AND name = N'IX_OpportunityForecastCategory_Tenant_Active')
+    EXEC(N'CREATE INDEX IX_OpportunityForecastCategory_Tenant_Active ON CRM.OpportunityForecastCategory(TenantId, IsActive, IsDeleted, SortOrder);');
+""";
+
+    private const string Migration0208_CrmOpportunityMultiLineEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'Status') IS NULL ALTER TABLE CRM.OpportunityLine ADD Status NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityLine_Status_0208 DEFAULT N'Draft';
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'IsPrimary') IS NULL ALTER TABLE CRM.OpportunityLine ADD IsPrimary BIT NOT NULL CONSTRAINT DF_OpportunityLine_IsPrimary_0208 DEFAULT 0;
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'TargetEffectiveDate') IS NULL ALTER TABLE CRM.OpportunityLine ADD TargetEffectiveDate DATETIME2 NULL;
+    IF COL_LENGTH(N'CRM.OpportunityLine', N'AssignedToUserId') IS NULL ALTER TABLE CRM.OpportunityLine ADD AssignedToUserId UNIQUEIDENTIFIER NULL;
+
+    EXEC(N'
+    ;WITH Ranked AS
+    (
+        SELECT OpportunityLineId,
+               rn = ROW_NUMBER() OVER (PARTITION BY OpportunityId ORDER BY CASE WHEN IsPrimary = 1 THEN 0 ELSE 1 END, EstPremium DESC, CreatedDateUtc)
+        FROM CRM.OpportunityLine
+        WHERE IsDeleted = 0
+    )
+    UPDATE line
+    SET IsPrimary = CASE WHEN Ranked.rn = 1 THEN 1 ELSE 0 END
+    FROM CRM.OpportunityLine line
+    INNER JOIN Ranked ON Ranked.OpportunityLineId = line.OpportunityLineId;
+    ');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityLine') AND name = N'UX_OpportunityLine_OnePrimary')
+        EXEC(N'CREATE UNIQUE INDEX UX_OpportunityLine_OnePrimary ON CRM.OpportunityLine(OpportunityId) WHERE IsDeleted = 0 AND IsPrimary = 1;');
+END;
+
+IF OBJECT_ID(N'CRM.Opportunity', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'CRM.Opportunity', N'PrimaryOpportunityLineId') IS NULL ALTER TABLE CRM.Opportunity ADD PrimaryOpportunityLineId UNIQUEIDENTIFIER NULL;
+
+    IF OBJECT_ID(N'CRM.OpportunityLine', N'U') IS NOT NULL
+    BEGIN
+        EXEC(N'
+        UPDATE o
+        SET PrimaryOpportunityLineId = primaryLine.OpportunityLineId,
+            EstimatedAmount = lineTotals.EstimatedAmount
+        FROM CRM.Opportunity o
+        OUTER APPLY
+        (
+            SELECT TOP 1 OpportunityLineId
+            FROM CRM.OpportunityLine line
+            WHERE line.OpportunityId = o.OpportunityId AND line.IsDeleted = 0
+            ORDER BY CASE WHEN line.IsPrimary = 1 THEN 0 ELSE 1 END, line.EstPremium DESC, line.CreatedDateUtc
+        ) primaryLine
+        OUTER APPLY
+        (
+            SELECT SUM(line.EstPremium) AS EstimatedAmount
+            FROM CRM.OpportunityLine line
+            WHERE line.OpportunityId = o.OpportunityId AND line.IsDeleted = 0
+        ) lineTotals
+        WHERE o.IsDeleted = 0
+          AND primaryLine.OpportunityLineId IS NOT NULL;
+        ');
+    END;
+END;
+
+IF OBJECT_ID(N'CRM.OpportunitySubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunitySubmissionLine
+    (
+        OpportunitySubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunitySubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunitySubmissionLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'UX_OpportunitySubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunitySubmissionLine_Submission_Line ON CRM.OpportunitySubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunitySubmissionLine') AND name = N'IX_OpportunitySubmissionLine_Opportunity')
+    EXEC(N'CREATE INDEX IX_OpportunitySubmissionLine_Opportunity ON CRM.OpportunitySubmissionLine(OpportunityId, IsDeleted, SubmissionId);');
+
+IF OBJECT_ID(N'CRM.OpportunityBoundPolicy', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.OpportunityBoundPolicy
+    (
+        OpportunityBoundPolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_OpportunityBoundPolicy PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NOT NULL,
+        OpportunitySubmissionId UNIQUEIDENTIFIER NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyNumber NVARCHAR(50) NOT NULL,
+        BindingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BindingStatus DEFAULT N'Bound',
+        BoundDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BoundDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'TenantId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_TenantId DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'OpportunityId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD OpportunityId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_OpportunityId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'OpportunitySubmissionId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD OpportunitySubmissionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'SubmissionId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_SubmissionId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'QuoteId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD QuoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_QuoteId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'PolicyId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD PolicyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_PolicyId DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'PolicyNumber') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD PolicyNumber NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_PolicyNumber DEFAULT N'POL-SEEDED';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'BindingStatus') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD BindingStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BindingStatusB DEFAULT N'Bound';
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'BoundDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD BoundDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_BoundDateUtcB DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_CreatedDateUtcB DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'CreatedByUserId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.OpportunityBoundPolicy', N'IsDeleted') IS NULL ALTER TABLE CRM.OpportunityBoundPolicy ADD IsDeleted BIT NOT NULL CONSTRAINT DF_OpportunityBoundPolicy_IsDeletedB DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'UX_OpportunityBoundPolicy_Policy')
+    EXEC(N'CREATE UNIQUE INDEX UX_OpportunityBoundPolicy_Policy ON CRM.OpportunityBoundPolicy(PolicyId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'IX_OpportunityBoundPolicy_Opportunity')
+    EXEC(N'CREATE INDEX IX_OpportunityBoundPolicy_Opportunity ON CRM.OpportunityBoundPolicy(TenantId, OpportunityId, IsDeleted, BoundDateUtc DESC);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.OpportunityBoundPolicy') AND name = N'IX_OpportunityBoundPolicy_SourceSubmission')
+    EXEC(N'CREATE INDEX IX_OpportunityBoundPolicy_SourceSubmission ON CRM.OpportunityBoundPolicy(OpportunitySubmissionId, IsDeleted) WHERE OpportunitySubmissionId IS NOT NULL;');
+
+INSERT INTO CRM.OpportunityBoundPolicy
+    (OpportunityBoundPolicyId, TenantId, OpportunityId, OpportunitySubmissionId, SubmissionId, QuoteId, PolicyId, PolicyNumber, BindingStatus, BoundDateUtc, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), p.TenantId, s.OpportunityId, os.SubmissionId, p.SubmissionId, p.QuoteId, p.PolicyId, p.PolicyNumber, p.Status, p.BoundDateUtc, SYSUTCDATETIME(), s.CreatedByUserId, 0
+FROM Submissions.BoundPolicy p
+INNER JOIN Submissions.Submission s ON s.SubmissionId = p.SubmissionId AND s.IsDeleted = 0
+OUTER APPLY
+(
+    SELECT TOP 1 source.SubmissionId
+    FROM CRM.OpportunitySubmission source
+    WHERE source.TenantId = p.TenantId
+      AND source.OpportunityId = s.OpportunityId
+      AND source.IsDeleted = 0
+      AND (source.LineOfBusiness = s.LineOfBusiness OR source.SubmissionNumber = s.SubmissionNumber)
+    ORDER BY CASE WHEN source.Status = N'Bound' THEN 0 ELSE 1 END, source.ModifiedDateUtc DESC, source.CreatedDateUtc DESC
+) os
+WHERE s.OpportunityId IS NOT NULL
+  AND p.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM CRM.OpportunityBoundPolicy existing WHERE existing.PolicyId = p.PolicyId AND existing.IsDeleted = 0);
+
+IF OBJECT_ID(N'Submissions.SubmissionLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionLine
+    (
+        SubmissionLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_SubmissionLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityId UNIQUEIDENTIFIER NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        TargetPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionLine_TargetPremium DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'UX_SubmissionLine_Submission_Line')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionLine_Submission_Line ON Submissions.SubmissionLine(SubmissionId, OpportunityLineId) WHERE IsDeleted = 0 AND OpportunityLineId IS NOT NULL;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionLine') AND name = N'IX_SubmissionLine_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionLine_Submission ON Submissions.SubmissionLine(SubmissionId, IsDeleted, LineOfBusiness);');
+
+IF OBJECT_ID(N'Submissions.QuoteLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteLine
+    (
+        QuoteLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        QuotedPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_QuotedPremium DEFAULT 0,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_Status DEFAULT N'Quoted',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsQuoteLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteLine') AND name = N'IX_QuoteLine_Quote')
+    EXEC(N'CREATE INDEX IX_QuoteLine_Quote ON Submissions.QuoteLine(QuoteId, IsDeleted, LineOfBusiness);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteLine') AND name = N'IX_QuoteLine_Submission')
+    EXEC(N'CREATE INDEX IX_QuoteLine_Submission ON Submissions.QuoteLine(SubmissionId, IsDeleted, OpportunityLineId);');
+
+IF OBJECT_ID(N'Submissions.PolicyLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.PolicyLine
+    (
+        PolicyLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_PolicyLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        QuoteId UNIQUEIDENTIFIER NULL,
+        OpportunityLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_WrittenPremium DEFAULT 0,
+        Status NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_Status DEFAULT N'Bound',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionsPolicyLine_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyLine') AND name = N'IX_PolicyLine_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Policy ON Submissions.PolicyLine(PolicyId, IsDeleted, LineOfBusiness);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.PolicyLine') AND name = N'IX_PolicyLine_Submission')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Submission ON Submissions.PolicyLine(SubmissionId, IsDeleted, OpportunityLineId);');
+
+INSERT INTO CRM.OpportunitySubmissionLine (OpportunitySubmissionLineId, TenantId, SubmissionId, OpportunityId, OpportunityLineId, LineOfBusiness, TargetPremium, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), s.TenantId, s.SubmissionId, s.OpportunityId, line.OpportunityLineId, line.LineOfBusiness, COALESCE(NULLIF(s.TargetPremium, 0), line.EstPremium), SYSUTCDATETIME(), s.CreatedByUserId, 0
+FROM CRM.OpportunitySubmission s
+INNER JOIN CRM.OpportunityLine line ON line.OpportunityId = s.OpportunityId AND line.IsDeleted = 0
+WHERE s.IsDeleted = 0
+  AND (s.LineOfBusiness = line.LineOfBusiness OR NOT EXISTS (SELECT 1 FROM CRM.OpportunityLine exactLine WHERE exactLine.OpportunityId = s.OpportunityId AND exactLine.IsDeleted = 0 AND exactLine.LineOfBusiness = s.LineOfBusiness))
+  AND NOT EXISTS (SELECT 1 FROM CRM.OpportunitySubmissionLine existing WHERE existing.SubmissionId = s.SubmissionId AND existing.OpportunityLineId = line.OpportunityLineId AND existing.IsDeleted = 0);
+""";
+
+    private const string Migration0209_SubmissionsPostCreateAutomationSchema = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'OPS') EXEC(N'CREATE SCHEMA OPS');
+
+IF OBJECT_ID(N'Submissions.SubmissionAutomationRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionAutomationRule
+    (
+        AutomationRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionAutomationRule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RuleCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        AutoCreateDocuments BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateDocuments DEFAULT 1,
+        AutoSelectMarkets BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSelectMarkets DEFAULT 1,
+        AutoSubmitToMarket BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSubmitToMarket DEFAULT 1,
+        AutoAssignOwner BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoAssignOwner DEFAULT 1,
+        AutoCreateFollowUpTask BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateFollowUpTask DEFAULT 1,
+        DefaultOwnerStrategy NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_DefaultOwnerStrategy DEFAULT N'SubmissionOrOpportunityOwner',
+        FollowUpTaskTitle NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTitle DEFAULT N'Follow up on submission',
+        FollowUpTaskDescription NVARCHAR(1000) NULL,
+        FollowUpTaskTypeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTypeCode DEFAULT N'SubmissionFollowUp',
+        FollowUpTaskStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStageCode DEFAULT N'Open',
+        FollowUpTaskStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStatusCode DEFAULT N'Open',
+        FollowUpTaskPriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpPriority DEFAULT N'Normal',
+        FollowUpTaskDueDays INT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpDueDays DEFAULT 3,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionAutomationRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoCreateDocuments') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoCreateDocuments BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateDocuments_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoSelectMarkets') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoSelectMarkets BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSelectMarkets_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoSubmitToMarket') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoSubmitToMarket BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoSubmitToMarket_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoAssignOwner') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoAssignOwner BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoAssignOwner_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'AutoCreateFollowUpTask') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD AutoCreateFollowUpTask BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_AutoCreateFollowUpTask_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'DefaultOwnerStrategy') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD DefaultOwnerStrategy NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_DefaultOwnerStrategy_0209 DEFAULT N'SubmissionOrOpportunityOwner';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskTitle') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskTitle NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTitle_0209 DEFAULT N'Follow up on submission';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskDescription') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskDescription NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskTypeCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskTypeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskTypeCode_0209 DEFAULT N'SubmissionFollowUp';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskStageCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStageCode_0209 DEFAULT N'Open';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskStatusCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpTaskStatusCode_0209 DEFAULT N'Open';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskPriorityCode') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskPriorityCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpPriority_0209 DEFAULT N'Normal';
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'FollowUpTaskDueDays') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD FollowUpTaskDueDays INT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_FollowUpDueDays_0209 DEFAULT 3;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsActive_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionAutomationRule_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionAutomationRule', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionAutomationRule ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionAutomationRule_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionAutomationRule') AND name = N'UX_SubmissionAutomationRule_Tenant_Lob_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionAutomationRule_Tenant_Lob_Code ON Submissions.SubmissionAutomationRule(TenantId, LineOfBusiness, RuleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketRule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketRule
+    (
+        MarketRuleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketRule PRIMARY KEY DEFAULT NEWID(),
+        AutomationRuleId UNIQUEIDENTIFIER NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RuleCode NVARCHAR(100) NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SortOrder DEFAULT 0,
+        AppetiteScore INT NOT NULL CONSTRAINT DF_SubmissionMarketRule_AppetiteScore DEFAULT 80,
+        IsRecommended BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsRecommended DEFAULT 0,
+        SubmitByDefault BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SubmitByDefault DEFAULT 1,
+        Notes NVARCHAR(1000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketRule_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'AutomationRuleId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD AutomationRuleId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'SubmitByDefault') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD SubmitByDefault BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_SubmitByDefault_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsActive_0209 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketRule_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketRule', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionMarketRule ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketRule_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketRule') AND name = N'UX_SubmissionMarketRule_Tenant_Lob_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketRule_Tenant_Lob_Carrier ON Submissions.SubmissionMarketRule(TenantId, LineOfBusiness, CarrierId, RuleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionDocumentChecklist', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionDocumentChecklist
+    (
+        DocumentChecklistId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionDocumentChecklist PRIMARY KEY DEFAULT NEWID(),
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentRequirementId UNIQUEIDENTIFIER NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsRequired DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_StatusCode DEFAULT N'Needed',
+        DocumentId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'DocumentRequirementId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD DocumentRequirementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'DocumentId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD DocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionDocumentChecklist', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionDocumentChecklist ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionDocumentChecklist_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionDocumentChecklist') AND name = N'UX_SubmissionDocumentChecklist_Submission_Category')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionDocumentChecklist_Submission_Category ON Submissions.SubmissionDocumentChecklist(SubmissionId, CategoryCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketDocument
+    (
+        SubmissionMarketDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketDocument PRIMARY KEY DEFAULT NEWID(),
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDocument_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDocument_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDocument') AND name = N'UX_SubmissionMarketDocument_Market_Document')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketDocument_Market_Document ON Submissions.SubmissionMarketDocument(SubmissionMarketId, DocumentId) WHERE IsDeleted = 0;');
+
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD TenantId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ReasonCode') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ReasonCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'NextActionDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD NextActionDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'SubmittedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD SubmittedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarket', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarket ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+
+EXEC(N'
+UPDATE sm
+SET TenantId = s.TenantId
+FROM Submissions.SubmissionMarket sm
+INNER JOIN Submissions.Submission s ON s.SubmissionId = sm.SubmissionId
+WHERE sm.TenantId IS NULL;
+');
+
+EXEC(N'
+;WITH RankedMarkets AS
+(
+    SELECT sm.SubmissionMarketId,
+           ROW_NUMBER() OVER
+           (
+               PARTITION BY sm.SubmissionId, sm.CarrierId
+               ORDER BY
+                   CASE WHEN sm.Status = N''Submitted'' THEN 0 WHEN sm.Status = N''Quoted'' THEN 1 WHEN sm.Status = N''Pending'' THEN 2 ELSE 3 END,
+                   sm.IsRecommended DESC,
+                   sm.AppetiteScore DESC,
+                   sm.AddedDateUtc DESC,
+                   sm.SubmissionMarketId
+           ) AS RowNumber
+    FROM Submissions.SubmissionMarket sm
+    WHERE sm.IsDeleted = 0
+)
+UPDATE sm
+SET IsDeleted = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.SubmissionMarket sm
+INNER JOIN RankedMarkets ranked ON ranked.SubmissionMarketId = sm.SubmissionMarketId
+WHERE ranked.RowNumber > 1;
+');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarket') AND name = N'UX_SubmissionMarket_Submission_Carrier')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarket_Submission_Carrier ON Submissions.SubmissionMarket(SubmissionId, CarrierId) WHERE IsDeleted = 0;');
+
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityName') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'RelatedEntityId') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionActionLog', N'ActionSource') IS NULL ALTER TABLE Submissions.SubmissionActionLog ADD ActionSource NVARCHAR(50) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionActionLog') AND name = N'IX_SubmissionActionLog_SubmissionDate')
+    EXEC(N'CREATE INDEX IX_SubmissionActionLog_SubmissionDate ON Submissions.SubmissionActionLog(SubmissionId, CreatedDateUtc DESC) INCLUDE (TenantId, ActionCode, Notes) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'OPS.TaskItem') AND name = N'IX_TaskItem_RelatedEntity')
+    EXEC(N'CREATE INDEX IX_TaskItem_RelatedEntity ON OPS.TaskItem(TenantId, RelatedEntityName, RelatedEntityId, IsDeleted, StatusCode, DueDate) INCLUDE (TaskNumber, Title, Description, TaskTypeCode, StageCode, PriorityCode, AssignedToUserId, CreatedDateUtc);');
+
+IF OBJECT_ID(N'DMS.Document', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.Document
+    (
+        DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DMS_Document_0209 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTypeCode NVARCHAR(100) NOT NULL,
+        CategoryCode NVARCHAR(100) NOT NULL,
+        EntityName NVARCHAR(100) NULL,
+        EntityId UNIQUEIDENTIFIER NULL,
+        FileName NVARCHAR(260) NOT NULL,
+        StoragePath NVARCHAR(500) NOT NULL,
+        ContentType NVARCHAR(150) NULL,
+        FileSizeBytes BIGINT NULL,
+        VersionNumber INT NOT NULL CONSTRAINT DF_DMS_Document_VersionNumber_0209 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_DMS_Document_StatusCode_Create_0209 DEFAULT N'Active',
+        RetentionDate DATE NULL,
+        Description NVARCHAR(1000) NULL,
+        Tags NVARCHAR(500) NULL,
+        UploadedByName NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DMS_Document_CreatedDateUtc_0209 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_Document_IsDeleted_Create_0209 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'DMS.Document', N'EntityName') IS NULL ALTER TABLE DMS.Document ADD EntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'DMS.Document', N'EntityId') IS NULL ALTER TABLE DMS.Document ADD EntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'StatusCode') IS NULL ALTER TABLE DMS.Document ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_DMS_Document_StatusCode_0209 DEFAULT N'Active';
+IF COL_LENGTH(N'DMS.Document', N'Description') IS NULL ALTER TABLE DMS.Document ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'DMS.Document', N'CreatedByUserId') IS NULL ALTER TABLE DMS.Document ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'ModifiedDateUtc') IS NULL ALTER TABLE DMS.Document ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'DMS.Document', N'ModifiedByUserId') IS NULL ALTER TABLE DMS.Document ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'DMS.Document', N'IsDeleted') IS NULL ALTER TABLE DMS.Document ADD IsDeleted BIT NOT NULL CONSTRAINT DF_DMS_Document_IsDeleted_0209 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.Document') AND name = N'IX_DMS_Document_SubmissionEntity')
+    EXEC(N'CREATE INDEX IX_DMS_Document_SubmissionEntity ON DMS.Document(TenantId, EntityName, EntityId, IsDeleted, CategoryCode);');
+
+IF OBJECT_ID(N'OPS.TaskItem', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'OPS.TaskItem', N'RelatedEntityName') IS NULL ALTER TABLE OPS.TaskItem ADD RelatedEntityName NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'OPS.TaskItem', N'RelatedEntityId') IS NULL ALTER TABLE OPS.TaskItem ADD RelatedEntityId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'OPS.TaskItem', N'AccountId') IS NULL ALTER TABLE OPS.TaskItem ADD AccountId UNIQUEIDENTIFIER NULL;
+END;
+
+DECLARE @SubmissionAutomationTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmissionAutomationTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @SubmissionAutomationTenants)
+    INSERT INTO @SubmissionAutomationTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @SubmissionAutomationLines TABLE
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    PRIMARY KEY (TenantId, LineOfBusiness)
+);
+
+IF OBJECT_ID(N'Agency.LineOfBusiness', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT lob.TenantId,
+               LEFT(LTRIM(RTRIM(lob.LobName)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY lob.TenantId, LEFT(LTRIM(RTRIM(lob.LobName)), 100) ORDER BY lob.LobId) AS RowNumber
+        FROM Agency.LineOfBusiness lob
+        WHERE lob.IsDeleted = 0
+          AND lob.IsActive = 1
+          AND NULLIF(LTRIM(RTRIM(lob.LobName)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+END;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+BEGIN
+    DECLARE @SubmissionLineSource TABLE
+    (
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        PRIMARY KEY (TenantId, LineOfBusiness)
+    );
+
+    INSERT INTO @SubmissionLineSource (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT s.TenantId,
+               LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY s.TenantId, LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) ORDER BY s.CreatedDateUtc DESC, s.SubmissionId) AS RowNumber
+        FROM Submissions.Submission s
+        WHERE s.IsDeleted = 0
+          AND NULLIF(LTRIM(RTRIM(s.LineOfBusiness)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+
+    INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM @SubmissionLineSource source
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM @SubmissionAutomationLines existing
+        WHERE existing.TenantId = source.TenantId
+          AND existing.LineOfBusiness = source.LineOfBusiness
+    );
+END;
+
+INSERT INTO @SubmissionAutomationLines (TenantId, LineOfBusiness)
+SELECT t.TenantId, v.LineOfBusiness
+FROM @SubmissionAutomationTenants t
+CROSS JOIN (VALUES (N'General Liability'), (N'Property'), (N'Workers Compensation'), (N'Commercial Auto'), (N'Cyber Liability')) v(LineOfBusiness)
+WHERE NOT EXISTS (SELECT 1 FROM @SubmissionAutomationLines existing WHERE existing.TenantId = t.TenantId AND existing.LineOfBusiness = v.LineOfBusiness);
+
+INSERT INTO Submissions.SubmissionAutomationRule
+    (AutomationRuleId, TenantId, LineOfBusiness, RuleCode, DisplayName, AutoCreateDocuments, AutoSelectMarkets, AutoSubmitToMarket, AutoAssignOwner, AutoCreateFollowUpTask,
+     DefaultOwnerStrategy, FollowUpTaskTitle, FollowUpTaskDescription, FollowUpTaskTypeCode, FollowUpTaskStageCode, FollowUpTaskStatusCode, FollowUpTaskPriorityCode, FollowUpTaskDueDays, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, N'DEFAULT_POST_CREATE', CONCAT(l.LineOfBusiness, N' post-create automation'), 1, 1, 1, 1, 1,
+       N'SubmissionOrOpportunityOwner', N'Follow up on submission markets', N'Review automated document checklist, market submissions, and carrier responses.', N'SubmissionFollowUp', N'Open', N'Open', N'Normal', 3, 1, SYSUTCDATETIME(), 0
+FROM @SubmissionAutomationLines l
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionAutomationRule r
+    WHERE r.TenantId = l.TenantId
+      AND r.LineOfBusiness = l.LineOfBusiness
+      AND r.RuleCode = N'DEFAULT_POST_CREATE'
+      AND r.IsDeleted = 0
+);
+
+INSERT INTO Submissions.SubmissionDocumentRequirement
+    (DocumentRequirementId, TenantId, LineOfBusiness, CategoryCode, DisplayName, IsRequired, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, d.CategoryCode, d.DisplayName, d.IsRequired, d.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM @SubmissionAutomationLines l
+CROSS JOIN
+(
+    VALUES
+        (N'Application', N'Application', CAST(1 AS bit), 10),
+        (N'LossRuns', N'Loss runs', CAST(1 AS bit), 20),
+        (N'ExposureSchedules', N'Exposure schedules', CAST(1 AS bit), 30),
+        (N'PriorPolicies', N'Prior policies', CAST(0 AS bit), 40),
+        (N'Financials', N'Financials', CAST(0 AS bit), 50),
+        (N'ACORD', N'ACORD forms', CAST(0 AS bit), 60)
+) d(CategoryCode, DisplayName, IsRequired, SortOrder)
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionDocumentRequirement existing
+    WHERE existing.TenantId = l.TenantId
+      AND existing.LineOfBusiness = l.LineOfBusiness
+      AND existing.CategoryCode = d.CategoryCode
+      AND existing.IsDeleted = 0
+);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    DECLARE @RankedCarrier TABLE
+    (
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        rn INT NOT NULL
+    );
+
+    INSERT INTO @RankedCarrier (TenantId, CarrierId, rn)
+    EXEC(N'
+    SELECT c.TenantId,
+           c.CarrierId,
+           ROW_NUMBER() OVER (PARTITION BY c.TenantId ORDER BY CASE WHEN c.CarrierName IN (N''Travelers'', N''Chubb'', N''Hartford'') THEN 0 ELSE 1 END, c.CarrierName) AS rn
+    FROM Core.Carrier c
+    WHERE c.IsDeleted = 0
+      AND c.IsActive = 1;');
+
+    INSERT INTO Submissions.SubmissionMarketRule
+        (MarketRuleId, AutomationRuleId, TenantId, LineOfBusiness, RuleCode, CarrierId, SortOrder, AppetiteScore, IsRecommended, SubmitByDefault, Notes, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), r.AutomationRuleId, l.TenantId, l.LineOfBusiness, N'DEFAULT_MARKET', c.CarrierId, c.rn * 10,
+           CASE c.rn WHEN 1 THEN 95 WHEN 2 THEN 88 ELSE 80 END,
+           CASE WHEN c.rn = 1 THEN 1 ELSE 0 END,
+           1,
+           N'Default seeded market rule for automated post-create submission workflow.',
+           1, SYSUTCDATETIME(), 0
+    FROM @SubmissionAutomationLines l
+    INNER JOIN Submissions.SubmissionAutomationRule r ON r.TenantId = l.TenantId AND r.LineOfBusiness = l.LineOfBusiness AND r.RuleCode = N'DEFAULT_POST_CREATE' AND r.IsDeleted = 0
+    INNER JOIN @RankedCarrier c ON c.TenantId = l.TenantId AND c.rn <= 3
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionMarketRule existing
+        WHERE existing.TenantId = l.TenantId
+          AND existing.LineOfBusiness = l.LineOfBusiness
+          AND existing.CarrierId = c.CarrierId
+          AND existing.RuleCode = N'DEFAULT_MARKET'
+          AND existing.IsDeleted = 0
+    );
+END;
+""";
+
+    private const string Migration0210_SubmissionsSubmitToMarketDispatch = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionMarketDispatch
+    (
+        SubmissionMarketDispatchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionMarketDispatch PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel DEFAULT N'InternalQueue',
+        DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status DEFAULT N'Pending',
+        Recipient NVARCHAR(500) NULL,
+        Subject NVARCHAR(300) NULL,
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload DEFAULT N'{}',
+        AttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_AttemptCount DEFAULT 0,
+        MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount DEFAULT 3,
+        NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt DEFAULT SYSUTCDATETIME(),
+        LockedDateUtc DATETIME2 NULL,
+        LockedBy NVARCHAR(120) NULL,
+        LastAttemptDateUtc DATETIME2 NULL,
+        CompletedDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_IsDeleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchChannelCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel_0210 DEFAULT N'InternalQueue';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchStatusCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status_0210 DEFAULT N'Pending';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'Recipient') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD Recipient NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'Subject') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD Subject NVARCHAR(300) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'PayloadJson') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload_0210 DEFAULT N'{}';
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'AttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD AttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_AttemptCount_0210 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'MaxAttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount_0210 DEFAULT 3;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'NextAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt_0210 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LockedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LockedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LockedBy') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LockedBy NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastAttemptDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CompletedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CompletedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastError') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastError NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Created_0210 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_IsDeleted_0210 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'UX_SubmissionMarketDispatch_Market')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionMarketDispatch_Market ON Submissions.SubmissionMarketDispatch(SubmissionMarketId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'IX_SubmissionMarketDispatch_Status')
+    EXEC(N'CREATE INDEX IX_SubmissionMarketDispatch_Status ON Submissions.SubmissionMarketDispatch(TenantId, DispatchStatusCode, IsDeleted, NextAttemptDateUtc, CreatedDateUtc);');
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0210 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0210 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0210 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0210 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0210 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0210 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0210 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0210 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0210 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0210 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0210 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'UX_CarrierSetting_Tenant_Code_Carrier_0210')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierSetting_Tenant_Code_Carrier_0210 ON Agency.CarrierSetting(TenantId, SettingCode, CarrierId) WHERE IsDeleted = 0;');
+
+DECLARE @SubmitToMarketTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @SubmitToMarketTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @SubmitToMarketTenants)
+    INSERT INTO @SubmitToMarketTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @SubmitToMarketSettings TABLE
+(
+    SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+    SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+    AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+);
+
+INSERT INTO @SubmitToMarketSettings VALUES
+(N'SUBMIT_TO_MARKET_DISPATCH_ENABLED', N'Submit-to-Market Dispatch Enabled', N'SubmissionDispatch', N'Tenant', N'Boolean', N'true', N'true', N'Enables the worker to process submitted market dispatch queue records.', N'{""required"":true}', N'{""control"":""toggle""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 10),
+(N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default dispatch channel when no carrier-specific channel is configured. Supported values: InternalQueue, Manual, Portal, Email, API, ExternalConnector.', N'{""maxLength"":50}', N'{""control"":""select"",""options"": [""InternalQueue"",""Manual"",""Portal"",""Email"",""API"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
+(N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT', N'Submit-to-Market Default Recipient', N'SubmissionDispatch', N'Tenant', N'Text', NULL, NULL, N'Optional default mailbox or endpoint identifier used by dispatch channels that require a recipient.', N'{""maxLength"":500}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 30),
+(N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE', N'Submit-to-Market Subject Template', N'SubmissionDispatch', N'Tenant', N'Text', N'Submission {SubmissionNumber} ready for market review', N'Submission {SubmissionNumber} ready for market review', N'Subject template for queued submit-to-market dispatch payloads.', N'{""maxLength"":300}', N'{""control"":""text""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 40),
+(N'SUBMIT_TO_MARKET_MAX_ATTEMPTS', N'Submit-to-Market Max Attempts', N'SubmissionDispatch', N'Tenant', N'Number', N'3', N'3', N'Max worker attempts before a pending dispatch is no longer selected.', N'{""min"":1,""max"":10}', N'{""control"":""number""}', N'SubmitToMarketDispatchWorkerService', 1, 0, 50),
+(N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'[""InternalQueue""]', N'[""InternalQueue""]', N'Channels that this worker may mark completed without an external connector.', N'{""type"":""array""}', N'{""control"":""multi-select"",""options"": [""InternalQueue"",""Manual"",""Portal"",""Email"",""API"",""ExternalConnector""]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
+(N'SUBMIT_TO_MARKET_API_ENDPOINT', N'Submit-to-Market API Endpoint', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier API endpoint. When configured, the worker marks the queue item ready for an external connector to send.', N'{""maxLength"":1000}', N'{""control"":""url""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 70),
+(N'SUBMIT_TO_MARKET_EMAIL', N'Submit-to-Market Email', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Optional carrier-specific email recipient. When configured, the worker marks the queue item ready for an email connector to send.', N'{""maxLength"":500}', N'{""control"":""email""}', N'SubmitToMarketDispatchWorkerService', 0, 0, 80),
+(N'SUBMIT_TO_MARKET_SECRET_REFERENCE', N'Submit-to-Market Secret Reference', N'SubmissionDispatch', N'Carrier', N'Secret', NULL, NULL, N'Optional Key Vault or secret reference for carrier submit-to-market API credentials.', N'{""maxLength"":500}', N'{""control"":""secret""}', N'SubmitToMarketDispatchWorkerService', 0, 1, 90);
+
+INSERT INTO Agency.CarrierSetting
+(CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM @SubmitToMarketTenants t
+CROSS JOIN @SubmitToMarketSettings s
+WHERE s.ScopeCode = N'Tenant'
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM Agency.CarrierSetting existing
+      WHERE existing.TenantId = t.TenantId
+        AND existing.CarrierId IS NULL
+        AND existing.SettingCode = s.SettingCode
+        AND existing.IsDeleted = 0
+  );
+""";
+
+    private const string Migration0211_SubmissionsCurrentMarketCarrierSeed = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Core') EXEC(N'CREATE SCHEMA Core');
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NULL
+BEGIN
+    CREATE TABLE Core.Carrier
+    (
+        CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Core_Carrier PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierCode NVARCHAR(50) NULL,
+        CarrierName NVARCHAR(200) NOT NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsActive_0211 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Carrier_Created_0211 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsDeleted_0211 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Core.Carrier', N'TenantId') IS NULL ALTER TABLE Core.Carrier ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Core_Carrier_TenantId_0211 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Core.Carrier', N'CarrierCode') IS NULL ALTER TABLE Core.Carrier ADD CarrierCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Core.Carrier', N'CarrierName') IS NULL ALTER TABLE Core.Carrier ADD CarrierName NVARCHAR(200) NOT NULL CONSTRAINT DF_Core_Carrier_Name_0211 DEFAULT N'Carrier';
+IF COL_LENGTH(N'Core.Carrier', N'IsActive') IS NULL ALTER TABLE Core.Carrier ADD IsActive BIT NOT NULL CONSTRAINT DF_Core_Carrier_Active_0211 DEFAULT 1;
+IF COL_LENGTH(N'Core.Carrier', N'CreatedDateUtc') IS NULL ALTER TABLE Core.Carrier ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Core_Carrier_CreatedDate_0211 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Core.Carrier', N'CreatedByUserId') IS NULL ALTER TABLE Core.Carrier ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Core.Carrier', N'ModifiedDateUtc') IS NULL ALTER TABLE Core.Carrier ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Core.Carrier', N'ModifiedByUserId') IS NULL ALTER TABLE Core.Carrier ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Core.Carrier', N'IsDeleted') IS NULL ALTER TABLE Core.Carrier ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Core_Carrier_IsDeletedB_0211 DEFAULT 0;
+
+DECLARE @CurrentMarketTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO @CurrentMarketTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM @CurrentMarketTenants)
+    INSERT INTO @CurrentMarketTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @CurrentMarkets TABLE
+(
+    CarrierCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    CarrierName NVARCHAR(200) NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO @CurrentMarkets (CarrierCode, CarrierName, SortOrder) VALUES
+(N'TRV', N'Travelers', 10),
+(N'CHB', N'Chubb', 20),
+(N'HFD', N'The Hartford', 30),
+(N'LIB', N'Liberty Mutual', 40),
+(N'CNA', N'CNA', 50),
+(N'ZUR', N'Zurich', 60),
+(N'AIG', N'AIG', 70),
+(N'NAT', N'Nationwide', 80),
+(N'AMT', N'AmTrust', 90),
+(N'BRK', N'Berkshire Hathaway GUARD', 100),
+(N'HAN', N'The Hanover', 110),
+(N'SEL', N'Selective', 120),
+(N'AUT', N'Auto-Owners', 130),
+(N'CIN', N'Cincinnati Insurance', 140),
+(N'MKL', N'Markel', 150),
+(N'PHL', N'Philadelphia Insurance Companies', 160),
+(N'GRA', N'Great American Insurance Group', 170),
+(N'TMH', N'Tokio Marine HCC', 180),
+(N'HIS', N'Hiscox', 190),
+(N'AXL', N'AXA XL', 200);
+
+INSERT INTO Core.Carrier (CarrierId, TenantId, CarrierCode, CarrierName, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, m.CarrierCode, m.CarrierName, 1, SYSUTCDATETIME(), 0
+FROM @CurrentMarketTenants t
+CROSS JOIN @CurrentMarkets m
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Core.Carrier existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.IsDeleted = 0
+      AND (existing.CarrierCode = m.CarrierCode OR existing.CarrierName = m.CarrierName)
+);
+
+UPDATE existing
+SET IsActive = 1,
+    CarrierCode = COALESCE(NULLIF(existing.CarrierCode, N''), m.CarrierCode),
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Core.Carrier existing
+INNER JOIN @CurrentMarkets m ON existing.CarrierName = m.CarrierName OR existing.CarrierCode = m.CarrierCode
+WHERE existing.IsDeleted = 0
+  AND existing.IsActive = 0;
+""";
+
+    private const string Migration0212_CrmLeadContextAccountContact = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Client') EXEC(N'CREATE SCHEMA Client');
+
+IF OBJECT_ID(N'CRM.LeadType', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadType
+    (
+        LeadTypeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CRM_LeadType PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TypeCode NVARCHAR(50) NOT NULL,
+        TypeName NVARCHAR(100) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        AccountTypeCode NVARCHAR(50) NOT NULL,
+        RequiresCompany BIT NOT NULL CONSTRAINT DF_CRM_LeadType_RequiresCompany_0212 DEFAULT 0,
+        PersonAccountFallback BIT NOT NULL CONSTRAINT DF_CRM_LeadType_PersonFallback_0212 DEFAULT 1,
+        IsActive BIT NOT NULL CONSTRAINT DF_CRM_LeadType_IsActive_0212 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CRM_LeadType_SortOrder_0212 DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CRM_LeadType_Created_0212 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CRM_LeadType_IsDeleted_0212 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'CRM.LeadType', N'TenantId') IS NULL ALTER TABLE CRM.LeadType ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CRM_LeadType_TenantId_0212 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'CRM.LeadType', N'TypeCode') IS NULL ALTER TABLE CRM.LeadType ADD TypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CRM_LeadType_TypeCode_0212 DEFAULT N'Personal';
+IF COL_LENGTH(N'CRM.LeadType', N'TypeName') IS NULL ALTER TABLE CRM.LeadType ADD TypeName NVARCHAR(100) NOT NULL CONSTRAINT DF_CRM_LeadType_TypeName_0212 DEFAULT N'Personal';
+IF COL_LENGTH(N'CRM.LeadType', N'Description') IS NULL ALTER TABLE CRM.LeadType ADD Description NVARCHAR(500) NULL;
+IF COL_LENGTH(N'CRM.LeadType', N'AccountTypeCode') IS NULL ALTER TABLE CRM.LeadType ADD AccountTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CRM_LeadType_AccountTypeCode_0212 DEFAULT N'Personal';
+IF COL_LENGTH(N'CRM.LeadType', N'RequiresCompany') IS NULL ALTER TABLE CRM.LeadType ADD RequiresCompany BIT NOT NULL CONSTRAINT DF_CRM_LeadType_RequiresCompanyB_0212 DEFAULT 0;
+IF COL_LENGTH(N'CRM.LeadType', N'PersonAccountFallback') IS NULL ALTER TABLE CRM.LeadType ADD PersonAccountFallback BIT NOT NULL CONSTRAINT DF_CRM_LeadType_PersonFallbackB_0212 DEFAULT 1;
+IF COL_LENGTH(N'CRM.LeadType', N'IsActive') IS NULL ALTER TABLE CRM.LeadType ADD IsActive BIT NOT NULL CONSTRAINT DF_CRM_LeadType_IsActiveB_0212 DEFAULT 1;
+IF COL_LENGTH(N'CRM.LeadType', N'SortOrder') IS NULL ALTER TABLE CRM.LeadType ADD SortOrder INT NOT NULL CONSTRAINT DF_CRM_LeadType_SortOrderB_0212 DEFAULT 0;
+IF COL_LENGTH(N'CRM.LeadType', N'CreatedDateUtc') IS NULL ALTER TABLE CRM.LeadType ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CRM_LeadType_CreatedB_0212 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'CRM.LeadType', N'CreatedByUserId') IS NULL ALTER TABLE CRM.LeadType ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadType', N'ModifiedDateUtc') IS NULL ALTER TABLE CRM.LeadType ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'CRM.LeadType', N'ModifiedByUserId') IS NULL ALTER TABLE CRM.LeadType ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'CRM.LeadType', N'IsDeleted') IS NULL ALTER TABLE CRM.LeadType ADD IsDeleted BIT NOT NULL CONSTRAINT DF_CRM_LeadType_IsDeletedB_0212 DEFAULT 0;
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND COL_LENGTH(N'CRM.Lead', N'LeadTypeCode') IS NULL
+    ALTER TABLE CRM.Lead ADD LeadTypeCode NVARCHAR(50) NULL;
+
+IF OBJECT_ID(N'Client.AccountContact', N'U') IS NULL
+BEGIN
+    CREATE TABLE Client.AccountContact
+    (
+        AccountContactId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Client_AccountContact PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        ContactId UNIQUEIDENTIFIER NOT NULL,
+        RelationshipTypeCode NVARCHAR(50) NOT NULL,
+        RelationshipName NVARCHAR(100) NOT NULL,
+        IsPrimary BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsPrimary_0212 DEFAULT 0,
+        IsDecisionMaker BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsDecisionMaker_0212 DEFAULT 0,
+        IsBillingContact BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsBilling_0212 DEFAULT 0,
+        IsServiceContact BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsService_0212 DEFAULT 0,
+        SourceEntityName NVARCHAR(100) NULL,
+        SourceEntityId UNIQUEIDENTIFIER NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsActive_0212 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Client_AccountContact_Created_0212 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsDeleted_0212 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Client.AccountContact', N'TenantId') IS NULL ALTER TABLE Client.AccountContact ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Client_AccountContact_TenantId_0212 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Client.AccountContact', N'AccountId') IS NULL ALTER TABLE Client.AccountContact ADD AccountId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Client_AccountContact_AccountId_0212 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Client.AccountContact', N'ContactId') IS NULL ALTER TABLE Client.AccountContact ADD ContactId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_Client_AccountContact_ContactId_0212 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Client.AccountContact', N'RelationshipTypeCode') IS NULL ALTER TABLE Client.AccountContact ADD RelationshipTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Client_AccountContact_RelCode_0212 DEFAULT N'PrimaryInsured';
+IF COL_LENGTH(N'Client.AccountContact', N'RelationshipRoleCode') IS NULL ALTER TABLE Client.AccountContact ADD RelationshipRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Client_AccountContact_RelRoleCode_0212 DEFAULT N'PrimaryInsured';
+IF COL_LENGTH(N'Client.AccountContact', N'RelationshipName') IS NULL ALTER TABLE Client.AccountContact ADD RelationshipName NVARCHAR(100) NOT NULL CONSTRAINT DF_Client_AccountContact_RelName_0212 DEFAULT N'Primary Insured';
+IF COL_LENGTH(N'Client.AccountContact', N'IsPrimary') IS NULL ALTER TABLE Client.AccountContact ADD IsPrimary BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsPrimaryB_0212 DEFAULT 0;
+IF COL_LENGTH(N'Client.AccountContact', N'IsDecisionMaker') IS NULL ALTER TABLE Client.AccountContact ADD IsDecisionMaker BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsDecisionMakerB_0212 DEFAULT 0;
+IF COL_LENGTH(N'Client.AccountContact', N'IsBillingContact') IS NULL ALTER TABLE Client.AccountContact ADD IsBillingContact BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsBillingB_0212 DEFAULT 0;
+IF COL_LENGTH(N'Client.AccountContact', N'IsServiceContact') IS NULL ALTER TABLE Client.AccountContact ADD IsServiceContact BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsServiceB_0212 DEFAULT 0;
+IF COL_LENGTH(N'Client.AccountContact', N'SourceEntityName') IS NULL ALTER TABLE Client.AccountContact ADD SourceEntityName NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Client.AccountContact', N'SourceEntityId') IS NULL ALTER TABLE Client.AccountContact ADD SourceEntityId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Client.AccountContact', N'IsActive') IS NULL ALTER TABLE Client.AccountContact ADD IsActive BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsActiveB_0212 DEFAULT 1;
+IF COL_LENGTH(N'Client.AccountContact', N'CreatedDateUtc') IS NULL ALTER TABLE Client.AccountContact ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Client_AccountContact_CreatedB_0212 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Client.AccountContact', N'CreatedByUserId') IS NULL ALTER TABLE Client.AccountContact ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Client.AccountContact', N'ModifiedDateUtc') IS NULL ALTER TABLE Client.AccountContact ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Client.AccountContact', N'ModifiedByUserId') IS NULL ALTER TABLE Client.AccountContact ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Client.AccountContact', N'IsDeleted') IS NULL ALTER TABLE Client.AccountContact ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Client_AccountContact_IsDeletedB_0212 DEFAULT 0;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadType') AND name = N'UX_CRM_LeadType_Tenant_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_CRM_LeadType_Tenant_Code ON CRM.LeadType(TenantId, TypeCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.Lead') AND name = N'IX_CRM_Lead_LeadTypeCode')
+    EXEC(N'CREATE INDEX IX_CRM_Lead_LeadTypeCode ON CRM.Lead(TenantId, LeadTypeCode, IsDeleted);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Client.AccountContact') AND name = N'IX_Client_AccountContact_Account')
+    EXEC(N'CREATE INDEX IX_Client_AccountContact_Account ON Client.AccountContact(TenantId, AccountId, IsDeleted, IsActive);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Client.AccountContact') AND name = N'IX_Client_AccountContact_Contact')
+    EXEC(N'CREATE INDEX IX_Client_AccountContact_Contact ON Client.AccountContact(TenantId, ContactId, IsDeleted, IsActive);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Client.AccountContact') AND name = N'UX_Client_AccountContact_Context')
+    EXEC(N'CREATE UNIQUE INDEX UX_Client_AccountContact_Context ON Client.AccountContact(TenantId, AccountId, ContactId, RelationshipTypeCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'tempdb..#LeadContextTenants') IS NOT NULL DROP TABLE #LeadContextTenants;
+CREATE TABLE #LeadContextTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #LeadContextTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #LeadContextTenants)
+    INSERT INTO #LeadContextTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#LeadTypes') IS NOT NULL DROP TABLE #LeadTypes;
+CREATE TABLE #LeadTypes
+(
+    TypeCode NVARCHAR(50) NOT NULL PRIMARY KEY,
+    TypeName NVARCHAR(100) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    AccountTypeCode NVARCHAR(50) NOT NULL,
+    RequiresCompany BIT NOT NULL,
+    PersonAccountFallback BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #LeadTypes (TypeCode, TypeName, Description, AccountTypeCode, RequiresCompany, PersonAccountFallback, SortOrder) VALUES
+(N'Personal', N'Personal / Individual', N'Individual or household lead. Company is optional and the person name can become the account.', N'Personal', 0, 1, 10),
+(N'Commercial', N'Commercial / Business', N'Business lead. Company is required and becomes the business account context.', N'Commercial', 1, 0, 20),
+(N'Mixed', N'Personal + Commercial', N'Person may be linked to both a personal account and a commercial account context.', N'Commercial', 0, 1, 30);
+
+EXEC(N'
+INSERT INTO CRM.LeadType (LeadTypeId, TenantId, TypeCode, TypeName, Description, AccountTypeCode, RequiresCompany, PersonAccountFallback, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, lt.TypeCode, lt.TypeName, lt.Description, lt.AccountTypeCode, lt.RequiresCompany, lt.PersonAccountFallback, 1, lt.SortOrder, SYSUTCDATETIME(), 0
+FROM #LeadContextTenants t
+CROSS JOIN #LeadTypes lt
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM CRM.LeadType existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.TypeCode = lt.TypeCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET TypeName = lt.TypeName,
+    Description = lt.Description,
+    AccountTypeCode = lt.AccountTypeCode,
+    RequiresCompany = lt.RequiresCompany,
+    PersonAccountFallback = lt.PersonAccountFallback,
+    IsActive = 1,
+    SortOrder = lt.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM CRM.LeadType existing
+INNER JOIN #LeadTypes lt ON lt.TypeCode = existing.TypeCode
+WHERE existing.IsDeleted = 0;');
+
+IF OBJECT_ID(N'Client.ContactRole', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Client.ContactRole', N'Description') IS NULL ALTER TABLE Client.ContactRole ADD Description NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Client.ContactRole', N'IsActive') IS NULL ALTER TABLE Client.ContactRole ADD IsActive BIT NOT NULL CONSTRAINT DF_Client_ContactRole_IsActive_0212 DEFAULT 1;
+    IF COL_LENGTH(N'Client.ContactRole', N'IsDefault') IS NULL ALTER TABLE Client.ContactRole ADD IsDefault BIT NOT NULL CONSTRAINT DF_Client_ContactRole_IsDefault_0212 DEFAULT 0;
+    IF COL_LENGTH(N'Client.ContactRole', N'CreatedDateUtc') IS NULL ALTER TABLE Client.ContactRole ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_Client_ContactRole_Created_0212 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Client.ContactRole', N'IsDeleted') IS NULL ALTER TABLE Client.ContactRole ADD IsDeleted BIT NOT NULL CONSTRAINT DF_Client_ContactRole_IsDeleted_0212 DEFAULT 0;
+
+    IF OBJECT_ID(N'tempdb..#RelationshipRoles') IS NOT NULL DROP TABLE #RelationshipRoles;
+    CREATE TABLE #RelationshipRoles (RoleName NVARCHAR(100) NOT NULL PRIMARY KEY, Description NVARCHAR(500) NULL, SortOrder INT NOT NULL);
+
+    INSERT INTO #RelationshipRoles (RoleName, Description, SortOrder) VALUES
+    (N'Primary Insured', N'Primary person insured on a personal or household account.', 10),
+    (N'Business Owner', N'Owner or principal connected to a commercial account.', 20),
+    (N'Decision Maker', N'Primary decision maker for the account.', 30),
+    (N'Billing Contact', N'Billing or payment contact for the account.', 40),
+    (N'Service Contact', N'Service contact for account servicing workflows.', 50);
+
+    EXEC(N'
+    INSERT INTO Client.ContactRole (ContactRoleId, TenantId, RoleName, Description, IsActive, IsDefault, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), t.TenantId, r.RoleName, r.Description, 1, CASE WHEN r.RoleName = N''Primary Insured'' THEN 1 ELSE 0 END, SYSUTCDATETIME(), 0
+    FROM #LeadContextTenants t
+    CROSS JOIN #RelationshipRoles r
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Client.ContactRole existing
+        WHERE existing.TenantId = t.TenantId
+          AND existing.RoleName = r.RoleName
+          AND existing.IsDeleted = 0
+    );');
+END;
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE CRM.Lead
+    SET LeadTypeCode = CASE WHEN NULLIF(AccountName, N'''') IS NULL THEN N''Personal'' ELSE N''Commercial'' END,
+        ModifiedDateUtc = COALESCE(ModifiedDateUtc, SYSUTCDATETIME())
+    WHERE LeadTypeCode IS NULL;');
+END;
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL AND OBJECT_ID(N'CRM.LeadContact', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO CRM.LeadContact
+    (ContactId, TenantId, LeadId, FirstName, LastName, Title, Email, Phone, IsPrimary, CreatedByUserId, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), l.TenantId, l.LeadId, l.FirstName, l.LastName, NULL, l.Email, l.Phone, 1, l.CreatedByUserId, COALESCE(l.CreatedDateUtc, SYSUTCDATETIME()), 0
+    FROM CRM.Lead l
+    WHERE l.IsDeleted = 0
+      AND (NULLIF(l.FirstName, N'''') IS NOT NULL OR NULLIF(l.LastName, N'''') IS NOT NULL)
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM CRM.LeadContact lc
+          WHERE lc.TenantId = l.TenantId
+            AND lc.LeadId = l.LeadId
+            AND lc.IsDeleted = 0
+      );');
+END;
+
+IF OBJECT_ID(N'Client.Contact', N'U') IS NOT NULL AND OBJECT_ID(N'Client.AccountContact', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Client.AccountContact
+    (AccountContactId, TenantId, AccountId, ContactId, RelationshipTypeCode, RelationshipRoleCode, RelationshipName, IsPrimary, IsDecisionMaker, IsBillingContact, IsServiceContact, SourceEntityName, SourceEntityId, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), c.TenantId, c.AccountId, c.ContactId,
+           CASE WHEN ISNULL(c.IsBillingContact, 0) = 1 THEN N''BillingContact'' WHEN ISNULL(c.IsServiceContact, 0) = 1 THEN N''ServiceContact'' ELSE N''PrimaryInsured'' END,
+           CASE WHEN ISNULL(c.IsBillingContact, 0) = 1 THEN N''BillingContact'' WHEN ISNULL(c.IsServiceContact, 0) = 1 THEN N''ServiceContact'' ELSE N''PrimaryInsured'' END,
+           CASE WHEN ISNULL(c.IsBillingContact, 0) = 1 THEN N''Billing Contact'' WHEN ISNULL(c.IsServiceContact, 0) = 1 THEN N''Service Contact'' ELSE N''Primary Insured'' END,
+           CASE WHEN ISNULL(c.IsKeyContact, 0) = 1 THEN 1 ELSE 0 END,
+           CASE WHEN ISNULL(c.IsKeyContact, 0) = 1 THEN 1 ELSE 0 END,
+           ISNULL(c.IsBillingContact, 0),
+           ISNULL(c.IsServiceContact, 0),
+           N''Client.Contact'',
+           c.ContactId,
+           1,
+           COALESCE(c.CreatedDateUtc, SYSUTCDATETIME()),
+           c.CreatedByUserId,
+           0
+    FROM Client.Contact c
+    WHERE c.IsDeleted = 0
+      AND c.AccountId IS NOT NULL
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Client.AccountContact ac
+          WHERE ac.TenantId = c.TenantId
+            AND ac.AccountId = c.AccountId
+            AND ac.ContactId = c.ContactId
+            AND ac.IsDeleted = 0
+      );');
+END;
+""";
+
+    private const string Migration0225_SubmissionsMarketScopedReadinessEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessRequirement
+    (
+        ReadinessRequirementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessRequirement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequirementCode NVARCHAR(100) NOT NULL,
+        RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Type_0225 DEFAULT N'IntakeConfirmation',
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequired_0225 DEFAULT 1,
+        AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiver_0225 DEFAULT 1,
+        RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidence_0225 DEFAULT 0,
+        ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeight_0225 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrder_0225 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActive_0225 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Created_0225 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeleted_0225 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'StateCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD StateCode NVARCHAR(20) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ChannelCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ChannelCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ScopeCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Scope_0225 DEFAULT N'Submission';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'EvidencePrompt') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD EvidencePrompt NVARCHAR(500) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ApprovalRoleCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ApprovalRoleCode NVARCHAR(100) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'BlocksSubmit') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD BlocksSubmit BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_BlocksSubmit_0225 DEFAULT 1;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CarrierId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ScopeCode') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_Scope_0225 DEFAULT N'Submission';
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'BlocksSubmit') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD BlocksSubmit BIT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_BlocksSubmit_0225 DEFAULT 1;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessRequirement') AND name = N'IX_SubmissionReadinessRequirement_Scope')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessRequirement_Scope ON Submissions.SubmissionReadinessRequirement(TenantId, LineOfBusiness, CarrierId, StateCode, ChannelCode, IsActive, IsDeleted, SortOrder);');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'IX_SubmissionIntakeQuestion_MarketScope')
+    EXEC(N'CREATE INDEX IX_SubmissionIntakeQuestion_MarketScope ON Submissions.SubmissionIntakeQuestion(SubmissionId, SubmissionMarketId, CarrierId, ScopeCode, IsDeleted);');
+
+IF OBJECT_ID(N'tempdb..#ScopedCarrierRequirements') IS NOT NULL DROP TABLE #ScopedCarrierRequirements;
+CREATE TABLE #ScopedCarrierRequirements
+(
+    CarrierName NVARCHAR(200) NOT NULL,
+    RequirementCode NVARCHAR(100) NOT NULL,
+    DisplayName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(1000) NOT NULL,
+    EvidencePrompt NVARCHAR(500) NULL,
+    ScoreWeight INT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ScopedCarrierRequirements (CarrierName, RequirementCode, DisplayName, Description, EvidencePrompt, ScoreWeight, SortOrder) VALUES
+(N'AmTrust', N'Carrier-AmTrust-PayrollExposure', N'AmTrust payroll exposure validated', N'Validate payroll, class code, and state exposure detail before transmitting this package to AmTrust.', N'Link payroll schedule or workers compensation exposure support when available.', 20, 110),
+(N'Chubb', N'Carrier-Chubb-LossNarrative', N'Chubb loss narrative prepared', N'Confirm executive-quality loss narrative, risk controls, and claim explanations are ready for Chubb review.', N'Link loss runs or claim narrative document when available.', 20, 120),
+(N'Travelers', N'Carrier-Travelers-ApplicationPack', N'Travelers application package ready', N'Confirm application, coverage schedule, and target limits are packaged for Travelers submission workflow.', N'Link ACORD/application document when available.', 20, 130);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.SubmissionReadinessRequirement
+        (ReadinessRequirementId, TenantId, LineOfBusiness, CarrierId, RequirementCode, RequirementTypeCode, ScopeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, EvidencePrompt, ScoreWeight, SortOrder, BlocksSubmit, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), lines.TenantId, lines.LineOfBusiness, c.CarrierId, r.RequirementCode, N''CarrierConfirmation'', N''Market'', r.DisplayName, r.Description, 1, 1, 0, r.EvidencePrompt, r.ScoreWeight, r.SortOrder, 1, 1, SYSUTCDATETIME(), 0
+    FROM Core.Carrier c
+    INNER JOIN #ScopedCarrierRequirements r ON r.CarrierName = c.CarrierName
+    CROSS APPLY
+    (
+        SELECT DISTINCT s.TenantId, s.LineOfBusiness
+        FROM Submissions.Submission s
+        WHERE s.TenantId = c.TenantId
+          AND s.IsDeleted = 0
+          AND NULLIF(s.LineOfBusiness, N'''') IS NOT NULL
+        UNION
+        SELECT c.TenantId, v.LineOfBusiness
+        FROM (VALUES (N''General Liability''), (N''Property''), (N''Workers Compensation''), (N''Commercial Auto''), (N''Cyber Liability'')) v(LineOfBusiness)
+    ) lines
+    WHERE c.IsDeleted = 0
+      AND ISNULL(c.IsActive, 1) = 1
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessRequirement existing
+          WHERE existing.TenantId = lines.TenantId
+            AND existing.LineOfBusiness = lines.LineOfBusiness
+            AND existing.RequirementCode = r.RequirementCode
+            AND existing.CarrierId = c.CarrierId
+            AND existing.IsDeleted = 0
+      );');
+END;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    UPDATE q
+    SET ScopeCode = COALESCE(q.ScopeCode, N''Submission''),
+        BlocksSubmit = CASE WHEN q.IsRequired = 1 THEN 1 ELSE q.BlocksSubmit END
+    FROM Submissions.SubmissionIntakeQuestion q
+    WHERE q.IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0226_SubmissionsSubmitToMarketDispatchCompletion = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+
+IF OBJECT_ID(N'Submissions.SubmissionMarketDispatch', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchChannelCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Channel_0226 DEFAULT N'InternalQueue';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'DispatchStatusCode') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD DispatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Status_0226 DEFAULT N'Pending';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'PayloadJson') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_Payload_0226 DEFAULT N'{}';
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'MaxAttemptCount') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD MaxAttemptCount INT NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_MaxAttemptCount_0226 DEFAULT 3;
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'NextAttemptDateUtc') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD NextAttemptDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionMarketDispatch_NextAttempt_0226 DEFAULT SYSUTCDATETIME();
+    IF COL_LENGTH(N'Submissions.SubmissionMarketDispatch', N'LastError') IS NULL ALTER TABLE Submissions.SubmissionMarketDispatch ADD LastError NVARCHAR(2000) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionMarketDispatch') AND name = N'IX_SubmissionMarketDispatch_WorkerQueue_0226')
+        EXEC(N'CREATE INDEX IX_SubmissionMarketDispatch_WorkerQueue_0226 ON Submissions.SubmissionMarketDispatch(DispatchStatusCode, IsDeleted, NextAttemptDateUtc, AttemptCount, MaxAttemptCount) INCLUDE (TenantId, SubmissionId, SubmissionMarketId, CarrierId, DispatchChannelCode);');
+END;
+
+IF OBJECT_ID(N'Submissions.CarrierTransmission', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.CarrierTransmission', N'DocumentPackageJson') IS NULL ALTER TABLE Submissions.CarrierTransmission ADD DocumentPackageJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierTransmission_Docs_0226 DEFAULT N'[]';
+    IF COL_LENGTH(N'Submissions.CarrierTransmission', N'LastError') IS NULL ALTER TABLE Submissions.CarrierTransmission ADD LastError NVARCHAR(2000) NULL;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.CarrierTransmission') AND name = N'IX_CarrierTransmission_Dispatch_0226')
+        EXEC(N'CREATE INDEX IX_CarrierTransmission_Dispatch_0226 ON Submissions.CarrierTransmission(SubmissionMarketDispatchId, IsDeleted, CreatedDateUtc DESC);');
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0226 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0226 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0226 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0226 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0226 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0226 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0226 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0226 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0226 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0226 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0226 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierSetting') AND name = N'IX_CarrierSetting_SubmitDispatch_0226')
+        EXEC(N'CREATE INDEX IX_CarrierSetting_SubmitDispatch_0226 ON Agency.CarrierSetting(TenantId, CategoryCode, SettingCode, CarrierId, IsActive, IsDeleted);');
+
+    DECLARE @Tenants0226 TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+    IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+        INSERT INTO @Tenants0226 (TenantId) EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+    IF NOT EXISTS (SELECT 1 FROM @Tenants0226)
+        INSERT INTO @Tenants0226 (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+    DECLARE @Settings0226 TABLE
+    (
+        SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+        SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+        AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+    );
+
+    INSERT INTO @Settings0226 VALUES
+    (N'SUBMIT_TO_MARKET_DISPATCH_ENABLED', N'Submit-to-Market Dispatch Enabled', N'SubmissionDispatch', N'Tenant', N'Boolean', N'true', N'true', N'Enables DB-backed worker processing for pending submit-to-market dispatch records.', N'{"required":true}', N'{"control":"toggle","icon":"bi-send-check"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 10),
+    (N'SUBMIT_TO_MARKET_DEFAULT_CHANNEL', N'Submit-to-Market Default Channel', N'SubmissionDispatch', N'Tenant', N'Text', N'InternalQueue', N'InternalQueue', N'Default outbound channel when a carrier-specific channel is not configured. Common channels: InternalQueue, Manual, Portal, Email, API, ExternalConnector.', N'{"maxLength":50}', N'{"control":"select","options":["InternalQueue","Manual","Portal","Email","API","ExternalConnector"]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 20),
+    (N'SUBMIT_TO_MARKET_DEFAULT_RECIPIENT', N'Submit-to-Market Default Recipient', N'SubmissionDispatch', N'Tenant', N'Text', NULL, NULL, N'Default carrier submission mailbox, portal queue, or endpoint alias used when carrier-specific settings are not configured.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-person-lines-fill"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 30),
+    (N'SUBMIT_TO_MARKET_SUBJECT_TEMPLATE', N'Submit-to-Market Subject Template', N'SubmissionDispatch', N'Tenant', N'Text', N'Submission {SubmissionNumber} ready for market review', N'Submission {SubmissionNumber} ready for market review', N'Carrier package subject template. Supports {SubmissionNumber}.', N'{"maxLength":300}', N'{"control":"text","icon":"bi-card-heading"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 40),
+    (N'SUBMIT_TO_MARKET_MAX_ATTEMPTS', N'Submit-to-Market Max Attempts', N'SubmissionDispatch', N'Tenant', N'Number', N'3', N'3', N'Maximum dispatch worker attempts before a queue item requires manual review.', N'{"min":1,"max":10}', N'{"control":"number","icon":"bi-arrow-repeat"}', N'SubmitToMarketDispatchWorkerService', 1, 0, 50),
+    (N'SUBMIT_TO_MARKET_WORKER_COMPLETABLE_CHANNELS', N'Submit-to-Market Worker Completable Channels', N'SubmissionDispatch', N'Tenant', N'Json', N'["InternalQueue","Manual","Portal"]', N'["InternalQueue","Manual","Portal"]', N'Channels the worker may complete internally without external connector credentials. Email/API should be completed only by an actual connector or sandbox mode.', N'{"type":"array"}', N'{"control":"multi-select","options":["InternalQueue","Manual","Portal","Email","API","ExternalConnector"]}', N'SubmitToMarketDispatchWorkerService', 1, 0, 60),
+    (N'SUBMIT_TO_MARKET_WORKER_POLL_SECONDS', N'Submit-to-Market Worker Poll Seconds', N'SubmissionDispatch', N'Tenant', N'Number', N'30', N'30', N'Preferred worker polling interval in seconds for submit-to-market dispatch processing.', N'{"min":10,"max":3600}', N'{"control":"number","icon":"bi-clock"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 70),
+    (N'SUBMIT_TO_MARKET_WORKER_BATCH_SIZE', N'Submit-to-Market Worker Batch Size', N'SubmissionDispatch', N'Tenant', N'Number', N'25', N'25', N'Maximum number of pending market dispatches processed per worker polling cycle.', N'{"min":1,"max":250}', N'{"control":"number","icon":"bi-stack"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 80),
+    (N'SUBMIT_TO_MARKET_API_ENDPOINT', N'Submit-to-Market API Endpoint', N'SubmissionDispatch', N'Carrier', N'Url', NULL, NULL, N'Carrier-specific API endpoint or external connector URL used for API-based market submissions.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 90),
+    (N'SUBMIT_TO_MARKET_EMAIL', N'Submit-to-Market Email', N'SubmissionDispatch', N'Carrier', N'Text', NULL, NULL, N'Carrier-specific submit-to-market mailbox used by the email connector.', N'{"maxLength":500}', N'{"control":"email","icon":"bi-envelope"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 100),
+    (N'SUBMIT_TO_MARKET_PORTAL_URL', N'Submit-to-Market Portal URL', N'SubmissionDispatch', N'Carrier', N'Url', NULL, NULL, N'Carrier portal URL for manual or portal-handoff submissions.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-window-stack"}', N'SubmitToMarketDispatchWorkerService', 0, 0, 110),
+    (N'SUBMIT_TO_MARKET_SECRET_REFERENCE', N'Submit-to-Market Secret Reference', N'SubmissionDispatch', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier submit-to-market credentials.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'SubmitToMarketDispatchWorkerService', 0, 1, 120);
+
+    INSERT INTO Agency.CarrierSetting
+        (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+    FROM @Tenants0226 t
+    CROSS JOIN @Settings0226 s
+    WHERE s.ScopeCode = N'Tenant'
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+
+    UPDATE existing
+    SET SettingName = s.SettingName,
+        CategoryCode = s.CategoryCode,
+        ScopeCode = s.ScopeCode,
+        DataTypeCode = s.DataTypeCode,
+        DefaultValue = s.DefaultValue,
+        Description = s.Description,
+        ValidationJson = s.ValidationJson,
+        UiSchemaJson = s.UiSchemaJson,
+        AppliesToExecutorType = s.AppliesToExecutorType,
+        IsRequired = s.IsRequired,
+        IsSecret = s.IsSecret,
+        SortOrder = s.SortOrder,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Agency.CarrierSetting existing
+    INNER JOIN @Settings0226 s ON s.SettingCode = existing.SettingCode
+    WHERE existing.CarrierId IS NULL
+      AND existing.IsDeleted = 0
+      AND (existing.CategoryCode <> s.CategoryCode
+        OR existing.ScopeCode <> s.ScopeCode
+        OR existing.DataTypeCode <> s.DataTypeCode
+        OR ISNULL(existing.DefaultValue, N'') <> ISNULL(s.DefaultValue, N'')
+        OR ISNULL(existing.Description, N'') <> ISNULL(s.Description, N'')
+        OR ISNULL(existing.ValidationJson, N'') <> ISNULL(s.ValidationJson, N'')
+        OR ISNULL(existing.UiSchemaJson, N'') <> ISNULL(s.UiSchemaJson, N'')
+        OR ISNULL(existing.AppliesToExecutorType, N'') <> ISNULL(s.AppliesToExecutorType, N'')
+        OR existing.IsRequired <> s.IsRequired
+        OR existing.IsSecret <> s.IsSecret
+        OR existing.SortOrder <> s.SortOrder);
+END;
+""";
+
+    private const string Migration0227_SubmissionsCommonExternalCarrierDeliverySettings = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Agency') EXEC(N'CREATE SCHEMA Agency');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Agency.CarrierExternalConnector', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierExternalConnector
+    (
+        CarrierExternalConnectorId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierExternalConnector_0227 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        ConnectorCode NVARCHAR(100) NOT NULL,
+        ConnectorName NVARCHAR(200) NOT NULL,
+        ConnectorTypeCode NVARCHAR(50) NOT NULL,
+        ExecutionModeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Mode_0227 DEFAULT N'ExternalConnector',
+        EndpointUri NVARCHAR(1000) NULL,
+        DefaultChannelCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Channel_0227 DEFAULT N'InternalQueue',
+        SupportsDocumentPackage BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_DocumentPackage_0227 DEFAULT 1,
+        SupportsDeliveryConfirmation BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Confirmation_0227 DEFAULT 1,
+        SupportsInboundResponse BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Inbound_0227 DEFAULT 1,
+        ConfigurationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Config_0227 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierExternalConnector_Ui_0227 DEFAULT N'{}',
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Active_0227 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierExternalConnector_Sort_0227 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierExternalConnector_Created_0227 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierExternalConnector_IsDeleted_0227 DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Agency.CarrierSetting', N'U') IS NULL
+BEGIN
+    CREATE TABLE Agency.CarrierSetting
+    (
+        CarrierSettingId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Agency_CarrierSetting_0227 PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        SettingCode NVARCHAR(100) NOT NULL,
+        SettingName NVARCHAR(240) NOT NULL,
+        CategoryCode NVARCHAR(80) NOT NULL,
+        ScopeCode NVARCHAR(80) NOT NULL CONSTRAINT DF_CarrierSetting_Scope_0227 DEFAULT N'Tenant',
+        DataTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CarrierSetting_DataType_0227 DEFAULT N'Text',
+        SettingValue NVARCHAR(MAX) NULL,
+        DefaultValue NVARCHAR(MAX) NULL,
+        Description NVARCHAR(1000) NULL,
+        ValidationJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_Validation_0227 DEFAULT N'{}',
+        UiSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_CarrierSetting_UiSchema_0227 DEFAULT N'{}',
+        AppliesToExecutorType NVARCHAR(240) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_CarrierSetting_Required_0227 DEFAULT 0,
+        IsSecret BIT NOT NULL CONSTRAINT DF_CarrierSetting_Secret_0227 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CarrierSetting_Active_0227 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CarrierSetting_Sort_0227 DEFAULT 100,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CarrierSetting_Created_0227 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CarrierSetting_IsDeleted_0227 DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Agency.CarrierExternalConnector') AND name = N'UX_CarrierExternalConnector_Tenant_Code_Carrier_0227')
+    EXEC(N'CREATE UNIQUE INDEX UX_CarrierExternalConnector_Tenant_Code_Carrier_0227 ON Agency.CarrierExternalConnector(TenantId, ConnectorCode, CarrierId) WHERE IsDeleted = 0;');
+
+DECLARE @Tenants0227 TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO @Tenants0227 (TenantId) EXEC(N'SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0;');
+IF NOT EXISTS (SELECT 1 FROM @Tenants0227)
+    INSERT INTO @Tenants0227 (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+DECLARE @Connectors0227 TABLE
+(
+    ConnectorCode NVARCHAR(100), ConnectorName NVARCHAR(200), ConnectorTypeCode NVARCHAR(50), ExecutionModeCode NVARCHAR(50), EndpointUri NVARCHAR(1000), DefaultChannelCode NVARCHAR(50),
+    SupportsDocumentPackage BIT, SupportsDeliveryConfirmation BIT, SupportsInboundResponse BIT, ConfigurationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX), SortOrder INT
+);
+
+INSERT INTO @Connectors0227 VALUES
+(N'EMAIL_SMTP_PACKAGE', N'Email Package Connector', N'Email', N'ExternalConnector', NULL, N'Email', 1, 1, 1, N'{"deliveryMode":"smtp","requiresSecretReference":true,"commonUse":"Send submission package to carrier underwriting mailbox"}', N'{"icon":"bi-envelope-at","description":"SMTP or email-service based carrier package delivery."}', 110),
+(N'MAILBOX_MONITORED_SUBMISSION', N'Monitored Mailbox Connector', N'Email', N'ExternalConnector', NULL, N'Email', 1, 1, 1, N'{"deliveryMode":"mailbox","requiresSecretReference":true,"commonUse":"Send and monitor carrier responses from a shared mailbox"}', N'{"icon":"bi-mailbox","description":"Shared mailbox delivery with inbound acknowledgement monitoring."}', 120),
+(N'PORTAL_MANUAL_HANDOFF', N'Carrier Portal Manual Handoff', N'Portal', N'ManualHandoff', NULL, N'Portal', 1, 0, 1, N'{"deliveryMode":"manualPortal","requiresPortalUrl":true,"requiresCredentials":true,"commonUse":"Top AMS workflow for carrier portals that do not expose APIs"}', N'{"icon":"bi-window-stack","description":"Manual upload checklist and portal URL handoff."}', 130),
+(N'API_JSON_SUBMISSION', N'Carrier API JSON Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"jsonApi","authModes":["OAuth2ClientCredentials","ApiKey","MutualTls"],"commonUse":"Modern carrier API quote intake"}', N'{"icon":"bi-braces","description":"JSON API submit-to-market connector template."}', 140),
+(N'API_ACORD_XML_SUBMISSION', N'Carrier API ACORD XML Submission', N'API', N'ExternalConnector', NULL, N'API', 1, 1, 1, N'{"deliveryMode":"acordXmlApi","payloadFormats":["ACORD_XML","SupplementalDocuments"],"commonUse":"Commercial lines carrier API/package exchange"}', N'{"icon":"bi-filetype-xml","description":"ACORD XML plus document package API connector template."}', 150),
+(N'API_RATING_JSON', N'Carrier API Rating Connector', N'RatingApi', N'ExternalConnector', NULL, N'API', 0, 1, 1, N'{"deliveryMode":"jsonApiRating","authModes":["None","ApiKey","BearerToken"],"responseContract":"normalizedQuoteResponse","commonUse":"Personal-lines or comparative-rater API rating request"}', N'{"icon":"bi-speedometer2","description":"Executes DB-backed API rating requests and stores normalized quote responses."}', 155),
+(N'WEBHOOK_SUBMISSION', N'Webhook Submission Connector', N'Webhook', N'ExternalConnector', NULL, N'Webhook', 1, 1, 1, N'{"deliveryMode":"webhook","requiresSigningSecret":true,"commonUse":"MGA/wholesaler or middleware webhook intake"}', N'{"icon":"bi-diagram-2","description":"Signed webhook package delivery template."}', 160),
+(N'SFTP_PACKAGE_DROP', N'SFTP Package Drop Connector', N'SFTP', N'ExternalConnector', NULL, N'SFTP', 1, 0, 1, N'{"deliveryMode":"sftp","requiresSecretReference":true,"commonUse":"Legacy or bulk package drop-off workflow"}', N'{"icon":"bi-folder-symlink","description":"SFTP package export/drop connector template."}', 170),
+(N'DOWNLOAD_PACKAGE_EXPORT', N'Download Package Export', N'Download', N'ManualHandoff', NULL, N'Download', 1, 0, 0, N'{"deliveryMode":"download","commonUse":"CSR/marketer downloads a carrier package for manual upload"}', N'{"icon":"bi-download","description":"Generate an outbound package for user-managed delivery."}', 180);
+
+INSERT INTO Agency.CarrierExternalConnector
+    (CarrierExternalConnectorId, TenantId, CarrierId, ConnectorCode, ConnectorName, ConnectorTypeCode, ExecutionModeCode, EndpointUri, DefaultChannelCode, SupportsDocumentPackage, SupportsDeliveryConfirmation, SupportsInboundResponse, ConfigurationJson, UiSchemaJson, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, c.ConnectorCode, c.ConnectorName, c.ConnectorTypeCode, c.ExecutionModeCode, c.EndpointUri, c.DefaultChannelCode, c.SupportsDocumentPackage, c.SupportsDeliveryConfirmation, c.SupportsInboundResponse, c.ConfigurationJson, c.UiSchemaJson, 1, c.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants0227 t
+CROSS JOIN @Connectors0227 c
+WHERE NOT EXISTS (SELECT 1 FROM Agency.CarrierExternalConnector existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.ConnectorCode = c.ConnectorCode AND existing.IsDeleted = 0);
+
+UPDATE existing
+SET ConnectorName = c.ConnectorName,
+    ConnectorTypeCode = c.ConnectorTypeCode,
+    ExecutionModeCode = c.ExecutionModeCode,
+    DefaultChannelCode = c.DefaultChannelCode,
+    SupportsDocumentPackage = c.SupportsDocumentPackage,
+    SupportsDeliveryConfirmation = c.SupportsDeliveryConfirmation,
+    SupportsInboundResponse = c.SupportsInboundResponse,
+    ConfigurationJson = c.ConfigurationJson,
+    UiSchemaJson = c.UiSchemaJson,
+    SortOrder = c.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Agency.CarrierExternalConnector existing
+INNER JOIN @Connectors0227 c ON c.ConnectorCode = existing.ConnectorCode
+WHERE existing.CarrierId IS NULL
+  AND existing.IsDeleted = 0;
+
+DECLARE @Settings0227 TABLE
+(
+    SettingCode NVARCHAR(100), SettingName NVARCHAR(240), CategoryCode NVARCHAR(80), ScopeCode NVARCHAR(80), DataTypeCode NVARCHAR(50),
+    SettingValue NVARCHAR(MAX), DefaultValue NVARCHAR(MAX), Description NVARCHAR(1000), ValidationJson NVARCHAR(MAX), UiSchemaJson NVARCHAR(MAX),
+    AppliesToExecutorType NVARCHAR(240), IsRequired BIT, IsSecret BIT, SortOrder INT
+);
+
+INSERT INTO @Settings0227 VALUES
+(N'CARRIER_DELIVERY_CONNECTOR_CODE', N'Carrier Delivery Connector Code', N'CarrierDelivery', N'Carrier', N'Select', NULL, N'EMAIL_SMTP_PACKAGE', N'Carrier-specific connector template used for external submit-to-market delivery.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"control":"select","icon":"bi-diagram-3"}', N'CarrierExternalTransmission', 0, 0, 10),
+(N'CARRIER_DELIVERY_CHANNEL_PRIORITY', N'Carrier Delivery Channel Priority', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["API","Email","Portal","Download"]', N'Preferred channel order for carrier package delivery when multiple channels are configured.', N'{"type":"array"}', N'{"control":"multi-select","options":["API","Email","Portal","Webhook","SFTP","Download","Manual"]}', N'CarrierExternalTransmission', 0, 0, 20),
+(N'CARRIER_DELIVERY_PACKAGE_FORMATS', N'Carrier Package Formats', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["PDF_PACKET","DOCUMENT_ATTACHMENTS","ACORD_XML"]', N'Package formats supported for this carrier or connector.', N'{"type":"array"}', N'{"control":"multi-select","options":["PDF_PACKET","DOCUMENT_ATTACHMENTS","ACORD_XML","JSON_PAYLOAD","CSV_SCHEDULES","ZIP_PACKAGE"]}', N'CarrierExternalTransmission', 0, 0, 30),
+(N'CARRIER_DELIVERY_EMAIL_TO', N'Carrier Submission Email To', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'Carrier underwriting mailbox for submission package delivery.', N'{"maxLength":500}', N'{"control":"email","icon":"bi-envelope-at"}', N'CarrierExternalTransmission', 0, 0, 40),
+(N'CARRIER_DELIVERY_EMAIL_CC', N'Carrier Submission Email CC', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'Optional CC recipients for submission package delivery.', N'{"maxLength":500}', N'{"control":"email-list","icon":"bi-envelope-plus"}', N'CarrierExternalTransmission', 0, 0, 50),
+(N'CARRIER_DELIVERY_EMAIL_SUBJECT_TEMPLATE', N'Carrier Email Subject Template', N'CarrierDelivery', N'Carrier', N'Text', NULL, N'Submission {SubmissionNumber} - {AccountName} - {LineOfBusiness}', N'Carrier-specific subject template. Common tokens: {SubmissionNumber}, {AccountName}, {LineOfBusiness}, {EffectiveDate}.', N'{"maxLength":300}', N'{"control":"text","icon":"bi-card-heading"}', N'CarrierExternalTransmission', 0, 0, 60),
+(N'CARRIER_DELIVERY_PORTAL_URL', N'Carrier Portal URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Carrier portal URL used for manual or semi-automated package uploads.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-window-stack"}', N'CarrierExternalTransmission', 0, 0, 70),
+(N'CARRIER_DELIVERY_PORTAL_USERNAME_REF', N'Carrier Portal Username Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier portal username.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-person-lock"}', N'CarrierExternalTransmission', 0, 1, 80),
+(N'CARRIER_DELIVERY_PORTAL_PASSWORD_REF', N'Carrier Portal Password Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier portal password.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'CarrierExternalTransmission', 0, 1, 90),
+(N'CARRIER_DELIVERY_API_ENDPOINT', N'Carrier API Endpoint', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Carrier API endpoint for submit-to-market package delivery.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'CarrierExternalTransmission', 0, 0, 100),
+(N'CARRIER_DELIVERY_API_AUTH_MODE', N'Carrier API Auth Mode', N'CarrierDelivery', N'Carrier', N'Select', NULL, N'OAuth2ClientCredentials', N'Authentication mode used by the carrier API connector.', N'{"options":["OAuth2ClientCredentials","ApiKey","Basic","MutualTls","SignedWebhook"]}', N'{"control":"select","icon":"bi-shield-lock"}', N'CarrierExternalTransmission', 0, 0, 110),
+(N'CARRIER_DELIVERY_API_KEY_REF', N'Carrier API Key Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for carrier API key/client secret.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key-fill"}', N'CarrierExternalTransmission', 0, 1, 120),
+(N'CARRIER_DELIVERY_CLIENT_ID', N'Carrier API Client ID', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'OAuth client id or integration id provided by the carrier.', N'{"maxLength":250}', N'{"control":"text","icon":"bi-person-badge"}', N'CarrierExternalTransmission', 0, 0, 130),
+(N'CARRIER_DELIVERY_TOKEN_URL', N'Carrier API Token URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'OAuth token URL for carrier API authentication.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-shield-check"}', N'CarrierExternalTransmission', 0, 0, 140),
+(N'CARRIER_DELIVERY_WEBHOOK_URL', N'Carrier/MGA Webhook URL', N'CarrierDelivery', N'Carrier', N'Url', NULL, NULL, N'Webhook endpoint for MGA, wholesaler, or middleware submission intake.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-diagram-2"}', N'CarrierExternalTransmission', 0, 0, 150),
+(N'CARRIER_DELIVERY_WEBHOOK_SIGNING_SECRET_REF', N'Webhook Signing Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference used to sign webhook payloads.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-fingerprint"}', N'CarrierExternalTransmission', 0, 1, 160),
+(N'CARRIER_DELIVERY_SFTP_HOST', N'Carrier SFTP Host', N'CarrierDelivery', N'Carrier', N'Text', NULL, NULL, N'SFTP host for package drop-off workflows.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-hdd-network"}', N'CarrierExternalTransmission', 0, 0, 170),
+(N'CARRIER_DELIVERY_SFTP_PATH', N'Carrier SFTP Drop Path', N'CarrierDelivery', N'Carrier', N'Text', NULL, N'/inbound/submissions', N'SFTP directory used for submission package drop-off.', N'{"maxLength":500}', N'{"control":"text","icon":"bi-folder"}', N'CarrierExternalTransmission', 0, 0, 180),
+(N'CARRIER_DELIVERY_SFTP_SECRET_REF', N'Carrier SFTP Secret Reference', N'CarrierDelivery', N'Carrier', N'Secret', NULL, NULL, N'Key Vault or secret reference for SFTP credentials or private key.', N'{"maxLength":500}', N'{"control":"secret","icon":"bi-key"}', N'CarrierExternalTransmission', 0, 1, 190),
+(N'CARRIER_DELIVERY_ACK_TIMEOUT_HOURS', N'Carrier Acknowledgement Timeout Hours', N'CarrierDelivery', N'Carrier', N'Number', NULL, N'24', N'Expected acknowledgement SLA before follow-up/exception handling.', N'{"min":1,"max":240}', N'{"control":"number","icon":"bi-clock-history"}', N'CarrierExternalTransmission', 0, 0, 200),
+(N'CARRIER_DELIVERY_RETRY_POLICY', N'Carrier Delivery Retry Policy', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'{"maxAttempts":3,"backoffMinutes":[5,15,60]}', N'Connector retry policy for transient delivery failures.', N'{"type":"object"}', N'{"control":"json","icon":"bi-arrow-repeat"}', N'CarrierExternalTransmission', 0, 0, 210),
+(N'CARRIER_DELIVERY_REQUIRED_DOCUMENT_GROUPS', N'Required Outbound Document Groups', N'CarrierDelivery', N'Carrier', N'Json', NULL, N'["Application","Loss Runs","Supplemental","Schedule"]', N'Document groups commonly expected in carrier submission packages.', N'{"type":"array"}', N'{"control":"multi-select","optionsGroup":"DMS.DocumentGroup"}', N'CarrierExternalTransmission', 0, 0, 220),
+(N'CARRIER_DELIVERY_REQUIRE_ACORD_XML', N'Require ACORD XML Payload', N'CarrierDelivery', N'Carrier', N'Boolean', NULL, N'false', N'Indicates whether this carrier connector expects ACORD XML in addition to documents.', N'{"required":false}', N'{"control":"toggle","icon":"bi-filetype-xml"}', N'CarrierExternalTransmission', 0, 0, 230),
+(N'CARRIER_DELIVERY_ENABLE_PACKAGE_DOWNLOAD', N'Enable Package Download Handoff', N'CarrierDelivery', N'Tenant', N'Boolean', N'true', N'true', N'Allows users to download a market package for carrier portal or manual delivery.', N'{"required":false}', N'{"control":"toggle","icon":"bi-download"}', N'CarrierExternalTransmission', 0, 0, 240),
+(N'CARRIER_DELIVERY_DEFAULT_FOLLOWUP_DAYS', N'Default Carrier Follow-up Days', N'CarrierDelivery', N'Tenant', N'Number', N'3', N'3', N'Default number of business days before carrier follow-up is due after package delivery.', N'{"min":1,"max":30}', N'{"control":"number","icon":"bi-calendar-check"}', N'CarrierExternalTransmission', 0, 0, 250);
+
+INSERT INTO @Settings0227 VALUES
+(N'API_RATING_WORKER_ENABLED', N'API Rating Worker Enabled', N'ApiRating', N'Tenant', N'Boolean', N'true', N'true', N'Enables DB-backed API rating connector execution for queued quote requests.', N'{"required":true}', N'{"control":"toggle","icon":"bi-play-circle"}', N'ApiRatingConnectorWorkerService', 1, 0, 300),
+(N'API_RATING_WORKER_POLL_SECONDS', N'API Rating Worker Poll Seconds', N'ApiRating', N'Tenant', N'Number', N'30', N'30', N'Polling interval for API rating connector execution.', N'{"min":10,"max":3600}', N'{"control":"number","icon":"bi-clock"}', N'ApiRatingConnectorWorkerService', 1, 0, 310),
+(N'API_RATING_WORKER_BATCH_SIZE', N'API Rating Worker Batch Size', N'ApiRating', N'Tenant', N'Number', N'10', N'10', N'Maximum queued API rating transmissions processed per poll.', N'{"min":1,"max":100}', N'{"control":"number","icon":"bi-list-ol"}', N'ApiRatingConnectorWorkerService', 1, 0, 320),
+(N'CARRIER_RATING_CONNECTOR_CODE', N'Carrier Rating Connector Code', N'ApiRating', N'Carrier', N'Select', NULL, N'API_RATING_JSON', N'Carrier-specific connector used for API rating requests.', N'{"optionsGroup":"CarrierExternalConnector"}', N'{"control":"select","icon":"bi-diagram-3"}', N'ApiRatingConnectorWorkerService', 0, 0, 330),
+(N'CARRIER_RATING_API_ENDPOINT', N'Carrier Rating API Endpoint', N'ApiRating', N'Carrier', N'Url', NULL, NULL, N'Carrier or comparative-rater endpoint for API rating requests.', N'{"maxLength":1000}', N'{"control":"url","icon":"bi-plug"}', N'ApiRatingConnectorWorkerService', 0, 0, 340),
+(N'CARRIER_RATING_API_AUTH_MODE', N'Carrier Rating API Auth Mode', N'ApiRating', N'Carrier', N'Select', NULL, N'None', N'Authentication mode used by the API rating connector.', N'{"options":["None","ApiKey","BearerToken"]}', N'{"control":"select","icon":"bi-shield-lock"}', N'ApiRatingConnectorWorkerService', 0, 0, 350),
+(N'CARRIER_RATING_API_KEY', N'Carrier Rating API Key', N'ApiRating', N'Carrier', N'Secret', NULL, NULL, N'API key value or secure secret material for the rating endpoint when ApiKey auth is selected.', N'{"maxLength":2000}', N'{"control":"secret","icon":"bi-key-fill"}', N'ApiRatingConnectorWorkerService', 0, 1, 360),
+(N'CARRIER_RATING_BEARER_TOKEN', N'Carrier Rating Bearer Token', N'ApiRating', N'Carrier', N'Secret', NULL, NULL, N'Bearer token value or secure secret material for the rating endpoint when BearerToken auth is selected.', N'{"maxLength":4000}', N'{"control":"secret","icon":"bi-key"}', N'ApiRatingConnectorWorkerService', 0, 1, 370),
+(N'CARRIER_RATING_API_KEY_HEADER', N'Carrier Rating API Key Header', N'ApiRating', N'Carrier', N'Text', NULL, N'x-api-key', N'Header name used when ApiKey authentication is selected.', N'{"maxLength":100}', N'{"control":"text","icon":"bi-input-cursor-text"}', N'ApiRatingConnectorWorkerService', 0, 0, 380),
+(N'CARRIER_RATING_REQUEST_TIMEOUT_SECONDS', N'Carrier Rating Request Timeout Seconds', N'ApiRating', N'Carrier', N'Number', NULL, N'30', N'Timeout for outbound rating API requests.', N'{"min":5,"max":300}', N'{"control":"number","icon":"bi-hourglass"}', N'ApiRatingConnectorWorkerService', 0, 0, 390);
+
+INSERT INTO Agency.CarrierSetting
+    (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, NULL, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+FROM @Tenants0227 t
+CROSS JOIN @Settings0227 s
+WHERE s.ScopeCode = N'Tenant'
+  AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = t.TenantId AND existing.CarrierId IS NULL AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+
+IF OBJECT_ID(N'Core.Carrier', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Agency.CarrierSetting
+        (CarrierSettingId, TenantId, CarrierId, SettingCode, SettingName, CategoryCode, ScopeCode, DataTypeCode, SettingValue, DefaultValue, Description, ValidationJson, UiSchemaJson, AppliesToExecutorType, IsRequired, IsSecret, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), c.TenantId, c.CarrierId, s.SettingCode, s.SettingName, s.CategoryCode, s.ScopeCode, s.DataTypeCode, s.SettingValue, s.DefaultValue, s.Description, s.ValidationJson, s.UiSchemaJson, s.AppliesToExecutorType, s.IsRequired, s.IsSecret, 1, s.SortOrder, SYSUTCDATETIME(), 0
+    FROM Core.Carrier c
+    CROSS JOIN @Settings0227 s
+    WHERE s.ScopeCode = N'Carrier'
+      AND c.IsDeleted = 0
+      AND ISNULL(c.IsActive, 1) = 1
+      AND NOT EXISTS (SELECT 1 FROM Agency.CarrierSetting existing WHERE existing.TenantId = c.TenantId AND existing.CarrierId = c.CarrierId AND existing.SettingCode = s.SettingCode AND existing.IsDeleted = 0);
+END;
+
+UPDATE existing
+SET SettingName = s.SettingName,
+    CategoryCode = s.CategoryCode,
+    ScopeCode = s.ScopeCode,
+    DataTypeCode = s.DataTypeCode,
+    DefaultValue = s.DefaultValue,
+    Description = s.Description,
+    ValidationJson = s.ValidationJson,
+    UiSchemaJson = s.UiSchemaJson,
+    AppliesToExecutorType = s.AppliesToExecutorType,
+    IsRequired = s.IsRequired,
+    IsSecret = s.IsSecret,
+    SortOrder = s.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Agency.CarrierSetting existing
+INNER JOIN @Settings0227 s ON s.SettingCode = existing.SettingCode
+WHERE existing.IsDeleted = 0;
+""";
+
+    private const string Migration0228_SubmissionsReadinessEvidenceDocuments = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessEvidenceDocument
+    (
+        SubmissionReadinessEvidenceDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessEvidenceDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        IntakeQuestionId UNIQUEIDENTIFIER NOT NULL,
+        ReadinessRequirementId UNIQUEIDENTIFIER NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        DocumentId UNIQUEIDENTIFIER NOT NULL,
+        EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Role_0228 DEFAULT N'SupportingEvidence',
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Created_0228 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeleted_0228 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Tenant_0228 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Submission_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IntakeQuestionId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IntakeQuestionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Intake_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ReadinessRequirementId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ReadinessRequirementId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD SubmissionMarketId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CarrierId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'DocumentId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD DocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_Document_0228 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'EvidenceRoleCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD EvidenceRoleCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_RoleB_0228 DEFAULT N'SupportingEvidence';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'Notes') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD Notes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_CreatedB_0228 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessEvidenceDocument', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionReadinessEvidenceDocument ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessEvidenceDocument_IsDeletedB_0228 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND OBJECT_ID(N'DMS.Document', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReadinessEvidenceDocument
+        (SubmissionReadinessEvidenceDocumentId, TenantId, SubmissionId, IntakeQuestionId, ReadinessRequirementId, SubmissionMarketId, CarrierId, DocumentId, EvidenceRoleCode, Notes, CreatedDateUtc, CreatedByUserId, IsDeleted)
+    SELECT NEWID(), q.TenantId, q.SubmissionId, q.IntakeQuestionId, q.ReadinessRequirementId, q.SubmissionMarketId, q.CarrierId, q.EvidenceDocumentId, N'SupportingEvidence', N'Migrated from legacy readiness EvidenceDocumentId.', SYSUTCDATETIME(), q.AnsweredByUserId, 0
+    FROM Submissions.SubmissionIntakeQuestion q
+    INNER JOIN DMS.Document d ON d.DocumentId = q.EvidenceDocumentId AND d.TenantId = q.TenantId AND d.EntityName = N'Submission' AND d.EntityId = q.SubmissionId AND d.IsDeleted = 0
+    WHERE q.EvidenceDocumentId IS NOT NULL
+      AND q.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionReadinessEvidenceDocument existing
+          WHERE existing.IntakeQuestionId = q.IntakeQuestionId
+            AND existing.DocumentId = q.EvidenceDocumentId
+            AND existing.IsDeleted = 0
+      );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'UX_SubmissionReadinessEvidenceDocument_Intake_Document')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionReadinessEvidenceDocument_Intake_Document ON Submissions.SubmissionReadinessEvidenceDocument(IntakeQuestionId, DocumentId) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Submission')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Submission ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, SubmissionId, IntakeQuestionId, IsDeleted) INCLUDE (DocumentId, SubmissionMarketId, CarrierId);');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessEvidenceDocument') AND name = N'IX_SubmissionReadinessEvidenceDocument_Document')
+    EXEC(N'CREATE INDEX IX_SubmissionReadinessEvidenceDocument_Document ON Submissions.SubmissionReadinessEvidenceDocument(TenantId, DocumentId, IsDeleted);');
+""";
+
+    private const string Migration0229_SubmissionsQuoteRequestBusinessObject = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.QuoteRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.QuoteRequest
+    (
+        QuoteRequestId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Submissions_QuoteRequest PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionId UNIQUEIDENTIFIER NOT NULL,
+        SubmissionMarketId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NOT NULL,
+        QuoteRequestActionCode NVARCHAR(50) NOT NULL,
+        QuoteRequestReasonCode NVARCHAR(80) NULL,
+        QuoteRequestScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Scope_0229 DEFAULT N'Package',
+        RequestedPremium DECIMAL(18,2) NULL,
+        Premium DECIMAL(18,2) NULL,
+        CommissionPercent DECIMAL(9,4) NULL,
+        QuoteNumber NVARCHAR(80) NULL,
+        ExpirationDateUtc DATETIME2 NULL,
+        CoverageNotes NVARCHAR(1000) NULL,
+        CarrierReferenceNumber NVARCHAR(120) NULL,
+        DeliveryMethodCode NVARCHAR(50) NULL,
+        AssignedUnderwriterUserId UNIQUEIDENTIFIER NULL,
+        AssignedUnderwriterName NVARCHAR(200) NULL,
+        AssignedUnderwriterEmail NVARCHAR(320) NULL,
+        AssignedUnderwriterPhone NVARCHAR(50) NULL,
+        DueDateUtc DATETIME2 NULL,
+        RetryCount INT NOT NULL CONSTRAINT DF_QuoteRequest_RetryCount_0229 DEFAULT 0,
+        CorrelationId NVARCHAR(120) NULL,
+        DispatchedDateUtc DATETIME2 NULL,
+        AcknowledgedDateUtc DATETIME2 NULL,
+        ResponseDateUtc DATETIME2 NULL,
+        LastAttemptDateUtc DATETIME2 NULL,
+        LastError NVARCHAR(2000) NULL,
+        RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequest_RequestVersion_0229 DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Status_0229 DEFAULT N'PendingDispatch',
+        RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_RequestedDateUtc_0229 DEFAULT SYSUTCDATETIME(),
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        ClosedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_CreatedDateUtc_0229 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequest_IsDeleted_0229 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'TenantId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Tenant_0229 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'SubmissionId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD SubmissionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Submission_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'SubmissionMarketId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD SubmissionMarketId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Market_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CarrierId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CarrierId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_QuoteRequest_Carrier_0229 DEFAULT '00000000-0000-0000-0000-000000000000';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestActionCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestActionCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_Action_0229 DEFAULT N'InitialRequest';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestReasonCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestReasonCode NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteRequestScopeCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteRequestScopeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_ScopeB_0229 DEFAULT N'Package';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedPremium') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'Premium') IS NULL ALTER TABLE Submissions.QuoteRequest ADD Premium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CommissionPercent') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CommissionPercent DECIMAL(9,4) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'QuoteNumber') IS NULL ALTER TABLE Submissions.QuoteRequest ADD QuoteNumber NVARCHAR(80) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ExpirationDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ExpirationDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CoverageNotes') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CoverageNotes NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DeliveryMethodCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DeliveryMethodCode NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterName') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterName NVARCHAR(200) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterEmail') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterEmail NVARCHAR(320) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AssignedUnderwriterPhone') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AssignedUnderwriterPhone NVARCHAR(50) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DueDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DueDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RetryCount') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RetryCount INT NOT NULL CONSTRAINT DF_QuoteRequest_RetryCountB_0229 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CorrelationId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CorrelationId NVARCHAR(120) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'DispatchedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD DispatchedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'AcknowledgedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD AcknowledgedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ResponseDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ResponseDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'LastAttemptDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD LastAttemptDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'LastError') IS NULL ALTER TABLE Submissions.QuoteRequest ADD LastError NVARCHAR(2000) NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestVersion') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestVersion INT NOT NULL CONSTRAINT DF_QuoteRequest_RequestVersionB_0229 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'StatusCode') IS NULL ALTER TABLE Submissions.QuoteRequest ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_QuoteRequest_StatusB_0229 DEFAULT N'PendingDispatch';
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_RequestedDateUtcB_0229 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'RequestedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD RequestedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ClosedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ClosedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_QuoteRequest_CreatedDateUtcB_0229 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.QuoteRequest ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.QuoteRequest', N'IsDeleted') IS NULL ALTER TABLE Submissions.QuoteRequest ADD IsDeleted BIT NOT NULL CONSTRAINT DF_QuoteRequest_IsDeletedB_0229 DEFAULT 0;
+
+IF COL_LENGTH(N'Submissions.Quote', N'QuoteRequestId') IS NULL ALTER TABLE Submissions.Quote ADD QuoteRequestId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'UX_QuoteRequest_Market_Version')
+    EXEC(N'CREATE UNIQUE INDEX UX_QuoteRequest_Market_Version ON Submissions.QuoteRequest(SubmissionMarketId, RequestVersion) WHERE IsDeleted = 0;');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Submission')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Submission ON Submissions.QuoteRequest(TenantId, SubmissionId, IsDeleted, RequestedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Market_Status')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Market_Status ON Submissions.QuoteRequest(SubmissionMarketId, StatusCode, IsDeleted, RequestedDateUtc DESC);');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.QuoteRequest') AND name = N'IX_QuoteRequest_Correlation')
+    EXEC(N'CREATE INDEX IX_QuoteRequest_Correlation ON Submissions.QuoteRequest(TenantId, CorrelationId, IsDeleted) WHERE CorrelationId IS NOT NULL;');
+
+IF OBJECT_ID(N'Submissions.SubmissionReferenceOption', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionReferenceOption (TenantId, OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    SELECT tenants.TenantId, seed.OptionGroup, seed.OptionCode, seed.OptionName, seed.Description, seed.IsDefault, seed.SortOrder
+    FROM (SELECT DISTINCT TenantId FROM Submissions.Submission WHERE IsDeleted = 0) tenants
+    CROSS JOIN (VALUES
+        (N'QuoteRequestStatus', N'Draft', N'Draft', N'Quote request is being prepared and has not been dispatched.', CAST(0 AS bit), 5),
+        (N'QuoteRequestStatus', N'ValidationRequired', N'Validation Required', N'Quote request is blocked until required submission information is completed.', CAST(0 AS bit), 8),
+        (N'QuoteRequestStatus', N'PendingDispatch', N'Pending Dispatch', N'Quote request was created and is waiting for dispatch.', CAST(1 AS bit), 10),
+        (N'QuoteRequestStatus', N'Open', N'Open', N'Legacy open quote request awaiting market response.', CAST(0 AS bit), 12),
+        (N'QuoteRequestStatus', N'Submitted', N'Submitted', N'Quote request has been submitted to the market.', CAST(0 AS bit), 20),
+        (N'QuoteRequestStatus', N'Acknowledged', N'Acknowledged', N'Market acknowledged the quote request.', CAST(0 AS bit), 30),
+        (N'QuoteRequestStatus', N'UnderReview', N'Under Review', N'Market is underwriting or reviewing the quote request.', CAST(0 AS bit), 40),
+        (N'QuoteRequestStatus', N'MoreInformationRequired', N'More Information Required', N'Market requested more information before quoting.', CAST(0 AS bit), 50),
+        (N'QuoteRequestStatus', N'Referred', N'Referred', N'Quote request was referred to underwriting.', CAST(0 AS bit), 60),
+        (N'QuoteRequestStatus', N'Quoted', N'Quoted', N'Market returned quote terms and a Quote record may exist.', CAST(0 AS bit), 70),
+        (N'QuoteRequestStatus', N'Received', N'Received', N'Legacy status for market returned quote terms.', CAST(0 AS bit), 72),
+        (N'QuoteRequestStatus', N'Declined', N'Declined', N'Market declined to quote.', CAST(0 AS bit), 80),
+        (N'QuoteRequestStatus', N'Withdrawn', N'Withdrawn', N'Quote request was withdrawn before response.', CAST(0 AS bit), 90),
+        (N'QuoteRequestStatus', N'Expired', N'Expired', N'Quote request or response expired.', CAST(0 AS bit), 100),
+        (N'QuoteRequestStatus', N'Cancelled', N'Cancelled', N'Quote request was cancelled.', CAST(0 AS bit), 110),
+        (N'QuoteRequestStatus', N'Failed', N'Failed', N'Quote request dispatch or processing failed.', CAST(0 AS bit), 120),
+        (N'QuoteRequestStatus', N'Closed', N'Closed', N'Quote request was closed by a replacement request or workflow action.', CAST(0 AS bit), 130),
+        (N'QuoteRequestStatus', N'No Response', N'No Response', N'Market did not respond before the follow-up due date.', CAST(0 AS bit), 140),
+        (N'QuoteRequestMethod', N'ApiRating', N'API Rating', N'Personal-lines or comparative-rater API path where request quote submits and rates in one workflow.', CAST(1 AS bit), 10),
+        (N'QuoteRequestMethod', N'MgaPortal', N'MGA Portal', N'MGA, wholesaler, or carrier portal path where AMS tracks portal submission and quote response.', CAST(0 AS bit), 20),
+        (N'QuoteRequestMethod', N'Email', N'Email', N'Email path where AMS tracks a quote request sent to the market or underwriter by email.', CAST(0 AS bit), 30),
+        (N'QuoteRequestMethod', N'ManualUnderwriter', N'Manual Underwriter', N'Manual commercial underwriting path where an underwriter reviews before quote terms are returned.', CAST(0 AS bit), 40),
+        (N'SubmissionMethod', N'ApiRating', N'API Rating', N'Submission and quote request are sent through a carrier or comparative rater API.', CAST(0 AS bit), 5),
+        (N'SubmissionMethod', N'MgaPortal', N'MGA Portal', N'Submission package is delivered through an MGA, wholesaler, or carrier portal.', CAST(0 AS bit), 18),
+        (N'SubmissionMethod', N'ManualUnderwriter', N'Manual Underwriter', N'Submission package is tracked through manual underwriter review.', CAST(0 AS bit), 45),
+        (N'SubmissionStatus', N'Draft', N'Draft', N'Submission is being drafted and is not ready for quote requests.', CAST(1 AS bit), 5),
+        (N'SubmissionStatus', N'In Progress', N'In Progress', N'Submission risk information is being collected before marketing readiness.', CAST(0 AS bit), 8),
+        (N'SubmissionStatus', N'Ready for Marketing', N'Ready for Marketing', N'Submission passed readiness checks and can be marketed.', CAST(0 AS bit), 10),
+        (N'SubmissionStatus', N'Marketing', N'Marketing', N'Submission is in active market placement workflow, including quote requests and underwriting.', CAST(0 AS bit), 20),
+        (N'SubmissionStatus', N'Quotes Received', N'Quotes Received', N'One or more market quote responses have been received.', CAST(0 AS bit), 40),
+        (N'SubmissionStatus', N'Proposal Prepared', N'Proposal Prepared', N'Customer proposal has been prepared from approved quotes.', CAST(0 AS bit), 50),
+        (N'SubmissionStatus', N'Presented', N'Presented', N'Proposal has been presented to the customer.', CAST(0 AS bit), 60),
+        (N'SubmissionStatus', N'Customer Accepted', N'Customer Accepted', N'Customer accepted a proposal or quote option.', CAST(0 AS bit), 70),
+        (N'SubmissionStatus', N'Binding', N'Binding', N'Selected quote is in bind request workflow.', CAST(0 AS bit), 80),
+        (N'SubmissionStatus', N'Bound', N'Bound', N'Submission has been bound into policy workflow.', CAST(0 AS bit), 90),
+        (N'SubmissionStatus', N'Lost', N'Lost', N'Submission was lost or not placed.', CAST(0 AS bit), 100),
+        (N'SubmissionStatus', N'Cancelled', N'Cancelled', N'Submission workflow was cancelled.', CAST(0 AS bit), 110),
+        (N'SubmissionStatus', N'Closed', N'Closed', N'Submission workflow was administratively closed.', CAST(0 AS bit), 120),
+        (N'QuoteStatus', N'Received', N'Received', N'Carrier quote response has been received and is awaiting internal review.', CAST(1 AS bit), 10),
+        (N'QuoteStatus', N'Under Review', N'Under Review', N'Quote is under internal review before customer presentation.', CAST(0 AS bit), 20),
+        (N'QuoteStatus', N'Revision Requested', N'Revision Requested', N'Quote requires revised terms from the market.', CAST(0 AS bit), 30),
+        (N'QuoteStatus', N'Approved for Presentation', N'Approved for Presentation', N'Quote has been approved for customer presentation.', CAST(0 AS bit), 40),
+        (N'QuoteStatus', N'Presented', N'Presented', N'Quote has been included in a customer proposal.', CAST(0 AS bit), 50),
+        (N'QuoteStatus', N'Selected', N'Selected', N'Customer selected this quote for binding.', CAST(0 AS bit), 60),
+        (N'QuoteStatus', N'Not Selected', N'Not Selected', N'Quote was retained in history but not selected.', CAST(0 AS bit), 70),
+        (N'QuoteStatus', N'Expired', N'Expired', N'Quote expired before selection or binding.', CAST(0 AS bit), 80),
+        (N'QuoteStatus', N'Superseded', N'Superseded', N'Quote was superseded by a later version or revision.', CAST(0 AS bit), 90),
+        (N'QuoteStatus', N'Bound', N'Bound', N'Quote was bound into a policy.', CAST(0 AS bit), 100)
+    ) seed(OptionGroup, OptionCode, OptionName, Description, IsDefault, SortOrder)
+    WHERE NOT EXISTS
+    (
+        SELECT 1
+        FROM Submissions.SubmissionReferenceOption existing
+        WHERE existing.TenantId = tenants.TenantId
+          AND existing.OptionGroup = seed.OptionGroup
+          AND existing.OptionCode = seed.OptionCode
+          AND existing.IsDeleted = 0
+    );
+
+    UPDATE Submissions.SubmissionReferenceOption
+    SET IsActive = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE OptionGroup = N'SubmissionStatus'
+      AND OptionCode IN (N'New', N'In Review', N'Submitted', N'Quoted', N'Quotes Requested', N'Declined', N'Withdrawn')
+      AND IsDeleted = 0;
+
+    UPDATE Submissions.Submission
+    SET Status = CASE Status
+            WHEN N'New' THEN N'In Progress'
+            WHEN N'In Review' THEN N'Marketing'
+            WHEN N'Submitted' THEN N'Marketing'
+            WHEN N'Quoted' THEN N'Quotes Received'
+            WHEN N'Quotes Requested' THEN N'Marketing'
+            WHEN N'Declined' THEN N'Lost'
+            WHEN N'Withdrawn' THEN N'Cancelled'
+            ELSE Status END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE Status IN (N'New', N'In Review', N'Submitted', N'Quoted', N'Quotes Requested', N'Declined', N'Withdrawn')
+      AND IsDeleted = 0;
+END;
+
+IF OBJECT_ID(N'Submissions.QuoteRequestHistory', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.QuoteRequest
+        (QuoteRequestId, TenantId, SubmissionId, SubmissionMarketId, CarrierId, QuoteRequestActionCode, QuoteRequestReasonCode, QuoteRequestMethodCode, QuoteRequestScopeCode,
+         RequestedPremium, CoverageNotes, RequestVersion, StatusCode, RequestedDateUtc, RequestedByUserId, ClosedDateUtc, CreatedDateUtc, CreatedByUserId,
+         ModifiedDateUtc, ModifiedByUserId, IsDeleted)
+    SELECT NEWID(), h.TenantId, h.SubmissionId, h.SubmissionMarketId, h.CarrierId, h.QuoteRequestActionCode, h.QuoteRequestReasonCode,
+           COALESCE(NULLIF(h.QuoteRequestMethodCode, N''), NULLIF(sm.SubmissionMethodCode, N''), N'ManualUnderwriter'), COALESCE(NULLIF(h.QuoteRequestScopeCode, N''), N'Package'), h.RequestedPremium, h.CoverageNotes, h.RequestVersion, h.StatusCode,
+           h.RequestedDateUtc, h.RequestedByUserId, CASE WHEN h.StatusCode IN (N'Closed', N'Declined', N'Received', N'Expired', N'No Response') THEN h.ModifiedDateUtc ELSE NULL END,
+           h.CreatedDateUtc, h.CreatedByUserId, h.ModifiedDateUtc, h.ModifiedByUserId, h.IsDeleted
+    FROM Submissions.QuoteRequestHistory h
+    LEFT JOIN Submissions.SubmissionMarket sm ON sm.SubmissionMarketId = h.SubmissionMarketId AND sm.IsDeleted = 0
+    WHERE h.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.QuoteRequest existing
+          WHERE existing.SubmissionMarketId = h.SubmissionMarketId
+            AND existing.RequestVersion = h.RequestVersion
+            AND existing.IsDeleted = 0
+      );
+END;
+
+UPDATE q
+SET QuoteRequestId = qr.QuoteRequestId,
+    ModifiedDateUtc = COALESCE(q.ModifiedDateUtc, SYSUTCDATETIME())
+FROM Submissions.Quote q
+OUTER APPLY
+(
+    SELECT TOP 1 QuoteRequestId
+    FROM Submissions.QuoteRequest qr
+    WHERE qr.SubmissionMarketId = q.SubmissionMarketId
+      AND qr.IsDeleted = 0
+    ORDER BY qr.RequestVersion DESC, qr.RequestedDateUtc DESC
+) qr
+WHERE q.QuoteRequestId IS NULL
+  AND q.SubmissionMarketId IS NOT NULL
+  AND qr.QuoteRequestId IS NOT NULL;
+
+UPDATE qr
+SET StatusCode = CASE
+        WHEN q.Status IN (N'Declined') THEN N'Declined'
+        WHEN q.QuoteReceivedDateUtc IS NOT NULL OR q.Status IN (N'Received', N'Presented', N'Accepted', N'Bound', N'Selected') THEN N'Received'
+        ELSE qr.StatusCode
+    END,
+    Premium = COALESCE(qr.Premium, q.AnnualPremium),
+    CommissionPercent = COALESCE(qr.CommissionPercent, q.CommissionPercent),
+    QuoteNumber = COALESCE(qr.QuoteNumber, q.QuoteNumber),
+    ExpirationDateUtc = COALESCE(qr.ExpirationDateUtc, q.ExpiresDateUtc),
+    CarrierReferenceNumber = COALESCE(qr.CarrierReferenceNumber, q.CarrierReferenceNumber),
+    ClosedDateUtc = CASE WHEN q.QuoteReceivedDateUtc IS NOT NULL THEN COALESCE(qr.ClosedDateUtc, q.QuoteReceivedDateUtc) ELSE qr.ClosedDateUtc END,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.QuoteRequest qr
+INNER JOIN Submissions.Quote q ON q.QuoteRequestId = qr.QuoteRequestId AND q.IsDeleted = 0
+WHERE qr.IsDeleted = 0;
+""";
+
+    private const string Migration0203_DmsDocumentCategoryGroupSchemaCleanup = """
+IF OBJECT_ID(N'DMS.DocumentCategory', N'U') IS NULL OR OBJECT_ID(N'DMS.DocumentGroup', N'U') IS NULL
+    RETURN;
+
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentCategory_DocumentGroup')
+    ALTER TABLE DMS.DocumentCategory DROP CONSTRAINT FK_DMS_DocumentCategory_DocumentGroup;
+
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentCategory') AND name = N'IX_DMS_DocumentCategory_DocumentGroup')
+    DROP INDEX IX_DMS_DocumentCategory_DocumentGroup ON DMS.DocumentCategory;
+
+IF COL_LENGTH(N'DMS.DocumentCategory', N'DocumentGroupId') IS NOT NULL
+    ALTER TABLE DMS.DocumentCategory DROP COLUMN DocumentGroupId;
+
+UPDATE g
+SET CategoryId = NULL,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM DMS.DocumentGroup g
+WHERE g.CategoryId IS NOT NULL
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM DMS.DocumentCategory dc
+      WHERE dc.DocumentCategoryId = g.CategoryId
+        AND dc.IsDeleted = 0
+  );
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DMS_DocumentGroup_DocumentCategory')
+    ALTER TABLE DMS.DocumentGroup ADD CONSTRAINT FK_DMS_DocumentGroup_DocumentCategory FOREIGN KEY (CategoryId) REFERENCES DMS.DocumentCategory(DocumentCategoryId);
+""";
+
+    private const string Migration0224_SubmissionsReadinessRequirementsEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Submissions.SubmissionReadinessRequirement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Submissions.SubmissionReadinessRequirement
+    (
+        ReadinessRequirementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_SubmissionReadinessRequirement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusiness NVARCHAR(100) NOT NULL,
+        RequirementCode NVARCHAR(100) NOT NULL,
+        RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Type_0224 DEFAULT N'IntakeConfirmation',
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequired_0224 DEFAULT 1,
+        AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiver_0224 DEFAULT 1,
+        RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidence_0224 DEFAULT 0,
+        ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeight_0224 DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrder_0224 DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActive_0224 DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Created_0224 DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeleted_0224 DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'TenantId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD TenantId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_TenantId_0224 DEFAULT '00000000-0000-0000-0000-000000000001';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'LineOfBusiness') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_LineOfBusiness_0224 DEFAULT N'General Liability';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequirementCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequirementCode NVARCHAR(100) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_Code_0224 DEFAULT N'READINESS';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequirementTypeCode') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequirementTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_TypeB_0224 DEFAULT N'IntakeConfirmation';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'DisplayName') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD DisplayName NVARCHAR(200) NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_DisplayName_0224 DEFAULT N'Readiness requirement';
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'Description') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD Description NVARCHAR(1000) NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsRequired') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsRequired BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsRequiredB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'AllowsWaiver') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD AllowsWaiver BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_AllowsWaiverB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'RequiresEvidence') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD RequiresEvidence BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_RequiresEvidenceB_0224 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ScoreWeight') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_ScoreWeightB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'SortOrder') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD SortOrder INT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_SortOrderB_0224 DEFAULT 0;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsActive') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsActive BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsActiveB_0224 DEFAULT 1;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CreatedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_CreatedB_0224 DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'CreatedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD CreatedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ModifiedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ModifiedDateUtc DATETIME2 NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Submissions.SubmissionReadinessRequirement', N'IsDeleted') IS NULL ALTER TABLE Submissions.SubmissionReadinessRequirement ADD IsDeleted BIT NOT NULL CONSTRAINT DF_SubmissionReadinessRequirement_IsDeletedB_0224 DEFAULT 0;
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ReadinessRequirementId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ReadinessRequirementId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'StatusCode') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_StatusCode_0224 DEFAULT N'NeedsReview';
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'StatusReason') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD StatusReason NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'EvidenceDocumentId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD EvidenceDocumentId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaiverReason') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaiverReason NVARCHAR(1000) NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaivedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaivedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'WaivedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD WaivedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CompletedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CompletedByUserId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'CompletedDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD CompletedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ReviewDueDateUtc') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ReviewDueDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ScoreWeight') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ScoreWeight INT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_ScoreWeight_0224 DEFAULT 1;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'SortOrder') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD SortOrder INT NOT NULL CONSTRAINT DF_SubmissionIntakeQuestion_SortOrder_0224 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.SubmissionIntakeQuestion', N'ModifiedByUserId') IS NULL ALTER TABLE Submissions.SubmissionIntakeQuestion ADD ModifiedByUserId UNIQUEIDENTIFIER NULL;
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionReadinessRequirement') AND name = N'UX_SubmissionReadinessRequirement_Tenant_Lob_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_SubmissionReadinessRequirement_Tenant_Lob_Code ON Submissions.SubmissionReadinessRequirement(TenantId, LineOfBusiness, RequirementCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.SubmissionIntakeQuestion') AND name = N'IX_SubmissionIntakeQuestion_Requirement')
+    EXEC(N'CREATE INDEX IX_SubmissionIntakeQuestion_Requirement ON Submissions.SubmissionIntakeQuestion(TenantId, ReadinessRequirementId, StatusCode, IsDeleted);');
+
+IF OBJECT_ID(N'tempdb..#ReadinessTenants') IS NOT NULL DROP TABLE #ReadinessTenants;
+CREATE TABLE #ReadinessTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #ReadinessTenants)
+    INSERT INTO #ReadinessTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#ReadinessLines') IS NOT NULL DROP TABLE #ReadinessLines;
+CREATE TABLE #ReadinessLines
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    LineOfBusiness NVARCHAR(100) NOT NULL,
+    PRIMARY KEY (TenantId, LineOfBusiness)
+);
+
+IF OBJECT_ID(N'Agency.LineOfBusiness', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT lob.TenantId,
+               LEFT(LTRIM(RTRIM(lob.LobName)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY lob.TenantId, LEFT(LTRIM(RTRIM(lob.LobName)), 100) ORDER BY lob.LobId) AS RowNumber
+        FROM Agency.LineOfBusiness lob
+        WHERE ISNULL(lob.IsDeleted, 0) = 0
+          AND ISNULL(lob.IsActive, 1) = 1
+          AND NULLIF(LTRIM(RTRIM(lob.LobName)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1;');
+END;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+    EXEC(N'
+    SELECT source.TenantId, source.LineOfBusiness
+    FROM
+    (
+        SELECT s.TenantId,
+               LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) AS LineOfBusiness,
+               ROW_NUMBER() OVER (PARTITION BY s.TenantId, LEFT(LTRIM(RTRIM(s.LineOfBusiness)), 100) ORDER BY s.CreatedDateUtc DESC, s.SubmissionId) AS RowNumber
+        FROM Submissions.Submission s
+        WHERE s.IsDeleted = 0
+          AND NULLIF(LTRIM(RTRIM(s.LineOfBusiness)), N'''') IS NOT NULL
+    ) source
+    WHERE source.RowNumber = 1
+      AND NOT EXISTS (SELECT 1 FROM #ReadinessLines existing WHERE existing.TenantId = source.TenantId AND existing.LineOfBusiness = source.LineOfBusiness);');
+END;
+
+INSERT INTO #ReadinessLines (TenantId, LineOfBusiness)
+SELECT t.TenantId, v.LineOfBusiness
+FROM #ReadinessTenants t
+CROSS JOIN (VALUES (N'General Liability'), (N'Property'), (N'Workers Compensation'), (N'Commercial Auto'), (N'Cyber Liability')) v(LineOfBusiness)
+WHERE NOT EXISTS (SELECT 1 FROM #ReadinessLines existing WHERE existing.TenantId = t.TenantId AND existing.LineOfBusiness = v.LineOfBusiness);
+
+IF OBJECT_ID(N'tempdb..#ReadinessRequirements') IS NOT NULL DROP TABLE #ReadinessRequirements;
+CREATE TABLE #ReadinessRequirements
+(
+    RequirementCode NVARCHAR(100) NOT NULL PRIMARY KEY,
+    RequirementTypeCode NVARCHAR(50) NOT NULL,
+    DisplayName NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(1000) NULL,
+    IsRequired BIT NOT NULL,
+    AllowsWaiver BIT NOT NULL,
+    RequiresEvidence BIT NOT NULL,
+    ScoreWeight INT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ReadinessRequirements (RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, ScoreWeight, SortOrder) VALUES
+(N'CoverageNeeds', N'IntakeConfirmation', N'Coverage needs confirmed', N'Confirm limits, deductibles, forms, requested coverage enhancements, and coverage intent before market submission.', 1, 1, 0, 25, 10),
+(N'ExposureDataValidated', N'IntakeConfirmation', N'Exposure data validated', N'Confirm schedules, payroll, sales, vehicles, properties, and other exposure bases are complete and current.', 1, 1, 0, 25, 20),
+(N'LossHistoryReviewed', N'IntakeConfirmation', N'Loss history reviewed', N'Confirm loss runs, claim explanations, and known risk-control context have been reviewed.', 1, 1, 0, 25, 30),
+(N'OperationsDescription', N'IntakeConfirmation', N'Operations description complete', N'Confirm operations, locations, exposures, risk narrative, and underwriting story are ready for carriers.', 1, 1, 0, 25, 40),
+(N'ProducerPreference', N'IntakeConfirmation', N'Producer preference documented', N'Capture producer or client preference that may influence market strategy and recommendation scoring.', 0, 1, 0, 5, 50);
+
+INSERT INTO Submissions.SubmissionReadinessRequirement
+    (ReadinessRequirementId, TenantId, LineOfBusiness, RequirementCode, RequirementTypeCode, DisplayName, Description, IsRequired, AllowsWaiver, RequiresEvidence, ScoreWeight, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), l.TenantId, l.LineOfBusiness, r.RequirementCode, r.RequirementTypeCode, r.DisplayName, r.Description, r.IsRequired, r.AllowsWaiver, r.RequiresEvidence, r.ScoreWeight, r.SortOrder, 1, SYSUTCDATETIME(), 0
+FROM #ReadinessLines l
+CROSS JOIN #ReadinessRequirements r
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Submissions.SubmissionReadinessRequirement existing
+    WHERE existing.TenantId = l.TenantId
+      AND existing.LineOfBusiness = l.LineOfBusiness
+      AND existing.RequirementCode = r.RequirementCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET RequirementTypeCode = r.RequirementTypeCode,
+    DisplayName = r.DisplayName,
+    Description = r.Description,
+    IsRequired = r.IsRequired,
+    AllowsWaiver = r.AllowsWaiver,
+    RequiresEvidence = r.RequiresEvidence,
+    ScoreWeight = r.ScoreWeight,
+    SortOrder = r.SortOrder,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Submissions.SubmissionReadinessRequirement existing
+INNER JOIN #ReadinessRequirements r ON r.RequirementCode = existing.RequirementCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.Submission', N'U') IS NOT NULL AND OBJECT_ID(N'Submissions.SubmissionIntakeQuestion', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Submissions.SubmissionIntakeQuestion
+        (IntakeQuestionId, SubmissionId, TenantId, ReadinessRequirementId, QuestionCode, QuestionText, HelpText, IsRequired, StatusCode, ScoreWeight, SortOrder, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), s.SubmissionId, s.TenantId, r.ReadinessRequirementId, r.RequirementCode, r.DisplayName, r.Description, r.IsRequired,
+           N'NeedsReview', r.ScoreWeight, r.SortOrder, SYSUTCDATETIME(), 0
+    FROM Submissions.Submission s
+    INNER JOIN Submissions.SubmissionReadinessRequirement r ON r.TenantId = s.TenantId AND r.LineOfBusiness = s.LineOfBusiness AND r.IsActive = 1 AND r.IsDeleted = 0
+    WHERE s.IsDeleted = 0
+      AND NOT EXISTS
+      (
+          SELECT 1
+          FROM Submissions.SubmissionIntakeQuestion q
+          WHERE q.SubmissionId = s.SubmissionId
+            AND q.QuestionCode = r.RequirementCode
+            AND q.IsDeleted = 0
+      );
+
+    UPDATE q
+    SET ReadinessRequirementId = r.ReadinessRequirementId,
+        QuestionText = r.DisplayName,
+        HelpText = r.Description,
+        IsRequired = r.IsRequired,
+        ScoreWeight = r.ScoreWeight,
+        SortOrder = r.SortOrder,
+        StatusCode = CASE
+            WHEN q.IsAnswered = 1 AND q.StatusCode = N'NeedsReview' THEN N'Confirmed'
+            WHEN q.IsAnswered = 0 AND q.StatusCode = N'Confirmed' THEN N'NeedsReview'
+            ELSE q.StatusCode
+        END,
+        CompletedByUserId = CASE WHEN q.IsAnswered = 1 THEN COALESCE(q.CompletedByUserId, q.AnsweredByUserId) ELSE q.CompletedByUserId END,
+        CompletedDateUtc = CASE WHEN q.IsAnswered = 1 THEN COALESCE(q.CompletedDateUtc, q.AnsweredDateUtc) ELSE q.CompletedDateUtc END,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM Submissions.SubmissionIntakeQuestion q
+    INNER JOIN Submissions.Submission s ON s.SubmissionId = q.SubmissionId AND s.TenantId = q.TenantId AND s.IsDeleted = 0
+    INNER JOIN Submissions.SubmissionReadinessRequirement r ON r.TenantId = s.TenantId AND r.LineOfBusiness = s.LineOfBusiness AND r.RequirementCode = q.QuestionCode AND r.IsDeleted = 0
+    WHERE q.IsDeleted = 0;
+END;
+""";
+
+    private const string Migration0230PolicyManualExistingPolicyWorkflow = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Submissions') EXEC(N'CREATE SCHEMA Submissions');
+
+IF OBJECT_ID(N'Policy.ManualPolicyOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.ManualPolicyOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_ManualPolicyOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_RequiresDocument DEFAULT 0,
+        RequiresElevatedPermission BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Elevated DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_ManualPolicyOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyOption_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ManualPolicyOption_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.ManualPolicyOption') AND name = N'UX_ManualPolicyOption_Tenant_Group_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_ManualPolicyOption_Tenant_Group_Code ON Policy.ManualPolicyOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.ManualPolicyDraft', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.ManualPolicyDraft
+    (
+        DraftId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_ManualPolicyDraft PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CurrentStep INT NOT NULL CONSTRAINT DF_ManualPolicyDraft_CurrentStep DEFAULT 1,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ManualPolicyDraft_Status DEFAULT N'InProgress',
+        PayloadJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_ManualPolicyDraft_Payload DEFAULT N'{}',
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Created DEFAULT SYSUTCDATETIME(),
+        UpdatedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Updated DEFAULT SYSUTCDATETIME(),
+        ExpiresAtUtc DATETIME2 NOT NULL CONSTRAINT DF_ManualPolicyDraft_Expires DEFAULT DATEADD(day, 30, SYSUTCDATETIME()),
+        SubmittedPolicyId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_ManualPolicyDraft_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.ManualPolicyDraft') AND name = N'IX_ManualPolicyDraft_Account_Status')
+    EXEC(N'CREATE INDEX IX_ManualPolicyDraft_Account_Status ON Policy.ManualPolicyDraft(TenantId, AccountId, StatusCode, UpdatedAtUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTerm', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTerm
+    (
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicyTerm PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        TermNumber INT NOT NULL CONSTRAINT DF_PolicyTerm_TermNumber DEFAULT 1,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        TermStatusCode NVARCHAR(50) NOT NULL,
+        TransactionTypeCode NVARCHAR(50) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        AnnualizedPremium DECIMAL(18,2) NULL,
+        Taxes DECIMAL(18,2) NULL,
+        Fees DECIMAL(18,2) NULL,
+        Surcharges DECIMAL(18,2) NULL,
+        TotalCost DECIMAL(18,2) NULL,
+        BillingTypeCode NVARCHAR(50) NULL,
+        DataCompletenessCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyTerm_DataCompleteness DEFAULT N'Partial',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTerm_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTerm_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTerm') AND name = N'IX_PolicyTerm_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyTerm_Policy ON Policy.PolicyTerm(PolicyId, TermNumber) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicySource', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicySource
+    (
+        PolicySourceId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicySource PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        SourceCode NVARCHAR(80) NOT NULL,
+        ManualReasonCode NVARCHAR(80) NULL,
+        ExternalSystem NVARCHAR(160) NULL,
+        ExternalReference NVARCHAR(160) NULL,
+        CarrierPortalReference NVARCHAR(160) NULL,
+        MigrationBatch NVARCHAR(160) NULL,
+        SourceNotes NVARCHAR(2000) NULL,
+        RecordedByUserId UNIQUEIDENTIFIER NULL,
+        RecordedAtUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicySource_Recorded DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicySource_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicySource') AND name = N'IX_PolicySource_Policy')
+    EXEC(N'CREATE INDEX IX_PolicySource_Policy ON Policy.PolicySource(PolicyId, RecordedAtUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyNamedInsured', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyNamedInsured
+    (
+        PolicyNamedInsuredId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_NamedInsured PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        AccountPartyId UNIQUEIDENTIFIER NULL,
+        LegalName NVARCHAR(240) NOT NULL,
+        DbaName NVARCHAR(240) NULL,
+        AddressSnapshotJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_PolicyNamedInsured_Address DEFAULT N'{}',
+        IsPrimary BIT NOT NULL CONSTRAINT DF_PolicyNamedInsured_Primary DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyNamedInsured_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyNamedInsured_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCoverageSummary', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCoverageSummary
+    (
+        PolicyCoverageSummaryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_CoverageSummary PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        CoverageNotes NVARCHAR(MAX) NULL,
+        RiskSnapshotJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCoverageSummary_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCoverageSummary_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAssignment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyAssignment
+    (
+        PolicyAssignmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Assignment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        Agency NVARCHAR(160) NULL,
+        Branch NVARCHAR(160) NULL,
+        Department NVARCHAR(160) NULL,
+        ProducerId UNIQUEIDENTIFIER NULL,
+        AccountManagerId UNIQUEIDENTIFIER NULL,
+        CsrId UNIQUEIDENTIFIER NULL,
+        ProducerName NVARCHAR(160) NULL,
+        AccountManagerName NVARCHAR(160) NULL,
+        CsrName NVARCHAR(160) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyAssignment_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyAssignment_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyCommissionEstimate', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyCommissionEstimate
+    (
+        PolicyCommissionEstimateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_CommissionEstimate PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        CommissionTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Type DEFAULT N'Estimated',
+        CommissionStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Status DEFAULT N'Estimated',
+        CommissionRate DECIMAL(9,4) NULL,
+        EstimatedCommission DECIMAL(18,2) NULL,
+        ProducerSplitPercent DECIMAL(9,4) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyCommissionEstimate_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.PolicyAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyAuditEvent
+    (
+        PolicyAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_AuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EntityType NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NOT NULL,
+        ActionCode NVARCHAR(100) NOT NULL,
+        SourceCode NVARCHAR(80) NOT NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        UserId UNIQUEIDENTIFIER NULL,
+        BeforeJson NVARCHAR(MAX) NULL,
+        AfterJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyAuditEvent_Created DEFAULT SYSUTCDATETIME(),
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyAuditEvent_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyAuditEvent') AND name = N'IX_PolicyAuditEvent_Entity')
+    EXEC(N'CREATE INDEX IX_PolicyAuditEvent_Entity ON Policy.PolicyAuditEvent(TenantId, EntityType, EntityId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0230 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0230 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'NormalizedPolicyNumber') IS NULL ALTER TABLE Submissions.BoundPolicy ADD NormalizedPolicyNumber NVARCHAR(80) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'WritingCompanyId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD WritingCompanyId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'BrokerOrMgaId') IS NULL ALTER TABLE Submissions.BoundPolicy ADD BrokerOrMgaId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyType') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyType NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyForm') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyForm NVARCHAR(100) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'PolicyDescription') IS NULL ALTER TABLE Submissions.BoundPolicy ADD PolicyDescription NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'LineOfBusiness') IS NULL ALTER TABLE Submissions.BoundPolicy ADD LineOfBusiness NVARCHAR(100) NOT NULL CONSTRAINT DF_BoundPolicy_LineOfBusiness_0230 DEFAULT N'General Liability';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'DataCompletenessCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD DataCompletenessCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_DataCompleteness_0230 DEFAULT N'Partial';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'VerificationStatusCode') IS NULL ALTER TABLE Submissions.BoundPolicy ADD VerificationStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_Verification_0230 DEFAULT N'PendingVerification';
+
+    EXEC(N'
+    UPDATE Submissions.BoundPolicy
+    SET NormalizedPolicyNumber = UPPER(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(NULLIF(PolicyNumber, N''''), N''''), N''-'', N''''), N'' '', N''''), N''.'', N''''), N''/'', N'''')),
+        IssueStatus = CASE WHEN Status IN (N''Issued'', N''Active'') THEN N''Issued'' ELSE COALESCE(NULLIF(IssueStatus, N''''), N''PendingIssue'') END,
+        CoverageStatus = CASE WHEN Status IN (N''Cancelled'', N''Expired'', N''Non-Renewed'') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''''), N''Bound'') END,
+        IssuedDateUtc = CASE WHEN Status IN (N''Issued'', N''Active'') THEN COALESCE(IssuedDateUtc, BoundDateUtc) ELSE IssuedDateUtc END
+    WHERE IsDeleted = 0;');
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Submissions.BoundPolicy') AND name = N'IX_BoundPolicy_ManualDuplicate_0230')
+        EXEC(N'CREATE INDEX IX_BoundPolicy_ManualDuplicate_0230 ON Submissions.BoundPolicy(TenantId, AccountId, CarrierId, NormalizedPolicyNumber, EffectiveDate, ExpirationDate, LineOfBusiness) WHERE IsDeleted = 0;');
+END;
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RequiresVerification') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RequiresVerification BIT NOT NULL CONSTRAINT DF_PolicyCreationSource_Verification_0230 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyCreationSource', N'RecommendedDocumentTypeCode') IS NULL ALTER TABLE Submissions.PolicyCreationSource ADD RecommendedDocumentTypeCode NVARCHAR(80) NULL;
+END;
+
+IF OBJECT_ID(N'tempdb..#ManualPolicyTenants') IS NOT NULL DROP TABLE #ManualPolicyTenants;
+CREATE TABLE #ManualPolicyTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #ManualPolicyTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #ManualPolicyTenants)
+    INSERT INTO #ManualPolicyTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#ManualPolicyOptions') IS NOT NULL DROP TABLE #ManualPolicyOptions;
+CREATE TABLE #ManualPolicyOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    RequiresDocument BIT NOT NULL,
+    RequiresElevatedPermission BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #ManualPolicyOptions (OptionGroupCode, OptionCode, DisplayName, Description, RequiresDocument, RequiresElevatedPermission, IsDefault, SortOrder) VALUES
+(N'PolicyCreationSource', N'ManualExistingPolicy', N'Manually Added Existing Policy', N'Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.', 1, 0, 1, 10),
+(N'PolicyCreationSource', N'CarrierDownload', N'Carrier Download', N'Policy originated from a carrier download or reconciliation workflow.', 0, 0, 0, 20),
+(N'PolicyCreationSource', N'DataMigration', N'Data Migration', N'Policy originated from book conversion or legacy AMS import.', 0, 0, 0, 30),
+(N'PolicyCreationSource', N'ExternalRater', N'External Rater', N'Policy was written using an external comparative rater.', 1, 0, 0, 40),
+(N'PolicyCreationSource', N'CarrierPortal', N'Carrier Portal', N'Policy was written through a carrier portal.', 1, 0, 0, 50),
+(N'PolicyCreationSource', N'MgaPortal', N'MGA / Wholesaler Portal', N'Policy was written through an MGA or wholesaler portal.', 1, 0, 0, 60),
+(N'PolicyCreationSource', N'BrokerOfRecord', N'Broker of Record', N'Policy came into the agency through a broker-of-record workflow.', 1, 0, 0, 70),
+(N'PolicyCreationSource', N'Acquisition', N'Agency Acquisition', N'Policy came from an acquired book of business.', 0, 0, 0, 80),
+(N'PolicyCreationSource', N'ApiImport', N'API Import', N'Policy was imported through an integration API.', 0, 0, 0, 90),
+(N'ManualPolicyReason', N'WrittenOutsideAgencyBinder', N'Written Outside AgencyBinder', N'Policy was written outside AgencyBinder and is being recorded for servicing.', 1, 0, 1, 10),
+(N'ManualPolicyReason', N'ExistingBookOfBusiness', N'Existing Book of Business', N'Policy existed before AgencyBinder adoption.', 0, 0, 0, 20),
+(N'ManualPolicyReason', N'MissingCarrierDownload', N'Missing Carrier Download', N'Carrier download is missing or failed.', 1, 0, 0, 30),
+(N'ManualPolicyReason', N'BrokerOfRecord', N'Broker of Record', N'Broker-of-record policy record.', 1, 0, 0, 40),
+(N'ManualPolicyReason', N'LegacyConversion', N'Legacy Conversion', N'Policy migrated from a legacy AMS.', 0, 0, 0, 50),
+(N'ManualPolicyReason', N'AgencyAcquisition', N'Agency Acquisition', N'Policy from acquired agency book.', 0, 0, 0, 60),
+(N'ManualPolicyReason', N'AdministrativeCorrection', N'Administrative Correction', N'Approved limited data-entry correction.', 0, 1, 0, 70),
+(N'ManualPolicyReason', N'Other', N'Other', N'Other approved manual-entry reason.', 1, 0, 0, 99),
+(N'PolicyStatus', N'Draft', N'Draft', NULL, 0, 0, 0, 10),
+(N'PolicyStatus', N'PendingVerification', N'Pending Verification', NULL, 0, 0, 1, 20),
+(N'PolicyStatus', N'PendingIssue', N'Pending Issue', NULL, 0, 0, 0, 30),
+(N'PolicyStatus', N'Active', N'Active', NULL, 0, 0, 0, 40),
+(N'PolicyStatus', N'Cancelled', N'Cancelled', NULL, 0, 0, 0, 50),
+(N'PolicyStatus', N'Expired', N'Expired', NULL, 0, 0, 0, 60),
+(N'PolicyStatus', N'NonRenewed', N'Non-Renewed', NULL, 0, 0, 0, 70),
+(N'PolicyStatus', N'Rewritten', N'Rewritten', NULL, 0, 0, 0, 80),
+(N'PolicyStatus', N'Suspended', N'Suspended', NULL, 0, 0, 0, 90),
+(N'PolicyStatus', N'Archived', N'Archived', NULL, 0, 0, 0, 100),
+(N'PolicyTermStatus', N'Draft', N'Draft', NULL, 0, 0, 0, 10),
+(N'PolicyTermStatus', N'Future', N'Future', NULL, 0, 0, 0, 20),
+(N'PolicyTermStatus', N'Active', N'Active', NULL, 0, 0, 1, 30),
+(N'PolicyTermStatus', N'Expired', N'Expired', NULL, 0, 0, 0, 40),
+(N'PolicyTermStatus', N'Cancelled', N'Cancelled', NULL, 0, 0, 0, 50),
+(N'PolicyTermStatus', N'NonRenewed', N'Non-Renewed', NULL, 0, 0, 0, 60),
+(N'PolicyTermStatus', N'Rewritten', N'Rewritten', NULL, 0, 0, 0, 70),
+(N'PolicyTransactionType', N'NewBusiness', N'New Business', NULL, 0, 0, 0, 10),
+(N'PolicyTransactionType', N'Renewal', N'Renewal', NULL, 0, 0, 0, 20),
+(N'PolicyTransactionType', N'Rewrite', N'Rewrite', NULL, 0, 0, 0, 30),
+(N'PolicyTransactionType', N'BrokerOfRecord', N'Broker of Record', NULL, 0, 0, 0, 40),
+(N'PolicyTransactionType', N'Conversion', N'Conversion', NULL, 0, 0, 1, 50),
+(N'BillingType', N'DirectBill', N'Direct Bill', N'Store premium and billing summary; no agency invoice unless requested.', 0, 0, 1, 10),
+(N'BillingType', N'AgencyBill', N'Agency Bill', N'Can create account receivable or invoice when requested.', 0, 0, 0, 20),
+(N'BillingType', N'PremiumFinance', N'Premium Finance', N'Can create finance agreement and installment schedule when requested.', 0, 0, 0, 30),
+(N'DocumentType', N'DeclarationsPage', N'Declarations Page', N'Strongly recommended for manual existing policies.', 0, 0, 1, 10),
+(N'DocumentType', N'PolicyContract', N'Policy Contract', NULL, 0, 0, 0, 20),
+(N'DocumentType', N'Binder', N'Binder', NULL, 0, 0, 0, 30),
+(N'DocumentType', N'CarrierConfirmation', N'Carrier Confirmation', NULL, 0, 0, 0, 40),
+(N'DocumentType', N'BorLetter', N'BOR Letter', NULL, 0, 0, 0, 50),
+(N'DocumentType', N'CoverageSummary', N'Coverage Summary', NULL, 0, 0, 0, 60),
+(N'DataCompleteness', N'Partial', N'Partial', NULL, 0, 0, 1, 10),
+(N'DataCompleteness', N'Complete', N'Complete', NULL, 0, 0, 0, 20),
+(N'CommissionType', N'Estimated', N'Estimated', N'Manual policy commission is estimated until reconciled.', 0, 0, 1, 10),
+(N'CommissionType', N'CarrierStatement', N'Carrier Statement', NULL, 0, 1, 0, 20);
+
+INSERT INTO Policy.ManualPolicyOption
+    (OptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, RequiresDocument, RequiresElevatedPermission, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.RequiresDocument, o.RequiresElevatedPermission, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #ManualPolicyTenants t
+CROSS JOIN #ManualPolicyOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.ManualPolicyOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    RequiresDocument = o.RequiresDocument,
+    RequiresElevatedPermission = o.RequiresElevatedPermission,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.ManualPolicyOption existing
+INNER JOIN #ManualPolicyOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.PolicyCreationSource', N'U') IS NOT NULL
+BEGIN
+    EXEC(N'
+    INSERT INTO Submissions.PolicyCreationSource
+        (PolicyCreationSourceId, TenantId, SourceCode, SourceName, Description, RequiresQuote, RequiresSubmission, RequiresAccount, RequiresReason, RequiresPolicyNumber, AllowsDirectPolicyEntry, IsImportSource, IsConversionSource, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted, RequiresVerification, RecommendedDocumentTypeCode)
+    SELECT NEWID(), t.TenantId, N''ManualExistingPolicy'', N''Manually Added Existing Policy'', N''Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.'', 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 15, SYSUTCDATETIME(), 0, 1, N''DeclarationsPage''
+    FROM #ManualPolicyTenants t
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM Submissions.PolicyCreationSource s
+        WHERE s.TenantId = t.TenantId AND s.SourceCode = N''ManualExistingPolicy'' AND s.IsDeleted = 0
+    );
+
+    UPDATE Submissions.PolicyCreationSource
+    SET SourceName = N''Manually Added Existing Policy'',
+        Description = N''Records an existing carrier policy in AgencyBinder. It does not issue or bind coverage.'',
+        RequiresQuote = 0,
+        RequiresSubmission = 0,
+        RequiresAccount = 1,
+        RequiresReason = 1,
+        RequiresPolicyNumber = 1,
+        AllowsDirectPolicyEntry = 1,
+        RequiresVerification = 1,
+        RecommendedDocumentTypeCode = N''DeclarationsPage'',
+        IsActive = 1,
+        SortOrder = 15,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    WHERE SourceCode = N''ManualExistingPolicy'' AND IsDeleted = 0;
+    ');
+END;
+
+IF OBJECT_ID(N'IAM.Permission', N'U') IS NOT NULL
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Master') EXEC(N'CREATE SCHEMA Master');
+
+    IF OBJECT_ID(N'Master.PermissionAction', N'U') IS NULL
+    BEGIN
+        CREATE TABLE Master.PermissionAction
+        (
+            PermissionActionId INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            ActionCode NVARCHAR(100) NOT NULL UNIQUE,
+            ActionName NVARCHAR(100) NOT NULL UNIQUE,
+            Description NVARCHAR(200) NULL
+        );
+    END;
+
+    EXEC(N'
+    INSERT INTO Master.PermissionAction (ActionCode, ActionName)
+    SELECT v.ActionCode, v.ActionName
+    FROM (VALUES
+        (N''READ'', N''Read''),
+        (N''WRITE'', N''Write''),
+        (N''MANAGE'', N''Manage'')
+    ) v(ActionCode, ActionName)
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM Master.PermissionAction existing
+        WHERE UPPER(existing.ActionCode) = v.ActionCode OR UPPER(existing.ActionName) = UPPER(v.ActionName)
+    );
+    ');
+
+    IF OBJECT_ID(N'tempdb..#ManualPolicyPermissions') IS NOT NULL DROP TABLE #ManualPolicyPermissions;
+    CREATE TABLE #ManualPolicyPermissions (PermissionCode NVARCHAR(200) NOT NULL PRIMARY KEY, PermissionName NVARCHAR(200) NOT NULL, ActionCode NVARCHAR(100) NOT NULL, Description NVARCHAR(500) NULL);
+    INSERT INTO #ManualPolicyPermissions (PermissionCode, PermissionName, ActionCode, Description) VALUES
+    (N'Policy.View', N'View Policies', N'Read', N'View policy records.'),
+    (N'Policy.CreateManual', N'Create Manual Policy', N'Create', N'Add an existing policy record from an account.'),
+    (N'Policy.CreateManualWithoutDocument', N'Create Manual Policy Without Document', N'Create', N'Create a manual policy without supporting documentation.'),
+    (N'Policy.OverrideDuplicate', N'Override Policy Duplicate Warning', N'Approve', N'Override possible duplicate manual policy warnings.'),
+    (N'Policy.Backdate', N'Backdate Policy Term', N'Approve', N'Create or edit backdated policy terms.'),
+    (N'Policy.Verify', N'Verify Policy', N'Approve', N'Verify manually added policy records.');
+
+    DECLARE @ManualPolicyReadActionId INT = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = N'READ' OR UPPER(ActionName) = N'READ' ORDER BY PermissionActionId);
+    IF @ManualPolicyReadActionId IS NULL SET @ManualPolicyReadActionId = (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction ORDER BY PermissionActionId);
+
+    INSERT INTO IAM.Permission (PermissionId, TenantId, PermissionCode, PermissionName, ResourceCode, ActionCode, PermissionActionId, ModuleCode, Description, IsBuiltIn, IsActive, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tenant.TenantId, p.PermissionCode, p.PermissionName, N'Policy', p.ActionCode, COALESCE(pa.PermissionActionId, @ManualPolicyReadActionId), N'Policy', p.Description, 1, 1, SYSUTCDATETIME(), 0
+    FROM #ManualPolicyPermissions p
+    CROSS APPLY (SELECT TOP 1 TenantId FROM #ManualPolicyTenants ORDER BY TenantId) tenant
+    OUTER APPLY (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END OR UPPER(ActionName) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END ORDER BY PermissionActionId) pa
+    WHERE NOT EXISTS
+    (
+        SELECT 1 FROM IAM.Permission existing
+        WHERE existing.PermissionCode = p.PermissionCode
+    );
+
+    UPDATE existing
+    SET PermissionName = p.PermissionName,
+        ResourceCode = N'Policy',
+        ActionCode = p.ActionCode,
+        PermissionActionId = COALESCE(pa.PermissionActionId, @ManualPolicyReadActionId, existing.PermissionActionId),
+        ModuleCode = N'Policy',
+        Description = p.Description,
+        IsBuiltIn = 1,
+        IsActive = 1,
+        IsDeleted = 0,
+        ModifiedDateUtc = SYSUTCDATETIME()
+    FROM IAM.Permission existing
+    INNER JOIN #ManualPolicyPermissions p ON p.PermissionCode = existing.PermissionCode
+    OUTER APPLY (SELECT TOP 1 PermissionActionId FROM Master.PermissionAction WHERE UPPER(ActionCode) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END OR UPPER(ActionName) = CASE UPPER(p.ActionCode) WHEN N'VIEW' THEN N'READ' WHEN N'CREATE' THEN N'WRITE' WHEN N'APPROVE' THEN N'MANAGE' ELSE UPPER(p.ActionCode) END ORDER BY PermissionActionId) pa;
+END;
+""";
+
+    private const string Migration0231PolicyPolicyLineMultiLineManual = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyLine
+    (
+        PolicyLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_PolicyLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        PolicyLineStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyLine_Status DEFAULT N'Active',
+        WrittenPremium DECIMAL(18,2) NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyLine_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyLine_Created DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyLine_Deleted DEFAULT 0
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessId') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessCode') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessCode NVARCHAR(80) NOT NULL CONSTRAINT DF_PolicyLine_Code_0231 DEFAULT N'UNKNOWN';
+IF COL_LENGTH(N'Policy.PolicyLine', N'LineOfBusinessName') IS NULL ALTER TABLE Policy.PolicyLine ADD LineOfBusinessName NVARCHAR(160) NOT NULL CONSTRAINT DF_PolicyLine_Name_0231 DEFAULT N'Unknown';
+IF COL_LENGTH(N'Policy.PolicyLine', N'PolicyLineStatusCode') IS NULL ALTER TABLE Policy.PolicyLine ADD PolicyLineStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PolicyLine_Status_0231 DEFAULT N'Active';
+IF COL_LENGTH(N'Policy.PolicyLine', N'WrittenPremium') IS NULL ALTER TABLE Policy.PolicyLine ADD WrittenPremium DECIMAL(18,2) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'CoverageSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD CoverageSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'LimitsSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD LimitsSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'DeductibleSummary') IS NULL ALTER TABLE Policy.PolicyLine ADD DeductibleSummary NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'Policy.PolicyLine', N'SortOrder') IS NULL ALTER TABLE Policy.PolicyLine ADD SortOrder INT NOT NULL CONSTRAINT DF_PolicyLine_Sort_0231 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyLine', N'ModifiedDateUtc') IS NULL ALTER TABLE Policy.PolicyLine ADD ModifiedDateUtc DATETIME2 NULL;
+
+IF TYPE_ID(N'Policy.PolicyLineCreateTableType') IS NULL
+BEGIN
+    EXEC(N'CREATE TYPE Policy.PolicyLineCreateTableType AS TABLE
+    (
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        PolicyLineStatusCode NVARCHAR(50) NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        CoverageSummary NVARCHAR(MAX) NULL,
+        LimitsSummary NVARCHAR(MAX) NULL,
+        DeductibleSummary NVARCHAR(MAX) NULL,
+        SortOrder INT NOT NULL
+    );');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLine') AND name = N'IX_PolicyLine_PolicyTerm')
+    EXEC(N'CREATE INDEX IX_PolicyLine_PolicyTerm ON Policy.PolicyLine(PolicyId, PolicyTermId, SortOrder) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLine') AND name = N'IX_PolicyLine_Lob')
+    EXEC(N'CREATE INDEX IX_PolicyLine_Lob ON Policy.PolicyLine(TenantId, LineOfBusinessId, LineOfBusinessCode) WHERE IsDeleted = 0;');
+""";
+
+    private const string Migration0232SubmissionsBoundPolicyStatusColumnRepair = """
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssueStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssueStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_IssueStatus_0232 DEFAULT N'PendingIssue';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'CoverageStatus') IS NULL ALTER TABLE Submissions.BoundPolicy ADD CoverageStatus NVARCHAR(50) NOT NULL CONSTRAINT DF_BoundPolicy_CoverageStatus_0232 DEFAULT N'Bound';
+    IF COL_LENGTH(N'Submissions.BoundPolicy', N'IssuedDateUtc') IS NULL ALTER TABLE Submissions.BoundPolicy ADD IssuedDateUtc DATETIME2 NULL;
+
+    EXEC(N'
+    UPDATE Submissions.BoundPolicy
+    SET IssueStatus = CASE WHEN Status IN (N''Issued'', N''Active'') THEN N''Issued'' ELSE COALESCE(NULLIF(IssueStatus, N''''), N''PendingIssue'') END,
+        CoverageStatus = CASE WHEN Status IN (N''Cancelled'', N''Expired'', N''Non-Renewed'') THEN Status ELSE COALESCE(NULLIF(CoverageStatus, N''''), N''Bound'') END,
+        IssuedDateUtc = CASE WHEN Status IN (N''Issued'', N''Active'') THEN COALESCE(IssuedDateUtc, BoundDateUtc) ELSE IssuedDateUtc END
+    WHERE IsDeleted = 0;');
+END;
+""";
+
+    private const string Migration0233SubmissionsPolicyBindTransactionEnterpriseColumnRepair = """
+IF OBJECT_ID(N'Submissions.PolicyBindTransaction', N'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'RequestedEffectiveTime') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD RequestedEffectiveTime TIME NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationSourceCode') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationSourceCode NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'CarrierReferenceNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD CarrierReferenceNumber NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'BinderNumber') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD BinderNumber NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FinalPremium') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FinalPremium DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'DownPaymentAmount') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD DownPaymentAmount DECIMAL(18,2) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'SubjectivitiesOutstanding') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD SubjectivitiesOutstanding NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationNotes') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationNotes NVARCHAR(2000) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationDocumentId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationDocumentId UNIQUEIDENTIFIER NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationReceivedFrom') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationReceivedFrom NVARCHAR(320) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationMessageId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationMessageId NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterName') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterName NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'UnderwriterCompany') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD UnderwriterCompany NVARCHAR(200) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'FollowUpWrittenConfirmationRequired') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD FollowUpWrittenConfirmationRequired BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_FollowUpWritten_0233 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'IntegrationCorrelationId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD IntegrationCorrelationId NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ExternalTransactionId') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ExternalTransactionId NVARCHAR(120) NULL;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmedManually') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmedManually BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_ConfirmedManually_0233 DEFAULT 0;
+    IF COL_LENGTH(N'Submissions.PolicyBindTransaction', N'ConfirmationCertified') IS NULL ALTER TABLE Submissions.PolicyBindTransaction ADD ConfirmationCertified BIT NOT NULL CONSTRAINT DF_PolicyBindTransaction_Certified_0233 DEFAULT 0;
+END;
+""";
+
+    private const string Migration0234PolicyLifecycleServicingEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+
+IF OBJECT_ID(N'Policy.PolicyLifecycleOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyLifecycleOption
+    (
+        PolicyLifecycleOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_LifecycleOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        IsTerminal BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Terminal DEFAULT 0,
+        IsPremiumBearing BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_PremiumBearing DEFAULT 0,
+        RequiresDocument BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Document DEFAULT 0,
+        IsDefault BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyLifecycleOption_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyLifecycleOption') AND name = N'UX_PolicyLifecycleOption_Tenant_Group_Code')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyLifecycleOption_Tenant_Group_Code ON Policy.PolicyLifecycleOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransaction
+    (
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Transaction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        ParentPolicyTransactionId UNIQUEIDENTIFIER NULL,
+        SupersedesPolicyTransactionId UNIQUEIDENTIFIER NULL,
+        TransactionNumber NVARCHAR(80) NOT NULL,
+        TransactionTypeCode NVARCHAR(80) NOT NULL,
+        TransactionStatusCode NVARCHAR(80) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NULL,
+        RequestedDateUtc DATETIME2 NULL,
+        ApprovedDateUtc DATETIME2 NULL,
+        IssuedDateUtc DATETIME2 NULL,
+        ProcessedDateUtc DATETIME2 NULL,
+        PriorWrittenPremium DECIMAL(18,2) NULL,
+        PremiumChange DECIMAL(18,2) NULL,
+        NewWrittenPremium DECIMAL(18,2) NULL,
+        TaxesChange DECIMAL(18,2) NULL,
+        FeesChange DECIMAL(18,2) NULL,
+        SurchargesChange DECIMAL(18,2) NULL,
+        TotalCostChange DECIMAL(18,2) NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        SourceCode NVARCHAR(80) NULL,
+        ExternalReference NVARCHAR(160) NULL,
+        CarrierTransactionNumber NVARCHAR(160) NULL,
+        Description NVARCHAR(1000) NULL,
+        Notes NVARCHAR(2000) NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        ApprovedByUserId UNIQUEIDENTIFIER NULL,
+        IssuedByUserId UNIQUEIDENTIFIER NULL,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_PolicyTransaction_Version DEFAULT 1,
+        DocumentCount INT NOT NULL CONSTRAINT DF_PolicyTransaction_DocCount DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransaction_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransaction_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransaction') AND name = N'IX_PolicyTransaction_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyTransaction_Policy ON Policy.PolicyTransaction(TenantId, PolicyId, EffectiveDate DESC, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransaction') AND name = N'IX_PolicyTransaction_Status')
+    EXEC(N'CREATE INDEX IX_PolicyTransaction_Status ON Policy.PolicyTransaction(TenantId, TransactionStatusCode, TransactionTypeCode, EffectiveDate) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransactionLineChange', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionLineChange
+    (
+        PolicyTransactionLineChangeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionLineChange PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyLineId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessId UNIQUEIDENTIFIER NULL,
+        LineOfBusinessCode NVARCHAR(80) NOT NULL,
+        LineOfBusinessName NVARCHAR(160) NOT NULL,
+        ChangeTypeCode NVARCHAR(80) NOT NULL,
+        PriorPremium DECIMAL(18,2) NULL,
+        PremiumChange DECIMAL(18,2) NULL,
+        NewPremium DECIMAL(18,2) NULL,
+        BeforeJson NVARCHAR(MAX) NULL,
+        AfterJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionLineChange_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionLineChange_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionLineChange') AND name = N'IX_PolicyTransactionLineChange_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyTransactionLineChange_Transaction ON Policy.PolicyTransactionLineChange(TenantId, PolicyTransactionId, LineOfBusinessCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTransactionDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTransactionDocument
+    (
+        PolicyTransactionDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TransactionDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        DocumentId UNIQUEIDENTIFIER NULL,
+        DocumentRoleCode NVARCHAR(80) NOT NULL,
+        DocumentTitle NVARCHAR(240) NOT NULL,
+        DocumentNumber NVARCHAR(120) NULL,
+        FileName NVARCHAR(260) NULL,
+        StorageUri NVARCHAR(1000) NULL,
+        LinkedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Linked DEFAULT SYSUTCDATETIME(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTransactionDocument_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTransactionDocument') AND name = N'IX_PolicyTransactionDocument_Transaction')
+    EXEC(N'CREATE INDEX IX_PolicyTransactionDocument_Transaction ON Policy.PolicyTransactionDocument(TenantId, PolicyTransactionId, DocumentRoleCode) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyTermHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyTermHistory
+    (
+        PolicyTermHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_TermHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        TermNumber INT NOT NULL,
+        TermStatusCode NVARCHAR(80) NOT NULL,
+        EffectiveDate DATE NOT NULL,
+        ExpirationDate DATE NOT NULL,
+        WrittenPremium DECIMAL(18,2) NULL,
+        AnnualizedPremium DECIMAL(18,2) NULL,
+        TotalCost DECIMAL(18,2) NULL,
+        SnapshotJson NVARCHAR(MAX) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyTermHistory_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyTermHistory_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyTermHistory') AND name = N'IX_PolicyTermHistory_Term')
+    EXEC(N'CREATE INDEX IX_PolicyTermHistory_Term ON Policy.PolicyTermHistory(TenantId, PolicyId, PolicyTermId, CreatedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyVersion
+    (
+        PolicyVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_Version PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        VersionNumber INT NOT NULL,
+        VersionReasonCode NVARCHAR(80) NOT NULL,
+        SnapshotJson NVARCHAR(MAX) NOT NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyVersion') AND name = N'UX_PolicyVersion_Policy_Version')
+    EXEC(N'CREATE UNIQUE INDEX UX_PolicyVersion_Policy_Version ON Policy.PolicyVersion(TenantId, PolicyId, VersionNumber) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'Policy.PolicyStatusHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.PolicyStatusHistory
+    (
+        PolicyStatusHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_Policy_StatusHistory PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NOT NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        PolicyTransactionId UNIQUEIDENTIFIER NULL,
+        StatusScopeCode NVARCHAR(80) NOT NULL,
+        OldStatusCode NVARCHAR(80) NULL,
+        NewStatusCode NVARCHAR(80) NOT NULL,
+        ReasonCode NVARCHAR(80) NULL,
+        Notes NVARCHAR(1000) NULL,
+        ChangedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyStatusHistory_Changed DEFAULT SYSUTCDATETIME(),
+        ChangedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PolicyStatusHistory_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PolicyStatusHistory_Deleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.PolicyStatusHistory') AND name = N'IX_PolicyStatusHistory_Policy')
+    EXEC(N'CREATE INDEX IX_PolicyStatusHistory_Policy ON Policy.PolicyStatusHistory(TenantId, PolicyId, ChangedDateUtc DESC) WHERE IsDeleted = 0;');
+
+IF OBJECT_ID(N'tempdb..#PolicyLifecycleTenants') IS NOT NULL DROP TABLE #PolicyLifecycleTenants;
+CREATE TABLE #PolicyLifecycleTenants (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO #PolicyLifecycleTenants (TenantId)
+    EXEC(N'SELECT TenantId FROM Core.Tenant WHERE COL_LENGTH(N''Core.Tenant'', N''IsDeleted'') IS NULL OR IsDeleted = 0;');
+END;
+
+IF NOT EXISTS (SELECT 1 FROM #PolicyLifecycleTenants)
+    INSERT INTO #PolicyLifecycleTenants (TenantId) VALUES ('00000000-0000-0000-0000-000000000001');
+
+IF OBJECT_ID(N'tempdb..#PolicyLifecycleOptions') IS NOT NULL DROP TABLE #PolicyLifecycleOptions;
+CREATE TABLE #PolicyLifecycleOptions
+(
+    OptionGroupCode NVARCHAR(80) NOT NULL,
+    OptionCode NVARCHAR(80) NOT NULL,
+    DisplayName NVARCHAR(160) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    IsTerminal BIT NOT NULL,
+    IsPremiumBearing BIT NOT NULL,
+    RequiresDocument BIT NOT NULL,
+    IsDefault BIT NOT NULL,
+    SortOrder INT NOT NULL
+);
+
+INSERT INTO #PolicyLifecycleOptions (OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, SortOrder) VALUES
+(N'PolicyTransactionType', N'NewBusiness', N'New Business', N'Initial policy transaction created from bind or manual intake.', 0, 1, 1, 1, 10),
+(N'PolicyTransactionType', N'Endorsement', N'Endorsement', N'Mid-term policy change affecting coverage, exposures, forms, or premium.', 0, 1, 1, 0, 20),
+(N'PolicyTransactionType', N'PolicyChange', N'Policy Change', N'Administrative or coverage policy change not classified as a formal endorsement.', 0, 1, 0, 0, 30),
+(N'PolicyTransactionType', N'Renewal', N'Renewal', N'Next term renewal transaction.', 0, 1, 1, 0, 40),
+(N'PolicyTransactionType', N'Rewrite', N'Rewrite', N'Rewritten policy replacing a prior policy or term.', 0, 1, 1, 0, 50),
+(N'PolicyTransactionType', N'Cancellation', N'Cancellation', N'Policy or term cancellation transaction.', 1, 1, 1, 0, 60),
+(N'PolicyTransactionType', N'Reinstatement', N'Reinstatement', N'Reinstates a previously cancelled or lapsed policy.', 0, 1, 1, 0, 70),
+(N'PolicyTransactionType', N'Audit', N'Audit', N'Premium audit or exposure audit transaction.', 0, 1, 1, 0, 80),
+(N'PolicyTransactionType', N'NonRenewal', N'Non-Renewal', N'Carrier or agency non-renewal transaction.', 1, 0, 1, 0, 90),
+(N'PolicyTransactionType', N'Conversion', N'Conversion', N'Legacy, carrier-download, or external conversion transaction.', 0, 1, 0, 0, 100),
+(N'PolicyTransactionStatus', N'Draft', N'Draft', N'Transaction is being prepared.', 0, 0, 0, 1, 10),
+(N'PolicyTransactionStatus', N'PendingReview', N'Pending Review', N'Transaction is ready for service or carrier review.', 0, 0, 0, 0, 20),
+(N'PolicyTransactionStatus', N'Approved', N'Approved', N'Transaction has been approved but not issued.', 0, 0, 0, 0, 30),
+(N'PolicyTransactionStatus', N'Issued', N'Issued', N'Carrier issued transaction evidence.', 0, 0, 1, 0, 40),
+(N'PolicyTransactionStatus', N'Completed', N'Completed', N'Transaction processing is complete.', 1, 0, 0, 0, 50),
+(N'PolicyTransactionStatus', N'Declined', N'Declined', N'Transaction was declined.', 1, 0, 0, 0, 60),
+(N'PolicyTransactionStatus', N'Withdrawn', N'Withdrawn', N'Transaction was withdrawn.', 1, 0, 0, 0, 70),
+(N'PolicyTransactionStatus', N'Superseded', N'Superseded', N'Transaction was replaced by a later version.', 1, 0, 0, 0, 80),
+(N'PolicyLineChangeType', N'AddLine', N'Add Line', N'Adds a policy line or coverage section.', 0, 1, 0, 0, 10),
+(N'PolicyLineChangeType', N'UpdateLine', N'Update Line', N'Updates existing policy line data.', 0, 1, 0, 1, 20),
+(N'PolicyLineChangeType', N'RemoveLine', N'Remove Line', N'Removes or non-renews a policy line.', 0, 1, 0, 0, 30),
+(N'PolicyLineChangeType', N'PremiumOnly', N'Premium Only', N'Premium-only adjustment with no coverage wording change.', 0, 1, 0, 0, 40),
+(N'PolicyDocumentRole', N'DeclarationsPage', N'Declarations Page', N'Policy declarations page linked to the transaction.', 0, 0, 0, 0, 10),
+(N'PolicyDocumentRole', N'EndorsementForm', N'Endorsement Form', N'Carrier endorsement form.', 0, 0, 0, 0, 20),
+(N'PolicyDocumentRole', N'CancellationNotice', N'Cancellation Notice', N'Carrier or insured cancellation notice.', 0, 0, 0, 0, 30),
+(N'PolicyDocumentRole', N'ReinstatementNotice', N'Reinstatement Notice', N'Reinstatement evidence.', 0, 0, 0, 0, 40),
+(N'PolicyDocumentRole', N'RenewalOffer', N'Renewal Offer', N'Renewal offer or quote evidence.', 0, 0, 0, 0, 50),
+(N'PolicyDocumentRole', N'AuditStatement', N'Audit Statement', N'Premium audit statement.', 0, 0, 0, 0, 60),
+(N'PolicyStatusScope', N'Policy', N'Policy', N'Policy-level status history.', 0, 0, 0, 1, 10),
+(N'PolicyStatusScope', N'Term', N'Term', N'Term-level status history.', 0, 0, 0, 0, 20),
+(N'PolicyStatusScope', N'Transaction', N'Transaction', N'Transaction-level status history.', 0, 0, 0, 0, 30);
+
+INSERT INTO Policy.PolicyLifecycleOption
+    (PolicyLifecycleOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsTerminal, IsPremiumBearing, RequiresDocument, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsTerminal, o.IsPremiumBearing, o.RequiresDocument, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #PolicyLifecycleTenants t
+CROSS JOIN #PolicyLifecycleOptions o
+WHERE NOT EXISTS
+(
+    SELECT 1
+    FROM Policy.PolicyLifecycleOption existing
+    WHERE existing.TenantId = t.TenantId
+      AND existing.OptionGroupCode = o.OptionGroupCode
+      AND existing.OptionCode = o.OptionCode
+      AND existing.IsDeleted = 0
+);
+
+UPDATE existing
+SET DisplayName = o.DisplayName,
+    Description = o.Description,
+    IsTerminal = o.IsTerminal,
+    IsPremiumBearing = o.IsPremiumBearing,
+    RequiresDocument = o.RequiresDocument,
+    IsDefault = o.IsDefault,
+    IsActive = 1,
+    SortOrder = o.SortOrder,
+    ModifiedDateUtc = SYSUTCDATETIME()
+FROM Policy.PolicyLifecycleOption existing
+INNER JOIN #PolicyLifecycleOptions o ON o.OptionGroupCode = existing.OptionGroupCode AND o.OptionCode = existing.OptionCode
+WHERE existing.IsDeleted = 0;
+
+IF OBJECT_ID(N'Submissions.BoundPolicy', N'U') IS NOT NULL
+BEGIN
+    INSERT INTO Policy.PolicyTransaction
+        (PolicyTransactionId, TenantId, PolicyId, PolicyTermId, TransactionNumber, TransactionTypeCode, TransactionStatusCode, EffectiveDate, ExpirationDate, RequestedDateUtc, IssuedDateUtc, ProcessedDateUtc, PriorWrittenPremium, PremiumChange, NewWrittenPremium, TotalCostChange, ReasonCode, SourceCode, Description, Notes, CurrentVersionNumber, DocumentCount, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), bp.TenantId, bp.PolicyId, pt.PolicyTermId,
+           CONCAT(N'PTR-', FORMAT(COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), N'yyyyMMdd'), N'-', RIGHT(REPLACE(CONVERT(NVARCHAR(36), bp.PolicyId), N'-', N''), 6)),
+           CASE WHEN COALESCE(bp.PolicySourceCode, N'') = N'ManualExistingPolicy' THEN N'Conversion' ELSE N'NewBusiness' END,
+           CASE WHEN bp.Status IN (N'Active', N'Issued', N'Bound') THEN N'Completed' ELSE N'Issued' END,
+           CONVERT(date, bp.EffectiveDate), CONVERT(date, bp.ExpirationDate), bp.BoundDateUtc, bp.IssuedDateUtc, COALESCE(bp.IssuedDateUtc, bp.BoundDateUtc, SYSUTCDATETIME()),
+           0, bp.AnnualPremium, bp.AnnualPremium, bp.AnnualPremium, bp.PolicySourceCode, bp.PolicySourceCode,
+           N'Baseline transaction synchronized from existing policy record.', bp.PolicySourceNotes, 1, 0, COALESCE(bp.BoundDateUtc, SYSUTCDATETIME()), 0
+    FROM Submissions.BoundPolicy bp
+    OUTER APPLY (SELECT TOP 1 PolicyTermId FROM Policy.PolicyTerm pt WHERE pt.TenantId = bp.TenantId AND pt.PolicyId = bp.PolicyId AND pt.IsDeleted = 0 ORDER BY pt.TermNumber DESC, pt.CreatedDateUtc DESC) pt
+    WHERE bp.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyTransaction existing WHERE existing.TenantId = bp.TenantId AND existing.PolicyId = bp.PolicyId AND existing.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyVersion
+        (PolicyVersionId, TenantId, PolicyId, PolicyTermId, PolicyTransactionId, VersionNumber, VersionReasonCode, SnapshotJson, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tx.TenantId, tx.PolicyId, tx.PolicyTermId, tx.PolicyTransactionId, 1, N'Baseline',
+           JSON_OBJECT(N'PolicyId': tx.PolicyId, N'TransactionId': tx.PolicyTransactionId, N'TransactionType': tx.TransactionTypeCode, N'Status': bp.Status, N'PolicyNumber': bp.PolicyNumber, N'EffectiveDate': CONVERT(NVARCHAR(30), bp.EffectiveDate, 126), N'ExpirationDate': CONVERT(NVARCHAR(30), bp.ExpirationDate, 126), N'AnnualPremium': bp.AnnualPremium),
+           tx.CreatedDateUtc, 0
+    FROM Policy.PolicyTransaction tx
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = tx.TenantId AND bp.PolicyId = tx.PolicyId AND bp.IsDeleted = 0
+    WHERE tx.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyVersion existing WHERE existing.TenantId = tx.TenantId AND existing.PolicyId = tx.PolicyId AND existing.VersionNumber = 1 AND existing.IsDeleted = 0);
+
+    INSERT INTO Policy.PolicyStatusHistory
+        (PolicyStatusHistoryId, TenantId, PolicyId, PolicyTermId, PolicyTransactionId, StatusScopeCode, OldStatusCode, NewStatusCode, ReasonCode, Notes, ChangedDateUtc, CreatedDateUtc, IsDeleted)
+    SELECT NEWID(), tx.TenantId, tx.PolicyId, tx.PolicyTermId, tx.PolicyTransactionId, N'Policy', NULL, bp.Status, tx.TransactionTypeCode, N'Baseline policy status synchronized from existing policy record.', COALESCE(bp.BoundDateUtc, tx.CreatedDateUtc), COALESCE(bp.BoundDateUtc, tx.CreatedDateUtc), 0
+    FROM Policy.PolicyTransaction tx
+    INNER JOIN Submissions.BoundPolicy bp ON bp.TenantId = tx.TenantId AND bp.PolicyId = tx.PolicyId AND bp.IsDeleted = 0
+    WHERE tx.IsDeleted = 0
+      AND NOT EXISTS (SELECT 1 FROM Policy.PolicyStatusHistory existing WHERE existing.TenantId = tx.TenantId AND existing.PolicyId = tx.PolicyId AND existing.StatusScopeCode = N'Policy' AND existing.NewStatusCode = bp.Status AND existing.IsDeleted = 0);
+END;
+""";
+
+    private const string Migration0240PolicyCertificateDocumentWorkflowEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Policy') EXEC(N'CREATE SCHEMA Policy');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'DMS') EXEC(N'CREATE SCHEMA DMS');
+
+IF OBJECT_ID(N'Policy.CertificateWorkflowOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateWorkflowOption
+    (
+        CertificateWorkflowOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateWorkflowOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(100) NOT NULL,
+        DisplayName NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(1000) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateWorkflowOption_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateHolder', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateHolder
+    (
+        CertificateHolderId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateHolder PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        HolderCode NVARCHAR(60) NOT NULL,
+        LegalName NVARCHAR(200) NOT NULL,
+        AddressLine1 NVARCHAR(200) NULL,
+        AddressLine2 NVARCHAR(200) NULL,
+        City NVARCHAR(100) NULL,
+        StateProvince NVARCHAR(100) NULL,
+        PostalCode NVARCHAR(30) NULL,
+        CountryCode NVARCHAR(10) NULL,
+        ContactName NVARCHAR(160) NULL,
+        EmailAddress NVARCHAR(320) NULL,
+        PhoneNumber NVARCHAR(50) NULL,
+        PreferredDeliveryMethodCode NVARCHAR(50) NULL,
+        DefaultWording NVARCHAR(MAX) NULL,
+        RequiresAdditionalInsured BIT NOT NULL CONSTRAINT DF_CertificateHolder_AI DEFAULT 0,
+        RequiresWaiverOfSubrogation BIT NOT NULL CONSTRAINT DF_CertificateHolder_Waiver DEFAULT 0,
+        RequiresPrimaryNonContributory BIT NOT NULL CONSTRAINT DF_CertificateHolder_Primary DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_CertificateHolder_Active DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateHolder_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateHolder_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentTemplateDefinition', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentTemplateDefinition
+    (
+        DocumentTemplateDefinitionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentTemplateDefinition PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TemplateCode NVARCHAR(100) NOT NULL,
+        TemplateName NVARCHAR(240) NOT NULL,
+        DocumentTypeCode NVARCHAR(80) NOT NULL,
+        FormNumber NVARCHAR(30) NULL,
+        LineOfBusinessCode NVARCHAR(80) NULL,
+        Description NVARCHAR(1000) NULL,
+        IsLicensedContent BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Licensed DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Active DEFAULT 1,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Version DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentTemplateDefinition_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.DocumentTemplateVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.DocumentTemplateVersion
+    (
+        DocumentTemplateVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_DocumentTemplateVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTemplateDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        EditionCode NVARCHAR(50) NULL,
+        ContentFormatCode NVARCHAR(50) NOT NULL,
+        TemplateContent NVARCHAR(MAX) NULL,
+        StoragePath NVARCHAR(1000) NULL,
+        MergeFieldSchemaJson NVARCHAR(MAX) NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Fields DEFAULT N'{}',
+        ChangeSummary NVARCHAR(1000) NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Status DEFAULT N'Draft',
+        EffectiveDateUtc DATETIME2 NULL,
+        RetiredDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_DocumentTemplateVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateRequest', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateRequest
+    (
+        CertificateRequestId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateRequest PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        RequestNumber NVARCHAR(60) NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyNumber NVARCHAR(80) NULL,
+        CertificateHolderId UNIQUEIDENTIFIER NULL,
+        RequestedDocumentTypeCode NVARCHAR(80) NOT NULL,
+        RequestedWording NVARCHAR(MAX) NULL,
+        AdditionalInsured BIT NOT NULL CONSTRAINT DF_CertificateRequest_AI DEFAULT 0,
+        WaiverOfSubrogation BIT NOT NULL CONSTRAINT DF_CertificateRequest_Waiver DEFAULT 0,
+        PrimaryNonContributory BIT NOT NULL CONSTRAINT DF_CertificateRequest_Primary DEFAULT 0,
+        SourceCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CertificateRequest_Source DEFAULT N'Agency',
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_CertificateRequest_Status DEFAULT N'Submitted',
+        PriorityCode NVARCHAR(30) NOT NULL CONSTRAINT DF_CertificateRequest_Priority DEFAULT N'Normal',
+        NeededByDateUtc DATETIME2 NULL,
+        RequestedByUserId UNIQUEIDENTIFIER NULL,
+        RequestedByName NVARCHAR(200) NULL,
+        RequestedByEmail NVARCHAR(320) NULL,
+        AssignedToUserId UNIQUEIDENTIFIER NULL,
+        CompletedCertificateId UNIQUEIDENTIFIER NULL,
+        SubmittedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRequest_Submitted DEFAULT SYSUTCDATETIME(),
+        CompletedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRequest_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateRequest_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.GeneratedDocument', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.GeneratedDocument
+    (
+        GeneratedDocumentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_GeneratedDocument PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        DocumentNumber NVARCHAR(80) NOT NULL,
+        DocumentTypeCode NVARCHAR(80) NOT NULL,
+        EntityTypeCode NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NULL,
+        TemplateDefinitionId UNIQUEIDENTIFIER NOT NULL,
+        CurrentVersionNumber INT NOT NULL CONSTRAINT DF_GeneratedDocument_Version DEFAULT 1,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_GeneratedDocument_Status DEFAULT N'Generated',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_GeneratedDocument_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_GeneratedDocument_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'DMS.GeneratedDocumentVersion', N'U') IS NULL
+BEGIN
+    CREATE TABLE DMS.GeneratedDocumentVersion
+    (
+        GeneratedDocumentVersionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_GeneratedDocumentVersion PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        GeneratedDocumentId UNIQUEIDENTIFIER NOT NULL,
+        DocumentTemplateVersionId UNIQUEIDENTIFIER NOT NULL,
+        VersionNumber INT NOT NULL,
+        MergeDataJson NVARCHAR(MAX) NOT NULL,
+        RenderedContent VARBINARY(MAX) NULL,
+        StoragePath NVARCHAR(1000) NULL,
+        ContentType NVARCHAR(200) NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_ContentType DEFAULT N'application/pdf',
+        ContentHash NVARCHAR(128) NULL,
+        FileSizeBytes BIGINT NULL,
+        ChangeSummary NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_GeneratedDocumentVersion_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateDelivery', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateDelivery
+    (
+        CertificateDeliveryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateDelivery PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NOT NULL,
+        GeneratedDocumentVersionId UNIQUEIDENTIFIER NULL,
+        DeliveryMethodCode NVARCHAR(50) NOT NULL,
+        RecipientName NVARCHAR(200) NULL,
+        RecipientAddress NVARCHAR(500) NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_CertificateDelivery_Status DEFAULT N'Queued',
+        ProviderMessageId NVARCHAR(240) NULL,
+        QueuedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateDelivery_Queued DEFAULT SYSUTCDATETIME(),
+        SentDateUtc DATETIME2 NULL,
+        DeliveredDateUtc DATETIME2 NULL,
+        FailedDateUtc DATETIME2 NULL,
+        FailureReason NVARCHAR(2000) NULL,
+        AttemptCount INT NOT NULL CONSTRAINT DF_CertificateDelivery_Attempts DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateDelivery_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateDelivery_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateRenewalSchedule', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateRenewalSchedule
+    (
+        CertificateRenewalScheduleId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateRenewalSchedule PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NOT NULL,
+        CertificateHolderId UNIQUEIDENTIFIER NULL,
+        RenewalLeadDays INT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Lead DEFAULT 30,
+        NextRunDateUtc DATETIME2 NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Status DEFAULT N'Scheduled',
+        AutoGenerate BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Auto DEFAULT 0,
+        AutoDeliver BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Deliver DEFAULT 0,
+        LastRunDateUtc DATETIME2 NULL,
+        LastResultCode NVARCHAR(50) NULL,
+        LastError NVARCHAR(2000) NULL,
+        LockedUntilDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_CertificateRenewalSchedule_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Policy.CertificateAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Policy.CertificateAuditEvent
+    (
+        CertificateAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_CertificateAuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CertificateId UNIQUEIDENTIFIER NULL,
+        CertificateRequestId UNIQUEIDENTIFIER NULL,
+        EventTypeCode NVARCHAR(80) NOT NULL,
+        EventDescription NVARCHAR(1000) NOT NULL,
+        OldValueJson NVARCHAR(MAX) NULL,
+        NewValueJson NVARCHAR(MAX) NULL,
+        ActorUserId UNIQUEIDENTIFIER NULL,
+        ActorName NVARCHAR(200) NULL,
+        CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_CertificateAuditEvent_Correlation DEFAULT NEWID(),
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_CertificateAuditEvent_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateHolderId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateHolderId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'CertificateRequestId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD CertificateRequestId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'DocumentTemplateVersionId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD DocumentTemplateVersionId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'GeneratedDocumentId') IS NULL ALTER TABLE Policy.PolicyCertificate ADD GeneratedDocumentId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'PrimaryNonContributory') IS NULL ALTER TABLE Policy.PolicyCertificate ADD PrimaryNonContributory BIT NOT NULL CONSTRAINT DF_PolicyCertificate_Primary_0240 DEFAULT 0;
+IF COL_LENGTH(N'Policy.PolicyCertificate', N'HolderSpecificWording') IS NULL ALTER TABLE Policy.PolicyCertificate ADD HolderSpecificWording NVARCHAR(MAX) NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateWorkflowOption') AND name = N'UX_CertificateWorkflowOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_CertificateWorkflowOption_Tenant_Group_Code ON Policy.CertificateWorkflowOption(TenantId, OptionGroupCode, OptionCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateHolder') AND name = N'UX_CertificateHolder_Tenant_Code') CREATE UNIQUE INDEX UX_CertificateHolder_Tenant_Code ON Policy.CertificateHolder(TenantId, HolderCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentTemplateDefinition') AND name = N'UX_DocumentTemplateDefinition_Tenant_Code') CREATE UNIQUE INDEX UX_DocumentTemplateDefinition_Tenant_Code ON DMS.DocumentTemplateDefinition(TenantId, TemplateCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'DMS.DocumentTemplateVersion') AND name = N'UX_DocumentTemplateVersion_Definition_Version') CREATE UNIQUE INDEX UX_DocumentTemplateVersion_Definition_Version ON DMS.DocumentTemplateVersion(DocumentTemplateDefinitionId, VersionNumber) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateRequest') AND name = N'UX_CertificateRequest_Tenant_Number') CREATE UNIQUE INDEX UX_CertificateRequest_Tenant_Number ON Policy.CertificateRequest(TenantId, RequestNumber) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateRenewalSchedule') AND name = N'IX_CertificateRenewalSchedule_Due') CREATE INDEX IX_CertificateRenewalSchedule_Due ON Policy.CertificateRenewalSchedule(StatusCode, NextRunDateUtc, LockedUntilDateUtc, IsDeleted) INCLUDE (TenantId, CertificateId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'IX_CertificateDelivery_Certificate') CREATE INDEX IX_CertificateDelivery_Certificate ON Policy.CertificateDelivery(TenantId, CertificateId, CreatedDateUtc DESC) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'IX_CertificateDelivery_Queue') CREATE INDEX IX_CertificateDelivery_Queue ON Policy.CertificateDelivery(StatusCode, QueuedDateUtc, AttemptCount) INCLUDE (TenantId, CertificateId, GeneratedDocumentVersionId, DeliveryMethodCode) WHERE IsDeleted = 0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'Policy.CertificateAuditEvent') AND name = N'IX_CertificateAuditEvent_Certificate') CREATE INDEX IX_CertificateAuditEvent_Certificate ON Policy.CertificateAuditEvent(TenantId, CertificateId, CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'DMS.DocumentTemplateVersion') AND name = N'CK_DocumentTemplateVersion_ContentSource') ALTER TABLE DMS.DocumentTemplateVersion ADD CONSTRAINT CK_DocumentTemplateVersion_ContentSource CHECK (NULLIF(LTRIM(RTRIM(TemplateContent)), N'') IS NOT NULL OR NULLIF(LTRIM(RTRIM(StoragePath)), N'') IS NOT NULL OR ContentFormatCode = N'LicensedExternal');
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'Policy.CertificateRenewalSchedule') AND name = N'CK_CertificateRenewalSchedule_LeadDays') ALTER TABLE Policy.CertificateRenewalSchedule ADD CONSTRAINT CK_CertificateRenewalSchedule_LeadDays CHECK (RenewalLeadDays BETWEEN 1 AND 365);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID(N'Policy.CertificateDelivery') AND name = N'CK_CertificateDelivery_Attempts') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT CK_CertificateDelivery_Attempts CHECK (AttemptCount >= 0);
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_DocumentTemplateVersion_Definition') ALTER TABLE DMS.DocumentTemplateVersion ADD CONSTRAINT FK_DocumentTemplateVersion_Definition FOREIGN KEY (DocumentTemplateDefinitionId) REFERENCES DMS.DocumentTemplateDefinition(DocumentTemplateDefinitionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocument_TemplateDefinition') ALTER TABLE DMS.GeneratedDocument ADD CONSTRAINT FK_GeneratedDocument_TemplateDefinition FOREIGN KEY (TemplateDefinitionId) REFERENCES DMS.DocumentTemplateDefinition(DocumentTemplateDefinitionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocumentVersion_Document') ALTER TABLE DMS.GeneratedDocumentVersion ADD CONSTRAINT FK_GeneratedDocumentVersion_Document FOREIGN KEY (GeneratedDocumentId) REFERENCES DMS.GeneratedDocument(GeneratedDocumentId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_GeneratedDocumentVersion_TemplateVersion') ALTER TABLE DMS.GeneratedDocumentVersion ADD CONSTRAINT FK_GeneratedDocumentVersion_TemplateVersion FOREIGN KEY (DocumentTemplateVersionId) REFERENCES DMS.DocumentTemplateVersion(DocumentTemplateVersionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateDelivery_Certificate') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT FK_CertificateDelivery_Certificate FOREIGN KEY (CertificateId) REFERENCES Policy.PolicyCertificate(CertificateId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateDelivery_GeneratedVersion') ALTER TABLE Policy.CertificateDelivery ADD CONSTRAINT FK_CertificateDelivery_GeneratedVersion FOREIGN KEY (GeneratedDocumentVersionId) REFERENCES DMS.GeneratedDocumentVersion(GeneratedDocumentVersionId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_CertificateRenewalSchedule_Certificate') ALTER TABLE Policy.CertificateRenewalSchedule ADD CONSTRAINT FK_CertificateRenewalSchedule_Certificate FOREIGN KEY (CertificateId) REFERENCES Policy.PolicyCertificate(CertificateId);
+
+SELECT DISTINCT TenantId INTO #CertificateWorkflowTenants
+FROM
+(
+    SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted, 0) = 0
+    UNION SELECT TenantId FROM Policy.PolicyCertificate WHERE IsDeleted = 0
+) tenants;
+
+CREATE TABLE #CertificateOptions (OptionGroupCode NVARCHAR(80), OptionCode NVARCHAR(100), DisplayName NVARCHAR(200), Description NVARCHAR(1000), IsDefault BIT, SortOrder INT);
+INSERT INTO #CertificateOptions VALUES
+(N'CertificateType', N'ACORD25', N'ACORD 25 / Certificate of Liability Insurance', N'Licensed ACORD 25 certificate workflow.', 1, 10),
+(N'CertificateType', N'EOI', N'Evidence of Insurance', N'General evidence of insurance workflow.', 0, 20),
+(N'CertificateType', N'ACORD27', N'ACORD 27 / Evidence of Property Insurance', N'Licensed property evidence workflow.', 0, 30),
+(N'CertificateType', N'ACORD28', N'ACORD 28 / Evidence of Commercial Property', N'Licensed commercial property evidence workflow.', 0, 40),
+(N'DocumentType', N'Application', N'ACORD Application', N'Application document generated from a versioned tenant template.', 0, 10),
+(N'DocumentType', N'Binder', N'Binder', N'Binder or temporary evidence of coverage.', 0, 20),
+(N'DocumentType', N'Certificate', N'Certificate', N'Certificate of insurance.', 1, 30),
+(N'DocumentType', N'CancellationRequest', N'Cancellation Request', N'Insured or agency cancellation request.', 0, 40),
+(N'DocumentType', N'PolicyChangeRequest', N'Policy Change Request', N'Policy change or endorsement request.', 0, 50),
+(N'DocumentType', N'Evidence', N'Evidence Form', N'Evidence of insurance or property coverage.', 0, 60),
+(N'DocumentType', N'Proposal', N'Proposal Document', N'Agency proposal document.', 0, 70),
+(N'DocumentType', N'QuoteProposal', N'Quote Proposal', N'Quote comparison and proposal.', 0, 80),
+(N'DocumentType', N'RenewalSummary', N'Renewal Summary', N'Renewal coverage and premium summary.', 0, 90),
+(N'DocumentType', N'Custom', N'Custom Agency Template', N'Tenant-authored custom document template.', 0, 100),
+(N'DeliveryMethod', N'Email', N'Email', N'Deliver through the configured email provider.', 1, 10),
+(N'DeliveryMethod', N'Portal', N'Self-Service Portal', N'Publish to the certificate holder or insured portal.', 0, 20),
+(N'DeliveryMethod', N'Download', N'Secure Download', N'Generate a secure download.', 0, 30),
+(N'DeliveryMethod', N'Print', N'Print / Mail', N'Prepare for physical delivery.', 0, 40),
+(N'RequestPriority', N'Normal', N'Normal', N'Standard service priority.', 1, 10),
+(N'RequestPriority', N'Urgent', N'Urgent', N'Urgent certificate request.', 0, 20),
+(N'RenewalLeadDays', N'30', N'30 days', N'Begin renewal processing 30 days before expiration.', 1, 10),
+(N'RenewalLeadDays', N'60', N'60 days', N'Begin renewal processing 60 days before expiration.', 0, 20),
+(N'RenewalLeadDays', N'90', N'90 days', N'Begin renewal processing 90 days before expiration.', 0, 30);
+
+INSERT INTO Policy.CertificateWorkflowOption (CertificateWorkflowOptionId, TenantId, OptionGroupCode, OptionCode, DisplayName, Description, IsDefault, IsActive, SortOrder, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, o.OptionGroupCode, o.OptionCode, o.DisplayName, o.Description, o.IsDefault, 1, o.SortOrder, SYSUTCDATETIME(), 0
+FROM #CertificateWorkflowTenants t CROSS JOIN #CertificateOptions o
+WHERE NOT EXISTS (SELECT 1 FROM Policy.CertificateWorkflowOption x WHERE x.TenantId = t.TenantId AND x.OptionGroupCode = o.OptionGroupCode AND x.OptionCode = o.OptionCode AND x.IsDeleted = 0);
+
+CREATE TABLE #DocumentTemplates (TemplateCode NVARCHAR(100), TemplateName NVARCHAR(240), DocumentTypeCode NVARCHAR(80), FormNumber NVARCHAR(30), IsLicensedContent BIT, SortOrder INT);
+INSERT INTO #DocumentTemplates VALUES
+(N'ACORD25', N'ACORD 25 Certificate of Liability Insurance', N'Certificate', N'25', 1, 10),
+(N'EOI', N'Evidence of Insurance', N'Evidence', NULL, 0, 20),
+(N'APPLICATION', N'Insurance Application', N'Application', NULL, 0, 30),
+(N'BINDER', N'Insurance Binder', N'Binder', NULL, 0, 40),
+(N'CANCELLATION', N'Cancellation Request', N'CancellationRequest', NULL, 0, 50),
+(N'POLICY_CHANGE', N'Policy Change Request', N'PolicyChangeRequest', NULL, 0, 60),
+(N'PROPOSAL', N'Agency Proposal', N'Proposal', NULL, 0, 70),
+(N'QUOTE_PROPOSAL', N'Quote Proposal', N'QuoteProposal', NULL, 0, 80),
+(N'RENEWAL_SUMMARY', N'Renewal Summary', N'RenewalSummary', NULL, 0, 90);
+
+INSERT INTO DMS.DocumentTemplateDefinition (DocumentTemplateDefinitionId, TenantId, TemplateCode, TemplateName, DocumentTypeCode, FormNumber, Description, IsLicensedContent, IsActive, CurrentVersionNumber, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), t.TenantId, d.TemplateCode, d.TemplateName, d.DocumentTypeCode, d.FormNumber, CONCAT(d.TemplateName, N' tenant template definition.'), d.IsLicensedContent, 1, 1, SYSUTCDATETIME(), 0
+FROM #CertificateWorkflowTenants t CROSS JOIN #DocumentTemplates d
+WHERE NOT EXISTS (SELECT 1 FROM DMS.DocumentTemplateDefinition x WHERE x.TenantId = t.TenantId AND x.TemplateCode = d.TemplateCode AND x.IsDeleted = 0);
+
+INSERT INTO DMS.DocumentTemplateVersion (DocumentTemplateVersionId, TenantId, DocumentTemplateDefinitionId, VersionNumber, EditionCode, ContentFormatCode, TemplateContent, MergeFieldSchemaJson, ChangeSummary, StatusCode, EffectiveDateUtc, CreatedDateUtc, IsDeleted)
+SELECT NEWID(), d.TenantId, d.DocumentTemplateDefinitionId, 1, CASE WHEN d.FormNumber IS NOT NULL THEN N'Tenant Licensed Edition' ELSE N'1.0' END,
+       CASE WHEN d.IsLicensedContent = 1 THEN N'LicensedExternal' ELSE N'Html' END,
+       CASE WHEN d.IsLicensedContent = 1 THEN NULL ELSE N'<article data-template="' + d.TemplateCode + N'"><h1>{{DocumentTitle}}</h1><section>{{Body}}</section></article>' END,
+       N'{"required":["DocumentTitle","Body"],"optional":["PolicyNumber","AccountName","HolderName","EffectiveDate","ExpirationDate"]}',
+       N'Initial enterprise template version.', N'Published', SYSUTCDATETIME(), SYSUTCDATETIME(), 0
+FROM DMS.DocumentTemplateDefinition d
+WHERE d.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM DMS.DocumentTemplateVersion v WHERE v.DocumentTemplateDefinitionId = d.DocumentTemplateDefinitionId AND v.VersionNumber = 1 AND v.IsDeleted = 0);
+
+INSERT INTO Policy.CertificateHolder (CertificateHolderId, TenantId, HolderCode, LegalName, AddressLine1, DefaultWording, RequiresAdditionalInsured, RequiresWaiverOfSubrogation, IsActive, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), c.TenantId, CONCAT(N'H-', LEFT(REPLACE(CONVERT(NVARCHAR(36), NEWID()), N'-', N''), 12)), c.HolderName, NULLIF(c.HolderAddress, N''), NULLIF(c.Description, N''), c.AdditionalInsured, c.WaiverSubrogation, 1, MIN(c.CreatedDateUtc), MAX(c.CreatedByUserId), 0
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0 AND NULLIF(LTRIM(RTRIM(c.HolderName)), N'') IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateHolder h WHERE h.TenantId = c.TenantId AND h.LegalName = c.HolderName AND ISNULL(h.AddressLine1, N'') = ISNULL(NULLIF(c.HolderAddress, N''), N'') AND h.IsDeleted = 0)
+GROUP BY c.TenantId, c.HolderName, c.HolderAddress, c.Description, c.AdditionalInsured, c.WaiverSubrogation;
+
+UPDATE c
+SET CertificateHolderId = h.CertificateHolderId,
+    HolderSpecificWording = COALESCE(c.HolderSpecificWording, h.DefaultWording),
+    ModifiedDateUtc = COALESCE(c.ModifiedDateUtc, SYSUTCDATETIME())
+FROM Policy.PolicyCertificate c
+OUTER APPLY (SELECT TOP 1 CertificateHolderId, DefaultWording FROM Policy.CertificateHolder h WHERE h.TenantId = c.TenantId AND h.LegalName = c.HolderName AND ISNULL(h.AddressLine1, N'') = ISNULL(NULLIF(c.HolderAddress, N''), N'') AND h.IsDeleted = 0 ORDER BY h.CreatedDateUtc) h
+WHERE c.CertificateHolderId IS NULL AND h.CertificateHolderId IS NOT NULL AND c.IsDeleted = 0;
+
+INSERT INTO Policy.CertificateRenewalSchedule (CertificateRenewalScheduleId, TenantId, CertificateId, CertificateHolderId, RenewalLeadDays, NextRunDateUtc, StatusCode, AutoGenerate, AutoDeliver, CreatedDateUtc, CreatedByUserId, IsDeleted)
+SELECT NEWID(), c.TenantId, c.CertificateId, c.CertificateHolderId, 30, DATEADD(day, -30, CONVERT(DATETIME2, c.ExpirationDate)), N'Scheduled', 0, 0, SYSUTCDATETIME(), c.CreatedByUserId, 0
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0 AND c.Status IN (N'Issued', N'Pending')
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateRenewalSchedule r WHERE r.CertificateId = c.CertificateId AND r.IsDeleted = 0);
+
+INSERT INTO Policy.CertificateAuditEvent (CertificateAuditEventId, TenantId, CertificateId, EventTypeCode, EventDescription, NewValueJson, ActorUserId, ActorName, CreatedDateUtc)
+SELECT NEWID(), c.TenantId, c.CertificateId, N'Synchronized', N'Existing certificate synchronized into the enterprise certificate workflow.',
+       JSON_OBJECT(N'CertificateNumber': c.CertificateNumber, N'HolderId': c.CertificateHolderId, N'Status': c.Status), c.CreatedByUserId, c.IssuedBy, SYSUTCDATETIME()
+FROM Policy.PolicyCertificate c
+WHERE c.IsDeleted = 0
+  AND NOT EXISTS (SELECT 1 FROM Policy.CertificateAuditEvent a WHERE a.CertificateId = c.CertificateId AND a.EventTypeCode = N'Synchronized');
+""";
+
+    private const string Migration0243BillingAgencyBillReceivablesEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'Billing') EXEC(N'CREATE SCHEMA Billing');
+
+IF OBJECT_ID(N'Billing.AgencyBillOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillOption
+    (
+        AgencyBillOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionGroupCode NVARCHAR(80) NOT NULL,
+        OptionCode NVARCHAR(80) NOT NULL,
+        DisplayName NVARCHAR(160) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        NumericValue DECIMAL(18,4) NULL,
+        IsDefault BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Default DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Active DEFAULT 1,
+        SortOrder INT NOT NULL CONSTRAINT DF_AgencyBillOption_Sort DEFAULT 0,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillOption_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillOption_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.FinanceCompany', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.FinanceCompany
+    (
+        FinanceCompanyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_FinanceCompany PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        CompanyCode NVARCHAR(50) NOT NULL,
+        CompanyName NVARCHAR(200) NOT NULL,
+        ContactName NVARCHAR(160) NULL,
+        EmailAddress NVARCHAR(254) NULL,
+        PhoneNumber NVARCHAR(50) NULL,
+        RemittanceInstructions NVARCHAR(1000) NULL,
+        IsActive BIT NOT NULL CONSTRAINT DF_FinanceCompany_Active DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FinanceCompany_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_FinanceCompany_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReceivable', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReceivable
+    (
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReceivable PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReceivableNumber NVARCHAR(50) NOT NULL,
+        SourceTypeCode NVARCHAR(50) NOT NULL,
+        SourceInvoiceId UNIQUEIDENTIFIER NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyTermId UNIQUEIDENTIFIER NULL,
+        AccountId UNIQUEIDENTIFIER NOT NULL,
+        CarrierId UNIQUEIDENTIFIER NULL,
+        BillingTypeCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_BillingType DEFAULT N'AgencyBill',
+        CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Currency DEFAULT N'USD',
+        TransactionDate DATE NOT NULL,
+        DueDate DATE NOT NULL,
+        OriginalAmount DECIMAL(18,2) NOT NULL,
+        AllocatedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Allocated DEFAULT 0,
+        AdjustedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Adjusted DEFAULT 0,
+        BalanceAmount AS (OriginalAmount + AdjustedAmount - AllocatedAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Status DEFAULT N'Open',
+        DelinquencyStageCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReceivable_Delinquency DEFAULT N'Current',
+        FinanceCompanyId UNIQUEIDENTIFIER NULL,
+        Notes NVARCHAR(2000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReceivable_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReceivable_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillInstallment', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillInstallment
+    (
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillInstallment PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        InstallmentNumber INT NOT NULL,
+        DueDate DATE NOT NULL,
+        InstallmentAmount DECIMAL(18,2) NOT NULL,
+        AllocatedAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillInstallment_Allocated DEFAULT 0,
+        BalanceAmount AS (InstallmentAmount - AllocatedAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillInstallment_Status DEFAULT N'Scheduled',
+        GraceDate DATE NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillInstallment_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillInstallment_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillPaymentAllocation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillPaymentAllocation
+    (
+        AgencyBillPaymentAllocationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillPaymentAllocation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        PaymentId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NULL,
+        AllocationAmount DECIMAL(18,2) NOT NULL,
+        AllocationDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAllocation_Date DEFAULT SYSUTCDATETIME(),
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_AgencyBillAllocation_Status DEFAULT N'Applied',
+        ReversalOfAllocationId UNIQUEIDENTIFIER NULL,
+        Notes NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAllocation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillAllocation_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.PremiumTrustTransaction', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.PremiumTrustTransaction
+    (
+        PremiumTrustTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PremiumTrustTransaction PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        TrustAccountCode NVARCHAR(50) NOT NULL,
+        TransactionTypeCode NVARCHAR(50) NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NULL,
+        PaymentId UNIQUEIDENTIFIER NULL,
+        PaymentAllocationId UNIQUEIDENTIFIER NULL,
+        TransactionDate DATE NOT NULL,
+        Amount DECIMAL(18,2) NOT NULL,
+        DirectionCode NVARCHAR(10) NOT NULL,
+        ReferenceNumber NVARCHAR(100) NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Status DEFAULT N'Posted',
+        ReversalOfTransactionId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_PremiumTrustTransaction_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillLateNotice', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillLateNotice
+    (
+        AgencyBillLateNoticeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillLateNotice PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillInstallmentId UNIQUEIDENTIFIER NULL,
+        NoticeLevelCode NVARCHAR(40) NOT NULL,
+        NoticeDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Date DEFAULT SYSUTCDATETIME(),
+        DeliveryMethodCode NVARCHAR(40) NOT NULL,
+        RecipientAddress NVARCHAR(254) NULL,
+        AmountDue DECIMAL(18,2) NOT NULL,
+        DueDate DATE NOT NULL,
+        StatusCode NVARCHAR(40) NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Status DEFAULT N'Prepared',
+        DeliveryReference NVARCHAR(200) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillLateNotice_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.NonPaymentCancellationReferral', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.NonPaymentCancellationReferral
+    (
+        NonPaymentCancellationReferralId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_NonPaymentReferral PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReferralNumber NVARCHAR(50) NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        PolicyId UNIQUEIDENTIFIER NULL,
+        PolicyCancellationId UNIQUEIDENTIFIER NULL,
+        ReferralDateUtc DATETIME2 NOT NULL CONSTRAINT DF_NonPaymentReferral_Date DEFAULT SYSUTCDATETIME(),
+        RequestedEffectiveDate DATE NULL,
+        AmountDue DECIMAL(18,2) NOT NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_NonPaymentReferral_Status DEFAULT N'PendingReview',
+        ReviewNotes NVARCHAR(2000) NULL,
+        ReviewedDateUtc DATETIME2 NULL,
+        ReviewedByUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_NonPaymentReferral_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_NonPaymentReferral_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReconciliation', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReconciliation
+    (
+        AgencyBillReconciliationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReconciliation PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        ReconciliationNumber NVARCHAR(50) NOT NULL,
+        StatementReference NVARCHAR(100) NOT NULL,
+        StatementDate DATE NOT NULL,
+        PeriodStartDate DATE NULL,
+        PeriodEndDate DATE NULL,
+        StatementAmount DECIMAL(18,2) NOT NULL,
+        SubledgerAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Subledger DEFAULT 0,
+        VarianceAmount AS (StatementAmount - SubledgerAmount) PERSISTED,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Status DEFAULT N'Draft',
+        CompletedDateUtc DATETIME2 NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReconciliation_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillReconciliationLine', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillReconciliationLine
+    (
+        AgencyBillReconciliationLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillReconciliationLine PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReconciliationId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NULL,
+        PaymentAllocationId UNIQUEIDENTIFIER NULL,
+        StatementLineReference NVARCHAR(100) NULL,
+        StatementAmount DECIMAL(18,2) NOT NULL,
+        SubledgerAmount DECIMAL(18,2) NOT NULL,
+        VarianceAmount AS (StatementAmount - SubledgerAmount) PERSISTED,
+        MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Status DEFAULT N'Unmatched',
+        ExceptionReason NVARCHAR(1000) NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_AgencyBillReconciliationLine_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.FinanceAgreement', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.FinanceAgreement
+    (
+        FinanceAgreementId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_FinanceAgreement PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        AgencyBillReceivableId UNIQUEIDENTIFIER NOT NULL,
+        FinanceCompanyId UNIQUEIDENTIFIER NOT NULL,
+        AgreementNumber NVARCHAR(100) NOT NULL,
+        FinancedAmount DECIMAL(18,2) NOT NULL,
+        DownPaymentAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_FinanceAgreement_DownPayment DEFAULT 0,
+        FundingStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_FinanceAgreement_Funding DEFAULT N'Pending',
+        ExpectedFundingDate DATE NULL,
+        FundedDate DATE NULL,
+        CancellationProtectionDate DATE NULL,
+        StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_FinanceAgreement_Status DEFAULT N'Active',
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_FinanceAgreement_Created DEFAULT SYSUTCDATETIME(),
+        CreatedByUserId UNIQUEIDENTIFIER NULL,
+        ModifiedDateUtc DATETIME2 NULL,
+        ModifiedByUserId UNIQUEIDENTIFIER NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_FinanceAgreement_Deleted DEFAULT 0
+    );
+END;
+
+IF OBJECT_ID(N'Billing.AgencyBillAuditEvent', N'U') IS NULL
+BEGIN
+    CREATE TABLE Billing.AgencyBillAuditEvent
+    (
+        AgencyBillAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_AgencyBillAuditEvent PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        EntityTypeCode NVARCHAR(80) NOT NULL,
+        EntityId UNIQUEIDENTIFIER NOT NULL,
+        EventTypeCode NVARCHAR(80) NOT NULL,
+        EventDescription NVARCHAR(1000) NOT NULL,
+        OldValueJson NVARCHAR(MAX) NULL,
+        NewValueJson NVARCHAR(MAX) NULL,
+        CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_AgencyBillAudit_Correlation DEFAULT NEWID(),
+        ActorUserId UNIQUEIDENTIFIER NULL,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_AgencyBillAudit_Created DEFAULT SYSUTCDATETIME()
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillOption') AND name=N'UX_AgencyBillOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_AgencyBillOption_Tenant_Group_Code ON Billing.AgencyBillOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.FinanceCompany') AND name=N'UX_FinanceCompany_Tenant_Code') CREATE UNIQUE INDEX UX_FinanceCompany_Tenant_Code ON Billing.FinanceCompany(TenantId,CompanyCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_Tenant_Number') CREATE UNIQUE INDEX UX_AgencyBillReceivable_Tenant_Number ON Billing.AgencyBillReceivable(TenantId,ReceivableNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_SourceInvoice') CREATE UNIQUE INDEX UX_AgencyBillReceivable_SourceInvoice ON Billing.AgencyBillReceivable(TenantId,SourceInvoiceId) WHERE SourceInvoiceId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'UX_AgencyBillReceivable_PolicyTerm') CREATE UNIQUE INDEX UX_AgencyBillReceivable_PolicyTerm ON Billing.AgencyBillReceivable(TenantId,PolicyTermId) WHERE PolicyTermId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'IX_AgencyBillReceivable_WorkQueue') CREATE INDEX IX_AgencyBillReceivable_WorkQueue ON Billing.AgencyBillReceivable(TenantId,StatusCode,DueDate) INCLUDE(AccountId,OriginalAmount,AllocatedAmount,DelinquencyStageCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'UX_AgencyBillInstallment_Receivable_Number') CREATE UNIQUE INDEX UX_AgencyBillInstallment_Receivable_Number ON Billing.AgencyBillInstallment(AgencyBillReceivableId,InstallmentNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'IX_AgencyBillInstallment_Due') CREATE INDEX IX_AgencyBillInstallment_Due ON Billing.AgencyBillInstallment(TenantId,StatusCode,DueDate) INCLUDE(AgencyBillReceivableId,InstallmentAmount,AllocatedAmount) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillPaymentAllocation') AND name=N'IX_AgencyBillAllocation_Payment') CREATE INDEX IX_AgencyBillAllocation_Payment ON Billing.AgencyBillPaymentAllocation(TenantId,PaymentId,StatusCode) INCLUDE(AgencyBillReceivableId,AllocationAmount) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PremiumTrustTransaction') AND name=N'IX_PremiumTrustTransaction_Ledger') CREATE INDEX IX_PremiumTrustTransaction_Ledger ON Billing.PremiumTrustTransaction(TenantId,TrustAccountCode,TransactionDate) INCLUDE(Amount,DirectionCode,StatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.NonPaymentCancellationReferral') AND name=N'UX_NonPaymentReferral_Tenant_Number') CREATE UNIQUE INDEX UX_NonPaymentReferral_Tenant_Number ON Billing.NonPaymentCancellationReferral(TenantId,ReferralNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillReconciliation') AND name=N'UX_AgencyBillReconciliation_Tenant_Number') CREATE UNIQUE INDEX UX_AgencyBillReconciliation_Tenant_Number ON Billing.AgencyBillReconciliation(TenantId,ReconciliationNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.FinanceAgreement') AND name=N'UX_FinanceAgreement_Tenant_Number') CREATE UNIQUE INDEX UX_FinanceAgreement_Tenant_Number ON Billing.FinanceAgreement(TenantId,AgreementNumber) WHERE IsDeleted=0;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.AgencyBillAuditEvent') AND name=N'IX_AgencyBillAudit_Entity') CREATE INDEX IX_AgencyBillAudit_Entity ON Billing.AgencyBillAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillReceivable') AND name=N'CK_AgencyBillReceivable_Amounts') ALTER TABLE Billing.AgencyBillReceivable ADD CONSTRAINT CK_AgencyBillReceivable_Amounts CHECK (OriginalAmount >= 0 AND AllocatedAmount >= 0);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillInstallment') AND name=N'CK_AgencyBillInstallment_Amounts') ALTER TABLE Billing.AgencyBillInstallment ADD CONSTRAINT CK_AgencyBillInstallment_Amounts CHECK (InstallmentNumber > 0 AND InstallmentAmount >= 0 AND AllocatedAmount >= 0 AND AllocatedAmount <= InstallmentAmount);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.AgencyBillPaymentAllocation') AND name=N'CK_AgencyBillPaymentAllocation_Amount') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT CK_AgencyBillPaymentAllocation_Amount CHECK (AllocationAmount > 0);
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Billing.PremiumTrustTransaction') AND name=N'CK_PremiumTrustTransaction_Direction') ALTER TABLE Billing.PremiumTrustTransaction ADD CONSTRAINT CK_PremiumTrustTransaction_Direction CHECK (Amount > 0 AND DirectionCode IN (N'Debit',N'Credit'));
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillReceivable_FinanceCompany') ALTER TABLE Billing.AgencyBillReceivable ADD CONSTRAINT FK_AgencyBillReceivable_FinanceCompany FOREIGN KEY(FinanceCompanyId) REFERENCES Billing.FinanceCompany(FinanceCompanyId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillInstallment_Receivable') ALTER TABLE Billing.AgencyBillInstallment ADD CONSTRAINT FK_AgencyBillInstallment_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillAllocation_Receivable') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT FK_AgencyBillAllocation_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillAllocation_Installment') ALTER TABLE Billing.AgencyBillPaymentAllocation ADD CONSTRAINT FK_AgencyBillAllocation_Installment FOREIGN KEY(AgencyBillInstallmentId) REFERENCES Billing.AgencyBillInstallment(AgencyBillInstallmentId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_LateNotice_Receivable') ALTER TABLE Billing.AgencyBillLateNotice ADD CONSTRAINT FK_LateNotice_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_NonPaymentReferral_Receivable') ALTER TABLE Billing.NonPaymentCancellationReferral ADD CONSTRAINT FK_NonPaymentReferral_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_AgencyBillReconciliationLine_Header') ALTER TABLE Billing.AgencyBillReconciliationLine ADD CONSTRAINT FK_AgencyBillReconciliationLine_Header FOREIGN KEY(AgencyBillReconciliationId) REFERENCES Billing.AgencyBillReconciliation(AgencyBillReconciliationId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_FinanceAgreement_Receivable') ALTER TABLE Billing.FinanceAgreement ADD CONSTRAINT FK_FinanceAgreement_Receivable FOREIGN KEY(AgencyBillReceivableId) REFERENCES Billing.AgencyBillReceivable(AgencyBillReceivableId);
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_FinanceAgreement_Company') ALTER TABLE Billing.FinanceAgreement ADD CONSTRAINT FK_FinanceAgreement_Company FOREIGN KEY(FinanceCompanyId) REFERENCES Billing.FinanceCompany(FinanceCompanyId);
+
+SELECT DISTINCT TenantId INTO #AgencyBillTenants FROM
+(
+    SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0
+    UNION SELECT TenantId FROM Billing.Invoice WHERE IsDeleted=0
+) t;
+
+CREATE TABLE #AgencyBillOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(80),DisplayName NVARCHAR(160),Description NVARCHAR(500),NumericValue DECIMAL(18,4),IsDefault BIT,SortOrder INT);
+INSERT INTO #AgencyBillOptions VALUES
+(N'DelinquencyStage',N'Current',N'Current',N'Obligation is not past due.',0,1,10),
+(N'DelinquencyStage',N'Late1',N'First Notice',N'First late-notice stage.',10,0,20),
+(N'DelinquencyStage',N'Late2',N'Final Notice',N'Final late-notice stage.',20,0,30),
+(N'DelinquencyStage',N'CancellationReview',N'Cancellation Review',N'Eligible for a human-reviewed non-payment referral.',30,0,40),
+(N'NoticeDeliveryMethod',N'Email',N'Email',N'Deliver through the configured email provider.',NULL,1,10),
+(N'NoticeDeliveryMethod',N'Portal',N'Portal',N'Publish to the insured portal.',NULL,0,20),
+(N'TrustAccount',N'PREMIUM_TRUST',N'Premium Trust Account',N'Default premium fiduciary ledger account code.',NULL,1,10),
+(N'InstallmentFrequency',N'Monthly',N'Monthly',N'Monthly installment schedule.',1,1,10),
+(N'InstallmentFrequency',N'Quarterly',N'Quarterly',N'Quarterly installment schedule.',3,0,20);
+
+INSERT INTO Billing.AgencyBillOption(AgencyBillOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,NumericValue,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.NumericValue,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0
+FROM #AgencyBillTenants t CROSS JOIN #AgencyBillOptions o
+WHERE NOT EXISTS(SELECT 1 FROM Billing.AgencyBillOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillReceivable(AgencyBillReceivableId,TenantId,ReceivableNumber,SourceTypeCode,SourceInvoiceId,AccountId,BillingTypeCode,CurrencyCode,TransactionDate,DueDate,OriginalAmount,AllocatedAmount,AdjustedAmount,StatusCode,DelinquencyStageCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),i.TenantId,CONCAT(N'ABR-',i.InvoiceNumber),N'BillingInvoice',i.InvoiceId,i.AccountId,N'AgencyBill',N'USD',CONVERT(date,i.CreatedDateUtc),DATEADD(day,30,CONVERT(date,i.CreatedDateUtc)),i.TotalAmount,
+       CASE WHEN i.BalanceAmount BETWEEN 0 AND i.TotalAmount THEN i.TotalAmount-i.BalanceAmount ELSE 0 END,0,
+       CASE WHEN i.BalanceAmount<=0 THEN N'Paid' WHEN i.BalanceAmount<i.TotalAmount THEN N'PartiallyPaid' ELSE N'Open' END,
+       CASE WHEN i.BalanceAmount>0 AND DATEADD(day,30,CONVERT(date,i.CreatedDateUtc))<CONVERT(date,SYSUTCDATETIME()) THEN N'Late1' ELSE N'Current' END,
+       COALESCE(i.CreatedDateUtc,SYSUTCDATETIME()),NULL,0
+FROM Billing.Invoice i
+WHERE i.IsDeleted=0 AND i.TotalAmount>=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillReceivable r WHERE r.TenantId=i.TenantId AND r.SourceInvoiceId=i.InvoiceId AND r.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillReceivable(AgencyBillReceivableId,TenantId,ReceivableNumber,SourceTypeCode,PolicyId,PolicyTermId,AccountId,CarrierId,BillingTypeCode,CurrencyCode,TransactionDate,DueDate,OriginalAmount,AllocatedAmount,AdjustedAmount,StatusCode,DelinquencyStageCode,Notes,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),pt.TenantId,CONCAT(N'ABR-POL-',LEFT(REPLACE(CONVERT(NVARCHAR(36),pt.PolicyTermId),N'-',N''),20)),N'PolicyTerm',pt.PolicyId,pt.PolicyTermId,bp.AccountId,bp.CarrierId,N'AgencyBill',N'USD',CONVERT(date,pt.EffectiveDate),DATEADD(day,30,CONVERT(date,pt.EffectiveDate)),COALESCE(pt.TotalCost,pt.WrittenPremium,0),0,0,N'Open',
+       CASE WHEN DATEADD(day,30,CONVERT(date,pt.EffectiveDate))<CONVERT(date,SYSUTCDATETIME()) THEN N'Late1' ELSE N'Current' END,N'Synchronized from agency-bill policy term.',COALESCE(pt.CreatedDateUtc,SYSUTCDATETIME()),NULL,0
+FROM Policy.PolicyTerm pt
+JOIN Submissions.BoundPolicy bp ON bp.TenantId=pt.TenantId AND bp.PolicyId=pt.PolicyId AND bp.IsDeleted=0
+WHERE pt.IsDeleted=0 AND UPPER(REPLACE(ISNULL(pt.BillingTypeCode,N''),N' ',N'')) IN (N'AGENCYBILL',N'AGENCY') AND COALESCE(pt.TotalCost,pt.WrittenPremium,0)>0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillReceivable r WHERE r.TenantId=pt.TenantId AND r.PolicyTermId=pt.PolicyTermId AND r.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillInstallment(AgencyBillInstallmentId,TenantId,AgencyBillReceivableId,InstallmentNumber,DueDate,InstallmentAmount,AllocatedAmount,StatusCode,GraceDate,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),r.TenantId,r.AgencyBillReceivableId,1,r.DueDate,r.OriginalAmount,r.AllocatedAmount,
+       CASE WHEN r.BalanceAmount<=0 THEN N'Paid' WHEN r.AllocatedAmount>0 THEN N'PartiallyPaid' WHEN r.DueDate<CONVERT(date,SYSUTCDATETIME()) THEN N'PastDue' ELSE N'Scheduled' END,
+       DATEADD(day,10,r.DueDate),r.CreatedDateUtc,0
+FROM Billing.AgencyBillReceivable r
+WHERE r.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillInstallment x WHERE x.AgencyBillReceivableId=r.AgencyBillReceivableId AND x.InstallmentNumber=1 AND x.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillPaymentAllocation(AgencyBillPaymentAllocationId,TenantId,PaymentId,AgencyBillReceivableId,AgencyBillInstallmentId,AllocationAmount,AllocationDateUtc,StatusCode,Notes,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),p.TenantId,p.PaymentId,r.AgencyBillReceivableId,inst.AgencyBillInstallmentId,
+       CASE WHEN pa.AppliedAmount>r.OriginalAmount THEN r.OriginalAmount ELSE pa.AppliedAmount END,COALESCE(pa.AppliedDateUtc,p.CreatedDateUtc,SYSUTCDATETIME()),N'Applied',N'Synchronized from invoice payment application.',COALESCE(pa.AppliedDateUtc,p.CreatedDateUtc,SYSUTCDATETIME()),COALESCE(pa.CreatedByUserId,p.CreatedByUserId),0
+FROM Billing.Payment p
+JOIN Billing.PaymentApplication pa ON pa.PaymentId=p.PaymentId
+JOIN Billing.AgencyBillReceivable r ON r.TenantId=p.TenantId AND r.SourceInvoiceId=pa.InvoiceId AND r.IsDeleted=0
+OUTER APPLY(SELECT TOP 1 AgencyBillInstallmentId FROM Billing.AgencyBillInstallment x WHERE x.AgencyBillReceivableId=r.AgencyBillReceivableId AND x.IsDeleted=0 ORDER BY x.InstallmentNumber) inst
+WHERE p.IsDeleted=0 AND pa.AppliedAmount>0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillPaymentAllocation a WHERE a.TenantId=p.TenantId AND a.PaymentId=p.PaymentId AND a.AgencyBillReceivableId=r.AgencyBillReceivableId AND a.StatusCode=N'Applied' AND a.IsDeleted=0);
+
+INSERT INTO Billing.PremiumTrustTransaction(PremiumTrustTransactionId,TenantId,TrustAccountCode,TransactionTypeCode,AgencyBillReceivableId,PaymentId,PaymentAllocationId,TransactionDate,Amount,DirectionCode,ReferenceNumber,StatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT NEWID(),a.TenantId,N'PREMIUM_TRUST',N'PremiumReceipt',a.AgencyBillReceivableId,a.PaymentId,a.AgencyBillPaymentAllocationId,CONVERT(date,a.AllocationDateUtc),a.AllocationAmount,N'Credit',p.ReferenceNumber,N'Posted',a.CreatedDateUtc,a.CreatedByUserId,0
+FROM Billing.AgencyBillPaymentAllocation a
+LEFT JOIN Billing.Payment p ON p.PaymentId=a.PaymentId AND p.TenantId=a.TenantId
+WHERE a.StatusCode=N'Applied' AND a.IsDeleted=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.PremiumTrustTransaction t WHERE t.TenantId=a.TenantId AND t.PaymentAllocationId=a.AgencyBillPaymentAllocationId AND t.StatusCode=N'Posted' AND t.IsDeleted=0);
+
+INSERT INTO Billing.AgencyBillAuditEvent(AgencyBillAuditEventId,TenantId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,ActorUserId,CreatedDateUtc)
+SELECT NEWID(),r.TenantId,N'Receivable',r.AgencyBillReceivableId,N'LegacySynchronized',N'Existing invoice synchronized into the agency-bill subledger.',JSON_OBJECT(N'SourceInvoiceId':r.SourceInvoiceId,N'ReceivableNumber':r.ReceivableNumber,N'OriginalAmount':r.OriginalAmount),r.CreatedByUserId,SYSUTCDATETIME()
+FROM Billing.AgencyBillReceivable r
+WHERE r.SourceInvoiceId IS NOT NULL AND r.IsDeleted=0
+  AND NOT EXISTS(SELECT 1 FROM Billing.AgencyBillAuditEvent a WHERE a.EntityTypeCode=N'Receivable' AND a.EntityId=r.AgencyBillReceivableId AND a.EventTypeCode=N'LegacySynchronized');
+""";
+
+    private const string Migration0244ClaimsServicingEnterprise = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name=N'Claims') EXEC(N'CREATE SCHEMA Claims');
+
+IF OBJECT_ID(N'Claims.ClaimOption',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimOption(ClaimOptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimOption PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,OptionGroupCode NVARCHAR(80) NOT NULL,OptionCode NVARCHAR(80) NOT NULL,DisplayName NVARCHAR(160) NOT NULL,Description NVARCHAR(500) NULL,IsDefault BIT NOT NULL CONSTRAINT DF_ClaimOption_Default DEFAULT 0,IsActive BIT NOT NULL CONSTRAINT DF_ClaimOption_Active DEFAULT 1,SortOrder INT NOT NULL CONSTRAINT DF_ClaimOption_Sort DEFAULT 0,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimOption_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimOption_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimAdjuster',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimAdjuster(ClaimAdjusterId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimAdjuster PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,AdjusterTypeCode NVARCHAR(50) NOT NULL,AdjusterName NVARCHAR(200) NOT NULL,CompanyName NVARCHAR(200) NULL,EmailAddress NVARCHAR(254) NULL,PhoneNumber NVARCHAR(50) NULL,LicenseNumber NVARCHAR(80) NULL,IsPrimary BIT NOT NULL CONSTRAINT DF_ClaimAdjuster_Primary DEFAULT 0,AssignmentStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimAdjuster_Status DEFAULT N'Active',AssignedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAdjuster_Assigned DEFAULT SYSUTCDATETIME(),ReleasedDateUtc DATETIME2 NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAdjuster_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimAdjuster_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimParty',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimParty(ClaimPartyId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimParty PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,ContactId UNIQUEIDENTIFIER NULL,PartyTypeCode NVARCHAR(50) NOT NULL,DisplayName NVARCHAR(200) NOT NULL,OrganizationName NVARCHAR(200) NULL,EmailAddress NVARCHAR(254) NULL,PhoneNumber NVARCHAR(50) NULL,AddressJson NVARCHAR(MAX) NULL,PreferredContactMethodCode NVARCHAR(50) NULL,IsPrimary BIT NOT NULL CONSTRAINT DF_ClaimParty_Primary DEFAULT 0,IsActive BIT NOT NULL CONSTRAINT DF_ClaimParty_Active DEFAULT 1,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimParty_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimParty_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimFinancialTransaction',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimFinancialTransaction(ClaimFinancialTransactionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimFinancialTransaction PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,TransactionTypeCode NVARCHAR(50) NOT NULL,TransactionDate DATE NOT NULL,Amount DECIMAL(18,2) NOT NULL,CurrencyCode NVARCHAR(3) NOT NULL CONSTRAINT DF_ClaimFinancial_Currency DEFAULT N'USD',CoverageCode NVARCHAR(80) NULL,PayeeClaimPartyId UNIQUEIDENTIFIER NULL,ReferenceNumber NVARCHAR(100) NULL,StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimFinancial_Status DEFAULT N'Posted',ReversalOfTransactionId UNIQUEIDENTIFIER NULL,Description NVARCHAR(1000) NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimFinancial_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimFinancial_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimNote',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimNote(ClaimNoteId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimNote PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,NoteTypeCode NVARCHAR(50) NOT NULL,Subject NVARCHAR(200) NOT NULL,NoteText NVARCHAR(MAX) NOT NULL,IsPinned BIT NOT NULL CONSTRAINT DF_ClaimNote_Pinned DEFAULT 0,IsConfidential BIT NOT NULL CONSTRAINT DF_ClaimNote_Confidential DEFAULT 0,NoteDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimNote_Date DEFAULT SYSUTCDATETIME(),CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimNote_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,CreatedByName NVARCHAR(200) NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimNote_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimTask',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimTask(ClaimTaskId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimTask PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,OpsTaskItemId UNIQUEIDENTIFIER NULL,SourceClaimActivityId UNIQUEIDENTIFIER NULL,TaskTypeCode NVARCHAR(50) NOT NULL,Title NVARCHAR(200) NOT NULL,Description NVARCHAR(2000) NULL,PriorityCode NVARCHAR(50) NOT NULL,StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_ClaimTask_Status DEFAULT N'Open',AssignedToUserId UNIQUEIDENTIFIER NULL,AssignedToName NVARCHAR(200) NULL,DueDate DATE NULL,CompletedDateUtc DATETIME2 NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimTask_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimTask_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimDocumentLink',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimDocumentLink(ClaimDocumentLinkId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimDocumentLink PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,DocumentId UNIQUEIDENTIFIER NOT NULL,DocumentRoleCode NVARCHAR(80) NOT NULL,Description NVARCHAR(500) NULL,LinkedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimDocumentLink_Date DEFAULT SYSUTCDATETIME(),LinkedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimDocumentLink_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.LossRun',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.LossRun(LossRunId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LossRun PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,AccountId UNIQUEIDENTIFIER NOT NULL,PolicyId UNIQUEIDENTIFIER NULL,CarrierId UNIQUEIDENTIFIER NULL,LossRunNumber NVARCHAR(50) NOT NULL,AsOfDate DATE NOT NULL,PeriodStartDate DATE NULL,PeriodEndDate DATE NULL,SourceDocumentId UNIQUEIDENTIFIER NULL,SourceFileName NVARCHAR(260) NULL,SourceFileHash NVARCHAR(128) NULL,ImportStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LossRun_ImportStatus DEFAULT N'Pending',TotalClaimCount INT NOT NULL CONSTRAINT DF_LossRun_Count DEFAULT 0,TotalIncurred DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Incurred DEFAULT 0,TotalReserved DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Reserved DEFAULT 0,TotalPaid DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRun_Paid DEFAULT 0,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LossRun_Created DEFAULT SYSUTCDATETIME(),CreatedByUserId UNIQUEIDENTIFIER NULL,ModifiedDateUtc DATETIME2 NULL,ModifiedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_LossRun_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.LossRunLine',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.LossRunLine(LossRunLineId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LossRunLine PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,LossRunId UNIQUEIDENTIFIER NOT NULL,LineNumber INT NOT NULL,ClaimId UNIQUEIDENTIFIER NULL,CarrierClaimNumber NVARCHAR(80) NULL,PolicyNumber NVARCHAR(50) NULL,ClaimantName NVARCHAR(200) NULL,DateOfLoss DATE NULL,ClaimStatusCode NVARCHAR(50) NULL,LossDescription NVARCHAR(1000) NULL,IncurredAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Incurred DEFAULT 0,ReserveAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Reserve DEFAULT 0,PaidAmount DECIMAL(18,2) NOT NULL CONSTRAINT DF_LossRunLine_Paid DEFAULT 0,MatchStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_LossRunLine_Match DEFAULT N'Unmatched',ValidationErrorsJson NVARCHAR(MAX) NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LossRunLine_Created DEFAULT SYSUTCDATETIME(),IsDeleted BIT NOT NULL CONSTRAINT DF_LossRunLine_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimStatusHistory',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimStatusHistory(ClaimStatusHistoryId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimStatusHistory PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NOT NULL,OldStatusCode NVARCHAR(50) NULL,NewStatusCode NVARCHAR(50) NOT NULL,ReasonCode NVARCHAR(80) NULL,Notes NVARCHAR(1000) NULL,ChangedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimStatusHistory_Date DEFAULT SYSUTCDATETIME(),ChangedByUserId UNIQUEIDENTIFIER NULL,IsDeleted BIT NOT NULL CONSTRAINT DF_ClaimStatusHistory_Deleted DEFAULT 0);
+END;
+
+IF OBJECT_ID(N'Claims.ClaimAuditEvent',N'U') IS NULL
+BEGIN
+ CREATE TABLE Claims.ClaimAuditEvent(ClaimAuditEventId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ClaimAuditEvent PRIMARY KEY DEFAULT NEWID(),TenantId UNIQUEIDENTIFIER NOT NULL,ClaimId UNIQUEIDENTIFIER NULL,EntityTypeCode NVARCHAR(80) NOT NULL,EntityId UNIQUEIDENTIFIER NOT NULL,EventTypeCode NVARCHAR(80) NOT NULL,EventDescription NVARCHAR(1000) NOT NULL,OldValueJson NVARCHAR(MAX) NULL,NewValueJson NVARCHAR(MAX) NULL,CorrelationId UNIQUEIDENTIFIER NOT NULL CONSTRAINT DF_ClaimAudit_Correlation DEFAULT NEWID(),ActorUserId UNIQUEIDENTIFIER NULL,CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_ClaimAudit_Created DEFAULT SYSUTCDATETIME());
+END;
+
+IF COL_LENGTH(N'Claims.Claim',N'PolicyLinkStatusCode') IS NULL ALTER TABLE Claims.Claim ADD PolicyLinkStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Claim_PolicyLinkStatus DEFAULT N'Unverified';
+IF COL_LENGTH(N'Claims.Claim',N'AccountLinkStatusCode') IS NULL ALTER TABLE Claims.Claim ADD AccountLinkStatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_Claim_AccountLinkStatus DEFAULT N'Unverified';
+IF COL_LENGTH(N'Claims.Claim',N'CarrierId') IS NULL ALTER TABLE Claims.Claim ADD CarrierId UNIQUEIDENTIFIER NULL;
+IF COL_LENGTH(N'Claims.Claim',N'PrimaryAdjusterId') IS NULL ALTER TABLE Claims.Claim ADD PrimaryAdjusterId UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimOption') AND name=N'UX_ClaimOption_Tenant_Group_Code') CREATE UNIQUE INDEX UX_ClaimOption_Tenant_Group_Code ON Claims.ClaimOption(TenantId,OptionGroupCode,OptionCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.Claim') AND name=N'UX_Claim_Tenant_Number') CREATE UNIQUE INDEX UX_Claim_Tenant_Number ON Claims.Claim(TenantId,ClaimNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.Claim') AND name=N'IX_Claim_ServiceQueue') CREATE INDEX IX_Claim_ServiceQueue ON Claims.Claim(TenantId,Status,FollowUpDueDate,Priority) INCLUDE(AccountId,PolicyId,CarrierClaimNumber,TotalIncurred,TotalReserves,TotalPaid) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimAdjuster') AND name=N'IX_ClaimAdjuster_Claim') CREATE INDEX IX_ClaimAdjuster_Claim ON Claims.ClaimAdjuster(TenantId,ClaimId,IsPrimary,AssignmentStatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimParty') AND name=N'IX_ClaimParty_Claim') CREATE INDEX IX_ClaimParty_Claim ON Claims.ClaimParty(TenantId,ClaimId,PartyTypeCode,IsPrimary) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'UX_ClaimFinancial_SourceActivity') CREATE UNIQUE INDEX UX_ClaimFinancial_SourceActivity ON Claims.ClaimFinancialTransaction(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'IX_ClaimFinancial_Ledger') CREATE INDEX IX_ClaimFinancial_Ledger ON Claims.ClaimFinancialTransaction(TenantId,ClaimId,TransactionDate,TransactionTypeCode) INCLUDE(Amount,StatusCode) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimNote') AND name=N'UX_ClaimNote_SourceActivity') CREATE UNIQUE INDEX UX_ClaimNote_SourceActivity ON Claims.ClaimNote(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimTask') AND name=N'UX_ClaimTask_SourceActivity') CREATE UNIQUE INDEX UX_ClaimTask_SourceActivity ON Claims.ClaimTask(TenantId,SourceClaimActivityId) WHERE SourceClaimActivityId IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimDocumentLink') AND name=N'UX_ClaimDocumentLink_Claim_Document') CREATE UNIQUE INDEX UX_ClaimDocumentLink_Claim_Document ON Claims.ClaimDocumentLink(TenantId,ClaimId,DocumentId) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRun') AND name=N'UX_LossRun_Tenant_Number') CREATE UNIQUE INDEX UX_LossRun_Tenant_Number ON Claims.LossRun(TenantId,LossRunNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRun') AND name=N'UX_LossRun_FileHash') CREATE UNIQUE INDEX UX_LossRun_FileHash ON Claims.LossRun(TenantId,SourceFileHash) WHERE SourceFileHash IS NOT NULL AND IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.LossRunLine') AND name=N'UX_LossRunLine_Number') CREATE UNIQUE INDEX UX_LossRunLine_Number ON Claims.LossRunLine(LossRunId,LineNumber) WHERE IsDeleted=0;
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Claims.ClaimAuditEvent') AND name=N'IX_ClaimAudit_Entity') CREATE INDEX IX_ClaimAudit_Entity ON Claims.ClaimAuditEvent(TenantId,EntityTypeCode,EntityId,CreatedDateUtc DESC);
+
+IF NOT EXISTS(SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Claims.ClaimFinancialTransaction') AND name=N'CK_ClaimFinancial_Amount') ALTER TABLE Claims.ClaimFinancialTransaction ADD CONSTRAINT CK_ClaimFinancial_Amount CHECK(Amount>0);
+IF NOT EXISTS(SELECT 1 FROM sys.check_constraints WHERE parent_object_id=OBJECT_ID(N'Claims.LossRunLine') AND name=N'CK_LossRunLine_Amounts') ALTER TABLE Claims.LossRunLine ADD CONSTRAINT CK_LossRunLine_Amounts CHECK(IncurredAmount>=0 AND ReserveAmount>=0 AND PaidAmount>=0);
+
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimAdjuster_Claim') ALTER TABLE Claims.ClaimAdjuster ADD CONSTRAINT FK_ClaimAdjuster_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimParty_Claim') ALTER TABLE Claims.ClaimParty ADD CONSTRAINT FK_ClaimParty_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimFinancial_Claim') ALTER TABLE Claims.ClaimFinancialTransaction ADD CONSTRAINT FK_ClaimFinancial_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimNote_Claim') ALTER TABLE Claims.ClaimNote ADD CONSTRAINT FK_ClaimNote_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimTask_Claim') ALTER TABLE Claims.ClaimTask ADD CONSTRAINT FK_ClaimTask_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimDocumentLink_Claim') ALTER TABLE Claims.ClaimDocumentLink ADD CONSTRAINT FK_ClaimDocumentLink_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_LossRunLine_LossRun') ALTER TABLE Claims.LossRunLine ADD CONSTRAINT FK_LossRunLine_LossRun FOREIGN KEY(LossRunId) REFERENCES Claims.LossRun(LossRunId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_ClaimStatusHistory_Claim') ALTER TABLE Claims.ClaimStatusHistory ADD CONSTRAINT FK_ClaimStatusHistory_Claim FOREIGN KEY(ClaimId) REFERENCES Claims.Claim(ClaimId);
+
+EXEC(N'CREATE OR ALTER PROCEDURE Claims.RecalculateClaimFinancials @TenantId UNIQUEIDENTIFIER,@ClaimId UNIQUEIDENTIFIER,@UserId UNIQUEIDENTIFIER=NULL AS
+BEGIN
+ SET NOCOUNT ON;
+ UPDATE c SET TotalReserves=CASE WHEN x.Reserves<0 THEN 0 ELSE x.Reserves END,TotalPaid=x.Paid,TotalIncurred=CASE WHEN x.Reserves+x.Paid-x.Recoveries<0 THEN 0 ELSE x.Reserves+x.Paid-x.Recoveries END,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+ FROM Claims.Claim c CROSS APPLY(SELECT COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''ReserveSet'' THEN f.Amount WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''ReserveRelease'' THEN -f.Amount ELSE 0 END),0) Reserves,COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''Payment'' THEN f.Amount ELSE 0 END),0) Paid,COALESCE(SUM(CASE WHEN f.StatusCode=N''Posted'' AND f.TransactionTypeCode=N''Recovery'' THEN f.Amount ELSE 0 END),0) Recoveries FROM Claims.ClaimFinancialTransaction f WHERE f.TenantId=@TenantId AND f.ClaimId=@ClaimId AND f.IsDeleted=0)x
+ WHERE c.TenantId=@TenantId AND c.ClaimId=@ClaimId AND c.IsDeleted=0;
+END');
+
+SELECT DISTINCT TenantId INTO #ClaimTenants FROM(SELECT TenantId FROM Core.Tenant WHERE ISNULL(IsDeleted,0)=0 UNION SELECT TenantId FROM Claims.Claim WHERE IsDeleted=0)t;
+CREATE TABLE #ClaimOptions(OptionGroupCode NVARCHAR(80),OptionCode NVARCHAR(80),DisplayName NVARCHAR(160),Description NVARCHAR(500),IsDefault BIT,SortOrder INT);
+INSERT #ClaimOptions VALUES
+(N'ClaimStatus',N'Open',N'Open',N'Claim is open for servicing.',1,10),(N'ClaimStatus',N'Acknowledged',N'Acknowledged',N'Carrier or agency acknowledged FNOL.',0,20),(N'ClaimStatus',N'UnderReview',N'Under Review',N'Claim is under coverage or liability review.',0,30),(N'ClaimStatus',N'PendingInfo',N'Pending Information',N'Additional information is required.',0,40),(N'ClaimStatus',N'InLitigation',N'In Litigation',N'Claim is in litigation.',0,50),(N'ClaimStatus',N'Subrogation',N'Subrogation',N'Subrogation recovery is active.',0,60),(N'ClaimStatus',N'Denied',N'Denied',N'Carrier denied the claim.',0,70),(N'ClaimStatus',N'Closed',N'Closed',N'Claim servicing is complete.',0,80),(N'ClaimStatus',N'Reopened',N'Reopened',N'Closed claim was reopened.',0,90),
+(N'ClaimPriority',N'Critical',N'Critical',N'Immediate claim response.',0,10),(N'ClaimPriority',N'High',N'High',N'High-priority claim response.',0,20),(N'ClaimPriority',N'Standard',N'Standard',N'Standard servicing priority.',1,30),(N'ClaimPriority',N'Low',N'Low',N'Low-priority servicing.',0,40),
+(N'PartyType',N'Claimant',N'Claimant',N'Person or organization asserting the claim.',1,10),(N'PartyType',N'Insured',N'Insured',N'Named insured or covered party.',0,20),(N'PartyType',N'Witness',N'Witness',N'Witness to the loss.',0,30),(N'PartyType',N'Attorney',N'Attorney',N'Legal representative.',0,40),(N'PartyType',N'Other',N'Other',N'Other claim contact.',0,50),
+(N'AdjusterType',N'Carrier',N'Carrier Adjuster',N'Adjuster assigned by the carrier.',1,10),(N'AdjusterType',N'Independent',N'Independent Adjuster',N'Independent adjusting firm.',0,20),(N'AdjusterType',N'Public',N'Public Adjuster',N'Adjuster representing the insured.',0,30),
+(N'FinancialTransactionType',N'ReserveSet',N'Reserve Set',N'Initial reserve or reserve increase.',1,10),(N'FinancialTransactionType',N'ReserveRelease',N'Reserve Release',N'Reserve reduction or release.',0,20),(N'FinancialTransactionType',N'Payment',N'Claim Payment',N'Indemnity or expense payment.',0,30),(N'FinancialTransactionType',N'Recovery',N'Recovery',N'Subrogation or salvage recovery.',0,40),
+(N'ActivityType',N'Communication',N'Communication',N'Carrier, claimant, or insured communication.',1,10),(N'ActivityType',N'Task',N'Task',N'Claim workflow activity.',0,20),(N'ActivityType',N'Reserve',N'Reserve',N'Reserve activity.',0,30),(N'ActivityType',N'Payment',N'Payment',N'Payment activity.',0,40),(N'ActivityType',N'Note',N'Note',N'Claim note activity.',0,50),(N'ActivityType',N'Coverage',N'Coverage',N'Coverage review activity.',0,60),(N'ActivityType',N'Legal',N'Legal',N'Legal activity.',0,70),(N'ActivityType',N'Investigation',N'Investigation',N'Investigation activity.',0,80),
+(N'LineOfBusiness',N'GeneralLiability',N'General Liability',N'General liability coverage.',1,10),(N'LineOfBusiness',N'CommercialAuto',N'Commercial Auto',N'Commercial auto coverage.',0,20),(N'LineOfBusiness',N'CommercialProperty',N'Commercial Property',N'Commercial property coverage.',0,30),(N'LineOfBusiness',N'WorkersComp',N'Workers Comp',N'Workers compensation coverage.',0,40),(N'LineOfBusiness',N'Umbrella',N'Umbrella',N'Umbrella coverage.',0,50),(N'LineOfBusiness',N'ProfessionalLiability',N'Professional Liability',N'Professional liability coverage.',0,60),(N'LineOfBusiness',N'PersonalAuto',N'Personal Auto',N'Personal auto coverage.',0,70),(N'LineOfBusiness',N'HomeDwelling',N'Home/Dwelling',N'Home and dwelling coverage.',0,80),
+(N'LossType',N'BodilyInjury',N'Bodily Injury',N'Bodily injury loss.',1,10),(N'LossType',N'PropertyDamage',N'Property Damage',N'Property damage loss.',0,20),(N'LossType',N'AutoCollision',N'Auto Collision',N'Auto collision loss.',0,30),(N'LossType',N'WorkersCompInjury',N'Workers Comp Injury',N'Workers compensation injury.',0,40),(N'LossType',N'Theft',N'Theft',N'Theft loss.',0,50),(N'LossType',N'Fire',N'Fire',N'Fire loss.',0,60),(N'LossType',N'WaterFlood',N'Water/Flood',N'Water or flood loss.',0,70),(N'LossType',N'WindHail',N'Wind/Hail',N'Wind or hail loss.',0,80),(N'LossType',N'Other',N'Other',N'Other classified loss.',0,90),
+(N'DocumentRole',N'FNOL',N'First Notice of Loss',N'FNOL form or intake evidence.',1,10),(N'DocumentRole',N'AdjusterReport',N'Adjuster Report',N'Carrier or independent adjuster report.',0,20),(N'DocumentRole',N'Photo',N'Loss Photo',N'Photographic loss evidence.',0,30),(N'DocumentRole',N'Correspondence',N'Correspondence',N'Claim correspondence.',0,40),(N'DocumentRole',N'LossRun',N'Loss Run',N'Carrier loss-run document.',0,50);
+INSERT Claims.ClaimOption(ClaimOptionId,TenantId,OptionGroupCode,OptionCode,DisplayName,Description,IsDefault,IsActive,SortOrder,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),t.TenantId,o.OptionGroupCode,o.OptionCode,o.DisplayName,o.Description,o.IsDefault,1,o.SortOrder,SYSUTCDATETIME(),0 FROM #ClaimTenants t CROSS JOIN #ClaimOptions o WHERE NOT EXISTS(SELECT 1 FROM Claims.ClaimOption x WHERE x.TenantId=t.TenantId AND x.OptionGroupCode=o.OptionGroupCode AND x.OptionCode=o.OptionCode AND x.IsDeleted=0);
+
+EXEC(N'UPDATE c SET PolicyId=p.PolicyId,AccountId=p.AccountId,PolicyLinkStatusCode=N''Linked'',AccountLinkStatusCode=N''Linked'',ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT MIN(bp.PolicyId) PolicyId,MIN(bp.AccountId) AccountId FROM Submissions.BoundPolicy bp WHERE bp.TenantId=c.TenantId AND bp.PolicyNumber=c.PolicyNumber AND bp.IsDeleted=0 HAVING COUNT(1)=1)p
+WHERE c.IsDeleted=0 AND (c.PolicyLinkStatusCode<>N''Linked'' OR c.AccountLinkStatusCode<>N''Linked'');
+
+UPDATE c SET AccountId=a.AccountId,AccountLinkStatusCode=N''Linked'',ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT MIN(ca.AccountId) AccountId FROM Client.Account ca WHERE ca.TenantId=c.TenantId AND ca.AccountName=c.AccountName AND ca.IsDeleted=0 HAVING COUNT(1)=1)a
+WHERE c.IsDeleted=0 AND c.AccountLinkStatusCode<>N''Linked'' AND NOT EXISTS(SELECT 1 FROM Submissions.BoundPolicy bp WHERE bp.TenantId=c.TenantId AND bp.PolicyNumber=c.PolicyNumber AND bp.IsDeleted=0);');
+
+INSERT Claims.ClaimParty(ClaimPartyId,TenantId,ClaimId,ContactId,PartyTypeCode,DisplayName,EmailAddress,PhoneNumber,PreferredContactMethodCode,IsPrimary,IsActive,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,c.ClaimId,ct.ContactId,N'Claimant',c.PrimaryClaimant,ct.Email,ct.Phone,ct.PreferredContactMethod,1,1,SYSUTCDATETIME(),0
+FROM Claims.Claim c OUTER APPLY(SELECT TOP 1 ContactId,Email,Phone,PreferredContactMethod FROM Client.Contact x WHERE x.TenantId=c.TenantId AND x.AccountId=c.AccountId AND CONCAT(x.FirstName,N' ',x.LastName)=c.PrimaryClaimant AND x.IsDeleted=0 ORDER BY x.CreatedDateUtc)ct
+WHERE c.IsDeleted=0 AND NULLIF(LTRIM(RTRIM(c.PrimaryClaimant)),N'') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM Claims.ClaimParty p WHERE p.ClaimId=c.ClaimId AND p.PartyTypeCode=N'Claimant' AND p.IsPrimary=1 AND p.IsDeleted=0);
+
+INSERT Claims.ClaimNote(ClaimNoteId,TenantId,ClaimId,SourceClaimActivityId,NoteTypeCode,Subject,NoteText,IsPinned,NoteDateUtc,CreatedDateUtc,CreatedByName,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,COALESCE(NULLIF(a.Category,N''),N'General'),COALESCE(NULLIF(a.Title,N''),N'Claim note'),COALESCE(NULLIF(a.Notes,N''),NULLIF(a.ActivityDescription,N''),N'Claim activity note.'),a.IsPinned,a.ActivityDate,COALESCE(a.CreatedDateUtc,a.ActivityDate),a.CreatedBy,0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0
+WHERE a.IsDeleted=0 AND a.ActivityType IN(N'Note',N'Communication',N'Claimant',N'Coverage',N'Legal',N'Investigation',N'FNOL') AND NOT EXISTS(SELECT 1 FROM Claims.ClaimNote n WHERE n.TenantId=c.TenantId AND n.SourceClaimActivityId=a.ClaimActivityId AND n.IsDeleted=0);
+
+INSERT Claims.ClaimTask(ClaimTaskId,TenantId,ClaimId,SourceClaimActivityId,TaskTypeCode,Title,Description,PriorityCode,StatusCode,AssignedToName,DueDate,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,COALESCE(NULLIF(a.Category,N''),N'FollowUp'),COALESCE(NULLIF(a.Title,N''),N'Claim follow-up'),COALESCE(NULLIF(a.Notes,N''),a.ActivityDescription),c.Priority,N'Open',a.Party,CONVERT(date,a.ActivityDate),COALESCE(a.CreatedDateUtc,a.ActivityDate),0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0 WHERE a.IsDeleted=0 AND a.ActivityType=N'Task' AND NOT EXISTS(SELECT 1 FROM Claims.ClaimTask t WHERE t.TenantId=c.TenantId AND t.SourceClaimActivityId=a.ClaimActivityId AND t.IsDeleted=0);
+
+INSERT Claims.ClaimFinancialTransaction(ClaimFinancialTransactionId,TenantId,ClaimId,SourceClaimActivityId,TransactionTypeCode,TransactionDate,Amount,CurrencyCode,ReferenceNumber,StatusCode,Description,CreatedDateUtc,IsDeleted)
+SELECT NEWID(),c.TenantId,a.ClaimId,a.ClaimActivityId,CASE WHEN a.ActivityType=N'Payment' THEN N'Payment' WHEN COALESCE(a.Amount,0)>=COALESCE(a.PriorAmount,0) THEN N'ReserveSet' ELSE N'ReserveRelease' END,CONVERT(date,a.ActivityDate),ABS(COALESCE(a.Amount,0)-CASE WHEN a.ActivityType=N'Reserve' THEN COALESCE(a.PriorAmount,0) ELSE 0 END),N'USD',NULL,N'Posted',COALESCE(NULLIF(a.Notes,N''),a.Title),COALESCE(a.CreatedDateUtc,a.ActivityDate),0
+FROM Claims.ClaimActivity a JOIN Claims.Claim c ON c.ClaimId=a.ClaimId AND c.IsDeleted=0 WHERE a.IsDeleted=0 AND a.ActivityType IN(N'Reserve',N'Payment') AND COALESCE(a.Amount,0)<>CASE WHEN a.ActivityType=N'Reserve' THEN COALESCE(a.PriorAmount,0) ELSE 0 END AND NOT EXISTS(SELECT 1 FROM Claims.ClaimFinancialTransaction f WHERE f.TenantId=c.TenantId AND f.SourceClaimActivityId=a.ClaimActivityId AND f.IsDeleted=0);
+
+INSERT Claims.ClaimDocumentLink(ClaimDocumentLinkId,TenantId,ClaimId,DocumentId,DocumentRoleCode,Description,LinkedDateUtc,LinkedByUserId,IsDeleted)
+SELECT NEWID(),d.TenantId,d.EntityId,d.DocumentId,COALESCE(NULLIF(d.DocumentTypeCode,N''),N'Correspondence'),d.Description,d.CreatedDateUtc,d.CreatedByUserId,0 FROM DMS.Document d JOIN Claims.Claim c ON c.TenantId=d.TenantId AND c.ClaimId=d.EntityId AND c.IsDeleted=0 WHERE d.IsDeleted=0 AND d.EntityName IN(N'Claim',N'Claims.Claim') AND NOT EXISTS(SELECT 1 FROM Claims.ClaimDocumentLink l WHERE l.TenantId=d.TenantId AND l.ClaimId=d.EntityId AND l.DocumentId=d.DocumentId AND l.IsDeleted=0);
+
+INSERT Claims.ClaimStatusHistory(ClaimStatusHistoryId,TenantId,ClaimId,OldStatusCode,NewStatusCode,ReasonCode,Notes,ChangedDateUtc,ChangedByUserId,IsDeleted)
+SELECT NEWID(),c.TenantId,c.ClaimId,NULL,c.Status,N'LegacySynchronized',N'Baseline claim status synchronized from existing claim.',COALESCE(c.CreatedDateUtc,SYSUTCDATETIME()),c.CreatedByUserId,0 FROM Claims.Claim c WHERE c.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Claims.ClaimStatusHistory h WHERE h.ClaimId=c.ClaimId AND h.IsDeleted=0);
+
+EXEC(N'INSERT Claims.ClaimAuditEvent(ClaimAuditEventId,TenantId,ClaimId,EntityTypeCode,EntityId,EventTypeCode,EventDescription,NewValueJson,ActorUserId,CreatedDateUtc)
+SELECT NEWID(),c.TenantId,c.ClaimId,N''Claim'',c.ClaimId,N''LegacySynchronized'',N''Existing claim synchronized into enterprise claim servicing.'',JSON_OBJECT(N''ClaimNumber'':c.ClaimNumber,N''PolicyLinkStatus'':c.PolicyLinkStatusCode,N''AccountLinkStatus'':c.AccountLinkStatusCode),c.CreatedByUserId,SYSUTCDATETIME() FROM Claims.Claim c WHERE c.IsDeleted=0 AND NOT EXISTS(SELECT 1 FROM Claims.ClaimAuditEvent a WHERE a.EntityTypeCode=N''Claim'' AND a.EntityId=c.ClaimId AND a.EventTypeCode=N''LegacySynchronized'');');
+
+UPDATE c SET TotalReserves=x.Reserves,TotalPaid=x.Paid,TotalIncurred=x.Reserves+x.Paid-x.Recoveries,ModifiedDateUtc=SYSUTCDATETIME()
+FROM Claims.Claim c CROSS APPLY(SELECT COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'ReserveSet' THEN f.Amount WHEN f.TransactionTypeCode=N'ReserveRelease' THEN -f.Amount ELSE 0 END),0) Reserves,COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'Payment' THEN f.Amount ELSE 0 END),0) Paid,COALESCE(SUM(CASE WHEN f.TransactionTypeCode=N'Recovery' THEN f.Amount ELSE 0 END),0) Recoveries,COUNT(1) EntryCount FROM Claims.ClaimFinancialTransaction f WHERE f.ClaimId=c.ClaimId AND f.StatusCode=N'Posted' AND f.IsDeleted=0)x
+WHERE c.IsDeleted=0 AND x.EntryCount>0;
+
+-- Remove only the known operational examples introduced by migration 0112; reference configuration remains.
+UPDATE Claims.Claim SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND CreatedByUserId IS NULL;
+UPDATE Claims.ClaimParty SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimNote SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimTask SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.ClaimFinancialTransaction SET IsDeleted=1 WHERE ClaimId IN(SELECT ClaimId FROM Claims.Claim WHERE TenantId='00000000-0000-0000-0000-000000000001' AND ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131') AND IsDeleted=1);
+UPDATE Claims.CatAffectedInsured SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE CatEventId IN(SELECT CatEventId FROM Claims.CatEvent WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail' AND IsDeleted=0);
+UPDATE Claims.CatEvent SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME() WHERE TenantId='00000000-0000-0000-0000-000000000001' AND CatCode=N'CAT-2025-TX-Hail';
+""";
+
+private const string Migration0245EnterpriseWorkflowRelationshipIntegrity = """
+-- Synchronize tenant ownership for submission markets created before TenantId became authoritative.
+UPDATE sm
+SET TenantId=s.TenantId
+FROM Submissions.SubmissionMarket sm
+JOIN Submissions.Submission s ON s.SubmissionId=sm.SubmissionId
+WHERE sm.TenantId IS NULL OR sm.TenantId<>s.TenantId;
+
+IF NOT EXISTS(SELECT 1 FROM Submissions.SubmissionMarket WHERE TenantId IS NULL)
+   AND EXISTS(SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID(N'Submissions.SubmissionMarket') AND name=N'TenantId' AND is_nullable=1)
+    ALTER TABLE Submissions.SubmissionMarket ALTER COLUMN TenantId UNIQUEIDENTIFIER NOT NULL;
+
+-- Remove legacy claim examples whose policy/account identifiers were generated independently.
+DECLARE @LegacyClaims TABLE(ClaimId UNIQUEIDENTIFIER PRIMARY KEY);
+INSERT @LegacyClaims(ClaimId)
+SELECT c.ClaimId
+FROM Claims.Claim c
+WHERE c.TenantId='00000000-0000-0000-0000-000000000001'
+  AND (c.ClaimNumber LIKE N'CLM-2024-00%' OR c.ClaimNumber IN(N'CLM-2025-00142',N'CLM-2025-00133',N'CLM-2025-00131'))
+  AND c.CreatedByUserId IS NULL
+  AND c.PolicyLinkStatusCode=N'Unverified'
+  AND NOT EXISTS(SELECT 1 FROM Submissions.BoundPolicy p WHERE p.TenantId=c.TenantId AND p.PolicyId=c.PolicyId);
+
+DELETE FROM Claims.ClaimAuditEvent WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimStatusHistory WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimDocumentLink WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimTask WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimNote WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimFinancialTransaction WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimParty WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimAdjuster WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+DELETE FROM Claims.ClaimActivity WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+IF OBJECT_ID(N'Claims.LossEstimate',N'U') IS NOT NULL
+ EXEC(N'DELETE le FROM Claims.LossEstimate le JOIN Claims.Claim c ON c.ClaimId=le.ClaimId WHERE c.TenantId=''''00000000-0000-0000-0000-000000000001'''' AND c.ClaimNumber LIKE N''''CLM-2024-00%'''' AND c.CreatedByUserId IS NULL;');
+DELETE FROM Claims.Claim WHERE ClaimId IN(SELECT ClaimId FROM @LegacyClaims);
+
+-- Restore the single missing owner referenced by the legacy commission transaction examples.
+IF EXISTS(SELECT 1 FROM Commission.CommissionTransaction WHERE TenantId='00000000-0000-0000-0000-000000000001' AND PayeeId='23d52fb4-91f4-4cc1-9aef-ff7d186835df' AND IsDeleted=0)
+   AND NOT EXISTS(SELECT 1 FROM Commission.CommissionPayee WHERE TenantId='00000000-0000-0000-0000-000000000001' AND PayeeId='23d52fb4-91f4-4cc1-9aef-ff7d186835df' AND IsDeleted=0)
+BEGIN
+ INSERT Commission.CommissionPayee(CommissionPayeeId,TenantId,PayeeCode,PayeeName,CommissionPayeeTypeId,CurrencyCode,IsActive,CreatedDateUtc,IsDeleted,PayeeTypeCode,SplitPercentage,EffectiveDate,StatusCode,PayeeId)
+ VALUES(NEWID(),'00000000-0000-0000-0000-000000000001',N'DEMO-HOUSE',N'Demo Agency House Account',3,'USD',1,SYSUTCDATETIME(),0,N'PARTNER',100,CONVERT(date,SYSUTCDATETIME()),N'Active','23d52fb4-91f4-4cc1-9aef-ff7d186835df');
+END;
+
+-- Enforce the high-value relationships used by the application flow after data synchronization.
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Submission_Account')
+ ALTER TABLE Submissions.Submission WITH CHECK ADD CONSTRAINT FK_Submission_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_SubmissionMarket_Submission')
+ ALTER TABLE Submissions.SubmissionMarket WITH CHECK ADD CONSTRAINT FK_SubmissionMarket_Submission FOREIGN KEY(SubmissionId) REFERENCES Submissions.Submission(SubmissionId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_BoundPolicy_Account')
+ ALTER TABLE Submissions.BoundPolicy WITH CHECK ADD CONSTRAINT FK_BoundPolicy_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_BoundPolicy_Submission')
+ ALTER TABLE Submissions.BoundPolicy WITH CHECK ADD CONSTRAINT FK_BoundPolicy_Submission FOREIGN KEY(SubmissionId) REFERENCES Submissions.Submission(SubmissionId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_PolicyTerm_BoundPolicy')
+ ALTER TABLE Policy.PolicyTerm WITH CHECK ADD CONSTRAINT FK_PolicyTerm_BoundPolicy FOREIGN KEY(PolicyId) REFERENCES Submissions.BoundPolicy(PolicyId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Claim_BoundPolicy')
+ ALTER TABLE Claims.Claim WITH CHECK ADD CONSTRAINT FK_Claim_BoundPolicy FOREIGN KEY(PolicyId) REFERENCES Submissions.BoundPolicy(PolicyId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_Claim_Account')
+ ALTER TABLE Claims.Claim WITH CHECK ADD CONSTRAINT FK_Claim_Account FOREIGN KEY(AccountId) REFERENCES Client.Account(AccountId);
+IF NOT EXISTS(SELECT 1 FROM sys.foreign_keys WHERE name=N'FK_CommissionTransaction_Payee')
+ ALTER TABLE Commission.CommissionTransaction WITH CHECK ADD CONSTRAINT FK_CommissionTransaction_Payee FOREIGN KEY(TenantId,PayeeId) REFERENCES Commission.CommissionPayee(TenantId,PayeeId);
+
+-- Index relationship columns in the order used by tenant-scoped repositories.
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.Submission') AND name=N'IX_Submission_Tenant_Account')
+ CREATE INDEX IX_Submission_Tenant_Account ON Submissions.Submission(TenantId,AccountId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.SubmissionMarket') AND name=N'IX_SubmissionMarket_Tenant_Submission')
+ CREATE INDEX IX_SubmissionMarket_Tenant_Submission ON Submissions.SubmissionMarket(TenantId,SubmissionId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Submissions.BoundPolicy') AND name=N'IX_BoundPolicy_Tenant_Account')
+ CREATE INDEX IX_BoundPolicy_Tenant_Account ON Submissions.BoundPolicy(TenantId,AccountId,IsDeleted) INCLUDE(PolicyNumber,Status);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Policy.PolicyTerm') AND name=N'IX_PolicyTerm_Tenant_Policy')
+ CREATE INDEX IX_PolicyTerm_Tenant_Policy ON Policy.PolicyTerm(TenantId,PolicyId,IsDeleted);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PaymentApplication') AND name=N'IX_PaymentApplication_Payment_Invoice')
+ CREATE UNIQUE INDEX IX_PaymentApplication_Payment_Invoice ON Billing.PaymentApplication(PaymentId,InvoiceId);
+IF NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'Billing.PaymentApplication') AND name=N'IX_PaymentApplication_Invoice')
+ CREATE INDEX IX_PaymentApplication_Invoice ON Billing.PaymentApplication(InvoiceId,PaymentId) INCLUDE(AppliedAmount,AppliedDateUtc);
+""";
+
+private const string Migration0248CrmLeadPrioritySeedSync = """
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'CRM') EXEC(N'CREATE SCHEMA CRM');
+
+IF OBJECT_ID(N'CRM.LeadEngagementOption', N'U') IS NULL
+BEGIN
+    CREATE TABLE CRM.LeadEngagementOption
+    (
+        OptionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_LeadEngagementOption PRIMARY KEY DEFAULT NEWID(),
+        TenantId UNIQUEIDENTIFIER NOT NULL,
+        OptionType NVARCHAR(50) NOT NULL,
+        Code NVARCHAR(100) NOT NULL,
+        Label NVARCHAR(200) NOT NULL,
+        Description NVARCHAR(500) NULL,
+        SortOrder INT NOT NULL CONSTRAINT DF_LeadEngagementOption_SortOrder DEFAULT 0,
+        IsActive BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsActive DEFAULT 1,
+        CreatedDateUtc DATETIME2 NOT NULL CONSTRAINT DF_LeadEngagementOption_CreatedDateUtc DEFAULT SYSUTCDATETIME(),
+        ModifiedDateUtc DATETIME2 NULL,
+        IsDeleted BIT NOT NULL CONSTRAINT DF_LeadEngagementOption_IsDeleted DEFAULT 0
+    );
+END;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'CRM.LeadEngagementOption') AND name = N'UX_LeadEngagementOption_TypeCode')
+    CREATE UNIQUE INDEX UX_LeadEngagementOption_TypeCode ON CRM.LeadEngagementOption(TenantId, OptionType, Code) WHERE IsDeleted = 0;
+
+DECLARE @PriorityTenants TABLE (TenantId UNIQUEIDENTIFIER NOT NULL PRIMARY KEY);
+IF OBJECT_ID(N'Core.Tenant', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT TenantId FROM Core.Tenant WHERE IsDeleted = 0;
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT DISTINCT TenantId FROM CRM.Lead WHERE TenantId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @PriorityTenants t WHERE t.TenantId = CRM.Lead.TenantId);
+IF OBJECT_ID(N'CRM.LeadInterestLine', N'U') IS NOT NULL
+    INSERT INTO @PriorityTenants (TenantId) SELECT DISTINCT TenantId FROM CRM.LeadInterestLine WHERE TenantId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @PriorityTenants t WHERE t.TenantId = CRM.LeadInterestLine.TenantId);
+
+DECLARE @PrioritySource TABLE
+(
+    TenantId UNIQUEIDENTIFIER NOT NULL,
+    Code NVARCHAR(100) NOT NULL,
+    Label NVARCHAR(200) NOT NULL,
+    Description NVARCHAR(500) NULL,
+    SortOrder INT NOT NULL,
+    PRIMARY KEY (TenantId, Code)
+);
+
+INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+SELECT t.TenantId, p.Code, p.Label, p.Description, p.SortOrder
+FROM @PriorityTenants t
+CROSS JOIN (VALUES
+    (N'Hot', N'Hot', N'Highest priority lead requiring immediate action.', 10),
+    (N'High', N'High', N'High priority lead or interest line.', 20),
+    (N'Warm', N'Warm', N'Engaged lead with active nurture signals.', 30),
+    (N'Medium', N'Medium', N'Medium priority lead or interest line.', 40),
+    (N'Normal', N'Normal', N'Standard priority lead or interest line.', 50),
+    (N'Cold', N'Cold', N'Low urgency lead with limited engagement.', 60),
+    (N'Low', N'Low', N'Low priority lead or interest line.', 70)
+) p(Code, Label, Description, SortOrder);
+
+IF OBJECT_ID(N'CRM.Lead', N'U') IS NOT NULL
+BEGIN
+    UPDATE CRM.Lead SET PriorityCode = N'Normal' WHERE NULLIF(LTRIM(RTRIM(PriorityCode)), N'') IS NULL;
+    INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+    SELECT DISTINCT l.TenantId, LTRIM(RTRIM(l.PriorityCode)), LTRIM(RTRIM(l.PriorityCode)), N'Priority synchronized from existing lead data.', 900
+    FROM CRM.Lead l
+    WHERE NULLIF(LTRIM(RTRIM(l.PriorityCode)), N'') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM @PrioritySource p WHERE p.TenantId = l.TenantId AND p.Code = LTRIM(RTRIM(l.PriorityCode)));
+END;
+
+IF OBJECT_ID(N'CRM.LeadInterestLine', N'U') IS NOT NULL
+BEGIN
+    UPDATE CRM.LeadInterestLine SET Priority = N'Medium' WHERE NULLIF(LTRIM(RTRIM(Priority)), N'') IS NULL;
+    INSERT INTO @PrioritySource (TenantId, Code, Label, Description, SortOrder)
+    SELECT DISTINCT i.TenantId, LTRIM(RTRIM(i.Priority)), LTRIM(RTRIM(i.Priority)), N'Priority synchronized from existing coverage interest data.', 910
+    FROM CRM.LeadInterestLine i
+    WHERE NULLIF(LTRIM(RTRIM(i.Priority)), N'') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM @PrioritySource p WHERE p.TenantId = i.TenantId AND p.Code = LTRIM(RTRIM(i.Priority)));
+END;
+
+MERGE CRM.LeadEngagementOption AS target
+USING @PrioritySource AS source
+ON target.TenantId = source.TenantId AND target.OptionType = N'LeadPriority' AND target.Code = source.Code AND target.IsDeleted = 0
+WHEN MATCHED THEN UPDATE SET
+    Label = source.Label,
+    Description = source.Description,
+    SortOrder = source.SortOrder,
+    IsActive = 1,
+    ModifiedDateUtc = SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT (OptionId, TenantId, OptionType, Code, Label, Description, SortOrder, IsActive, CreatedDateUtc, IsDeleted)
+VALUES (NEWID(), source.TenantId, N'LeadPriority', source.Code, source.Label, source.Description, source.SortOrder, 1, SYSUTCDATETIME(), 0);
 """;
 }

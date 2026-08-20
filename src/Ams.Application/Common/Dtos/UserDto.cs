@@ -18,7 +18,9 @@ public sealed class UserDto
     public string? PhoneNumber { get; set; }
     public string? TimeZoneCode { get; set; }
     public string? LocaleCode { get; set; }
+    public Guid? DepartmentId { get; set; }
     public string? Department { get; set; }
+    public Guid? JobTitleId { get; set; }
     public string? JobTitle { get; set; }
     public DateTime? PasswordChangedDateUtc { get; set; }
     public bool IsLockedOut { get; set; }

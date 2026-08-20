@@ -16,10 +16,10 @@ public sealed class UpdateOpportunityRequest
     public decimal WinProbability { get; set; }
 
     [Required, StringLength(50)]
-    public string ForecastCategoryCode { get; set; } = "Pipeline";
+    public string ForecastCategoryCode { get; set; } = string.Empty;
 
     [Required, StringLength(50)]
-    public string StageName { get; set; } = "Qualification";
+    public string StageName { get; set; } = string.Empty;
 
     [StringLength(2000)]
     public string? Description { get; set; }
@@ -35,6 +35,19 @@ public sealed class UpdateOpportunityStageRequest
     public string Stage { get; set; } = string.Empty;
 
     public Guid? ModifiedByUserId { get; set; }
+
+    public bool CreateBoundPolicy { get; set; }
+}
+
+public sealed class OpportunityStageUpdateResult
+{
+    public Guid OpportunityId { get; set; }
+    public string Stage { get; set; } = string.Empty;
+    public Guid? PolicyId { get; set; }
+    public string? PolicyNumber { get; set; }
+    public bool PolicyCreated { get; set; }
+    public bool PolicyAlreadyExists { get; set; }
+    public string Message { get; set; } = string.Empty;
 }
 
 public sealed class UpsertOpportunityActivityRequest
@@ -68,12 +81,47 @@ public sealed class UpsertOpportunitySubmissionRequest
     [Required, StringLength(100)]
     public string LineOfBusiness { get; set; } = string.Empty;
 
+    public IReadOnlyList<Guid> OpportunityLineIds { get; set; } = [];
+
     [Required, StringLength(50)]
     public string Status { get; set; } = "Draft";
 
     [Range(0, 999999999999)]
     public decimal TargetPremium { get; set; }
 
+    public Guid? UserId { get; set; }
+}
+
+public sealed class UpsertOpportunityLineRequest
+{
+    public Guid? OpportunityLineId { get; set; }
+    public Guid TenantId { get; set; }
+    public Guid OpportunityId { get; set; }
+    public Guid LobId { get; set; }
+
+    [Required, StringLength(100)]
+    public string LineOfBusiness { get; set; } = string.Empty;
+
+    [StringLength(200)]
+    public string? Carrier { get; set; }
+
+    [Range(0, 999999999999)]
+    public decimal EstPremium { get; set; }
+
+    [Required, StringLength(50)]
+    public string Priority { get; set; } = "Medium";
+
+    [Required, StringLength(50)]
+    public string Status { get; set; } = "Draft";
+
+    public bool IsPrimary { get; set; }
+    public DateTime? TargetEffectiveDate { get; set; }
+    public Guid? AssignedToUserId { get; set; }
+    public Guid? UserId { get; set; }
+}
+
+public sealed class SetPrimaryOpportunityLineRequest
+{
     public Guid? UserId { get; set; }
 }
 

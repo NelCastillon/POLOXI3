@@ -6,6 +6,7 @@ public sealed class AccountDto
     public Guid TenantId { get; set; }
     public string AccountNumber { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
+    public string? DbaName { get; set; }
     public string AccountTypeCode { get; set; } = string.Empty;
     public string? MainEmail { get; set; }
     public string? MainPhone { get; set; }
@@ -38,6 +39,13 @@ public sealed class AccountDto
     public string? State { get; set; }
     public string? Zip { get; set; }
     public string? Country { get; set; }
+    public Guid? AddressResolutionId { get; set; }
+    public string? County { get; set; }
+    public decimal? Latitude { get; set; }
+    public decimal? Longitude { get; set; }
+    public string? AddressValidationStatusCode { get; set; }
+    public string? AddressProviderCode { get; set; }
+    public string? AddressProviderPlaceId { get; set; }
 
     // Audit
     public DateTime CreatedDateUtc { get; set; }

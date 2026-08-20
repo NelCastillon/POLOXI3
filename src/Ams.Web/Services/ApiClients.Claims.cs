@@ -10,8 +10,11 @@ public sealed partial class ApiClient
     public Task<PagedResult<ClaimDto>?> SearchClaimsAsync(Guid tenantId, string? searchTerm = null, string? status = null, string? lob = null, string? catCode = null, int pageNumber = 1, int pageSize = 100, CancellationToken cancellationToken = default)
         => _httpClient.GetFromJsonAsync<PagedResult<ClaimDto>>($"api/claims?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&status={Uri.EscapeDataString(status ?? string.Empty)}&lob={Uri.EscapeDataString(lob ?? string.Empty)}&catCode={Uri.EscapeDataString(catCode ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", cancellationToken);
 
-    public Task<ClaimDetailDto?> GetClaimDetailAsync(Guid claimId, CancellationToken cancellationToken = default)
-        => _httpClient.GetFromJsonAsync<ClaimDetailDto>($"api/claims/{claimId}", cancellationToken);
+    public Task<ClaimDetailDto?> GetClaimDetailAsync(Guid tenantId, Guid claimId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<ClaimDetailDto>($"api/claims/{claimId}?tenantId={tenantId}", cancellationToken);
+
+    public Task<List<ClaimOptionDto>?> GetClaimOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<List<ClaimOptionDto>>($"api/claims/options?tenantId={tenantId}", cancellationToken);
 
     public async Task<Guid> CreateClaimAsync(CreateClaimRequest request, CancellationToken cancellationToken = default)
     {
@@ -19,6 +22,43 @@ public sealed partial class ApiClient
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
+
+    public Task<Guid> AssignClaimAdjusterAsync(AssignClaimAdjusterRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/{request.ClaimId}/adjusters", request, cancellationToken);
+
+    public Task<Guid> UpsertClaimPartyAsync(UpsertClaimPartyRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Put, $"api/claims/{request.ClaimId}/parties", request, cancellationToken);
+
+    public Task<Guid> CreateClaimFinancialTransactionAsync(CreateClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/{request.ClaimId}/financial-transactions", request, cancellationToken);
+
+    public Task<Guid> ReverseClaimFinancialTransactionAsync(ReverseClaimFinancialTransactionRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/financial-transactions/{request.ClaimFinancialTransactionId}/reverse", request, cancellationToken);
+
+    public Task<Guid> CreateClaimNoteAsync(CreateClaimNoteRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/{request.ClaimId}/notes", request, cancellationToken);
+
+    public Task<Guid> CreateClaimTaskAsync(CreateClaimTaskRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/{request.ClaimId}/tasks", request, cancellationToken);
+
+    public async Task CompleteClaimTaskAsync(CompleteClaimTaskRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync($"api/claims/tasks/{request.ClaimTaskId}/complete", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public Task<Guid> LinkClaimDocumentAsync(LinkClaimDocumentRequest request, CancellationToken cancellationToken = default)
+        => SendForIdAsync(HttpMethod.Post, $"api/claims/{request.ClaimId}/documents", request, cancellationToken);
+
+    public async Task<LossRunImportResultDto?> ImportLossRunAsync(ImportLossRunRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/claims/loss-runs/import", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LossRunImportResultDto>(cancellationToken: cancellationToken);
+    }
+
+    public Task<List<LossRunDto>?> GetLossRunsAsync(Guid tenantId, Guid? accountId = null, CancellationToken cancellationToken = default)
+        => _httpClient.GetFromJsonAsync<List<LossRunDto>>($"api/claims/loss-runs?tenantId={tenantId}&accountId={accountId}", cancellationToken);
 
     public async Task UpdateClaimStatusAsync(Guid claimId, UpdateClaimStatusRequest request, CancellationToken cancellationToken = default)
     {
@@ -84,5 +124,13 @@ public sealed partial class ApiClient
     private sealed class GeoTagResult
     {
         public int Count { get; set; }
+    }
+
+    private async Task<Guid> SendForIdAsync<T>(HttpMethod method, string uri, T request, CancellationToken cancellationToken)
+    {
+        using var message = new HttpRequestMessage(method, uri) { Content = JsonContent.Create(request) };
+        using var response = await _httpClient.SendAsync(message, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<IdResult>(cancellationToken: cancellationToken))!.Id;
     }
 }

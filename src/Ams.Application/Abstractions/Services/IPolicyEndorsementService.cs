@@ -6,8 +6,26 @@ namespace Ams.Application.Abstractions.Services;
 public interface IPolicyEndorsementService
 {
     Task<PolicyEndorsementCenterDto> GetCenterAsync(Guid tenantId, CancellationToken cancellationToken = default);
-    Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid endorsementId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PolicyEndorsementOptionDto>> GetOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementCatalogDto> GetCatalogAsync(Guid tenantId, string? lineOfBusinessCode = null, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementTypeCatalogDto?> GetTypeCatalogAsync(Guid tenantId, string typeCode, CancellationToken cancellationToken = default);
+    Task UpdateTypeProfileAsync(Guid endorsementTypeId, UpdatePolicyEndorsementTypeProfileRequest request, CancellationToken cancellationToken = default);
+    Task ReplaceTypeConfigurationAsync(Guid endorsementTypeId, ReplacePolicyEndorsementTypeConfigurationRequest request, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementDetailDto?> GetDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementWorkflowDetailDto?> GetWorkflowDetailAsync(Guid tenantId, Guid endorsementId, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementRoutePreviewDto?> GetRoutePreviewAsync(Guid tenantId, Guid endorsementId, string routePurposeCode, Guid actorUserId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PolicyEndorsementApprovalInboxItemDto>> GetApprovalInboxAsync(Guid tenantId, Guid assignedToUserId, CancellationToken cancellationToken = default);
+    Task<PolicyEndorsementPolicyWorkspaceDto?> GetPolicyWorkspaceAsync(Guid tenantId, Guid policyId, CancellationToken cancellationToken = default);
     Task<Guid> CreateAsync(CreatePolicyEndorsementRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreateTransactionAsync(CreatePolicyEndorsementTransactionRequest request, CancellationToken cancellationToken = default);
+    Task SaveDraftAsync(Guid endorsementId, SavePolicyEndorsementDraftRequest request, CancellationToken cancellationToken = default);
+    Task TransitionAsync(Guid endorsementId, TransitionPolicyEndorsementRequest request, CancellationToken cancellationToken = default);
+    Task DecideApprovalAsync(Guid endorsementId, Guid approvalId, DecidePolicyEndorsementApprovalRequest request, CancellationToken cancellationToken = default);
+    Task AssignApprovalAsync(Guid endorsementId, Guid approvalId, AssignPolicyEndorsementApprovalRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> RequestInformationAsync(Guid endorsementId, RequestPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default);
+    Task RespondToInformationRequestAsync(Guid endorsementId, Guid informationRequestId, RespondPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default);
+    Task ResubmitInformationRequestAsync(Guid endorsementId, Guid informationRequestId, ResubmitPolicyEndorsementInformationRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> ReverseAsync(Guid endorsementId, ReversePolicyEndorsementRequest request, CancellationToken cancellationToken = default);
     Task UpdateAsync(Guid endorsementId, UpdatePolicyEndorsementRequest request, CancellationToken cancellationToken = default);
     Task UpdateStatusAsync(Guid endorsementId, UpdatePolicyEndorsementStatusRequest request, CancellationToken cancellationToken = default);
     Task<Guid> AddActivityAsync(AddPolicyEndorsementActivityRequest request, CancellationToken cancellationToken = default);

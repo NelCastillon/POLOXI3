@@ -126,6 +126,46 @@ public sealed class OpportunityStagesController : ControllerBase
 }
 
 [ApiController]
+[Route("api/crm/opp-forecast-categories")]
+public sealed class OpportunityForecastCategoriesController : ControllerBase
+{
+    private readonly IOpportunityForecastCategoryService _service;
+    public OpportunityForecastCategoriesController(IOpportunityForecastCategoryService service) => _service = service;
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        var item = await _service.GetByIdAsync(id, ct);
+        return item is null ? NotFound() : Ok(item);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+        => Ok(await _service.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, ct));
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateOpportunityForecastCategoryRequest request, CancellationToken ct)
+    {
+        var id = await _service.CreateAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateOpportunityForecastCategoryRequest request, CancellationToken ct)
+    {
+        await _service.UpdateAsync(id, request, ct);
+        return NoContent();
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        await _service.DeleteAsync(id, ct);
+        return NoContent();
+    }
+}
+
+[ApiController]
 [Route("api/crm/pipeline-settings")]
 public sealed class PipelineSettingsController : ControllerBase
 {

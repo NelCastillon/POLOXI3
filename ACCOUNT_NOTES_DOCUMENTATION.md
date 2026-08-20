@@ -158,10 +158,10 @@ Account Notes Page
 
 ### Technologies Used
 - **Blazor Server Components**
-- **Syncfusion Components**
-  - SfDialog (Modal)
-  - SfDropDownList (Dropdowns)
-  - SfToast (Notifications)
+- **Enterprise native components**
+  - enterprise modal (Modal)
+  - native select (Dropdowns)
+  - enterprise toast (Notifications)
 - **Component-scoped CSS**
 - **Bootstrap Icons**
 

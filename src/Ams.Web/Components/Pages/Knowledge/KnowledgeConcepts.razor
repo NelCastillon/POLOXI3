@@ -1,0 +1,112 @@
+@page "/admin/knowledge/concepts"
+@attribute [Authorize(Policy = Ams.Web.Security.KnowledgePolicies.ConceptsRead)]
+@using Ams.Knowledge.Application.Features.Knowledge
+@inject ApiClient Api
+@inject NavigationManager Nav
+@inject BreadcrumbService Breadcrumbs
+@inject NotificationService Notifications
+@inject CurrentUserContext CurrentUser
+
+<PageTitle>Knowledge Concepts</PageTitle>
+<KnowledgeWorkspace>
+    <AppPageHeader Title="Concept Catalog" Subtitle="Search and govern canonical insurance concepts and terminology" Icon="bi-journal-text">
+        <Actions><AuthorizeView Policy="@Ams.Web.Security.KnowledgePolicies.ConceptsManage"><button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New Concept</button></AuthorizeView></Actions>
+    </AppPageHeader>
+    @if (_loadError is not null) { <div class="knowledge-alert" role="alert"><i class="bi bi-exclamation-triangle"></i>@_loadError</div> }
+    <section class="knowledge-panel">
+        <div class="knowledge-toolbar">
+            <input class="knowledge-input knowledge-input-grow" placeholder="Search code, label, or definition" @bind="_search" @bind:event="oninput" aria-label="Search concepts" />
+            <select class="knowledge-input" @bind="_status"><option value="">All statuses</option>@foreach (var item in _statuses) { <option value="@item.ValueCode">@item.DisplayName</option> }</select>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync"><i class="bi bi-search"></i> Search</button>
+        </div>
+        @if (_loading) { <div class="knowledge-empty"><AppSpinner /></div> }
+        else if (_items.Count == 0) { <div class="knowledge-empty">No concepts match the current filters.</div> }
+        else
+        {
+            <AppGrid TValue="KnowledgeConceptDto" DataSource="_items" AllowPaging="true" EnableHover="true">
+                <GridEvents TValue="KnowledgeConceptDto" RowSelected="OpenRow" />
+                <GridColumns>
+                    <GridColumn Field="@nameof(KnowledgeConceptDto.ConceptCode)" HeaderText="Code" Width="170" />
+                    <GridColumn Field="@nameof(KnowledgeConceptDto.PreferredLabel)" HeaderText="Preferred Label" MinWidth="220" />
+                    <GridColumn Field="@nameof(KnowledgeConceptDto.ConceptTypeCode)" HeaderText="Type" Width="145" />
+                    <GridColumn HeaderText="Status" Width="125"><Template>@{ var row=(KnowledgeConceptDto)context; }<AppStatusBadge Status="@row.StatusCode" /></Template></GridColumn>
+                    <GridColumn Field="@nameof(KnowledgeConceptDto.VersionNumber)" HeaderText="Version" Width="80" />
+                </GridColumns>
+            </AppGrid>
+        }
+    </section>
+</KnowledgeWorkspace>
+
+@if (_showCreate)
+{
+    <div class="knowledge-modal-backdrop" @onclick="CloseCreate"><div class="knowledge-modal" role="dialog" aria-modal="true" aria-labelledby="conceptCreateTitle" @onclick:stopPropagation="true">
+        <EditForm Model="_form" OnValidSubmit="CreateAsync"><DataAnnotationsValidator />
+            <header><i class="bi bi-journal-plus"></i><h2 id="conceptCreateTitle" class="h5 mb-0">Create Knowledge Concept</h2></header>
+            <div class="body knowledge-form-grid">
+                <div class="knowledge-field"><label>Scheme</label><InputSelect class="knowledge-input" @bind-Value="_form.ConceptSchemeId"><option value="@Guid.Empty">Select scheme</option>@foreach (var scheme in _schemes) { <option value="@scheme.ConceptSchemeId">@scheme.Name</option> }</InputSelect><ValidationMessage For="() => _form.ConceptSchemeId" /></div>
+                <div class="knowledge-field"><label>Concept type</label><InputSelect class="knowledge-input" @bind-Value="_form.ConceptTypeCode"><option value="">Select type</option>@foreach (var item in _types) { <option value="@item.ValueCode">@item.DisplayName</option> }</InputSelect><ValidationMessage For="() => _form.ConceptTypeCode" /></div>
+                <div class="knowledge-field"><label>Concept code</label><InputText class="knowledge-input" @bind-Value="_form.ConceptCode" /><ValidationMessage For="() => _form.ConceptCode" /></div>
+                <div class="knowledge-field"><label>Preferred label</label><InputText class="knowledge-input" @bind-Value="_form.PreferredLabel" /><ValidationMessage For="() => _form.PreferredLabel" /></div>
+                <div class="knowledge-field knowledge-field-wide"><label>Definition</label><InputTextArea class="knowledge-input" rows="4" @bind-Value="_form.Definition" /></div>
+                <div class="knowledge-field"><label>Definition source</label><InputText class="knowledge-input" @bind-Value="_form.DefinitionSource" /><ValidationMessage For="() => _form.DefinitionSource" /></div>
+                <div class="knowledge-field"><label>Change reason</label><InputText class="knowledge-input" @bind-Value="_form.ChangeReason" /><ValidationMessage For="() => _form.ChangeReason" /></div>
+            </div>
+            <footer><button type="button" class="um-btn um-btn-ghost" @onclick="CloseCreate">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Create</button></footer>
+        </EditForm>
+    </div></div>
+}
+
+@code {
+    private List<KnowledgeConceptDto> _items = [];
+    private List<ConceptSchemeDto> _schemes = [];
+    private List<KnowledgeLookupDto> _statuses = [];
+    private List<KnowledgeLookupDto> _types = [];
+    private string _search = string.Empty;
+    private string _status = string.Empty;
+    private bool _loading, _saving, _showCreate;
+    private string? _loadError;
+    private ConceptForm _form = new();
+
+    protected override async Task OnInitializedAsync() { Breadcrumbs.SetCrumbs(new("Home", "/"), new("Knowledge", "/admin/knowledge"), new("Concepts", "/admin/knowledge/concepts")); await LoadAsync(); }
+    private async Task LoadAsync()
+    {
+        _loading = true; _loadError = null;
+        try
+        {
+            var concepts = Api.SearchKnowledgeConceptsAsync(searchTerm: _search, statusCode: _status, pageSize: 250);
+            var schemes = Api.SearchKnowledgeSchemesAsync(pageSize: 250);
+            var statuses = Api.GetKnowledgeLookupsAsync("CONCEPT_STATUS");
+            var types = Api.GetKnowledgeLookupsAsync("CONCEPT_TYPE");
+            await Task.WhenAll(concepts, schemes, statuses, types);
+            _items = (concepts.Result?.Items ?? []).ToList(); _schemes = (schemes.Result?.Items ?? []).ToList(); _statuses = statuses.Result.ToList(); _types = types.Result.ToList();
+        }
+        catch (Exception ex) { _loadError = $"Failed to load concepts: {ex.Message}"; Danger("Concept load failed", ex); }
+        finally { _loading = false; }
+    }
+    private void OpenRow(RowSelectEventArgs<KnowledgeConceptDto> args) => Nav.NavigateTo($"/admin/knowledge/concepts/{args.Data.KnowledgeConceptId}");
+    private void OpenCreate() { _form = new(); _showCreate = true; }
+    private void CloseCreate() => _showCreate = false;
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        try
+        {
+            var user = await CurrentUser.RequireAsync();
+            var id = await Api.CreateKnowledgeConceptAsync(new(Guid.Empty, _form.ConceptSchemeId, _form.ConceptCode, _form.ConceptTypeCode, _form.PreferredLabel, _form.Definition, null, false, true, "DRAFT", DateTime.UtcNow, null, user.TenantId, false, user.UserId, user.UserId, null, _form.DefinitionSource, null, _form.ChangeReason, Guid.NewGuid().ToString("N"), Guid.Empty));
+            _showCreate = false; Nav.NavigateTo($"/admin/knowledge/concepts/{id}");
+        }
+        catch (Exception ex) { Danger("Concept creation failed", ex); }
+        finally { _saving = false; }
+    }
+    private void Danger(string title, Exception ex) => Notifications.Add(new(Guid.NewGuid(), title, ex.Message, "bi-exclamation-triangle", "danger"));
+    private sealed class ConceptForm
+    {
+        [Required] public Guid ConceptSchemeId { get; set; }
+        [Required, StringLength(100)] public string ConceptCode { get; set; } = string.Empty;
+        [Required] public string ConceptTypeCode { get; set; } = string.Empty;
+        [Required, StringLength(250)] public string PreferredLabel { get; set; } = string.Empty;
+        public string? Definition { get; set; }
+        [Required] public string DefinitionSource { get; set; } = string.Empty;
+        [Required] public string ChangeReason { get; set; } = string.Empty;
+    }
+}

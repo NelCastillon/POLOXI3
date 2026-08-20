@@ -1,4 +1,8 @@
 @namespace Ams.Web.Components.Shared
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.PolicyLifecycle
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -46,6 +50,13 @@
     <span class="polw-filter-count">@Filtered.Count() item(s)</span>
 </div>
 
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+        <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+    </div>
+}
+
 @if (_loading)
 {
     <div class="mt-loading"><div class="um-spinner"></div><span>Loading @Title.ToLowerInvariant()...</span></div>
@@ -78,8 +89,8 @@
                     </div>
                     <div class="polw-actions" @onclick:stopPropagation="true">
                         <button class="um-btn um-btn-ghost um-btn-xs" title="Open" @onclick="() => Open(row)"><i class="bi bi-arrow-right"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Review" @onclick="() => ReviewAsync(row)"><i class="bi bi-eye"></i></button>
-                        <button class="um-btn um-btn-ghost um-btn-xs" title="Approve" @onclick="() => ApproveAsync(row)"><i class="bi bi-check-circle"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="Review lifecycle history" @onclick="() => Review(row)"><i class="bi bi-eye"></i></button>
+                        <button class="um-btn um-btn-ghost um-btn-xs" title="@AdvanceTitle(row)" disabled="@(row.PolicyTransactionId is null || string.IsNullOrWhiteSpace(row.NextStatusCode))" @onclick="() => AdvanceAsync(row)"><i class="bi @AdvanceIcon(row)"></i></button>
                         <button class="um-btn um-btn-ghost um-btn-xs" title="Document" @onclick="() => DocumentAsync(row)"><i class="bi bi-folder2"></i></button>
                     </div>
                 </article>
@@ -112,8 +123,8 @@
             </div>
             <div class="polw-detail-actions">
                 <button class="um-btn um-btn-primary" @onclick="() => Open(_selected)"><i class="bi bi-arrow-right"></i> Open</button>
-                <button class="um-btn um-btn-ghost" @onclick="() => ReviewAsync(_selected)"><i class="bi bi-eye"></i> Review</button>
-                <button class="um-btn um-btn-ghost" @onclick="() => ApproveAsync(_selected)"><i class="bi bi-check-circle"></i> Approve</button>
+                <button class="um-btn um-btn-ghost" @onclick="() => Review(_selected)"><i class="bi bi-eye"></i> Review History</button>
+                <button class="um-btn um-btn-ghost" disabled="@(_selected.PolicyTransactionId is null || string.IsNullOrWhiteSpace(_selected.NextStatusCode))" @onclick="() => AdvanceAsync(_selected)"><i class="bi @AdvanceIcon(_selected)"></i> @AdvanceLabel(_selected)</button>
                 <button class="um-btn um-btn-ghost" @onclick="() => DocumentAsync(_selected)"><i class="bi bi-folder2"></i> Documents</button>
             </div>
         </aside>
@@ -124,7 +135,9 @@
     [Parameter] public string Mode { get; set; } = "policies";
 
     EnterpriseToast? _toast;
+    Guid _tenantId;
     bool _loading;
+    string? _loadError;
     string _search = string.Empty;
     string _statusFilter = string.Empty;
     string _typeFilter = string.Empty;
@@ -172,6 +185,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        await ResolveCurrentUserContextAsync();
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Policies", "/policies"), new(Title, CurrentUrl));
         await LoadAsync();
     }
@@ -181,10 +195,34 @@
     async Task LoadAsync()
     {
         _loading = true;
-        await Task.Delay(0);
-        if (_rows.Count == 0) BuildStub();
-        _selected ??= Filtered.FirstOrDefault();
-        _loading = false;
+        _loadError = null;
+        try
+        {
+            if (_tenantId == Guid.Empty)
+            {
+                await ResolveCurrentUserContextAsync();
+            }
+
+            var rows = await Api.GetPolicyLifecycleWorkbenchAsync(_tenantId, ModeKey) ?? [];
+            _rows.Clear();
+            _rows.AddRange(rows.Select(ToWorkRow));
+            _selected = _selected is null ? Filtered.FirstOrDefault() : Filtered.FirstOrDefault(x => x.Id == _selected.Id) ?? Filtered.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            _loadError = ex.Message;
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = $"Load failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    async Task ResolveCurrentUserContextAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
     }
 
     bool MatchesKpi(PolicyWorkRow x) => _activeFilter switch
@@ -207,12 +245,71 @@
     void ResetFilters() { _search = _statusFilter = _typeFilter = _ownerFilter = _activeFilter = string.Empty; }
     void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : filter ?? string.Empty;
     void Select(PolicyWorkRow row) => _selected = row;
-    void Open(PolicyWorkRow row) => Nav.NavigateTo(ModeKey is "policy-documents" or "compliance-policies" ? "/policies/documents" : $"/policies/{row.Id}");
+    void Open(PolicyWorkRow row) => Nav.NavigateTo(ModeKey is "policy-documents" or "compliance-policies" ? "/policies/documents" : $"/policies/{row.PolicyId}");
+    void Review(PolicyWorkRow row) => Nav.NavigateTo($"/policies/{row.PolicyId}/versions");
     Task PrimaryActionAsync() => ToastAsync($"{PrimaryText} started.");
-    Task ReviewAsync(PolicyWorkRow row) => ToastAsync($"Review opened: {row.Number}");
-    Task ApproveAsync(PolicyWorkRow row) => ToastAsync($"Approval action queued: {row.Number}");
     Task DocumentAsync(PolicyWorkRow row) { Nav.NavigateTo("/policies/documents"); return Task.CompletedTask; }
-    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "e-toast-success" }); }
+    async Task ToastAsync(string message) { if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = message, CssClass = "enterprise-toast-success" }); }
+
+    async Task AdvanceAsync(PolicyWorkRow row)
+    {
+        if (row.PolicyTransactionId is null || string.IsNullOrWhiteSpace(row.NextStatusCode))
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = "No further lifecycle transition is configured for this record.", CssClass = "enterprise-toast-danger" });
+            return;
+        }
+
+        if (row.NextTransitionRequiresDocument && row.DocumentCount == 0)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = $"{AdvanceLabel(row)} requires a linked policy transaction document.", CssClass = "enterprise-toast-danger" });
+            return;
+        }
+
+        try
+        {
+            var context = await CurrentUser.RequireAsync();
+            await Api.TransitionPolicyLifecycleTransactionAsync(row.PolicyTransactionId.Value, new TransitionPolicyLifecycleTransactionRequest
+            {
+                TenantId = _tenantId,
+                ToStatusCode = row.NextStatusCode,
+                ChangedByUserId = context.UserId == Guid.Empty ? null : context.UserId,
+                Notes = $"Advanced from the {Title}."
+            });
+            await LoadAsync();
+            await ToastAsync($"{row.Number} advanced to {row.NextStatusDisplayName ?? row.NextStatusCode}.");
+        }
+        catch (Exception ex)
+        {
+            if (_toast is not null) await _toast.ShowAsync(new ToastModel { Title = Title, Content = $"Transition failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
+        }
+    }
+
+    static string AdvanceLabel(PolicyWorkRow row) => string.IsNullOrWhiteSpace(row.NextStatusDisplayName) ? "No Next Action" : row.NextStatusDisplayName;
+    static string AdvanceTitle(PolicyWorkRow row) => string.IsNullOrWhiteSpace(row.NextStatusDisplayName) ? "No configured next transition" : $"Advance to {row.NextStatusDisplayName}";
+    static string AdvanceIcon(PolicyWorkRow row) => row.NextStatusCode switch { "PendingReview" => "bi-eye", "Approved" => "bi-check-circle", "Issued" => "bi-file-earmark-check", "Completed" => "bi-check2-all", _ => "bi-arrow-right-circle" };
+
+    static PolicyWorkRow ToWorkRow(PolicyLifecycleWorkbenchRowDto row) => new()
+    {
+        Id = row.PolicyTransactionId ?? row.PolicyId,
+        PolicyId = row.PolicyId,
+        PolicyTransactionId = row.PolicyTransactionId,
+        Mode = row.Mode,
+        Number = row.Number,
+        Title = row.Title,
+        Account = row.Account,
+        Carrier = row.Carrier,
+        Owner = row.Owner,
+        Branch = row.Branch,
+        Type = row.Type,
+        Status = row.Status,
+        Date = row.Date,
+        Amount = row.Amount,
+        DocumentCount = row.DocumentCount,
+        NextStatusCode = row.NextStatusCode,
+        NextStatusDisplayName = row.NextStatusDisplayName,
+        NextTransitionRequiresDocument = row.NextTransitionRequiresDocument,
+        NextTransitionRequiresApproval = row.NextTransitionRequiresApproval
+    };
 
     bool IsDueSoon(PolicyWorkRow row) => row.Date.Date <= DateTime.Today.AddDays(30) && row.Status is not "Retired" and not "Acknowledged" and not "Cancelled";
     static bool IsRisk(PolicyWorkRow row) => row.Date.Date < DateTime.Today && row.Status is not "Acknowledged" and not "Retired";
@@ -220,55 +317,12 @@
 
     RenderFragment Kpi(string icon, string label, string value, string title, string css, string? filter) => @<button class="polw-kpi-card @css @(_activeFilter == (filter ?? string.Empty) ? "polw-kpi-active" : "")" title="@title" @onclick="() => SetFilter(filter)"><div class="polw-kpi-val">@value</div><div class="polw-kpi-lbl"><i class="bi @icon"></i> @label</div><small>@title</small></button>;
 
-    void BuildStub()
-    {
-        var rng = new Random(41);
-        string[] accounts = ["Sullivan Mfg. LLC", "Bridgewater Hotels", "Metro Freight Co.", "PineCrest Builders", "Omega Tech Corp.", "Harbor Fresh Foods"];
-        string[] carriers = ["Travelers", "Chubb", "Zurich", "AIG", "Hartford", "CNA"];
-        string[] owners = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams", "Tom Reeves"];
-        string[] branches = ["West", "Central", "Northeast", "South"];
-        AddRows("policies", "POL", ["Active", "Active", "Active", "Lapsed"], ["General Liability", "Commercial Property", "Auto", "Workers Comp"], 55);
-        AddRows("endorsements", "END", ["Pending", "Approved", "Declined", "Issued"], ["Add Coverage", "Change Limit", "Add Insured", "Premium Adjustment"], 38);
-        AddRows("cancellations", "CAN", ["Pending", "Cancelled", "Reinstated"], ["Non-Payment", "Insured Request", "Underwriting", "Flat"], 34);
-        AddRows("policy-documents", "DOC", ["Active", "Pending", "Issued"], ["Policy", "Endorsement", "Certificate", "Declaration", "Binder"], 48);
-        AddRows("compliance-policies", "CMP", ["Draft", "Published", "Retired"], ["Security", "Operations", "Finance", "Privacy"], 32);
-        AddRows("acknowledgements", "ACK", ["Pending", "Overdue", "Acknowledged"], ["Security", "HR", "Compliance", "Privacy"], 44);
-
-        void AddRows(string mode, string prefix, string[] statuses, string[] types, int count)
-        {
-            for (var i = 1; i <= count; i++)
-            {
-                var type = types[rng.Next(types.Length)];
-                _rows.Add(new PolicyWorkRow
-                {
-                    Mode = mode,
-                    Number = $"{prefix}-2025-{i:D4}",
-                    Title = mode switch
-                    {
-                        "policy-documents" => $"{type} document package",
-                        "compliance-policies" => $"{type} compliance policy",
-                        "acknowledgements" => $"{type} policy acknowledgement",
-                        "endorsements" => $"{type} endorsement request",
-                        "cancellations" => $"{type} cancellation workflow",
-                        _ => $"{type} policy lifecycle record"
-                    },
-                    Account = accounts[rng.Next(accounts.Length)],
-                    Carrier = carriers[rng.Next(carriers.Length)],
-                    Owner = owners[rng.Next(owners.Length)],
-                    Branch = branches[rng.Next(branches.Length)],
-                    Type = type,
-                    Status = statuses[rng.Next(statuses.Length)],
-                    Date = DateTime.Today.AddDays(rng.Next(-25, 95)),
-                    Amount = mode is "acknowledgements" or "compliance-policies" ? 0 : rng.Next(1500, 75000)
-                });
-            }
-        }
-    }
-
     sealed record Group<T>(string Label, List<T> Items);
     sealed class PolicyWorkRow
     {
         public Guid Id { get; set; } = Guid.NewGuid();
+        public Guid PolicyId { get; set; }
+        public Guid? PolicyTransactionId { get; set; }
         public string Mode { get; set; } = string.Empty;
         public string Number { get; set; } = string.Empty;
         public string Title { get; set; } = string.Empty;
@@ -280,5 +334,10 @@
         public string Status { get; set; } = string.Empty;
         public DateTime Date { get; set; }
         public decimal Amount { get; set; }
+        public int DocumentCount { get; set; }
+        public string? NextStatusCode { get; set; }
+        public string? NextStatusDisplayName { get; set; }
+        public bool NextTransitionRequiresDocument { get; set; }
+        public bool NextTransitionRequiresApproval { get; set; }
     }
 }

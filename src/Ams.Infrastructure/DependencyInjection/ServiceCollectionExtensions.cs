@@ -1,13 +1,18 @@
 using Ams.Application;
+using Ams.Application.Abstractions.Intelligence;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Services;
 using Ams.Infrastructure.Configuration;
+using Ams.Infrastructure.Intelligence;
 using Ams.Infrastructure.Persistence;
 using Ams.Infrastructure.Persistence.ConnectionFactory;
 using Ams.Infrastructure.Persistence.Repositories;
 using Ams.Infrastructure.Persistence.TypeHandlers;
 using Ams.Infrastructure.Payments;
 using Ams.Infrastructure.Services;
+using Azure.Core;
+using Azure.Identity;
 using Dapper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,7 +30,6 @@ public static class ServiceCollectionExtensions
         {
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
         });
-
         services.Configure<DocumentStorageOptions>(options =>
         {
             var section = configuration.GetSection("DocumentStorage");
@@ -35,9 +39,21 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddDataProtection();
+        services.AddMemoryCache();
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
+        services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+        services.AddScoped<IAddressLocationRepository, AddressLocationRepository>();
+        services.AddScoped<IAddressLocationService, AddressLocationService>();
+        services.AddHttpClient<IAddressProvider, AzureMapsAddressProvider>();
         services.AddScoped<IDocumentStorageService, AzureBlobDocumentStorageService>();
+        services.AddScoped<IDocumentIntakePayloadStore, DocumentIntakePayloadStore>();
+        services.AddScoped<IDocumentOcrRouteRepository, DocumentOcrRouteRepository>();
+        services.AddHttpClient<IDocumentOcrProvider, AzureDocumentIntelligenceOcrProvider>();
+        services.AddScoped<IDocumentInterpretationProvider, AzureOpenAiDocumentInterpretationProvider>();
+        services.AddHttpClient<IDocumentSearchIndexer, AzureDocumentSearchIndexer>();
+        services.AddScoped<DocumentIntakeReadinessHealthCheck>();
+        services.AddScoped<IMalwareStatusProvider, DefenderStorageMalwareStatusProvider>();
 
         // ── Existing repositories ────────────────────────────────────
         services.AddScoped<ILeadRepository, LeadRepository>();
@@ -77,6 +93,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionPayoutRepository, CommissionPayoutRepository>();
         services.AddScoped<IDocumentRepository, DocumentRepository>();
         services.AddScoped<IDocumentWorkflowRepository, DocumentWorkflowRepository>();
+        services.AddScoped<IDocumentIntakeRepository, DocumentIntakeRepository>();
+        services.AddScoped<IDocumentIntakeOperationsRepository, DocumentIntakeOperationsRepository>();
         services.AddScoped<IAcordFormRepository, AcordFormRepository>();
         services.AddScoped<IDocumentExceptionRepository, DocumentExceptionRepository>();
         services.AddScoped<IDocumentPacketRepository, DocumentPacketRepository>();
@@ -194,6 +212,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantSettingsWorkflowService, TenantSettingsWorkflowService>();
         services.AddScoped<ISubscriptionSettingsWorkflowService, SubscriptionSettingsWorkflowService>();
         services.AddScoped<INotificationService, NotificationService>();
+        services.AddScoped<INotificationDeliveryService, NotificationDeliveryService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
         services.AddScoped<ISupportedLocaleService, SupportedLocaleService>();
@@ -260,13 +279,19 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IServiceManagerWorkbenchRepository, ServiceManagerWorkbenchRepository>();
         services.AddScoped<IServiceManagerWorkbenchService, ServiceManagerWorkbenchService>();
         services.AddScoped<IAccountingWorkbenchRepository, AccountingWorkbenchRepository>();
+        services.AddScoped<IPolicyAccountingRepository, PolicyAccountingRepository>();
         services.AddScoped<IAccountingWorkbenchService, AccountingWorkbenchService>();
+        services.AddScoped<IPolicyAccountingService, PolicyAccountingService>();
         services.AddScoped<IMarketingWorkbenchRepository, MarketingWorkbenchRepository>();
         services.AddScoped<IMarketingWorkbenchService, MarketingWorkbenchService>();
         services.AddScoped<IOperationsWorkbenchRepository, OperationsWorkbenchRepository>();
         services.AddScoped<IOperationsWorkbenchService, OperationsWorkbenchService>();
         services.AddScoped<IRenewalRetentionRepository, RenewalRetentionRepository>();
         services.AddScoped<IRenewalRetentionService, RenewalRetentionService>();
+        services.AddScoped<IPremiumFinanceRepository, PremiumFinanceRepository>();
+        services.AddScoped<IPremiumFinanceService, PremiumFinanceService>();
+        services.AddScoped<IPremiumFinanceProvider, ManualPremiumFinanceProvider>();
+        services.AddScoped<IPremiumFinanceProviderResolver, PremiumFinanceProviderResolver>();
 
         // ── Client and Account engines ───────────────────────────────
         services.AddScoped<IAccountNoteRepository, AccountNoteRepository>();
@@ -290,6 +315,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalRepository, AgreementRenewalRepository>();
         services.AddScoped<IServiceRequestRepository, ServiceRequestRepository>();
         services.AddScoped<IOperationalActivityRepository, OperationalActivityRepository>();
+        services.AddScoped<IOperationalOptionRepository, OperationalOptionRepository>();
+        services.AddScoped<ISearchMatchingRepository, SearchMatchingRepository>();
         services.AddScoped<ICalendarEventRepository, CalendarEventRepository>();
 
         services.AddScoped<IEngagementMilestoneService, EngagementMilestoneService>();
@@ -300,6 +327,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAgreementRenewalService, AgreementRenewalService>();
         services.AddScoped<IServiceRequestService, ServiceRequestService>();
         services.AddScoped<IOperationalActivityService, OperationalActivityService>();
+        services.AddScoped<IEntityMatchingService, EntityMatchingService>();
         services.AddScoped<ICalendarEventService, CalendarEventService>();
 
         // ── Billing extended engines ─────────────────────────────────
@@ -369,6 +397,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionDisputeRepository, CommissionDisputeRepository>();
         services.AddScoped<ICommissionPayoutStatementRepository, CommissionPayoutStatementRepository>();
         services.AddScoped<ICommissionAccrualEntryRepository, CommissionAccrualEntryRepository>();
+        services.AddScoped<ICommissionAccountingRepository, CommissionAccountingRepository>();
 
         services.AddScoped<ICommissionPlanVersionService, CommissionPlanVersionService>();
         services.AddScoped<ICommissionSplitRuleService, CommissionSplitRuleService>();
@@ -381,6 +410,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICommissionDisputeService, CommissionDisputeService>();
         services.AddScoped<ICommissionPayoutStatementService, CommissionPayoutStatementService>();
         services.AddScoped<ICommissionAccrualEntryService, CommissionAccrualEntryService>();
+        services.AddScoped<ICommissionAccountingService, CommissionAccountingService>();
 
         // ── Compliance engines ───────────────────────────────────────────────
         services.AddScoped<IPolicyDocumentRepository, PolicyDocumentRepository>();
@@ -432,6 +462,10 @@ public static class ServiceCollectionExtensions
         // ── Submissions & Quoting Engine ─────────────────────────────
         services.AddScoped<ISubmissionRepository, SubmissionRepository>();
         services.AddScoped<ISubmissionService, SubmissionService>();
+        services.AddScoped<IPolicyCreationRepository, PolicyCreationRepository>();
+        services.AddScoped<IPolicyCreationService, PolicyCreationService>();
+        services.AddScoped<ISubmissionWorkflowConfigurationRepository, SubmissionWorkflowConfigurationRepository>();
+        services.AddScoped<ISubmissionWorkflowConfigurationService, SubmissionWorkflowConfigurationService>();
         services.AddScoped<ISubmissionReferenceOptionRepository, SubmissionReferenceOptionRepository>();
         services.AddScoped<ISubmissionReferenceOptionService, SubmissionReferenceOptionService>();
 
@@ -439,22 +473,37 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISubmissionIntakeRepository, SubmissionIntakeRepository>();
         services.AddScoped<IAccountMatchingService, AccountMatchingService>();
         services.AddScoped<ISubmissionIntakeService, SubmissionIntakeService>();
+        services.AddScoped<IDocumentIntakeService, DocumentIntakeService>();
+        services.AddScoped<IDocumentIntakeOperationsService, DocumentIntakeOperationsService>();
 
         // ── Policy Endorsements Workflow ─────────────────────────────
         services.AddScoped<IPolicyEndorsementRepository, PolicyEndorsementRepository>();
         services.AddScoped<IPolicyEndorsementService, PolicyEndorsementService>();
 
+        // ── Policy Lifecycle Servicing ───────────────────────────────
+        services.AddScoped<IPolicyLifecycleRepository, PolicyLifecycleRepository>();
+        services.AddScoped<IPolicyLifecycleService, PolicyLifecycleService>();
+
         // ── Policy Cancellations Workflow ────────────────────────────
         services.AddScoped<IPolicyCancellationRepository, PolicyCancellationRepository>();
         services.AddScoped<IPolicyCancellationService, PolicyCancellationService>();
+        services.AddScoped<IPolicyCheckRepository, PolicyCheckRepository>();
+        services.AddScoped<IPolicyCheckService, PolicyCheckService>();
+
+        // ── Policy Non-Renewal Workflow ─────────────────────────────────────
+        services.AddScoped<INonRenewalRepository, NonRenewalRepository>();
+        services.AddScoped<INonRenewalService, NonRenewalService>();
 
         // ── Policy Certificates Workflow ─────────────────────────────
         services.AddScoped<IPolicyCertificateRepository, PolicyCertificateRepository>();
         services.AddScoped<IPolicyCertificateService, PolicyCertificateService>();
+        services.AddScoped<ICertificateWorkflowRepository, CertificateWorkflowRepository>();
+        services.AddScoped<ICertificateWorkflowService, CertificateWorkflowService>();
 
         // ── Documents — E-Sign (Epic 11) ─────────────────────────────
         services.AddScoped<IESignRepository, ESignRepository>();
         services.AddScoped<IESignService, ESignService>();
+        services.AddHttpClient<IESignEnvelopeProvider, DocuSignEnvelopeProvider>();
 
         // ── Communications (Epic 10) ──────────────────────────────────
         services.AddScoped<IMessageRepository, MessageRepository>();
@@ -479,6 +528,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILeadStatusService, LeadStatusService>();
         services.AddScoped<IOpportunityStageRepository, OpportunityStageRepository>();
         services.AddScoped<IOpportunityStageService, OpportunityStageService>();
+        services.AddScoped<IOpportunityForecastCategoryRepository, OpportunityForecastCategoryRepository>();
+        services.AddScoped<IOpportunityForecastCategoryService, OpportunityForecastCategoryService>();
         services.AddScoped<IPipelineSettingRepository, PipelineSettingRepository>();
         services.AddScoped<IPipelineSettingService, PipelineSettingService>();
         services.AddScoped<IDuplicateRuleRepository, DuplicateRuleRepository>();
@@ -543,6 +594,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IMarketAccessRuleService, MarketAccessRuleService>();
         services.AddScoped<ICarrierDownloadMappingRepository, CarrierDownloadMappingRepository>();
         services.AddScoped<ICarrierDownloadMappingService, CarrierDownloadMappingService>();
+        services.AddScoped<ICarrierRuleCategoryRepository, CarrierRuleCategoryRepository>();
+        services.AddScoped<ICarrierRuleCategoryService, CarrierRuleCategoryService>();
+        services.AddScoped<ICarrierRuleLookupRepository, CarrierRuleLookupRepository>();
+        services.AddScoped<ICarrierRuleLookupService, CarrierRuleLookupService>();
+        services.AddScoped<ICarrierProductRuleRepository, CarrierProductRuleRepository>();
+        services.AddScoped<ICarrierProductRuleService, CarrierProductRuleService>();
         services.AddScoped<IWorkflowConfigRepository, WorkflowConfigRepository>();
         services.AddScoped<IWorkflowConfigService, WorkflowConfigService>();
         services.AddScoped<ICommunicationConfigRepository, CommunicationConfigRepository>();
@@ -561,6 +618,19 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntegrationConfigService, IntegrationConfigService>();
         services.AddScoped<IAiConfigRepository, AiConfigRepository>();
         services.AddScoped<IAiConfigService, AiConfigService>();
+        services.AddScoped<IIntelligenceRepository, IntelligenceRepository>();
+        services.AddScoped<IRecommendationGenerationRepository>(provider => provider.GetRequiredService<IIntelligenceRepository>() as IRecommendationGenerationRepository
+            ?? throw new InvalidOperationException("The intelligence repository must support recommendation generation."));
+        services.AddScoped<IIntelligenceService, IntelligenceService>();
+        services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
+        services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
+        services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
+        services.AddScoped<IRulesPlatformService, RulesPlatformService>();
+        services.AddScoped<IValidationPlatformService, ValidationPlatformService>();
+        services.AddSingleton<ISemanticQueryExpander, NullSemanticQueryExpander>();
+        services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
+        services.AddScoped<IAiProviderRouter, AiProviderRouter>();
+        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>();
         services.AddScoped<IDataConfigRepository, DataConfigRepository>();
         services.AddScoped<IDataConfigService, DataConfigService>();
         services.AddScoped<ISubscriptionConfigRepository, SubscriptionConfigRepository>();

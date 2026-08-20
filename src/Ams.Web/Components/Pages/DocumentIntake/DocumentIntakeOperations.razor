@@ -1,0 +1,113 @@
+@page "/operations/document-intake/operations"
+@attribute [Authorize(Policy=Ams.Web.Security.DocumentIntakePolicies.Admin)]
+@inject Ams.Web.Services.ApiClient Api
+@inject Ams.Web.Services.CurrentUserContext CurrentUser
+@inject Ams.Web.Services.BreadcrumbService Breadcrumbs
+@inject Ams.Web.Services.NotificationService Notifications
+@using Ams.Application.Features.DocumentIntake
+
+<DocumentIntakeWorkspace>
+    <div class="intake-page">
+        <header class="intake-page-header">
+            <div>
+                <span>Production control plane</span>
+                <h1>Document Intake Operations</h1>
+                <p>Dead-letter recovery, prompt quality gates, SLO incidents, and effective database-backed controls.</p>
+            </div>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </header>
+        @if (_loading)
+        {
+            <div class="intake-state"><i class="bi bi-arrow-repeat"></i><p>Loading production controls...</p></div>
+        }
+        else if (_error is not null)
+        {
+            <div class="intake-error">@_error</div>
+        }
+        else
+        {
+            <section class="intake-kpis">
+                <article><i class="bi bi-exclamation-diamond"></i><span>Dead letters</span><strong>@_deadLetters.Count</strong><small>Operator action required</small></article>
+                <article><i class="bi bi-bell"></i><span>Open alerts</span><strong>@_alerts.Count</strong><small>@_alerts.Count(alert => alert.SeverityCode == "CRITICAL") critical</small></article>
+                <article><i class="bi bi-shield-check"></i><span>Prompt suites</span><strong>@_suites.Count</strong><small>@_suites.Sum(suite => suite.ActiveCaseCount) governed cases</small></article>
+                <article><i class="bi bi-clipboard2-check"></i><span>Evaluation runs</span><strong>@_runs.Count</strong><small>@_runs.Count(run => run.StatusCode == "PASSED") passing</small></article>
+            </section>
+            <section class="intake-panel">
+                <h2><i class="bi bi-exclamation-diamond"></i> Dead-letter recovery</h2>
+                @if (_deadLetters.Count == 0)
+                {
+                    <div class="intake-state"><i class="bi bi-check2-circle"></i><p>No failed or dead-lettered intake work.</p></div>
+                }
+                else
+                {
+                    @foreach (var item in _deadLetters)
+                    {
+                        <div class="intake-operation-row">
+                            <div><strong>@item.SessionNumber · @item.WorkTypeCode</strong><small>@item.LastErrorCode — @item.LastErrorMessage</small><span>Attempts @item.AttemptCount/@item.MaxAttempts</span></div>
+                            <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => ReplayAsync(item)" disabled="@_busy">Replay</button>
+                        </div>
+                    }
+                }
+            </section>
+            <section class="intake-panel">
+                <h2><i class="bi bi-bell"></i> SLO incidents</h2>
+                @if (_alerts.Count == 0)
+                {
+                    <div class="intake-state"><i class="bi bi-shield-check"></i><p>All intake SLOs are within thresholds.</p></div>
+                }
+                else
+                {
+                    @foreach (var alert in _alerts)
+                    {
+                        <div class="intake-operation-row">
+                            <div><strong>@alert.DisplayName</strong><small>@alert.Summary</small><span>@alert.SeverityCode · observed @alert.LastObservedDateUtc.ToLocalTime().ToString("g")</span></div>
+                            <AppStatusBadge Status="@alert.SeverityCode" />
+                        </div>
+                    }
+                }
+            </section>
+            <section class="intake-panel">
+                <h2><i class="bi bi-shield-check"></i> Prompt evaluation gates</h2>
+                @if (_suites.Count == 0)
+                {
+                    <div class="intake-state"><i class="bi bi-clipboard2-data"></i><p>No prompt evaluation suites are configured. Add approved evaluation cases before production prompt changes.</p></div>
+                }
+                else
+                {
+                    @foreach (var suite in _suites)
+                    {
+                        <div class="intake-operation-row"><div><strong>@suite.PromptCode · @suite.SuiteName</strong><small>@suite.ActiveCaseCount active cases · pass @suite.MinimumPassRate:P0 · score @suite.MinimumAverageScore:P0</small></div></div>
+                    }
+                }
+                @foreach (var run in _runs.Take(10))
+                {
+                    <div class="intake-operation-row">
+                        <div><strong>@run.PromptCode @run.PromptVersion</strong><small>@run.PassedCaseCount/@run.TotalCaseCount passed · @((run.AverageScore ?? 0).ToString("P0")) average</small></div>
+                        <AppStatusBadge Status="@run.StatusCode" />
+                    </div>
+                }
+            </section>
+            @if (_settings is not null)
+            {
+                <section class="intake-panel">
+                    <h2><i class="bi bi-sliders"></i> Effective controls</h2>
+                    <div class="intake-settings-grid">
+                        <span>Malware enforcement<strong>@(_settings.MalwareEnabled ? "Enabled" : "Disabled")</strong></span>
+                        <span>Fail closed<strong>@(_settings.MalwareFailClosed ? "Yes" : "No")</strong></span>
+                        <span>Payload retention<strong>@_settings.PayloadRetentionDays days</strong></span>
+                        <span>Lease duration<strong>@_settings.LeaseDurationSeconds seconds</strong></span>
+                        <span>Telemetry snapshots<strong>@_settings.TelemetrySnapshotIntervalMinutes minutes</strong></span>
+                        <span>Prompt passing run<strong>@(_settings.RequirePassedPromptEvaluation ? "Required" : "Optional")</strong></span>
+                    </div>
+                </section>
+            }
+        }
+    </div>
+</DocumentIntakeWorkspace>
+
+@code{
+    private readonly List<DocumentIntakeDeadLetterDto> _deadLetters=[];private readonly List<DocumentIntakeAlertDto> _alerts=[];private readonly List<DocumentIntakePromptSuiteDto> _suites=[];private readonly List<DocumentIntakePromptEvaluationRunDto> _runs=[];private DocumentIntakeRuntimeSettings? _settings;private bool _loading=true,_busy;private string? _error;
+    protected override async Task OnInitializedAsync(){Breadcrumbs.SetCrumbs(new("Home","/"),new("Document Intake","/operations/document-intake"),new("Operations","/operations/document-intake/operations"));await LoadAsync();}
+    private async Task LoadAsync(){_loading=true;_error=null;try{var dead=Api.GetDocumentIntakeDeadLettersAsync();var alerts=Api.GetDocumentIntakeAlertsAsync();var suites=Api.GetDocumentIntakePromptSuitesAsync();var runs=Api.GetDocumentIntakePromptRunsAsync();var settings=Api.GetDocumentIntakeRuntimeSettingsAsync();await Task.WhenAll(dead,alerts,suites,runs,settings);_deadLetters.Clear();_deadLetters.AddRange(await dead);_alerts.Clear();_alerts.AddRange(await alerts);_suites.Clear();_suites.AddRange(await suites);_runs.Clear();_runs.AddRange(await runs);_settings=await settings;}catch(Exception ex){_error=ex.Message;}finally{_loading=false;}}
+    private async Task ReplayAsync(DocumentIntakeDeadLetterDto item){_busy=true;try{var user=await CurrentUser.RequireAsync();await Api.ReplayDocumentIntakeDeadLetterAsync(item.WorkItemId,new(user.TenantId,item.WorkItemId,"Authorized replay from Document Intake operations.",Guid.NewGuid().ToString("N"),user.UserId,item.RowVersion));Notifications.Add(new(Guid.NewGuid(),"Dead-letter replay queued",item.SessionNumber,"bi-arrow-repeat","success",$"/operations/document-intake/{item.IntakeSessionId}"));await LoadAsync();}catch(Exception ex){Notifications.Add(new(Guid.NewGuid(),"Dead-letter replay failed",ex.Message,"bi-exclamation-triangle","danger"));}finally{_busy=false;}}
+}

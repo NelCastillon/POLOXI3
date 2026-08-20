@@ -160,7 +160,7 @@
                     <div class="dup-groups-grid">
                         @foreach (var group in FilteredOpenGroups)
                         {
-                            <article class="dup-group-card @GroupCardClass(group)" @onclick="@(() => SelectGroup(group))">
+                            <article class="dup-group-card @GroupCardClass(group)" @onclick="@(() => CompareGroupAsync(group))">
                                 <div class="dup-group-hdr">
                                     <div class="dup-select-wrap" @onclick:stopPropagation="true">
                                         <input type="checkbox" checked="@IsSelected(group.GroupId)" @onchange="@(() => ToggleSelected(group.GroupId))" aria-label="Select duplicate group" />
@@ -218,7 +218,7 @@
                     <div class="dup-history-list">
                         @foreach (var group in FilteredResolvedGroups)
                         {
-                            <article class="dup-history-item" @onclick="@(() => SelectGroup(group))">
+                            <article class="dup-history-item" @onclick="@(() => CompareGroupAsync(group))">
                                 <span class="dup-history-icon"><i class="bi @(group.StatusCode == "Merged" ? "bi-union" : "bi-x-circle")" aria-hidden="true"></i></span>
                                 <div><strong>@group.StatusCode: @group.PrimaryName</strong><span>@group.EntityType - @group.Records.Count records - @FormatDateTime(group.ResolvedDateUtc)</span></div>
                                 <span class="dup-confidence @ConfidenceClass(group.ConfidenceScore)">@group.ConfidenceScore%</span>
@@ -465,6 +465,7 @@
         _busy = true;
         try
         {
+            await RecordDecisionAsync(group, MatchReviewDecisionCodes.UseExisting, record.RecordId, $"Selected {record.RecordName} as the primary record.");
             await Api.SetDuplicatePrimaryAsync(group.GroupId, new DuplicateSetPrimaryRequest { PrimaryRecordId = record.RecordId, ModifiedByUserId = _tenantAdminUserId });
             await LoadAsync();
             await ShowToastAsync($"{record.RecordName} set as primary.", "success");
@@ -475,6 +476,7 @@
 
     private async Task MergeAsync(DuplicateGroupDto group)
     {
+        await RecordDecisionAsync(group, MatchReviewDecisionCodes.MergeRequest, group.PrimaryRecordId, _resolutionNotes);
         await Api.MergeDuplicateGroupAsync(group.GroupId, new DuplicateResolveRequest { ResolvedByUserId = _tenantAdminUserId, Notes = _resolutionNotes });
         _selectedGroupIds.Remove(group.GroupId);
         await LoadAsync();
@@ -484,6 +486,7 @@
 
     private async Task DismissAsync(DuplicateGroupDto group)
     {
+        await RecordDecisionAsync(group, MatchReviewDecisionCodes.CreateNew, null, _resolutionNotes);
         await Api.DismissDuplicateGroupAsync(group.GroupId, new DuplicateResolveRequest { ResolvedByUserId = _tenantAdminUserId, Notes = _resolutionNotes });
         _selectedGroupIds.Remove(group.GroupId);
         await LoadAsync();
@@ -517,7 +520,25 @@
     private void ShowAccounts() { _entityFilter = "Account"; _activeFilter = "Account"; _view = "groups"; }
     private void ShowContacts() { _entityFilter = "Contact"; _activeFilter = "Contact"; _view = "groups"; }
     private void ShowHighConfidence() { _confidenceFilter = "High"; _activeFilter = "High"; _view = "groups"; }
-    private void SelectGroup(DuplicateGroupDto group) => _selectedGroup = group;
+    private async Task CompareGroupAsync(DuplicateGroupDto group)
+    {
+        _selectedGroup = group;
+        await RecordDecisionAsync(group, MatchReviewDecisionCodes.Compare, group.PrimaryRecordId, "Opened record comparison.");
+    }
+
+    private async Task RecordDecisionAsync(DuplicateGroupDto group, string decisionCode, Guid? candidateEntityId, string? notes)
+    {
+        const string prefix = "SearchMatch:";
+        if (!group.MatchKey.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !Guid.TryParse(group.MatchKey[prefix.Length..], out var executionId)) return;
+        await Api.SaveMatchReviewDecisionAsync(new MatchReviewDecisionRequest
+        {
+            MatchExecutionId = executionId,
+            CandidateEntityId = candidateEntityId,
+            DecisionCode = decisionCode,
+            Notes = notes,
+            CorrelationId = $"duplicate-review:{group.GroupId:N}:{Guid.NewGuid():N}"
+        });
+    }
     private void SelectEntity(string entity) { _entityFilter = _entityFilter == entity ? string.Empty : entity; _activeFilter = _entityFilter; _view = "groups"; }
     private void SetQuickFilter(string filter) { _activeFilter = _activeFilter == filter ? string.Empty : filter; if (filter is "Account" or "Contact") _entityFilter = _activeFilter; if (filter == "High") _confidenceFilter = _confidenceFilter == "High" ? string.Empty : "High"; if (filter == "Resolved") _view = "resolved"; else _view = "groups"; }
     private void ResetFilters() { _activeFilter = string.Empty; _searchTerm = string.Empty; _entityFilter = string.Empty; _confidenceFilter = string.Empty; _statusFilter = string.Empty; }

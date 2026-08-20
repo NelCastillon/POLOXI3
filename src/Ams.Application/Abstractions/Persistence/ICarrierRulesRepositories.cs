@@ -21,3 +21,23 @@ public interface ICarrierDownloadMappingRepository
     Task UpdateAsync(Guid id, UpdateCarrierDownloadMappingRequest request, CancellationToken ct = default);
     Task DeleteAsync(Guid id, CancellationToken ct = default);
 }
+
+public interface ICarrierRuleCategoryRepository
+{
+    Task<IReadOnlyList<CarrierRuleCategoryDto>> GetActiveAsync(CancellationToken ct = default);
+}
+
+public interface ICarrierRuleLookupRepository
+{
+    Task<IReadOnlyList<CarrierRuleOptionDto>> GetOptionsAsync(Guid tenantId, string optionType, CancellationToken ct = default);
+    Task<IReadOnlyList<CarrierProductCatalogDto>> GetProductsAsync(Guid tenantId, Guid? carrierId, Guid? lineOfBusinessId, CancellationToken ct = default);
+}
+
+public interface ICarrierProductRuleRepository
+{
+    Task<CarrierProductRuleDto?> GetByIdAsync(Guid tenantId, Guid id, CancellationToken ct = default);
+    Task<PagedResult<CarrierProductRuleDto>> SearchAsync(Guid tenantId, string? searchTerm, string? categoryCode, bool? isActive, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<Guid> CreateAsync(CreateCarrierProductRuleRequest request, CancellationToken ct = default);
+    Task UpdateAsync(Guid tenantId, Guid id, UpdateCarrierProductRuleRequest request, CancellationToken ct = default);
+    Task DeleteAsync(Guid tenantId, Guid id, CancellationToken ct = default);
+}

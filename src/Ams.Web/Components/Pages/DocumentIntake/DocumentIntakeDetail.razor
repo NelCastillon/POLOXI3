@@ -1,0 +1,361 @@
+@page "/operations/document-intake/{Id:guid}"
+@attribute [Authorize(Policy = Ams.Web.Security.DocumentIntakePolicies.Read)]
+@using Ams.Application.Features.DocumentIntake
+@using System.ComponentModel.DataAnnotations
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject CurrentUserContext CurrentUser
+@inject NotificationService Notifications
+@inject ConfirmationDialogService Confirmations
+@inject NavigationManager Nav
+
+<PageTitle>Document Intake Review</PageTitle>
+
+<EnterpriseDocumentUpload @bind-IsOpen="_uploadOpen"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_userId"
+                          EntityName="DocumentIntake"
+                          EntityId="Id"
+                          Title="Upload Intake Evidence"
+                          IntroText="Upload legal evidence to Azure Blob Storage and attach the persisted DMS document to this governed intake session."
+                          DefaultDocumentTypeCode="General"
+                          DefaultCategoryCode="Other"
+                          DefaultRetentionDate="@DateOnly.FromDateTime(DateTime.Today.AddYears(7))"
+                          OnUploaded="HandleUploadedAsync"
+                          OnUploadFailed="HandleUploadFailed" />
+
+<DocumentIntakeWorkspace>
+    @if (_detail is null)
+    {
+        <div class="intake-state">@(_loading ? "Loading governed intake session..." : _error ?? "Intake session was not found.")</div>
+    }
+    else
+    {
+        <div class="di-detail-shell">
+        <AppPageHeader Title="@_detail.Session.SessionNumber" Subtitle="@SessionSubtitle" Icon="bi-stars" ReturnUrl="/operations/document-intake">
+            <Actions>
+                <div class="intake-actions di-command-actions">
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Draft)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Upload">
+                            <button class="um-btn um-btn-ghost" @onclick="OpenUpload" disabled="@_saving"><i class="bi bi-cloud-arrow-up"></i> Manual upload</button>
+                            <button class="um-btn um-btn-primary" @onclick="QueueAsync" disabled="@(_saving || _detail.Documents.Count == 0)"><i class="bi bi-play-circle"></i> Queue processing</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode is DocumentIntakeStatuses.Failed or DocumentIntakeStatuses.ReviewRequired or DocumentIntakeStatuses.Ready)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Reprocess">
+                            <button class="um-btn um-btn-ghost" @onclick="OpenReprocess" disabled="@_saving"><i class="bi bi-arrow-repeat"></i> Reprocess</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Ready)
+                    {
+                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Promote">
+                            <button class="um-btn um-btn-primary" @onclick="PromoteAsync" disabled="@(_saving || _detail.PromotionReadiness?.CanPromote != true)">Create @ModuleLabel</button>
+                        </AuthorizeView>
+                    }
+                    @if (_detail.Session.StatusCode == DocumentIntakeStatuses.Completed && _detail.Session.PromotedEntityId.HasValue)
+                    {
+                        <button class="um-btn um-btn-primary" @onclick="OpenPromotedRecord"><i class="bi bi-box-arrow-up-right"></i> Open Submission</button>
+                    }
+                    @if (_detail.Session.StatusCode is not (DocumentIntakeStatuses.Completed or DocumentIntakeStatuses.Cancelled))
+                    {
+                        <button class="um-btn di-danger-action" @onclick="CancelAsync" disabled="@_saving"><i class="bi bi-x-octagon"></i> Cancel intake</button>
+                    }
+                </div>
+            </Actions>
+        </AppPageHeader>
+
+        <div class="di-command-center">
+            @if (_detail.Session.ModuleCode == DocumentIntakeModules.Submission)
+            {
+                <section class="intake-panel di-readiness-panel">
+                    <div class="di-readiness-heading">
+                        <span><i class="bi bi-shield-check"></i></span>
+                        <div>
+                            <h2 class="h5">Submission promotion readiness</h2>
+                            <p>Readiness is validated from reviewed intake data, tenant configuration, source documents, and canonical Line of Business records.</p>
+                        </div>
+                    </div>
+                    @if (_detail.PromotionReadiness is { CanPromote: true } readiness)
+                    {
+                        <div class="alert alert-success di-readiness-alert" role="status">
+                            <i class="bi bi-check-circle-fill me-2"></i>
+                            Ready to create the Account, Opportunity, canonical @readiness.LobName line, Submission, linked documents, and configured follow-up records.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-danger di-readiness-alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+                            <strong>Promotion is blocked.</strong>
+                            <ul class="mb-0 mt-2">
+                                @foreach (var blocker in _detail.PromotionReadiness?.Blockers ?? [])
+                                {
+                                    <li>@blocker</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+                </section>
+            }
+
+            <section class="di-properties-panel" aria-label="Document intake properties">
+                <div class="di-properties-heading">
+                    <span><i class="bi bi-card-checklist"></i></span>
+                    <div>
+                        <strong>Intake properties</strong>
+                        <small>Operational state and review indicators</small>
+                    </div>
+                </div>
+                <div class="di-properties-grid">
+                    <div class="di-property"><span>Workflow status</span><strong><AppStatusBadge Status="@_detail.Session.StatusCode" /></strong></div>
+                    <div class="di-property"><span>Overall confidence</span><strong>@FormatConfidence(_detail.Session.OverallConfidence)</strong></div>
+                    <div class="di-property"><span>Warnings</span><strong>@_detail.Session.WarningCount</strong></div>
+                    <div class="di-property"><span>Blocking errors</span><strong>@_detail.Session.ErrorCount</strong></div>
+                </div>
+            </section>
+        </div>
+
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-files"></i></span>
+                <div>
+                    <h2 class="h5">Evidence documents</h2>
+                    <p>Persisted source files attached to this governed intake session.</p>
+                </div>
+            </div>
+            @if (_detail.Documents.Count == 0)
+            {
+                <div class="intake-state">Use Manual upload to persist evidence in Azure Blob Storage and DMS before processing.</div>
+            }
+            else
+            {
+                <div class="di-detail-table-shell">
+                    <table class="di-detail-table">
+                        <thead>
+                            <tr>
+                                <th>File</th>
+                                <th>Role</th>
+                                <th>Content type</th>
+                                <th>SHA-256</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var document in _detail.Documents)
+                            {
+                                <tr>
+                                    <td><div class="di-document-cell"><span><i class="bi bi-file-earmark-text"></i></span><strong>@document.FileName</strong></div></td>
+                                    <td><span class="di-soft-pill">@document.DocumentRoleCode</span></td>
+                                    <td>@(document.ContentType ?? "—")</td>
+                                    <td><code class="di-hash">@document.ContentHashSha256</code></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-ui-checks-grid"></i></span>
+                <div>
+                    <h2 class="h5">Extracted and normalized values</h2>
+                    <p>Compare OCR extraction, knowledge normalization, and reviewer-approved values.</p>
+                </div>
+            </div>
+            @if (_detail.DraftFields.Count == 0)
+            {
+                <div class="intake-state">No draft values have been extracted yet.</div>
+            }
+            @foreach (var field in _detail.DraftFields)
+            {
+                <article class="intake-field-card di-field-card">
+                    <header>
+                        <div><strong>@field.FieldPath</strong><div class="intake-source">@field.EntityTypeCode · Source page @(field.SourcePageNumber?.ToString() ?? "—") · Confidence @FormatConfidence(field.Confidence)</div></div>
+                        <div class="di-field-card-actions">
+                            <AppStatusBadge Status="@field.ReviewStatusCode" />
+                            @if (field.ReviewStatusCode == DocumentIntakeReviewStatuses.Pending)
+                            {
+                                <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
+                                    <div class="intake-actions di-review-actions">
+                                        <button class="um-btn um-btn-primary um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Approved, field.NormalizedValue ?? field.ExtractedValue)" disabled="@_saving">Approve</button>
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenCorrection(field)" disabled="@_saving">Correct</button>
+                                        <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => ReviewAsync(field, DocumentIntakeReviewStatuses.Rejected, null)" disabled="@_saving">Reject</button>
+                                    </div>
+                                </AuthorizeView>
+                            }
+                        </div>
+                    </header>
+                    <div class="intake-detail-grid mt-2">
+                        <div class="intake-detail"><small>Extracted</small>@(field.ExtractedValue ?? "—")</div>
+                        <div class="intake-detail"><small>Knowledge normalized</small>@(field.NormalizedValue ?? "—")</div>
+                        <div class="intake-detail"><small>Reviewed</small>@(field.ReviewedValue ?? "—")</div>
+                    </div>
+                </article>
+            }
+        </section>
+
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-exclamation-octagon"></i></span>
+                <div>
+                    <h2 class="h5">Warnings and conflicts</h2>
+                    <p>Review open AI, validation, and reconciliation issues before promotion.</p>
+                </div>
+            </div>
+            <div class="di-detail-table-shell">
+                <table class="di-detail-table">
+                    <thead>
+                        <tr>
+                            <th>Severity</th>
+                            <th>Code</th>
+                            <th>Message</th>
+                            <th>Status</th>
+                            <th class="di-action-cell">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var issue in _detail.Issues)
+                        {
+                            <tr>
+                                <td><AppStatusBadge Status="@issue.SeverityCode" /></td>
+                                <td><strong>@issue.IssueCode</strong></td>
+                                <td>@issue.Message</td>
+                                <td><AppStatusBadge Status="@issue.StatusCode" /></td>
+                                <td class="di-action-cell">
+                                    @if (issue.StatusCode == "OPEN")
+                                    {
+                                        <AuthorizeView Policy="@Ams.Web.Security.DocumentIntakePolicies.Review" Context="authorizationState">
+                                            <button class="um-btn um-btn-ghost um-btn-xs" @onclick="() => OpenIssueResolution(issue)" disabled="@_saving">Resolve</button>
+                                        </AuthorizeView>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="intake-panel di-section-panel">
+            <div class="di-section-heading">
+                <span><i class="bi bi-cpu"></i></span>
+                <div>
+                    <h2 class="h5">Processing pipeline</h2>
+                    <p>Audit each stage, retry attempt, and any retained processing error.</p>
+                </div>
+            </div>
+            <div class="di-pipeline-list">
+                @foreach (var workItem in _detail.WorkItems)
+                {
+                    <article class="di-pipeline-card">
+                        <span class="di-pipeline-icon"><i class="bi bi-cpu"></i></span>
+                        <div class="di-pipeline-main">
+                            <strong>@workItem.WorkTypeCode.Replace('_', ' ')</strong>
+                            <small>@(string.IsNullOrWhiteSpace(workItem.LastErrorMessage) ? "No retained error" : workItem.LastErrorMessage)</small>
+                        </div>
+                        <div class="di-pipeline-meta">
+                            <AppStatusBadge Status="@workItem.StatusCode" />
+                            <span>@workItem.AttemptCount attempt@(workItem.AttemptCount == 1 ? string.Empty : "s")</span>
+                        </div>
+                    </article>
+                }
+            </div>
+        </section>
+        </div>
+    }
+</DocumentIntakeWorkspace>
+
+<AppCrudDrawer @bind-Visible="_correctionDrawer" Title="Correct extracted value" Icon="bi-pencil" OnConfirm="SaveCorrectionAsync" IsBusy="_saving" ConfirmText="Save correction" Width="640px">
+    <Content>
+        <EditForm EditContext="_correctionContext">
+            <DataAnnotationsValidator />
+            <div class="di-drawer-intro"><span><i class="bi bi-pencil-square"></i></span><div><strong>Reviewer correction</strong><small>Capture the corrected value and evidence-based reason for audit history.</small></div></div>
+            <div class="di-drawer-form">
+                <div class="di-drawer-field"><label>Reviewed value</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Value" /><ValidationMessage For="() => _correctionForm.Value" class="text-danger" /></div>
+                <div class="di-drawer-field"><label>Correction reason</label><InputTextArea class="intake-input w-100" @bind-Value="_correctionForm.Reason" /><ValidationMessage For="() => _correctionForm.Reason" class="text-danger" /></div>
+            </div>
+        </EditForm>
+    </Content>
+</AppCrudDrawer>
+<AppModal @bind-Visible="_reprocessDrawer" Width="640px" CssClass="di-centered-modal" IsModal="true" ShowCloseIcon="false">
+    <DialogContent>
+        <div class="di-modal-card">
+            <div class="um-modal-header di-modal-header">
+                <span class="di-modal-icon"><i class="bi bi-arrow-repeat"></i></span>
+                <div>
+                    <strong>Reprocess intake</strong>
+                    <small>Restart governed processing from a selected stage.</small>
+                </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _reprocessDrawer = false" disabled="@_saving"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body di-modal-body">
+                <EditForm EditContext="_reprocessContext">
+                    <DataAnnotationsValidator />
+                    <div class="di-drawer-intro"><span><i class="bi bi-arrow-repeat"></i></span><div><strong>Controlled reprocessing</strong><small>Restart from a selected stage while retaining prior audit attempts and evidence.</small></div></div>
+                    <div class="di-drawer-form">
+                        <div class="di-drawer-field"><label>Restart from stage</label><InputSelect class="intake-input w-100" @bind-Value="_reprocessForm.WorkTypeCode"><option value="OCR">OCR</option><option value="CLASSIFICATION">Classification</option><option value="EXTRACTION">Extraction</option><option value="KNOWLEDGE_MAPPING">Knowledge mapping</option><option value="VALIDATION">Validation</option><option value="SEARCH_INDEXING">Search indexing</option></InputSelect><ValidationMessage For="() => _reprocessForm.WorkTypeCode" class="text-danger" /></div>
+                        <div class="di-drawer-field"><label>Reason</label><InputTextArea class="intake-input w-100" @bind-Value="_reprocessForm.Reason" /><ValidationMessage For="() => _reprocessForm.Reason" class="text-danger" /></div>
+                    </div>
+                </EditForm>
+            </div>
+            <div class="um-modal-footer di-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _reprocessDrawer = false" disabled="@_saving">Cancel</button>
+                <button type="button" class="um-btn um-btn-primary" @onclick="ReprocessAsync" disabled="@_saving">
+                    @if (_saving) { <span class="um-spin" aria-hidden="true"></span> }
+                    Queue reprocess
+                </button>
+            </div>
+        </div>
+    </DialogContent>
+</AppModal>
+<AppCrudDrawer @bind-Visible="_issueDrawer" Title="Resolve intake issue" Icon="bi-check2-circle" OnConfirm="ResolveIssueAsync" IsBusy="_saving" ConfirmText="Resolve issue" Width="640px">
+    <Content>
+        <EditForm EditContext="_issueContext">
+            <DataAnnotationsValidator />
+            <div class="di-drawer-intro di-drawer-intro--warning"><span><i class="bi bi-exclamation-octagon"></i></span><div><strong>@_selectedIssue?.IssueCode</strong><small>@_selectedIssue?.Message</small></div></div>
+            <div class="di-drawer-form">
+                <div class="di-drawer-field"><label>Resolution notes</label><InputTextArea class="intake-input w-100" @bind-Value="_issueForm.Notes" /><ValidationMessage For="() => _issueForm.Notes" class="text-danger" /></div>
+            </div>
+        </EditForm>
+    </Content>
+</AppCrudDrawer>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private DocumentIntakeDetailDto? _detail;
+    private Guid _tenantId, _userId;
+    private bool _loading = true, _saving, _uploadOpen, _correctionDrawer, _reprocessDrawer, _issueDrawer;
+    private string? _error;
+    private DocumentIntakeDraftFieldDto? _selectedField;
+    private DocumentIntakeIssueDto? _selectedIssue;
+    private CorrectionForm _correctionForm = new();
+    private ReprocessForm _reprocessForm = new();
+    private IssueResolutionForm _issueForm = new();
+    private EditContext _correctionContext = default!, _reprocessContext = default!, _issueContext = default!;
+    private string SessionSubtitle => _detail is null ? "" : $"{ModuleLabel} · {_detail.Session.EntryPointCode.Replace('_', ' ')}";
+    private string ModuleLabel => _detail?.Session.ModuleCode.Replace('_', ' ') ?? "record";
+
+    protected override async Task OnInitializedAsync() { _correctionContext = new(_correctionForm); _reprocessContext = new(_reprocessForm); _issueContext = new(_issueForm); var user = await CurrentUser.RequireAsync(); _tenantId = user.TenantId; _userId = user.UserId; Breadcrumbs.SetCrumbs(new("Home", "/"), new("Document Intake", "/operations/document-intake"), new("Review")); await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; try { _detail = await Api.GetDocumentIntakeAsync(Id); _error = null; } catch (Exception ex) { _error = ex.Message; } finally { _loading = false; } }
+    private void OpenUpload() => _uploadOpen = true;
+    private void OpenReprocess() { _reprocessForm = new(); _reprocessContext = new(_reprocessForm); _reprocessDrawer = true; }
+    private async Task HandleUploadedAsync(Guid documentId) { if (_saving) return; _saving = true; try { await Api.AttachDocumentToIntakeAsync(Id, new(_tenantId, Id, documentId, "SOURCE", null, (_detail?.Documents.Count ?? 0) + 1, _userId)); _uploadOpen = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private void HandleUploadFailed(string message) => Fail(message);
+    private async Task QueueAsync() { if (_detail is null || _saving) return; _saving = true; try { await Api.QueueDocumentIntakeAsync(Id, new(_tenantId, Id, "Queued evidence for governed AI processing", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private void OpenCorrection(DocumentIntakeDraftFieldDto field) { _selectedField = field; _correctionForm = new() { Value = field.NormalizedValue ?? field.ExtractedValue ?? "", Reason = "Corrected against source evidence" }; _correctionContext = new(_correctionForm); _correctionDrawer = true; }
+    private void OpenIssueResolution(DocumentIntakeIssueDto issue) { _selectedIssue = issue; _issueForm = new(); _issueContext = new(_issueForm); _issueDrawer = true; }
+    private async Task SaveCorrectionAsync() { if (_selectedField is null || !_correctionContext.Validate()) return; await ReviewAsync(_selectedField, DocumentIntakeReviewStatuses.Corrected, _correctionForm.Value, _correctionForm.Reason); if (!_saving) _correctionDrawer = false; }
+    private async Task ReviewAsync(DocumentIntakeDraftFieldDto field, string decision, string? value, string reason = "Reviewed document evidence") { if (_saving) return; _saving = true; try { await Api.ReviewDocumentIntakeFieldAsync(Id, field.IntakeDraftFieldId, new(_tenantId, Id, field.IntakeDraftFieldId, decision, value, reason, Guid.NewGuid().ToString("N"), _userId, field.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task ResolveIssueAsync() { if (_selectedIssue is null || !_issueContext.Validate() || _saving) return; _saving = true; try { await Api.ResolveDocumentIntakeIssueAsync(Id, _selectedIssue.IntakeIssueId, new(_tenantId, Id, _selectedIssue.IntakeIssueId, "RESOLVED", _issueForm.Notes, Guid.NewGuid().ToString("N"), _userId, _selectedIssue.RowVersion)); _issueDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task ReprocessAsync() { if (_detail is null || !_reprocessContext.Validate() || _saving) return; _saving = true; try { await Api.ReprocessDocumentIntakeAsync(Id, new(_tenantId, Id, _reprocessForm.WorkTypeCode, _reprocessForm.Reason, Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); _reprocessDrawer = false; await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task CancelAsync() { if (_detail is null || _saving || !await Confirmations.ConfirmAsync("Cancel intake", "Cancel this intake session and pending work?")) return; _saving = true; try { await Api.CancelDocumentIntakeAsync(Id, new(_tenantId, Id, "Cancelled by reviewer", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private async Task PromoteAsync() { if (_detail?.PromotionReadiness?.CanPromote != true || _saving || !await Confirmations.ConfirmAsync("Create official record", $"Create the official {ModuleLabel} through its Application Service?")) return; _saving = true; try { var result = await Api.PromoteDocumentIntakeAsync(Id, new(_tenantId, Id, null, false, $"{Id}:PROMOTE", "Approved reviewed intake", Guid.NewGuid().ToString("N"), _userId, _detail.Session.RowVersion)); Notifications.Add(new(Guid.NewGuid(), "Official record created", result?.Message ?? "Promotion completed.", "bi-check-circle", "success", result is null ? null : $"/submissions/{result.TargetEntityId}")); if (result is not null) Nav.NavigateTo($"/submissions/{result.TargetEntityId}"); else await LoadAsync(); } catch (Exception ex) { Fail(ex.Message); } finally { _saving = false; } }
+    private void OpenPromotedRecord() { if (_detail?.Session.PromotedEntityId is Guid submissionId) Nav.NavigateTo($"/submissions/{submissionId}"); }
+    private void Fail(string message) => Notifications.Add(new(Guid.NewGuid(), "Document intake operation failed", message, "bi-exclamation-triangle", "danger"));
+    private static string FormatConfidence(decimal? value) => value.HasValue ? value.Value.ToString("P0") : "—";
+    private sealed class CorrectionForm { [Required, StringLength(4000)] public string Value { get; set; } = ""; [Required, StringLength(2000)] public string Reason { get; set; } = ""; }
+    private sealed class ReprocessForm { [Required, StringLength(50)] public string WorkTypeCode { get; set; } = "OCR"; [Required, StringLength(2000)] public string Reason { get; set; } = "Reprocess requested after reviewed evidence changed"; }
+    private sealed class IssueResolutionForm { [Required, StringLength(2000)] public string Notes { get; set; } = ""; }
+}

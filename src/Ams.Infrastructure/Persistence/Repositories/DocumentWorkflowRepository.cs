@@ -641,16 +641,26 @@ WHERE RetentionPolicyId = @RetentionPolicyId AND IsDeleted = 0;";
     {
         const string sql = @"
 ;WITH Cte AS (
-    SELECT * FROM DMS.DocumentAuditTrail
-    WHERE TenantId = @TenantId
-      AND (@DocumentId IS NULL OR DocumentId = @DocumentId)
-      AND (@WorkflowInstanceId IS NULL OR WorkflowInstanceId = @WorkflowInstanceId)
-      AND (@EventType IS NULL OR @EventType = '' OR EventType = @EventType)
-      AND (@PerformedByUserId IS NULL OR PerformedByUserId = @PerformedByUserId)
-      AND (@EventDateFrom IS NULL OR EventDateUtc >= @EventDateFrom)
-      AND (@EventDateTo IS NULL OR EventDateUtc <= @EventDateTo)
+    SELECT audit.*, COALESCE(NULLIF(tenant.TenantName, N''), N'Unknown tenant') AS TenantName,
+           CASE
+               WHEN audit.PerformedByUserId IS NULL THEN COALESCE(NULLIF(audit.PerformedByName, N''), N'System')
+               ELSE COALESCE(NULLIF([user].DisplayName, N''), NULLIF([user].FullName, N''), NULLIF([user].UserName, N''), NULLIF([user].Email, N''), NULLIF(audit.PerformedByName, N''), N'Former user')
+           END AS ResolvedPerformedByName
+    FROM DMS.DocumentAuditTrail audit
+    LEFT JOIN Core.Tenant tenant ON tenant.TenantId = audit.TenantId
+    LEFT JOIN IAM.[User] [user] ON [user].UserId = audit.PerformedByUserId AND [user].TenantId = audit.TenantId
+    WHERE audit.TenantId = @TenantId
+      AND (@DocumentId IS NULL OR audit.DocumentId = @DocumentId)
+      AND (@WorkflowInstanceId IS NULL OR audit.WorkflowInstanceId = @WorkflowInstanceId)
+      AND (@EventType IS NULL OR @EventType = '' OR audit.EventType = @EventType)
+      AND (@PerformedByUserId IS NULL OR audit.PerformedByUserId = @PerformedByUserId)
+      AND (@EventDateFrom IS NULL OR audit.EventDateUtc >= @EventDateFrom)
+      AND (@EventDateTo IS NULL OR audit.EventDateUtc <= @EventDateTo)
 )
-SELECT * FROM Cte ORDER BY EventDateUtc DESC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+SELECT AuditId, TenantId, TenantName, DocumentId, WorkflowInstanceId, EventType, EventCategory, EventDescription,
+       PerformedByUserId, ResolvedPerformedByName AS PerformedByName, PerformedByRoleCode, EventDateUtc,
+       OldValue, NewValue, ChangesSummary, IpAddress, UserAgent, SessionId, RetentionYears, IsArchived, CreatedDateUtc
+FROM Cte ORDER BY EventDateUtc DESC OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
 SELECT COUNT(1) FROM DMS.DocumentAuditTrail
 WHERE TenantId = @TenantId
   AND (@DocumentId IS NULL OR DocumentId = @DocumentId)
@@ -669,7 +679,22 @@ WHERE TenantId = @TenantId
 
     public async Task<IReadOnlyList<DocumentAuditTrailDto>> GetAuditTrailByDocumentIdAsync(Guid documentId, CancellationToken cancellationToken = default)
     {
-        const string sql = "SELECT TOP 100 * FROM DMS.DocumentAuditTrail WHERE DocumentId = @DocumentId ORDER BY EventDateUtc DESC;";
+        const string sql = @"
+SELECT TOP 100 audit.AuditId, audit.TenantId,
+       COALESCE(NULLIF(tenant.TenantName, N''), N'Unknown tenant') AS TenantName,
+       audit.DocumentId, audit.WorkflowInstanceId, audit.EventType, audit.EventCategory, audit.EventDescription,
+       audit.PerformedByUserId,
+       CASE
+           WHEN audit.PerformedByUserId IS NULL THEN COALESCE(NULLIF(audit.PerformedByName, N''), N'System')
+           ELSE COALESCE(NULLIF([user].DisplayName, N''), NULLIF([user].FullName, N''), NULLIF([user].UserName, N''), NULLIF([user].Email, N''), NULLIF(audit.PerformedByName, N''), N'Former user')
+       END AS PerformedByName,
+       audit.PerformedByRoleCode, audit.EventDateUtc, audit.OldValue, audit.NewValue, audit.ChangesSummary,
+       audit.IpAddress, audit.UserAgent, audit.SessionId, audit.RetentionYears, audit.IsArchived, audit.CreatedDateUtc
+FROM DMS.DocumentAuditTrail audit
+LEFT JOIN Core.Tenant tenant ON tenant.TenantId = audit.TenantId
+LEFT JOIN IAM.[User] [user] ON [user].UserId = audit.PerformedByUserId AND [user].TenantId = audit.TenantId
+WHERE audit.DocumentId = @DocumentId
+ORDER BY audit.EventDateUtc DESC;";
         using var cn = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var rows = await cn.QueryAsync<DocumentAuditTrailDto>(new CommandDefinition(sql, new { DocumentId = documentId }, cancellationToken: cancellationToken));
         return rows.AsList();

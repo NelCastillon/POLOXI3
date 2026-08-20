@@ -67,6 +67,9 @@ public sealed class CreateSubmissionIntakeRequest
     public Guid? AssignedToUserId { get; set; }
 
     public Guid? CreatedByUserId { get; set; }
+
+    [StringLength(240)]
+    public string? SourceIdempotencyKey { get; set; }
 }
 
 public sealed class UpdateSubmissionIntakeRequest
@@ -141,6 +144,23 @@ public sealed class PromoteSubmissionIntakeRequest
 
     /// <summary>When true, force-create a new Prospect account even if matches exist.</summary>
     public bool CreateNewAccount { get; set; }
+
+    public Guid LobId { get; set; }
+
+    [Required, StringLength(50)]
+    public string OpportunityLinePriorityCode { get; set; } = string.Empty;
+
+    [Required, StringLength(50)]
+    public string OpportunityLineStatusCode { get; set; } = string.Empty;
+
+    [Range(0, 3650)]
+    public int OpportunityCloseDays { get; set; }
+
+    [Range(0, 100)]
+    public decimal OpportunityWinProbability { get; set; }
+
+    [Range(1, 120)]
+    public int SubmissionTermMonths { get; set; }
 
     public Guid? ProcessedByUserId { get; set; }
 }

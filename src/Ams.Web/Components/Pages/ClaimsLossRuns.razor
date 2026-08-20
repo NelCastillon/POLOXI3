@@ -1,0 +1,93 @@
+@page "/claims/loss-runs"
+@namespace Ams.Web.Components.Pages
+@using System.ComponentModel.DataAnnotations
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Claims
+@using Microsoft.AspNetCore.Components.Forms
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+@inject Ams.Web.Services.ApiClient Api
+
+<PageTitle>Claims Loss Runs - AMS</PageTitle>
+
+<div class="container-fluid py-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+        <div><h1 class="h3 mb-1">Claims Loss Runs</h1><p class="text-secondary mb-0">Import, validate, match, and monitor carrier loss-run files using tenant-scoped database records.</p></div>
+        <div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="/claims">Claims Register</a><button class="btn btn-outline-primary" @onclick="LoadAsync" disabled="@_loading">Refresh</button></div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message)) { <div class="alert @(_isError ? "alert-danger" : "alert-success")">@_message</div> }
+
+    <div class="row g-4">
+        <div class="col-xl-4">
+            <div class="card shadow-sm"><div class="card-header"><strong>Import CSV Loss Run</strong></div><div class="card-body">
+                <EditForm Model="_form" OnValidSubmit="ImportAsync"><DataAnnotationsValidator /><ValidationSummary />
+                    <div class="mb-3"><label class="form-label">Account ID</label><InputText class="form-control" @bind-Value="_form.AccountIdText" placeholder="Account GUID" /></div>
+                    <div class="mb-3"><label class="form-label">As-of Date</label><InputDate class="form-control" @bind-Value="_form.AsOfDate" /></div>
+                    <div class="mb-3"><label class="form-label">Source File Name</label><InputText class="form-control" @bind-Value="_form.SourceFileName" /></div>
+                    <div class="mb-3"><label class="form-label">CSV Content</label><InputTextArea class="form-control font-monospace" rows="12" @bind-Value="_form.CsvContent" placeholder="CarrierClaimNumber,PolicyNumber,ClaimantName,DateOfLoss,Status,LossDescription,Incurred,Reserve,Paid" /></div>
+                    <button class="btn btn-primary w-100" type="submit" disabled="@_saving">@(_saving ? "Importing..." : "Import and Validate")</button>
+                </EditForm>
+            </div></div>
+        </div>
+        <div class="col-xl-8">
+            <div class="card shadow-sm"><div class="card-header d-flex justify-content-between"><strong>Imported Loss Runs</strong><span>@_lossRuns.Count record(s)</span></div>
+                <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Number</th><th>As Of</th><th>Status</th><th class="text-end">Claims</th><th class="text-end">Incurred</th><th class="text-end">Reserve</th><th class="text-end">Paid</th></tr></thead><tbody>
+                    @if (_loading) { <tr><td colspan="7" class="text-center py-5">Loading...</td></tr> }
+                    else if (_lossRuns.Count == 0) { <tr><td colspan="7" class="text-center py-5 text-secondary">No DB-backed loss runs have been imported.</td></tr> }
+                    else { @foreach (var row in _lossRuns) { <tr><td><strong>@row.LossRunNumber</strong><small class="d-block text-secondary">@row.SourceFileName</small></td><td>@row.AsOfDate.ToString("MM/dd/yyyy")</td><td><span class="badge text-bg-@(row.ImportStatusCode == "Validated" ? "success" : "danger")">@row.ImportStatusCode</span></td><td class="text-end">@row.TotalClaimCount</td><td class="text-end">@row.TotalIncurred.ToString("C0")</td><td class="text-end">@row.TotalReserved.ToString("C0")</td><td class="text-end">@row.TotalPaid.ToString("C0")</td></tr> } }
+                </tbody></table></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private Guid _tenantId;
+    private bool _loading;
+    private bool _saving;
+    private bool _isError;
+    private string? _message;
+    private List<LossRunDto> _lossRuns = [];
+    private LossRunForm _form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = await CurrentUser.RequireAsync();
+        _tenantId = user.TenantId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Claims", "/claims"), new("Loss Runs", ""));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _lossRuns = await Api.GetLossRunsAsync(_tenantId) ?? []; }
+        catch (Exception ex) { SetMessage(ex.Message, true); }
+        finally { _loading = false; }
+    }
+
+    private async Task ImportAsync()
+    {
+        if (!Guid.TryParse(_form.AccountIdText, out var accountId) || accountId == Guid.Empty) { SetMessage("A valid account ID is required.", true); return; }
+        _saving = true;
+        try
+        {
+            var result = await Api.ImportLossRunAsync(new ImportLossRunRequest(_tenantId, accountId, null, null, DateOnly.FromDateTime(_form.AsOfDate), null, null, null, _form.SourceFileName, _form.CsvContent, null));
+            SetMessage($"Imported {result?.ImportedLineCount ?? 0} line(s); {result?.MatchedLineCount ?? 0} matched and {result?.ValidationErrorCount ?? 0} failed validation.", result?.ValidationErrorCount > 0);
+            await LoadAsync();
+        }
+        catch (Exception ex) { SetMessage(ex.Message, true); }
+        finally { _saving = false; }
+    }
+
+    private void SetMessage(string message, bool error) { _message = message; _isError = error; }
+
+    private sealed class LossRunForm
+    {
+        [Required] public string AccountIdText { get; set; } = string.Empty;
+        [Required] public DateTime AsOfDate { get; set; } = DateTime.Today;
+        [Required, StringLength(260)] public string SourceFileName { get; set; } = string.Empty;
+        [Required] public string CsvContent { get; set; } = string.Empty;
+    }
+}

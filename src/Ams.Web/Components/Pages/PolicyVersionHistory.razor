@@ -1,6 +1,10 @@
 @page "/policies/{PolicyId:guid}/versions"
 @namespace Ams.Web.Components.Pages
+@using System.Text.Json
+@using Ams.Application.Common.Dtos
 @using Ams.Web.Components.Shared
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 
@@ -33,13 +37,20 @@ else
         </div>
     </div>
 
+    @if (_loadError is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>@_loadError
+        </div>
+    }
+
     <!-- -- KPI STRIP ----------------------------------------------- -->
     <div class="pvh-kpi-strip">
-        @KpiCard("bi-stack",                "Versions",          _events.Count.ToString(),                                       "pvh-kpi-v")
-        @KpiCard("bi-pen",                  "Endorsements",      _events.Count(e=>e.EventType=="Endorsement").ToString(),        "pvh-kpi-end")
-        @KpiCard("bi-arrow-repeat",         "Renewals",          _events.Count(e=>e.EventType=="Renewal").ToString(),           "pvh-kpi-ren")
-        @KpiCard("bi-cash-stack",           "Premium Today",     _premiumCurrent.ToString("C0"),                                 "pvh-kpi-prem")
-        @KpiCard("bi-arrow-up-right-circle","Lifetime Change",   _lifetimePremDelta.ToString("+$#,##0;-$#,##0;$0"),             "pvh-kpi-chg")
+        @KpiCard("bi-stack",                "Versions",          _events.Count.ToString(),                                       "pvh-kpi-v", "")
+        @KpiCard("bi-pen",                  "Endorsements",      _events.Count(e=>e.EventType=="Endorsement").ToString(),        "pvh-kpi-end", "Endorsement")
+        @KpiCard("bi-arrow-repeat",         "Renewals",          _events.Count(e=>e.EventType=="Renewal").ToString(),           "pvh-kpi-ren", "Renewal")
+        @KpiCard("bi-cash-stack",           "Premium Today",     _premiumCurrent.ToString("C0"),                                 "pvh-kpi-prem", "premium")
+        @KpiCard("bi-arrow-up-right-circle","Lifetime Change",   _lifetimePremDelta.ToString("+$#,##0;-$#,##0;$0"),             "pvh-kpi-chg", "premium")
     </div>
 
     <!-- -- VIEW TOGGLE --------------------------------------------- -->
@@ -54,12 +65,11 @@ else
         <label class="pvh-filter-lbl">Filter</label>
         <select class="e-input pvh-filter-sel" @bind="_filterType">
             <option value="">All Events</option>
-            <option>New Business</option>
-            <option>Endorsement</option>
-            <option>Renewal</option>
-            <option>Cancellation</option>
-            <option>Reinstatement</option>
-            <option>Remarket</option>
+            <option value="premium">Premium Changes</option>
+            @foreach (var eventType in EventTypes)
+            {
+                <option value="@eventType">@eventType</option>
+            }
         </select>
     </div>
 
@@ -74,8 +84,8 @@ else
     {
         <!-- -- TABLE VIEW ----------------------------------------- -->
         <div class="pvh-table-wrap">
-            <SfGrid DataSource="@FilteredEvents.ToList()" AllowSorting="true" AllowPaging="true" RowHeight="40">
-                <GridPageSettings PageSize="25" />
+            <AppGrid DataSource="@FilteredEvents.ToList()" AllowSorting="true" AllowPaging="true" RowHeight="40">
+                
                 <GridColumns>
                     <GridColumn Field="EventDate"    HeaderText="Date"         Width="120" Format="MM/dd/yyyy" />
                     <GridColumn Field="EventType"    HeaderText="Event"        Width="140"
@@ -89,7 +99,7 @@ else
                     <GridColumn HeaderText="" Width="100" AllowSorting="false"
                                 Template="@(ctx => GridActions((PolicyChangeTimeline.PolicyTimelineEvent)ctx))" />
                 </GridColumns>
-            </SfGrid>
+            </AppGrid>
         </div>
     }
 }
@@ -97,9 +107,11 @@ else
 @code {
     [Parameter] public Guid PolicyId { get; set; }
 
-    EnterpriseToast _toast = default!;
+    EnterpriseToast? _toast;
 
     bool   _loading = true;
+    string? _loadError;
+    Guid _tenantId;
     string _view    = "timeline";
     string _filterType = "";
 
@@ -115,9 +127,13 @@ else
     List<PolicyChangeTimeline.PolicyTimelineEvent> _events = new();
 
     IReadOnlyList<PolicyChangeTimeline.PolicyTimelineEvent> FilteredEvents =>
-        string.IsNullOrEmpty(_filterType)
-            ? _events
-            : _events.Where(e => e.EventType == _filterType).ToList();
+        _filterType switch
+        {
+            "" => _events,
+            "premium" => _events.Where(e => e.PremiumDelta != 0).ToList(),
+            _ => _events.Where(e => e.EventType == _filterType).ToList()
+        };
+    string[] EventTypes => _events.Select(e => e.EventType).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToArray();
 
     protected override async Task OnInitializedAsync()
     {
@@ -126,151 +142,172 @@ else
             new("Policy Detail", $"/policies/{PolicyId}"),
             new("Version History", $"/policies/{PolicyId}/versions"));
 
-        await Task.Delay(0);
-        BuildStub();
-        _loading = false;
+        await LoadAsync();
     }
 
-    void BuildStub()
+    async Task LoadAsync()
     {
-        _policyNo       = "POL-2025-44821";
-        _account        = "Sullivan Mfg. LLC";
-        _lob            = "General Liability";
-        _carrier        = "Travelers Indemnity";
-        _lobKey         = "gl";
-        _lobIcon        = "bi-shield";
-        _premiumCurrent = 17_250m;
-
-        var E = PolicyChangeTimeline.ExposureDelta.Money;
-        var T = PolicyChangeTimeline.ExposureDelta.Text;
-        var C = PolicyChangeTimeline.ExposureDelta.Count;
-
-        _events = new List<PolicyChangeTimeline.PolicyTimelineEvent>
+        _loading = true;
+        _loadError = null;
+        try
         {
-            new()
-            {
-                EventType   = "New Business",
-                Title       = "Policy issued ? GL new business",
-                Description = "Original policy bound for Sullivan Mfg. LLC. GL coverage with $1M/$2M limits.",
-                EventDate   = new DateTime(2023,1,15),
-                PerformedBy = "Maria Santos",
-                PremiumDelta= 12_400m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "POL-2023-44821",
-                ExposureDeltas = new()
-                {
-                    E("Annual Premium",  0,           12_400),
-                    E("Occurrence Limit",0,        1_000_000),
-                    E("Aggregate Limit", 0,        2_000_000),
-                    C("Employees",       0,              42),
-                    E("Annual Payroll",  0,        2_100_000),
-                }
-            },
-            new()
-            {
-                EventType   = "Endorsement",
-                Title       = "END-2023-0041 ? Add additional insured (City of Houston)",
-                Description = "Customer required to add City of Houston as additional insured per contract.",
-                EventDate   = new DateTime(2023,4,1),
-                PerformedBy = "Chen Li",
-                PremiumDelta= 285m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "END-2023-0041",
-                ExposureDeltas = new()
-                {
-                    T("Additional Insured","None","City of Houston"),
-                    T("Waiver of Subrogation","No","Yes ? City of Houston"),
-                    E("Annual Premium", 12_400, 12_685),
-                }
-            },
-            new()
-            {
-                EventType   = "Endorsement",
-                Title       = "END-2023-0112 ? Payroll update mid-term",
-                Description = "Annual payroll increased following Q2 hiring expansion. Premium adjusted accordingly.",
-                EventDate   = new DateTime(2023,7,20),
-                PerformedBy = "Aisha Williams",
-                PremiumDelta= 1_100m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "END-2023-0112",
-                ExposureDeltas = new()
-                {
-                    E("Annual Payroll", 2_100_000, 2_850_000),
-                    C("Employees",      42,        58),
-                    E("Annual Premium", 12_685,    13_785),
-                }
-            },
-            new()
-            {
-                EventType   = "Renewal",
-                Title       = "Policy renewed ? 2024 term",
-                Description = "Annual renewal at higher rate. Limits unchanged. Carrier retained.",
-                EventDate   = new DateTime(2024,1,15),
-                PerformedBy = "James Patel",
-                PremiumDelta= 1_215m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "POL-2024-44821",
-                ExposureDeltas = new()
-                {
-                    E("Annual Premium",    13_785, 15_000),
-                    T("Policy Term",       "2023","2024"),
-                    T("Rate",              "1.87%","2.05%"),
-                }
-            },
-            new()
-            {
-                EventType   = "Endorsement",
-                Title       = "END-2024-0055 ? Occurrence limit increased to $2M",
-                Description = "Customer negotiated higher limits after winning large government contract.",
-                EventDate   = new DateTime(2024,3,12),
-                PerformedBy = "Maria Santos",
-                PremiumDelta= 1_800m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "END-2024-0055",
-                ExposureDeltas = new()
-                {
-                    E("Occurrence Limit", 1_000_000, 2_000_000),
-                    E("Aggregate Limit",  2_000_000, 4_000_000),
-                    E("Annual Premium",   15_000,    16_800),
-                }
-            },
-            new()
-            {
-                EventType   = "Remarket",
-                Title       = "Remarketed to Zurich ? declined, retained Travelers",
-                Description = "Remarketed at renewal to Zurich American and Liberty Mutual. Both quoted higher. Travelers retained.",
-                EventDate   = new DateTime(2024,12,5),
-                PerformedBy = "Chen Li",
-                PremiumDelta= 0,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "RMK-2024-0018",
-                ExposureDeltas = new()
-                {
-                    T("Market",     "Travelers only","Travelers / Zurich / Liberty"),
-                    T("Outcome",    "?","Retained ? Travelers lowest"),
-                }
-            },
-            new()
-            {
-                EventType   = "Renewal",
-                Title       = "Policy renewed ? 2025 term",
-                Description = "Second annual renewal. Premium increased slightly due to claims history.",
-                EventDate   = new DateTime(2025,1,15),
-                PerformedBy = "Aisha Williams",
-                PremiumDelta= 450m,
-                Carrier     = "Travelers Indemnity",
-                RefNumber   = "POL-2025-44821",
-                ExposureDeltas = new()
-                {
-                    E("Annual Premium",   16_800, 17_250),
-                    T("Policy Term",      "2024","2025"),
-                    T("Loss Modifier",    "0.92","0.98"),
-                }
-            },
-        };
+            var context = await CurrentUser.RequireAsync();
+            _tenantId = context.TenantId;
 
+            var detail = await Api.GetPolicyLifecycleDetailAsync(_tenantId, PolicyId);
+            BuildFromLifecycle(detail);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load policy lifecycle history: {ex.Message}";
+            _events = [];
+            if (_toast is not null)
+            {
+                await _toast.ShowAsync(new ToastModel { Title = "Policy Version History", Content = $"Load failed: {ex.Message}", CssClass = "enterprise-toast-danger" });
+            }
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    void BuildFromLifecycle(PolicyLifecycleDetailDto? detail)
+    {
+        _policyNo = PolicyId.ToString("N")[..8].ToUpperInvariant();
+        _account = "Policy lifecycle";
+        _lob = "Policy";
+        _carrier = string.Empty;
+        _lobKey = "policy";
+        _lobIcon = "bi-shield";
+        _premiumCurrent = 0m;
+        _lifetimePremDelta = 0m;
+        _events = [];
+
+        if (detail is null)
+        {
+            _loadError = "No lifecycle history was found for this policy.";
+            return;
+        }
+
+        _policyNo = detail.Policy.PolicyNumber;
+        _account = detail.Policy.AccountName;
+        _lob = detail.Policy.LineOfBusiness;
+        _carrier = detail.Policy.CarrierName;
+        _premiumCurrent = detail.Policy.AnnualPremium;
+        _lobKey = _lob.ToLowerInvariant().Replace(" ", "-");
+        _lobIcon = _lob.Contains("auto", StringComparison.OrdinalIgnoreCase) ? "bi-car-front" : _lob.Contains("property", StringComparison.OrdinalIgnoreCase) ? "bi-building" : "bi-shield";
+
+        var latestSnapshot = detail.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault()?.SnapshotJson;
+        ApplySnapshotHeader(latestSnapshot);
+
+        var lineChangesByTransaction = detail.LineChanges
+            .GroupBy(x => x.PolicyTransactionId)
+            .ToDictionary(x => x.Key, x => x.ToList());
+
+        _events = detail.Transactions
+            .OrderBy(x => x.EffectiveDate)
+            .ThenBy(x => x.CreatedDateUtc)
+            .Select(tx => ToTimelineEvent(tx, lineChangesByTransaction.GetValueOrDefault(tx.PolicyTransactionId) ?? []))
+            .ToList();
+
+        if (_events.Count == 0)
+        {
+            _events = detail.StatusHistory
+                .OrderBy(x => x.ChangedDateUtc)
+                .Select(ToTimelineEvent)
+                .ToList();
+        }
+
+        _premiumCurrent = detail.Transactions
+            .OrderByDescending(x => x.EffectiveDate)
+            .ThenByDescending(x => x.CreatedDateUtc)
+            .Select(x => x.NewWrittenPremium ?? x.PriorWrittenPremium ?? 0m)
+            .FirstOrDefault(x => x > 0m, _premiumCurrent);
         _lifetimePremDelta = _events.Sum(e => e.PremiumDelta);
     }
+
+    void ApplySnapshotHeader(string? snapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotJson))
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(snapshotJson);
+            var root = document.RootElement;
+            _policyNo = ReadString(root, "PolicyNumber") ?? _policyNo;
+            _lob = ReadString(root, "LineOfBusiness") ?? _lob;
+            _carrier = ReadString(root, "Carrier") ?? _carrier;
+            _premiumCurrent = ReadDecimal(root, "AnnualPremium") ?? _premiumCurrent;
+            _lobKey = _lob.ToLowerInvariant().Replace(" ", "-");
+            _lobIcon = _lob.Contains("auto", StringComparison.OrdinalIgnoreCase) ? "bi-car-front" : _lob.Contains("property", StringComparison.OrdinalIgnoreCase) ? "bi-building" : "bi-shield";
+        }
+        catch (JsonException)
+        {
+        }
+    }
+
+    static PolicyChangeTimeline.PolicyTimelineEvent ToTimelineEvent(PolicyTransactionDto transaction, IReadOnlyList<PolicyTransactionLineChangeDto> lineChanges)
+    {
+        var eventType = DisplayCode(transaction.TransactionTypeCode);
+        var priorPremium = transaction.PriorWrittenPremium ?? 0m;
+        var newPremium = transaction.NewWrittenPremium ?? priorPremium + (transaction.PremiumChange ?? 0m);
+        var deltas = new List<PolicyChangeTimeline.ExposureDelta>();
+
+        if (transaction.PremiumChange.HasValue || transaction.NewWrittenPremium.HasValue || transaction.PriorWrittenPremium.HasValue)
+        {
+            deltas.Add(PolicyChangeTimeline.ExposureDelta.Money("Written Premium", priorPremium, newPremium));
+        }
+
+        deltas.AddRange(lineChanges.Select(line => PolicyChangeTimeline.ExposureDelta.Money(line.LineOfBusinessName, line.PriorPremium ?? 0m, line.NewPremium ?? (line.PriorPremium ?? 0m) + (line.PremiumChange ?? 0m))));
+
+        return new PolicyChangeTimeline.PolicyTimelineEvent
+        {
+            EventType = eventType,
+            Title = string.IsNullOrWhiteSpace(transaction.Description) ? $"{eventType} - {DisplayCode(transaction.TransactionStatusCode)}" : transaction.Description,
+            Description = string.IsNullOrWhiteSpace(transaction.Notes) ? $"Status: {DisplayCode(transaction.TransactionStatusCode)}" : transaction.Notes,
+            EventDate = transaction.EffectiveDate,
+            PerformedBy = transaction.IssuedByUserId?.ToString("N")[..8] ?? transaction.ApprovedByUserId?.ToString("N")[..8] ?? transaction.RequestedByUserId?.ToString("N")[..8] ?? "System",
+            PremiumDelta = transaction.PremiumChange ?? newPremium - priorPremium,
+            Carrier = string.Empty,
+            RefNumber = transaction.TransactionNumber,
+            ExposureDeltas = deltas
+        };
+    }
+
+    static PolicyChangeTimeline.PolicyTimelineEvent ToTimelineEvent(PolicyStatusHistoryDto status)
+        => new()
+        {
+            EventType = "Audit",
+            Title = $"{DisplayCode(status.StatusScopeCode)} status changed to {DisplayCode(status.NewStatusCode)}",
+            Description = status.Notes ?? status.ReasonCode ?? string.Empty,
+            EventDate = status.ChangedDateUtc,
+            PerformedBy = status.ChangedByUserId?.ToString("N")[..8] ?? "System",
+            RefNumber = status.PolicyStatusHistoryId.ToString("N")[..8].ToUpperInvariant(),
+            ExposureDeltas = string.IsNullOrWhiteSpace(status.OldStatusCode)
+                ? []
+                : [PolicyChangeTimeline.ExposureDelta.Text("Status", DisplayCode(status.OldStatusCode), DisplayCode(status.NewStatusCode))]
+        };
+
+    static string DisplayCode(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var spaced = System.Text.RegularExpressions.Regex.Replace(value.Trim(), "(?<!^)([A-Z])", " $1");
+        return spaced.Replace("  ", " ");
+    }
+
+    static string? ReadString(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+
+    static decimal? ReadDecimal(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var property) && property.TryGetDecimal(out var value) ? value : null;
 
     void GoBack()    => Nav.NavigateTo($"/policies/{PolicyId}");
     void GoCompare() => Nav.NavigateTo($"/policies/{PolicyId}/compare");
@@ -289,9 +326,9 @@ else
             <i class="bi bi-layout-split" aria-hidden="true"></i> Compare
         </button>;
 
-    RenderFragment KpiCard(string icon, string label, string val, string css) =>
-        @<div class="pvh-kpi-card @css">
+    RenderFragment KpiCard(string icon, string label, string val, string css, string filter) =>
+        @<button type="button" class="pvh-kpi-card @css @(_filterType == filter ? "pvh-kpi-card--active" : null)" title="Filter by @label" @onclick="() => _filterType = _filterType == filter ? string.Empty : filter">
             <div class="pvh-kpi-val">@val</div>
             <div class="pvh-kpi-lbl"><i class="bi @icon" aria-hidden="true"></i> @label</div>
-        </div>;
+        </button>;
 }

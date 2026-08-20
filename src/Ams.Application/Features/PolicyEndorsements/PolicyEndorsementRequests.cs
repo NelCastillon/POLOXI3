@@ -18,20 +18,80 @@ public sealed class CreatePolicyEndorsementRequest
     public string Carrier { get; set; } = string.Empty;
     [Required, StringLength(120)]
     public string EndorsementType { get; set; } = string.Empty;
+    [StringLength(50)]
+    public string? RequestSourceCode { get; set; }
+    [StringLength(50)]
+    public string? ChangeCategoryCode { get; set; }
     [Required, StringLength(1000)]
     public string Description { get; set; } = string.Empty;
     [Required]
     public DateTime EffectiveDate { get; set; }
+    public DateTime? ExpirationDate { get; set; }
+    public DateTime? RetroactiveDate { get; set; }
+    public DateTime? DiscoveryDate { get; set; }
     [Range(-10000000, 10000000)]
     public decimal PremiumDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal TaxFeeDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal TotalCostDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal ProratedPremiumDelta { get; set; }
     [Required, StringLength(40)]
     public string Priority { get; set; } = "Normal";
     [Required, StringLength(160)]
     public string RequestedByName { get; set; } = string.Empty;
+    [EmailAddress, StringLength(254)]
+    public string? RequestedByEmail { get; set; }
+    [StringLength(40)]
+    public string? RequestedByPhone { get; set; }
+    [StringLength(160)]
+    public string? ClientContactName { get; set; }
+    [EmailAddress, StringLength(254)]
+    public string? ClientContactEmail { get; set; }
+    [StringLength(40)]
+    public string? ClientContactPhone { get; set; }
     [Required, StringLength(160)]
     public string AssignedToName { get; set; } = string.Empty;
     [StringLength(160)]
     public string? UnderwriterName { get; set; }
+    [EmailAddress, StringLength(254)]
+    public string? UnderwriterEmail { get; set; }
+    public DateTime? CarrierSubmissionDateUtc { get; set; }
+    public DateTime? CarrierResponseDueDate { get; set; }
+    [StringLength(80)]
+    public string? CarrierReferenceNumber { get; set; }
+    public bool BrokerOfRecordRequired { get; set; }
+    [StringLength(50)]
+    public string? AgentAuthorityCode { get; set; }
+    [StringLength(50)]
+    public string? ApprovalLevelCode { get; set; }
+    [StringLength(160)]
+    public string? ApprovedByName { get; set; }
+    [StringLength(160)]
+    public string? IssuedByName { get; set; }
+    [StringLength(50)]
+    public string? BillingImpactCode { get; set; }
+    [StringLength(50)]
+    public string? CommissionImpactCode { get; set; }
+    [StringLength(500)]
+    public string? BillingInstruction { get; set; }
+    [StringLength(50)]
+    public string? DocumentDeliveryCode { get; set; }
+    public bool CertificateRequired { get; set; }
+    [StringLength(1000)]
+    public string? FormsRequired { get; set; }
+    [StringLength(500)]
+    public string? AcordFormNumbers { get; set; }
+    [StringLength(80)]
+    public string? ExternalReferenceNumber { get; set; }
+    public bool ComplianceReviewRequired { get; set; }
+    [StringLength(1000)]
+    public string? EoExposureNotes { get; set; }
+    [StringLength(2000)]
+    public string? InternalNotes { get; set; }
+    [StringLength(2000)]
+    public string? ClientFacingNotes { get; set; }
     [StringLength(1000)]
     public string? Reason { get; set; }
     [StringLength(1000)]
@@ -45,18 +105,68 @@ public sealed class UpdatePolicyEndorsementRequest
 {
     [Required, StringLength(120)]
     public string EndorsementType { get; set; } = string.Empty;
+    [StringLength(50)]
+    public string? RequestSourceCode { get; set; }
+    [StringLength(50)]
+    public string? ChangeCategoryCode { get; set; }
     [Required, StringLength(1000)]
     public string Description { get; set; } = string.Empty;
     [Required]
     public DateTime EffectiveDate { get; set; }
+    public DateTime? ExpirationDate { get; set; }
+    public DateTime? RetroactiveDate { get; set; }
+    public DateTime? DiscoveryDate { get; set; }
     [Range(-10000000, 10000000)]
     public decimal PremiumDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal TaxFeeDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal TotalCostDelta { get; set; }
+    [Range(-10000000, 10000000)]
+    public decimal ProratedPremiumDelta { get; set; }
     [Required, StringLength(40)]
     public string Priority { get; set; } = "Normal";
     [Required, StringLength(160)]
     public string AssignedToName { get; set; } = string.Empty;
     [StringLength(160)]
     public string? UnderwriterName { get; set; }
+    [EmailAddress, StringLength(254)]
+    public string? UnderwriterEmail { get; set; }
+    public DateTime? CarrierSubmissionDateUtc { get; set; }
+    public DateTime? CarrierResponseDueDate { get; set; }
+    [StringLength(80)]
+    public string? CarrierReferenceNumber { get; set; }
+    public bool BrokerOfRecordRequired { get; set; }
+    [StringLength(50)]
+    public string? AgentAuthorityCode { get; set; }
+    [StringLength(50)]
+    public string? ApprovalLevelCode { get; set; }
+    [StringLength(160)]
+    public string? ApprovedByName { get; set; }
+    [StringLength(160)]
+    public string? IssuedByName { get; set; }
+    [StringLength(50)]
+    public string? BillingImpactCode { get; set; }
+    [StringLength(50)]
+    public string? CommissionImpactCode { get; set; }
+    [StringLength(500)]
+    public string? BillingInstruction { get; set; }
+    [StringLength(50)]
+    public string? DocumentDeliveryCode { get; set; }
+    public bool CertificateRequired { get; set; }
+    [StringLength(1000)]
+    public string? FormsRequired { get; set; }
+    [StringLength(500)]
+    public string? AcordFormNumbers { get; set; }
+    [StringLength(80)]
+    public string? ExternalReferenceNumber { get; set; }
+    public bool ComplianceReviewRequired { get; set; }
+    [StringLength(1000)]
+    public string? EoExposureNotes { get; set; }
+    [StringLength(2000)]
+    public string? InternalNotes { get; set; }
+    [StringLength(2000)]
+    public string? ClientFacingNotes { get; set; }
     [StringLength(1000)]
     public string? Reason { get; set; }
     [StringLength(1000)]

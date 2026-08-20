@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Common.Dtos;
@@ -33,6 +34,16 @@ public sealed class DocumentService : IDocumentService
     }
 
     public Task<DocumentDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => _repository.GetByIdAsync(id, cancellationToken);
+    public Task<DocumentDto?> GetPolicyDocumentAsync(Guid tenantId, Guid policyId, Guid documentId, CancellationToken cancellationToken = default)
+    {
+        if (tenantId == Guid.Empty || policyId == Guid.Empty || documentId == Guid.Empty)
+        {
+            return Task.FromResult<DocumentDto?>(null);
+        }
+
+        return _repository.GetPolicyDocumentAsync(tenantId, policyId, documentId, cancellationToken);
+    }
+
     public Task<PagedResult<DocumentDto>> SearchAsync(Guid tenantId, string? categoryCode, string? entityName, Guid? entityId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default) => _repository.SearchAsync(tenantId, categoryCode, entityName, entityId, searchTerm, pageNumber, pageSize, cancellationToken);
 
     public async Task<Guid> CreateAsync(CreateDocumentRequest request, CancellationToken cancellationToken = default)
@@ -82,7 +93,27 @@ public sealed class DocumentService : IDocumentService
 
     // Version control
     public Task<IReadOnlyList<DocumentVersionDto>> GetVersionsAsync(Guid documentId, CancellationToken cancellationToken = default) => _repository.GetVersionsAsync(documentId, cancellationToken);
-    public Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default) => _repository.CreateVersionAsync(request, cancellationToken);
+    public Task<DocumentVersionDto?> GetVersionAsync(Guid documentId, Guid documentVersionId, CancellationToken cancellationToken = default) => _repository.GetVersionAsync(documentId, documentVersionId, cancellationToken);
+    public async Task<Guid> CreateVersionAsync(CreateDocumentVersionRequest request, CancellationToken cancellationToken = default)
+    {
+        Validator.ValidateObject(request, new ValidationContext(request), validateAllProperties: true);
+
+        var document = await _repository.GetByIdAsync(request.DocumentId, cancellationToken)
+            ?? throw new KeyNotFoundException("The document was not found or is no longer available.");
+
+        if (request.TenantId == Guid.Empty || document.TenantId != request.TenantId)
+            throw new ValidationException("The document does not belong to the specified tenant.");
+
+        if (string.Equals(document.StatusCode, "Archived", StringComparison.OrdinalIgnoreCase))
+            throw new ValidationException("Archived documents cannot receive new versions. Restore the document before uploading a version.");
+
+        request.FileName = request.FileName.Trim();
+        request.StoragePath = request.StoragePath.Trim();
+        request.ContentType = string.IsNullOrWhiteSpace(request.ContentType) ? null : request.ContentType.Trim();
+        request.ChangeNotes = request.ChangeNotes!.Trim();
+
+        return await _repository.CreateVersionAsync(request, cancellationToken);
+    }
 
     // Secure sharing
     public Task<IReadOnlyList<DocumentShareLinkDto>> GetShareLinksAsync(Guid documentId, CancellationToken cancellationToken = default) => _repository.GetShareLinksAsync(documentId, cancellationToken);

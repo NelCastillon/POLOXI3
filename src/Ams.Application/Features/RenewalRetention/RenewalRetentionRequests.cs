@@ -2,6 +2,10 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Ams.Application.Features.RenewalRetention;
 
+public sealed record InitiateEligibleRenewalsRequest(Guid? TenantId, string InitiationSourceCode, Guid? InitiatedByUserId, int? MaxCases = null);
+
+public sealed record LaunchRenewalPlacementRequest(Guid TenantId, Guid? LaunchedByUserId);
+
 public sealed class CreateRenewalRetentionCaseRequest
 {
     [Required]

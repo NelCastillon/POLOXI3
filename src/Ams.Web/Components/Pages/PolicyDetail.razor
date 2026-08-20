@@ -3,15 +3,34 @@
 @using System.ComponentModel.DataAnnotations
 @using System.Globalization
 @using Ams.Application.Features.PolicyCoverages
+@using Ams.Application.Features.PolicyEndorsements
+@using Ams.Application.Features.PolicyLifecycle
+@using Ams.Application.Features.Claims
+@using Ams.Application.Features.PolicyCertificates
+@using Ams.Application.Features.RenewalRetention
 @using Microsoft.AspNetCore.Components.Forms
 @inject ApiClient Api
 @inject CurrentUserContext CurrentUser
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 @inject BreadcrumbService Breadcrumbs
 
 <PageTitle>@(_policy is null ? "Policy" : _policy.PolicyNumber) ? Policy Detail</PageTitle>
 
 <EnterpriseToast @ref="_toast" ShowCloseButton="true" Timeout="4000" NewestOnTop="true" />
+
+<EnterpriseDocumentUpload @bind-IsOpen="_showDocumentUpload"
+                          TenantId="_tenantId"
+                          CreatedByUserId="_currentUserId"
+                          EntityName="Policy"
+                          EntityId="PolicyId"
+                          Title="Upload Policy Document"
+                          IntroText="Upload and classify declarations, certificates, endorsements, binders, and other supporting policy documents."
+                          DefaultDocumentTypeCode="POLICY"
+                          DefaultCategoryCode="POLICY"
+                          DefaultTags="Policy"
+                          OnUploaded="HandlePolicyDocumentUploadedAsync"
+                          OnUploadFailed="HandlePolicyDocumentUploadFailed" />
 
 @if (_loading)
 {
@@ -31,31 +50,31 @@ else
 {
     <div class="pd-enterprise-page">
     <!-- -- HEADER --------------------------------------------------------- -->
-    <div class="pd-header">
-        <div class="pd-header-left">
-            <div class="pd-lob-icon pd-lob-@LobKey(_policy.Lob)">
+    <div class="page-header">
+        <div class="aph-left">
+            <div class="aph-icon pd-lob-@LobKey(_policy.Lob)">
                 <i class="bi @LobIcon(_policy.Lob)" aria-hidden="true"></i>
             </div>
-            <div class="pd-header-info">
-                <div class="pd-title-row">
-                    <h1 class="pd-pol-num">@_policy.PolicyNumber</h1>
-                    <span class="pd-status pd-status-@_policy.Status.ToLower()">@_policy.Status</span>
-                    <span class="pd-lob-badge pd-lob-@LobKey(_policy.Lob)">@_policy.Lob</span>
+            <div>
+                <div class="aph-title-row">
+                    <h1 class="page-title">@_policy.PolicyNumber</h1>
+                    <span class="badge badge-green pd-status-@_policy.Status.ToLower()">@_policy.Status</span>
+                    <span class="badge badge-blue pd-lob-@LobKey(_policy.Lob)">@_policy.Lob</span>
                 </div>
-                <div class="pd-sub-row">
-                    <button class="pd-acct-link" @onclick='() => Nav.NavigateTo($"/accounts/{_policy.AccountId}")'>
+                <div class="page-subtitle pd-global-header-meta">
+                    <button class="badge badge-neutral" @onclick='() => Nav.NavigateTo($"/accounts/{_policy.AccountId}")'>
                         <i class="bi bi-building" aria-hidden="true"></i>@_policy.Account
                     </button>
-                    <span class="pd-sub-chip"><i class="bi bi-building-fill" aria-hidden="true"></i>@_policy.Carrier</span>
-                    <span class="pd-sub-chip"><i class="bi bi-calendar" aria-hidden="true"></i>@_policy.EffDate.ToString("MM/dd/yyyy") ? @_policy.ExpDate.ToString("MM/dd/yyyy")</span>
-                    <span class="pd-sub-chip @ExpChipCss(_policy.ExpDate)">
+                    <span class="badge badge-neutral"><i class="bi bi-building-fill" aria-hidden="true"></i>@_policy.Carrier</span>
+                    <span class="badge badge-neutral"><i class="bi bi-calendar" aria-hidden="true"></i>@_policy.EffDate.ToString("MM/dd/yyyy") ? @_policy.ExpDate.ToString("MM/dd/yyyy")</span>
+                    <span class="badge badge-neutral @ExpChipCss(_policy.ExpDate)">
                         <i class="bi bi-clock" aria-hidden="true"></i>
                         @DaysLabel(_policy.ExpDate)
                     </span>
                 </div>
             </div>
         </div>
-        <div class="pd-header-actions">
+        <div class="page-actions">
             <button class="um-btn um-btn-ghost um-btn-sm pd-back-btn" title="Back to policies" aria-label="Back to policies" @onclick='() => Nav.NavigateTo("/policies")'>
                 <i class="bi bi-arrow-left" aria-hidden="true"></i>
             </button>
@@ -74,6 +93,9 @@ else
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("esign")'>
                 <i class="bi bi-pen-fill" aria-hidden="true"></i> E-Sign
             </button>
+            <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => Nav.NavigateTo($"/premium-finance?sourceType=Policy&sourceId={PolicyId}")'>
+                <i class="bi bi-bank2" aria-hidden="true"></i> Premium Finance
+            </button>
             <button class="um-btn um-btn-ghost um-btn-sm" @onclick='() => OpenAction("message")'>
                 <i class="bi bi-chat" aria-hidden="true"></i> Message
             </button>
@@ -91,6 +113,16 @@ else
             }
         </div>
     </div>
+
+    <section class="pd-cockpit" aria-label="Policy service assignments">
+        <div class="pd-cockpit-head"><span><i class="bi bi-people-fill" aria-hidden="true"></i> Account service team</span><button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenServiceAssignmentsAsync"><i class="bi bi-person-gear" aria-hidden="true"></i> Manage assignments</button></div>
+        <div class="pd-cockpit-grid">
+            @CockpitCard("Account Manager", AssignmentName("ACCOUNT_MANAGER"), "Primary account assignment", "bi-person-badge", "info")
+            @CockpitCard("Producer", AssignmentName("PRODUCER"), "Endorsement routing fallback", "bi-briefcase", "success")
+            @CockpitCard("CSR", AssignmentName("CSR"), "Account servicing support", "bi-headset", "neutral")
+        </div>
+        <small class="text-muted">Assignments are maintained on @_policy.Account and apply to every policy linked to this account.</small>
+    </section>
 
     <div class="pd-command-strip" aria-label="Policy executive summary">
         <div class="pd-command-card @PolicyHealthCss()">
@@ -127,6 +159,71 @@ else
         </div>
     </div>
 
+    @if (_accounting is not null)
+    {
+        <section class="pd-cockpit" aria-label="Policy financial status">
+            <div class="pd-cockpit-head">
+                <span><i class="bi bi-bank" aria-hidden="true"></i> Policy accounting</span>
+                <strong>@_accounting.StatusCode</strong>
+            </div>
+            <div class="pd-cockpit-grid">
+                @CockpitCard("Invoice", _accounting.InvoiceAmount.ToString("C0"), _accounting.BillingTypeCode, "bi-receipt", "info")
+                @CockpitCard("Outstanding balance", _accounting.OutstandingBalance.ToString("C0"), _accounting.OutstandingBalance > 0 ? "Customer receivable open" : "Account current", "bi-wallet2", _accounting.OutstandingBalance > 0 ? "attention" : "success")
+                @CockpitCard("Commission", _accounting.CommissionAmount.ToString("C0"), $"{_accounting.CommissionRatePct:N2}% expected", "bi-percent", "success")
+                @CockpitCard("Carrier payable", _accounting.CarrierPayableAmount.ToString("C0"), _accounting.BillingTypeCode == "AgencyBill" ? "Pending remittance" : "Carrier bills insured", "bi-building", "neutral")
+                @CockpitCard("Installments", _accounting.InstallmentCount.ToString(), _accounting.InstallmentCount > 0 ? "Scheduled from billing plan" : "Not agency billed", "bi-calendar3", "info")
+                @CockpitCard("Fees and taxes", (_accounting.FeeAmount + _accounting.TaxAmount).ToString("C0"), $"Fees {_accounting.FeeAmount:C0} / Taxes {_accounting.TaxAmount:C0}", "bi-calculator", "neutral")
+            </div>
+            <div class="pd-cockpit-actions" aria-label="Policy accounting actions">
+                <span>Accounting actions</span>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing/payments")'><i class="bi bi-cash-coin" aria-hidden="true"></i><strong>Receive payment</strong><small>Record and apply insured funds.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing/invoices")'><i class="bi bi-receipt" aria-hidden="true"></i><strong>View invoice</strong><small>Review invoice and line detail.</small></button>
+                <button type="button" @onclick="PrintInvoiceAsync" disabled="@(!_accounting.Invoices.Any())"><i class="bi bi-printer" aria-hidden="true"></i><strong>Print invoice</strong><small>Print the persisted invoice view.</small></button>
+                <button type="button" @onclick="OpenInvoiceEmail" disabled="@(!_accounting.Invoices.Any())"><i class="bi bi-envelope" aria-hidden="true"></i><strong>Email invoice</strong><small>@InvoiceDeliveryActionText</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/billing")'><i class="bi bi-calendar3" aria-hidden="true"></i><strong>Payment schedule</strong><small>Review installments and trust activity.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/workbench/accounting")'><i class="bi bi-clipboard-data" aria-hidden="true"></i><strong>View accounting</strong><small>Open the accounting work queue.</small></button>
+                <button type="button" @onclick='() => Nav.NavigateTo("/finance/journalentries")'><i class="bi bi-journal-text" aria-hidden="true"></i><strong>View ledger</strong><small>Open posted general ledger entries.</small></button>
+            </div>
+        </section>
+    }
+
+@if (_showServiceAssignments)
+{
+    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseServiceAssignments">
+        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-service-assignment-title" @onclick:stopPropagation="true">
+            <div class="um-modal-header"><i class="bi bi-people-fill" aria-hidden="true"></i><span id="pd-service-assignment-title">Manage Account Service Team</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseServiceAssignments" aria-label="Close"><i class="bi bi-x-lg"></i></button></div>
+            <EditForm Model="_serviceAssignmentForm" OnValidSubmit="SaveServiceAssignmentsAsync">
+                <div class="um-modal-body">
+                    <p class="text-muted">Changes update the persisted service team for <strong>@_policy?.Account</strong> and affect all linked policies.</p>
+                    <div class="um-form-grid">
+                        <div class="um-field"><label>Primary Account Manager</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.AccountManagerUserId"><option value="">Unassigned</option>@foreach(var user in PolicyAccountManagerUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                        <div class="um-field"><label>Primary Producer</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.ProducerUserId"><option value="">Unassigned</option>@foreach(var user in PolicyProducerUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                        <div class="um-field"><label>CSR</label><InputSelect class="form-select" @bind-Value="_serviceAssignmentForm.CsrUserId"><option value="">Unassigned</option>@foreach(var user in PolicyCsrUsers){<option value="@user.UserId">@AssignmentUserName(user)</option>}</InputSelect></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseServiceAssignments">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_savingServiceAssignments"><i class="bi bi-check-lg"></i> Save assignments</button></div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+    @if (_showInvoiceEmail)
+    {
+        <div class="mt-modal-backdrop" role="presentation" @onclick="CloseInvoiceEmail">
+            <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="invoice-email-title" @onclick:stopPropagation="true">
+                <div class="um-modal-header"><i class="bi bi-envelope" aria-hidden="true"></i><span id="invoice-email-title">Email policy invoice</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseInvoiceEmail"><i class="bi bi-x-lg"></i></button></div>
+                <div class="um-modal-body">
+                    <div class="pd-modal-intro"><span class="pd-modal-chip"><i class="bi bi-send"></i> Proposal delivery system</span><p>The invoice will use the tenant email provider, retry policy, and delivery audit queue.</p></div>
+                    <div class="um-form-grid">
+                        <div class="um-field um-field--full"><label>Invoice</label><select class="form-select" @bind="_invoiceEmailInvoiceId">@foreach (var invoice in _accounting!.Invoices) { <option value="@invoice.InvoiceId">@invoice.InvoiceNumber — @invoice.BalanceAmount.ToString("C2")</option> }</select></div>
+                        <div class="um-field um-field--full"><label>Recipient email <span class="text-danger">*</span></label><input class="form-control" type="email" @bind="_invoiceEmailRecipient" /></div>
+                    </div>
+                </div>
+                <div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="CloseInvoiceEmail">Cancel</button><button type="button" class="um-btn um-btn-primary" @onclick="EmailInvoiceAsync" disabled="@_emailingInvoice"><i class="bi bi-send"></i> @(_emailingInvoice ? "Queueing…" : "Queue email")</button></div>
+            </div>
+        </div>
+    }
+
     @if (_loadError is not null)
     {
         <div class="alert alert-danger pd-load-error" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;" role="alert">
@@ -134,19 +231,42 @@ else
         </div>
     }
 
-    <section class="pd-workspace-panel" aria-label="Policy workspace">
-        <!-- -- KPI BAR --------------------------------------------------------- -->
-        <div class="pd-kpi-bar">
-            @PdKpi("Written Premium",   _policy.WrittenPremium.ToString("C0"),  "bi-cash-stack",       "pd-ki--blue")
-            @PdKpi("Annual Premium",    _policy.AnnualPremium.ToString("C0"),   "bi-calendar-check",   "pd-ki--blue")
-            @PdKpi("Balance Due",       _policy.BalanceDue.ToString("C0"),      "bi-receipt",          _policy.BalanceDue > 0 ? "pd-ki--red" : "pd-ki--green")
-            @PdKpi("Open Claims",       _policy.OpenClaims.ToString(),          "bi-exclamation-circle", _policy.OpenClaims > 0 ? "pd-ki--amber" : "pd-ki--green")
-            @PdKpi("Endorsements",      _endorsements.Count.ToString(),         "bi-pen",              "pd-ki--gray")
-            @PdKpi("YTD Commission",    _commissions.Sum(c => c.AgencyAmt).ToString("C0"), "bi-percent", "pd-ki--purple")
-            @PdKpi("Producer",          _policy.Producer,                       "bi-person-badge",     "pd-ki--gray")
-            @PdKpi("CSR",               _policy.Csr,                            "bi-headset",          "pd-ki--gray")
+    <section class="pd-cockpit" aria-label="Policy cockpit">
+        <div class="pd-cockpit-primary">
+            <div class="pd-cockpit-head">
+                <span><i class="bi bi-speedometer2" aria-hidden="true"></i> Policy cockpit</span>
+                <strong>@PolicyHealthLabel()</strong>
+            </div>
+            <p>@PolicyHealthSummary()</p>
+            <div class="pd-cockpit-term">
+                <div>
+                    <span>Term progress</span>
+                    <strong>@TermProgressPercent%</strong>
+                </div>
+                <div class="pd-cockpit-track" aria-hidden="true"><i style="width:@TermProgressPercent%"></i></div>
+                <small>@_policy.EffDate.ToString("MMM d, yyyy") - @_policy.ExpDate.ToString("MMM d, yyyy")</small>
+            </div>
         </div>
+        <div class="pd-cockpit-grid">
+            @CockpitCard("Premium posture", _policy.WrittenPremium.ToString("C0"), $"Annual {_policy.AnnualPremium:C0} / Balance {_policy.BalanceDue:C0}", "bi-cash-coin", _policy.BalanceDue > 0 ? "attention" : "success")
+            @CockpitCard("Coverage operations", _coverages.Count.ToString(), $"{_endorsements.Count} endorsement(s), {_documents.Count} document(s)", "bi-shield-check", "info")
+            @CockpitCard("Claims exposure", _policy.OpenClaims.ToString(), _policy.OpenClaims > 0 ? "Open claim monitoring required" : "No active claim exceptions", "bi-exclamation-diamond", _policy.OpenClaims > 0 ? "attention" : "success")
+            @CockpitCard("Service owner", _policy.Producer, $"CSR: {_policy.Csr} / Branch: {_policy.Branch}", "bi-person-workspace", "neutral")
+        </div>
+        <div class="pd-cockpit-actions" aria-label="Recommended actions">
+            <span>Recommended next actions</span>
+            @foreach (var action in RecommendedActions)
+            {
+                <button type="button" @onclick='() => OpenAction(action.ActionKey)'>
+                    <i class="bi @action.Icon" aria-hidden="true"></i>
+                    <strong>@action.Title</strong>
+                    <small>@action.Description</small>
+                </button>
+            }
+        </div>
+    </section>
 
+    <section class="pd-workspace-panel" aria-label="Policy workspace">
         <!-- -- 13-TAB BODY ---------------------------------------------------- -->
         <div class="pd-native-tabs" role="tablist" aria-label="Policy detail sections">
             @for (var i = 0; i < _detailTabs.Length; i++)
@@ -366,7 +486,7 @@ else
                     <div class="pd-tab-body">
                         <div class="pd-tab-toolbar">
                             <span class="pd-tab-count">@_documents.Count document(s)</span>
-                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentForm">
+                            <button class="um-btn um-btn-ghost um-btn-sm" @onclick="OpenDocumentUpload">
                                 <i class="bi bi-upload" aria-hidden="true"></i> Upload
                             </button>
                         </div>
@@ -384,8 +504,11 @@ else
                                     </div>
                                     <div class="pd-doc-actions">
                                         @OpenDetailsLink(doc)
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button>
-                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Preview" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        @if (doc.HasStoredContent)
+                                        {
+                                            <button class="um-btn um-btn-ghost um-btn-sm" title="Download" @onclick="() => DownloadDocumentAsync(doc)"><i class="bi bi-download" aria-hidden="true"></i></button>
+                                            <button class="um-btn um-btn-ghost um-btn-sm" title="Preview" @onclick="() => PreviewDocumentAsync(doc)"><i class="bi bi-eye" aria-hidden="true"></i></button>
+                                        }
                                     </div>
                                 </div>
                             }
@@ -540,7 +663,7 @@ else
                         </div>
                         <div class="pd-enterprise-list">
                             <div class="pd-list-head pd-list-head--endorsements">
-                                <span>Endorsement</span><span>Effective</span><span>Type</span><span>Description</span><span>Premium ?</span><span>Status</span><span></span>
+                                <span>Endorsement</span><span>Effective</span><span>Type</span><span>Description</span><span>Premium Δ</span><span>Status</span><span></span>
                             </div>
                             @foreach (var e in _endorsements)
                             {
@@ -549,7 +672,7 @@ else
                                     <span class="pd-mono">@e.EffDate.ToString("MM/dd/yyyy")</span>
                                     <span>@e.Type</span>
                                     <span><strong>@e.Description</strong><small>@e.IssuedBy</small></span>
-                                    <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : null)">@(e.PremChange >= 0 ? "+" : "")@e.PremChange.ToString("C2")</span>
+                                    <span class="pd-mono @(e.PremChange > 0 ? "pd-prem-up" : e.PremChange < 0 ? "pd-prem-dn" : null)">@(_canViewEndorsementFinancial ? $"{(e.PremChange >= 0 ? "+" : "")}{e.PremChange:C2}" : "Restricted")</span>
                                     <span class="pd-end-status pd-es-@e.Status.ToLower()">@e.Status</span>
                                     <span class="pd-open-cell">@OpenDetailsLink(e)</span>
                                 </button>
@@ -1100,8 +1223,79 @@ else
                         @if (_activeAction is "endorse" or "rewrite")
                         {
                             <div class="um-field">
+                                <label>Endorsement Type <span class="text-danger">*</span></label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.EndorsementType">
+                                    <option value="">Select type</option>
+                                    @foreach (var opt in EndorsementTypeOptions)
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
+                                <label>Change Category</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.ChangeCategoryCode">
+                                    @foreach (var opt in EndorsementOptionValues("ChangeCategory"))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
+                                <label>Request Source</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.RequestSourceCode">
+                                    @foreach (var opt in EndorsementOptionValues("RequestSource"))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
+                                <label>Priority</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.Priority">
+                                    @foreach (var opt in EndorsementOptionValues("Priority"))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
                                 <label>Premium Change</label>
                                 <InputNumber class="form-control" @bind-Value="_actionForm.PremiumDelta" />
+                            </div>
+                            <div class="um-field">
+                                <label>Taxes / Fees Change</label>
+                                <InputNumber class="form-control" @bind-Value="_actionForm.TaxFeeDelta" />
+                            </div>
+                            <div class="um-field">
+                                <label>Billing Impact</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.BillingImpactCode">
+                                    @foreach (var opt in EndorsementOptionValues("BillingImpact"))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
+                                <label>Approval Level</label>
+                                <InputSelect class="form-select" @bind-Value="_actionForm.ApprovalLevelCode">
+                                    @foreach (var opt in EndorsementOptionValues("ApprovalLevel"))
+                                    {
+                                        <option value="@opt.Value">@opt.Label</option>
+                                    }
+                                </InputSelect>
+                            </div>
+                            <div class="um-field">
+                                <label>Carrier Reference</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.CarrierReferenceNumber" />
+                            </div>
+                            <div class="um-field">
+                                <label>Client Contact</label>
+                                <InputText class="form-control" @bind-Value="_actionForm.ClientContactName" />
+                            </div>
+                            <div class="um-field um-field--full">
+                                <label>Required Documents</label>
+                                <InputTextArea class="form-control" rows="2" @bind-Value="_actionForm.RequiredDocuments" />
                             </div>
                         }
                         @if (_activeAction == "cancel")
@@ -1486,61 +1680,6 @@ else
     </div>
 }
 
-@if (_showDocForm)
-{
-    <div class="mt-modal-backdrop" role="presentation" @onclick="CloseDocumentForm">
-        <div class="mt-modal pd-form-modal" role="dialog" aria-modal="true" aria-labelledby="pd-doc-title" @onclick:stopPropagation="true">
-            <div class="um-modal-header">
-                <i class="bi bi-upload" aria-hidden="true"></i>
-                <span id="pd-doc-title">Upload Policy Document</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseDocumentForm"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <EditForm Model="_docForm" OnValidSubmit="SaveDocumentAsync" OnInvalidSubmit="NotifyValidationAsync">
-                <DataAnnotationsValidator />
-                <div class="um-modal-body">
-                    <div class="pd-modal-intro">
-                        <span class="pd-modal-chip"><i class="bi bi-folder-check" aria-hidden="true"></i> Document governance</span>
-                        <p>Register policy documents, generate an activity entry, and update the audit trail.</p>
-                    </div>
-                    <div class="um-form-grid">
-                        <div class="um-field um-field--full">
-                            <label>Document Name <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_docForm.Name" />
-                        </div>
-                        <div class="um-field">
-                            <label>Category <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_docForm.Category">
-                                <option value="Policy">Policy</option>
-                                <option value="Certificate">Certificate</option>
-                                <option value="Endorsement">Endorsement</option>
-                                <option value="Billing">Billing</option>
-                                <option value="Claims">Claims</option>
-                            </InputSelect>
-                        </div>
-                        <div class="um-field">
-                            <label>File Type</label>
-                            <InputSelect class="form-select" @bind-Value="_docForm.FileType">
-                                <option value="PDF">PDF</option>
-                                <option value="DOCX">DOCX</option>
-                                <option value="XLSX">XLSX</option>
-                                <option value="PNG">PNG</option>
-                            </InputSelect>
-                        </div>
-                        <div class="um-field um-field--full">
-                            <label>Notes</label>
-                            <InputTextArea class="form-control" rows="3" @bind-Value="_docForm.Notes" />
-                        </div>
-                    </div>
-                </div>
-                <div class="um-modal-footer">
-                    <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDocumentForm">Cancel</button>
-                    <button type="submit" class="um-btn um-btn-primary"><i class="bi bi-check-lg"></i> Upload</button>
-                </div>
-            </EditForm>
-        </div>
-    </div>
-}
-
 @if (_showClaimForm)
 {
     <div class="mt-modal-backdrop" role="presentation" @onclick="CloseClaimForm">
@@ -1718,6 +1857,7 @@ else
     private string   _dlTab   = "drivers";
     private Guid     _tenantId;
     private Guid?    _currentUserId;
+    private bool     _canViewEndorsementFinancial;
 
     // -- Data ----------------------------------------------------------------
     private PolicyRecord?           _policy;
@@ -1744,6 +1884,10 @@ else
     private List<ReinsuranceRow>    _reinsurance    = [];
     private List<CoverageLookup>    _coverageLookups = [];
     private List<PolicyCoverageDetailTemplateDto> _coverageTemplates = [];
+    private List<PolicyEndorsementOptionDto> _endorsementOptions = [];
+    private List<EndorsementTypeDto> _endorsementTypes = [];
+    private Account360Dto? _account360;
+    private List<UserDto> _assignmentUsers = [];
 
     private readonly DetailTab[] _detailTabs =
     [
@@ -1778,6 +1922,10 @@ else
         _coverageForm.StatusCode,
         _coverageTemplates.Select(x => x.StatusCode),
         _coverages.Select(x => x.StatusCode));
+    private IEnumerable<PdLv> EndorsementTypeOptions => _endorsementTypes
+        .OrderBy(x => x.SortOrder)
+        .ThenBy(x => x.TypeName)
+        .Select(x => new PdLv(x.TypeName, x.TypeName));
 
     // -- Action dialog -------------------------------------------------------
     private bool    _showActionDlg  = false;
@@ -1798,29 +1946,33 @@ else
     private bool         _showRiskForm = false;
     private bool         _showActForm  = false;
     private bool         _showCommForm = false;
-    private bool         _showDocForm  = false;
+    private bool         _showDocumentUpload;
     private bool         _showClaimForm = false;
+    private bool         _showServiceAssignments;
+    private bool         _savingServiceAssignments;
+    private PolicyServiceAssignmentForm _serviceAssignmentForm = new();
     private CoverageRow? _selectedCoverage;
     private CoverageForm _coverageForm = new();
     private EditContext  _coverageEditContext = new(new CoverageForm());
     private RiskItemForm _riskForm     = new();
-    private DocumentForm _docForm      = new();
     private ClaimForm    _claimForm    = new();
     private ActivityForm _actForm      = new();
     private CommForm     _commForm     = new();
+    private PolicyAccountingDashboardDto? _accounting;
+    private PolicyServicingWorkspaceDto? _servicingWorkspace;
+    private bool _showInvoiceEmail;
+    private bool _emailingInvoice;
+    private Guid _invoiceEmailInvoiceId;
+    private string _invoiceEmailRecipient = string.Empty;
+    private string InvoiceDeliveryActionText => _accounting?.Invoices.FirstOrDefault()?.DeliveryStatusCode is { Length: > 0 } status ? $"Latest delivery: {status}" : "Queue through tenant email delivery.";
 
     // -- Dropdown options ----------------------------------------------------
-    private static readonly List<PdLv> _cancelReasonOpts =
-    [
-        new("insured-request","Insured Request"), new("non-payment","Non-Payment"),
-        new("underwriting","Underwriting"), new("fraud","Fraud / Misrepresentation"),
-        new("other","Other"),
-    ];
-    private static readonly List<PdLv> _certTypeOpts =
-    [
-        new("acord25","ACORD 25 ? Liability"), new("acord27","ACORD 27 ? Property"),
-        new("acord28","ACORD 28 ? Commercial Property"), new("acord75","ACORD 75 ? Workers Comp"),
-    ];
+    private IReadOnlyList<PolicyLifecycleOptionDto> _policyLifecycleOptions = [];
+    private IEnumerable<PdLv> _cancelReasonOpts => _policyLifecycleOptions
+        .Where(x => x.OptionGroupCode == "PolicyTransactionReason")
+        .OrderBy(x => x.SortOrder)
+        .Select(x => new PdLv(x.OptionCode, x.DisplayName));
+    private IEnumerable<PdLv> _certTypeOpts => LifecycleOptions("CertificateType");
     private static readonly List<PdLv> _esignDocOpts =
     [
         new("app","Application"), new("bind","Bind Request"), new("cancel","Notice of Cancellation"),
@@ -1870,8 +2022,15 @@ else
             }
 
             await LoadPolicyRelatedDataAsync();
+            _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
+            _servicingWorkspace = await Api.GetPolicyServicingWorkspaceAsync(_tenantId, PolicyId);
+            LoadServicingWorkspaceRows();
+            _accounting = await Api.GetPolicyAccountingDashboardAsync(_tenantId, PolicyId);
+            LoadAccountingRows();
             await LoadPolicyCoveragesAsync();
             await LoadCoverageLookupsAsync();
+            await LoadEndorsementTypesAsync();
+            await LoadPolicyLifecycleOptionsAsync();
             await LoadPolicyCommissionsAsync();
         }
         catch (Exception ex)
@@ -1895,23 +2054,83 @@ else
         }
     }
 
+    private IEnumerable<UserDto> PolicyAccountManagerUsers => AssignmentUsersInRoles("ACCOUNT_MANAGER", "ACCOUNTMANAGER", "SERVICE_MANAGER", "SERVICEMANAGER");
+    private IEnumerable<UserDto> PolicyProducerUsers => AssignmentUsersInRoles("PRODUCER", "ACCOUNT_PRODUCER", "ACCOUNTPRODUCER");
+    private IEnumerable<UserDto> PolicyCsrUsers => AssignmentUsersInRoles("CSR", "SENIOR_CSR", "SENIORCSR");
+    private IEnumerable<UserDto> AssignmentUsersInRoles(params string[] allowedRoles)
+    {
+        var allowed = allowedRoles.Select(NormalizeAssignmentRole).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _assignmentUsers.Where(user => !user.IsLockedOut && string.Equals(user.StatusCode, "Active", StringComparison.OrdinalIgnoreCase) && AssignmentUserRoles(user).Any(allowed.Contains)).OrderBy(AssignmentUserName);
+    }
+    private static IEnumerable<string> AssignmentUserRoles(UserDto user) => (user.AssignedRoleCodes ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(NormalizeAssignmentRole);
+
+    private static string AssignmentUserName(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.Email;
+    private static string NormalizeAssignmentRole(string role) => role.Replace("_", "").Replace("-", "").Replace(" ", "");
+    private AccountServiceAssignmentDto? Assignment(string role) => _account360?.ServiceAssignments.FirstOrDefault(assignment => assignment.IsPrimary && string.Equals(NormalizeAssignmentRole(assignment.AssignmentRoleCode), NormalizeAssignmentRole(role), StringComparison.OrdinalIgnoreCase));
+    private string AssignmentName(string role) => Assignment(role)?.UserName ?? "Unassigned";
+
+    private async Task OpenServiceAssignmentsAsync()
+    {
+        if (_policy is null) return;
+        _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
+        var users = await Api.SearchUsersAsync(_tenantId, pageSize: 1000);
+        _assignmentUsers = users?.Items.ToList() ?? [];
+        _serviceAssignmentForm = new()
+        {
+            AccountManagerUserId = Assignment("ACCOUNT_MANAGER")?.UserId,
+            ProducerUserId = Assignment("PRODUCER")?.UserId,
+            CsrUserId = Assignment("CSR")?.UserId
+        };
+        _showServiceAssignments = true;
+    }
+
+    private void CloseServiceAssignments()
+    {
+        if (!_savingServiceAssignments) _showServiceAssignments = false;
+    }
+
+    private async Task SaveServiceAssignmentsAsync()
+    {
+        if (_policy is null) return;
+        _savingServiceAssignments = true;
+        try
+        {
+            await Api.ReplaceAccountServiceAssignmentsAsync(_policy.AccountId, new()
+            {
+                TenantId = _tenantId,
+                AccountId = _policy.AccountId,
+                AccountManagerUserId = _serviceAssignmentForm.AccountManagerUserId,
+                ProducerUserId = _serviceAssignmentForm.ProducerUserId,
+                CsrUserId = _serviceAssignmentForm.CsrUserId
+            });
+            _account360 = await Api.GetAccount360Async(_tenantId, _policy.AccountId);
+            _showServiceAssignments = false;
+            await ShowToast("Account service assignments updated.");
+        }
+        catch (Exception ex) { await ShowErrorToast($"Assignment save failed: {ex.Message}"); }
+        finally { _savingServiceAssignments = false; }
+    }
+
     private async Task LoadPolicyRelatedDataAsync()
     {
         if (_policy is null) return;
 
-        var endorsementsTask = Api.GetPolicyEndorsementCenterAsync(_tenantId);
+        var endorsementsTask = Api.GetPolicyEndorsementWorkspaceAsync(_tenantId, PolicyId);
         var cancellationsTask = Api.GetPolicyCancellationCenterAsync(_tenantId);
         var certificatesTask = Api.SearchPolicyCertificatesAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
         var documentsTask = Api.SearchPolicyDocumentsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var enterpriseDocumentsTask = Api.GetDocumentsByEntityAsync(_tenantId, "Policy", PolicyId);
         var submissionsTask = Api.SearchSubmissionsAsync(_tenantId, _policy.SubmissionRef, pageSize: 25);
+        var claimsTask = Api.SearchClaimsAsync(_tenantId, _policy.PolicyNumber, pageSize: 200);
+        var renewalsTask = Api.GetRenewalRetentionCenterAsync(_tenantId);
 
-        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, submissionsTask);
+        await Task.WhenAll(endorsementsTask, cancellationsTask, certificatesTask, documentsTask, enterpriseDocumentsTask, submissionsTask, claimsTask, renewalsTask);
 
         var endorsements = endorsementsTask.Result?.Endorsements
-            .Where(x => x.PolicyId == PolicyId || string.Equals(x.PolicyNumber, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.RequestedDateUtc)
             .ToList() ?? [];
         _endorsements = endorsements.Select(MapEndorsementRow).ToList();
+        _endorsementOptions = endorsementsTask.Result?.Options.ToList() ?? [];
 
         var cancellationActivities = cancellationsTask.Result?.Activities ?? [];
         var cancellations = cancellationsTask.Result?.Cancellations
@@ -1925,11 +2144,41 @@ else
             .Select(MapCertificateRow)
             .ToList();
 
+        _claims = (claimsTask.Result?.Items ?? [])
+            .Where(x => x.PolicyId == PolicyId)
+            .OrderByDescending(x => x.DateReported)
+            .Select(x => new ClaimRow
+            {
+                ClaimId = x.ClaimId,
+                ClaimNum = x.ClaimNumber,
+                LossDate = x.DateOfLoss,
+                LossType = x.LossType,
+                Description = x.LossDescription ?? string.Empty,
+                Status = x.Status,
+                Reserve = x.TotalReserves,
+                Paid = x.TotalPaid,
+                Adjuster = x.AssignedHandler,
+                ClosedDate = x.ClosedDate
+            }).ToList();
+
+        var renewalCase = (renewalsTask.Result?.Cases ?? []).FirstOrDefault(x => x.PolicyId == PolicyId);
+        _renewal = renewalCase is null ? null : new RenewalPipeline
+        {
+            Status = renewalCase.Stage,
+            QuotedPremium = renewalCase.ProposedPremium,
+            Remarketed = renewalCase.RenewalSubmissionId.HasValue,
+            CarriersQuoted = renewalCase.RenewalSubmissionId.HasValue ? 1 : 0,
+            FollowUpDate = renewalCase.NextActionDueDate,
+            AssignedTo = renewalCase.AssignedToName ?? renewalCase.Csr
+        };
+
         _documents = (documentsTask.Result?.Items ?? [])
             .Where(x => string.Equals(x.PolicyCode, _policy.PolicyNumber, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(x => x.CreatedDateUtc)
             .Select(MapDocumentRow)
             .ToList();
+        _documents.AddRange((enterpriseDocumentsTask.Result ?? []).Select(MapEnterpriseDocumentRow));
+        _documents = _documents.OrderByDescending(x => x.UploadedAt).ToList();
 
         _submissions = (submissionsTask.Result?.Items ?? [])
             .Where(x => x.SubmissionId.ToString().Equals(_policy.SubmissionRef, StringComparison.OrdinalIgnoreCase) || string.Equals(x.SubmissionNumber, _policy.SubmissionRef, StringComparison.OrdinalIgnoreCase))
@@ -1940,6 +2189,103 @@ else
         _activities = BuildActivityRows(cancellations, cancellationActivities, endorsements);
         _auditLog = BuildAuditRows();
         BuildDerivedPolicyRows(cancellations);
+    }
+
+    private IEnumerable<PdLv> LifecycleOptions(string groupCode)
+        => _policyLifecycleOptions
+            .Where(x => string.Equals(x.OptionGroupCode, groupCode, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.SortOrder)
+            .Select(x => new PdLv(x.OptionCode, x.DisplayName));
+
+    private void LoadServicingWorkspaceRows()
+    {
+        if (_servicingWorkspace is null) return;
+
+        _policyLifecycleOptions = _servicingWorkspace.Options;
+        _activities.AddRange(_servicingWorkspace.Activities.Select(x => new ActivityRow
+        {
+            Subject = x.Subject,
+            Category = x.ActivityTypeCode,
+            Channel = x.ChannelCode ?? string.Empty,
+            Outcome = x.OutcomeCode ?? x.StatusCode,
+            ActivityDate = x.ActivityDateUtc.ToLocalTime(),
+            Notes = x.Notes,
+            CreatedBy = x.PerformedByName ?? string.Empty
+        }));
+        _activities = _activities.OrderByDescending(x => x.ActivityDate).ToList();
+
+        _comms = _servicingWorkspace.Communications.Select(x => new CommRow
+        {
+            ThreadId = x.ThreadId.ToString(),
+            SentAt = x.LastActivityDateUtc.ToLocalTime(),
+            Channel = x.ChannelCode,
+            Direction = x.DirectionCode,
+            Subject = x.Subject,
+            From = x.DirectionCode == "Outbound" ? "Agency" : x.Recipient ?? string.Empty,
+            To = x.DirectionCode == "Outbound" ? x.Recipient ?? string.Empty : "Agency",
+            Status = x.StatusCode
+        }).ToList();
+
+        _serviceTasks = _servicingWorkspace.Tasks.Select(x => new ServiceTaskRow
+        {
+            TaskNumber = x.TaskId.ToString(),
+            Title = x.Title,
+            Type = x.TaskTypeCode,
+            Priority = x.PriorityCode,
+            Status = x.StatusCode,
+            DueDate = x.DueDateUtc ?? DateTime.MaxValue,
+            AssignedTo = x.AssignedToName ?? string.Empty,
+            RelatedTo = _servicingWorkspace.Policy.PolicyNumber
+        }).ToList();
+
+        _compliance = _servicingWorkspace.ComplianceDocuments.Select(x => new ComplianceRow
+        {
+            ComplianceDocumentId = x.PolicyDocumentId,
+            Requirement = x.PolicyTitle,
+            Category = x.PolicyTypeCode,
+            Status = x.StatusCode,
+            DueDate = x.EffectiveDateUtc ?? DateTime.MinValue,
+            Owner = string.Empty,
+            Evidence = x.Version
+        }).ToList();
+
+        _auditLog = _servicingWorkspace.Timeline.Select(x => new AuditEntry
+        {
+            Timestamp = x.OccurredDateUtc.ToLocalTime(),
+            Action = x.Title,
+            Field = x.EntryTypeCode,
+            OldValue = string.Empty,
+            NewValue = x.StatusCode ?? string.Empty,
+            ChangedBy = x.ActorName ?? string.Empty,
+            IpAddress = string.Empty
+        }).ToList();
+    }
+
+    private async Task LoadEndorsementTypesAsync()
+    {
+        try
+        {
+            var result = await Api.SearchEndorsementTypesAsync(_tenantId, pageSize: 500);
+            _endorsementTypes = result?.Items.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.TypeName).ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _endorsementTypes = [];
+            await ShowErrorToast($"Endorsement type load failed: {ex.Message}");
+        }
+    }
+
+    private async Task LoadPolicyLifecycleOptionsAsync()
+    {
+        try
+        {
+            _policyLifecycleOptions = await Api.GetPolicyLifecycleOptionsAsync(_tenantId) ?? [];
+        }
+        catch (Exception ex)
+        {
+            _policyLifecycleOptions = [];
+            await ShowErrorToast($"Policy lifecycle option load failed: {ex.Message}");
+        }
     }
 
     private void ClearPolicyDetailCollections()
@@ -1965,6 +2311,7 @@ else
         _carrierUw = [];
         _relationships = [];
         _reinsurance = [];
+        _policyLifecycleOptions = [];
     }
 
     private static PolicyRecord MapPolicyRecord(PolicyRegisterDto row)
@@ -2008,6 +2355,26 @@ else
         };
     }
 
+    private static DocRow MapEnterpriseDocumentRow(DocumentDto document) => new()
+    {
+        DocumentId = document.DocumentId,
+        HasStoredContent = true,
+        Name = document.FileName,
+        Category = document.CategoryCode,
+        FileType = Path.GetExtension(document.FileName).TrimStart('.').ToUpperInvariant() is { Length: > 0 } extension ? extension : "Record",
+        FileSize = FormatDocumentSize(document.FileSizeBytes),
+        UploadedAt = document.CreatedDateUtc,
+        UploadedBy = document.UploadedByName ?? "System"
+    };
+
+    private static string FormatDocumentSize(long? bytes) => bytes switch
+    {
+        null => "Unknown size",
+        < 1024 => $"{bytes} B",
+        < 1_048_576 => $"{bytes / 1024d:F1} KB",
+        _ => $"{bytes / 1_048_576d:F1} MB"
+    };
+
     private static EndorsementRow MapEndorsementRow(PolicyEndorsementDto endorsement) => new()
     {
         EndNum = endorsement.EndorsementNumber,
@@ -2033,7 +2400,8 @@ else
 
     private static DocRow MapDocumentRow(PolicyDocumentDto document) => new()
     {
-        DocumentId = document.PolicyDocumentId,
+        ComplianceDocumentId = document.PolicyDocumentId,
+        HasStoredContent = false,
         Name = document.PolicyTitle,
         Category = document.PolicyTypeCode,
         FileType = "Record",
@@ -2078,18 +2446,7 @@ else
     {
         if (_policy is null) return;
 
-        var installment = _policy.WrittenPremium <= 0 ? 0 : Math.Round(_policy.WrittenPremium / 12m, 2);
-        _invoices = installment <= 0 ? [] : Enumerable.Range(0, 12).Select(i => new InvoiceRow
-        {
-            InvoiceNum = $"INV-{_policy.PolicyNumber}-{i + 1:00}",
-            DueDate = _policy.EffDate.AddMonths(i),
-            Amount = installment,
-            AmountPaid = 0m,
-            Balance = installment,
-            Status = _policy.EffDate.AddMonths(i) < DateTime.Today ? "Due" : "Scheduled"
-        }).ToList();
-
-        _renewal = new RenewalPipeline
+        _renewal ??= new RenewalPipeline
         {
             Status = DaysLabel(_policy.ExpDate).Contains("Expired", StringComparison.OrdinalIgnoreCase) ? "Expired" : "In Progress",
             QuotedPremium = _policy.AnnualPremium,
@@ -2101,16 +2458,71 @@ else
 
         _renewalHistory = _submissions.Select(s => new RenewalHistRow { PolicyNum = _policy.PolicyNumber, EffDate = _policy.EffDate, ExpDate = _policy.ExpDate, Carrier = _policy.Carrier, Premium = s.QuotedPremium, Change = 0m, Outcome = s.Outcome }).ToList();
         _commissions = [];
-        _compliance = _documents.Select(d => new ComplianceRow { ComplianceDocumentId = d.DocumentId, Requirement = d.Name, Category = d.Category, Status = "On File", DueDate = d.UploadedAt, Owner = d.UploadedBy, Evidence = d.FileSize }).ToList();
-        _serviceTasks = cancellations.Where(c => !string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)).Select(c => new ServiceTaskRow { TaskNumber = c.CancellationNumber, Title = c.CancellationReason, Type = c.RequestType, Priority = c.Priority, Status = c.Status, DueDate = c.DueDate ?? c.EffectiveDate, AssignedTo = c.AssignedToName, RelatedTo = c.PolicyNumber }).ToList();
+        if (_compliance.Count == 0)
+            _compliance = _documents.Select(d => new ComplianceRow { ComplianceDocumentId = d.DocumentId, Requirement = d.Name, Category = d.Category, Status = "On File", DueDate = d.UploadedAt, Owner = d.UploadedBy, Evidence = d.FileSize }).ToList();
+        if (_serviceTasks.Count == 0)
+            _serviceTasks = cancellations.Where(c => !string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)).Select(c => new ServiceTaskRow { TaskNumber = c.CancellationNumber, Title = c.CancellationReason, Type = c.RequestType, Priority = c.Priority, Status = c.Status, DueDate = c.DueDate ?? c.EffectiveDate, AssignedTo = c.AssignedToName, RelatedTo = c.PolicyNumber }).ToList();
         _relationships = [new RelationshipRow { Entity = _policy.Account, Role = "Named Insured", Relationship = "Policy owner", Contact = _policy.PrimaryInsured, Status = _policy.Status, Route = $"/accounts/{_policy.AccountId}" }, new RelationshipRow { Entity = _policy.Carrier, Role = "Carrier", Relationship = "Issuing carrier", Contact = _policy.Underwriter ?? _policy.Carrier, Status = "Active", Route = $"/admin/reference/carriers?carrier={Uri.EscapeDataString(_policy.Carrier)}" }];
         _carrierUw = [new CarrierUwRow { Item = _policy.Carrier, Type = "Carrier", Status = "Active", Owner = _policy.Underwriter ?? _policy.Carrier, LastUpdate = _policy.BindDate ?? _policy.CreatedAt, Notes = _policy.Lob }];
         _riskItems = [];
         _drivers = [];
         _locations = [];
-        _claims = [];
-        _comms = [];
         _reinsurance = [];
+    }
+
+    private void LoadAccountingRows()
+    {
+        _invoices = _accounting?.Invoices.Select(i => new InvoiceRow
+        {
+            InvoiceNum = i.InvoiceNumber,
+            DueDate = i.DueDate.ToDateTime(TimeOnly.MinValue),
+            Amount = i.TotalAmount,
+            AmountPaid = i.TotalAmount - i.BalanceAmount,
+            Balance = i.BalanceAmount,
+            Status = i.StatusCode
+        }).ToList() ?? [];
+    }
+
+    private async Task PrintInvoiceAsync()
+    {
+        if (_accounting?.Invoices.Any() != true) return;
+        await JS.InvokeVoidAsync("print");
+    }
+
+    private void OpenInvoiceEmail()
+    {
+        _invoiceEmailInvoiceId = _accounting?.Invoices.FirstOrDefault()?.InvoiceId ?? Guid.Empty;
+        _invoiceEmailRecipient = _accounting?.Invoices.FirstOrDefault()?.DeliveryRecipient ?? string.Empty;
+        _showInvoiceEmail = _invoiceEmailInvoiceId != Guid.Empty;
+    }
+
+    private void CloseInvoiceEmail() => _showInvoiceEmail = false;
+
+    private async Task EmailInvoiceAsync()
+    {
+        if (_invoiceEmailInvoiceId == Guid.Empty || string.IsNullOrWhiteSpace(_invoiceEmailRecipient))
+        {
+            await ShowErrorToast("Select an invoice and enter a recipient email.");
+            return;
+        }
+
+        _emailingInvoice = true;
+        try
+        {
+            var result = await Api.EmailPolicyInvoiceAsync(PolicyId, _invoiceEmailInvoiceId, new EmailPolicyInvoiceRequest(_tenantId, _invoiceEmailRecipient.Trim(), null));
+            _showInvoiceEmail = false;
+            _accounting = await Api.GetPolicyAccountingDashboardAsync(_tenantId, PolicyId);
+            LoadAccountingRows();
+            await ShowToast($"Invoice email {result?.StatusCode.ToLowerInvariant() ?? "queued"} for {_invoiceEmailRecipient.Trim()}.");
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorToast($"Invoice email could not be queued: {ex.Message}");
+        }
+        finally
+        {
+            _emailingInvoice = false;
+        }
     }
 
     private async Task LoadPolicyCoveragesAsync()
@@ -2282,6 +2694,7 @@ else
         var context = await CurrentUser.RequireAsync();
         _tenantId = context.TenantId;
         _currentUserId = context.UserId;
+        _canViewEndorsementFinancial = context.HasPermission("ENDORSEMENT_FINANCIAL_VIEW") || context.HasPermission("ENDORSEMENT_MANAGE");
     }
 
     private async Task LoadCoverageLookupsAsync()
@@ -2322,6 +2735,12 @@ else
     // -- Action handling -----------------------------------------------------
     private void OpenAction(string action)
     {
+        if (action is "endorse" or "rewrite")
+        {
+            Nav.NavigateTo($"/policies/endorsements?policyId={PolicyId}");
+            return;
+        }
+
         _activeAction    = action;
         _actionNote      = string.Empty;
         _actionReason    = string.Empty;
@@ -2329,7 +2748,20 @@ else
         _actionCertAddr  = string.Empty;
         _actionPremDelta = 0m;
         _actionDate      = DateTime.Today;
-        _actionForm = new PolicyActionForm { Action = action, ActionDate = DateTime.Today, Reason = action == "message" ? "Email" : string.Empty };
+        _actionForm = new PolicyActionForm
+        {
+            Action = action,
+            ActionDate = DateTime.Today,
+            Reason = action == "message" ? "Email" : string.Empty,
+            EndorsementType = EndorsementTypeOptions.FirstOrDefault()?.Value ?? string.Empty,
+            RequestSourceCode = DefaultEndorsementOption("RequestSource"),
+            ChangeCategoryCode = DefaultEndorsementOption("ChangeCategory"),
+            Priority = DefaultEndorsementOption("Priority"),
+            BillingImpactCode = DefaultEndorsementOption("BillingImpact"),
+            ApprovalLevelCode = DefaultEndorsementOption("ApprovalLevel"),
+            DocumentDeliveryCode = DefaultEndorsementOption("DocumentDelivery"),
+            AgentAuthorityCode = DefaultEndorsementOption("AgentAuthority")
+        };
 
         (_actionTitle, _actionDesc, _actionIcon) = action switch
         {
@@ -2361,6 +2793,7 @@ else
     private async Task ExecuteActionAsync()
     {
         if (_policy is null) return;
+        var refreshLifecycleData = _activeAction is "cancel" or "reinstate" or "bindRenewal";
         _actionDate = _actionForm.ActionDate;
         _actionReason = _actionForm.Reason ?? string.Empty;
         _actionCertHolder = _actionForm.PartyName ?? string.Empty;
@@ -2376,64 +2809,27 @@ else
                     await ShowErrorToast("Cancellation reason is required.");
                     return;
                 }
+                await CreateLifecycleTransactionAsync("Cancellation", "Issued", _actionReason, _actionNote, _policy.WrittenPremium, -_policy.WrittenPremium, 0m);
                 _policy.Status     = "Cancelled";
                 _policy.CancelDate = _actionDate;
-                _activities.Insert(0, NewActivity("Policy cancellation recorded", "Endorsement", "Portal", "Completed", $"Reason: {_actionReason}. {_actionNote}"));
-                AddAuditEntry("Policy Cancelled", "Status", "Active", "Cancelled");
                 break;
             case "reinstate":
+                await CreateLifecycleTransactionAsync("Reinstatement", "Issued", _actionReason, _actionNote, 0m, _policy.WrittenPremium, _policy.WrittenPremium);
                 _policy.Status        = "Active";
                 _policy.ReinstateDate = _actionDate;
-                _activities.Insert(0, NewActivity("Policy reinstated", "Endorsement", "Portal", "Completed", _actionNote));
-                AddAuditEntry("Policy Reinstated", "Status", "Cancelled", "Active");
-                break;
-            case "endorse":
-                AddEndorsement("Change Endorsement", string.IsNullOrWhiteSpace(_actionNote) ? "Policy endorsement" : _actionNote, _actionPremDelta, _actionDate);
-                break;
-            case "rewrite":
-                AddEndorsement("Rewrite Request", string.IsNullOrWhiteSpace(_actionNote) ? "Policy rewrite requested" : _actionNote, _actionPremDelta, _actionDate, "Pending");
-                _activities.Insert(0, NewActivity("Policy rewrite workflow started", "Renewal", "Portal", "Pending", _actionNote));
-                AddAuditEntry("Rewrite Started", "Workflow", "?", "Pending");
                 break;
             case "remarket":
-                EnsureRenewalPipeline();
-                _renewal!.Status = "Remarketing";
-                _renewal.Remarketed = true;
-                _renewal.CarriersQuoted = Math.Max(_renewal.CarriersQuoted, 3);
-                _renewal.QuotedPremium ??= Math.Round(_policy.WrittenPremium * 1.04m, 2);
-                _renewal.FollowUpDate = DateTime.Today.AddDays(7);
-                _activities.Insert(0, NewActivity("Remarket workflow started", "Renewal", "Portal", "Pending", _actionNote));
-                AddAuditEntry("Remarket Started", "Renewal Status", "In Progress", _renewal.Status);
+                var remarketCase = await EnsureRenewalCaseAsync();
+                await Api.LaunchRenewalPlacementAsync(remarketCase.RetentionCaseId, new LaunchRenewalPlacementRequest(_tenantId, _currentUserId));
+                refreshLifecycleData = true;
+                toastMessage = "Renewal placement launched.";
                 break;
             case "bindRenewal":
-                EnsureRenewalPipeline();
-                var oldPolicy = _policy.PolicyNumber;
-                var oldPremium = _policy.WrittenPremium;
-                var renewedPremium = _renewal!.QuotedPremium ?? Math.Round(_policy.WrittenPremium * 1.04m, 2);
-                _renewalHistory.Insert(0, new RenewalHistRow
-                {
-                    PolicyNum = oldPolicy,
-                    EffDate = _policy.EffDate,
-                    ExpDate = _policy.ExpDate,
-                    Carrier = _policy.Carrier,
-                    Premium = _policy.WrittenPremium,
-                    Change = 0m,
-                    Outcome = "Renewed",
-                });
-                _policy.PolicyNumber = NextPolicyNumber(oldPolicy);
-                _policy.EffDate = _policy.ExpDate;
-                _policy.ExpDate = _policy.EffDate.AddMonths(_policy.TermMonths == 0 ? 12 : _policy.TermMonths);
-                _policy.WrittenPremium = renewedPremium;
-                _policy.AnnualPremium = renewedPremium;
-                _policy.BalanceDue = Math.Round(renewedPremium / 10m, 2);
-                _policy.Status = "Active";
-                _renewal.Status = "Bound";
-                _renewal.QuotedPremium = renewedPremium;
-                _renewal.FollowUpDate = null;
-                _documents.Insert(0, NewDocument($"Renewal Binder ? {_policy.PolicyNumber}", "Bind", "PDF", "156 KB"));
-                _activities.Insert(0, NewActivity("Renewal bound", "Renewal", "Portal", "Completed", $"Renewed from {oldPolicy} at {renewedPremium:C0}."));
-                AddAuditEntry("Renewal Bound", "Written Premium", oldPremium.ToString("C0"), renewedPremium.ToString("C0"));
-                toastMessage = $"Renewal bound as {_policy.PolicyNumber}.";
+                var renewalCase = await EnsureRenewalCaseAsync();
+                var renewedPremium = renewalCase.ProposedPremium ?? _policy.WrittenPremium;
+                await CreateLifecycleTransactionAsync("Renewal", "PendingReview", "Renewal", _actionNote, _policy.WrittenPremium, renewedPremium - _policy.WrittenPremium, renewedPremium);
+                refreshLifecycleData = true;
+                toastMessage = "Renewal transaction submitted for review.";
                 break;
             case "certificate":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder))
@@ -2441,10 +2837,13 @@ else
                     await ShowErrorToast("Certificate holder name is required.");
                     return;
                 }
-                var certName = $"Certificate of Insurance ? {_actionCertHolder}";
-                _documents.Insert(0, NewDocument(certName, "Certificate", "PDF", "144 KB"));
-                _activities.Insert(0, NewActivity(certName, "Endorsement", "Portal", "Completed", _actionCertAddr));
-                AddAuditEntry("Certificate Issued", "Documents", "?", certName);
+                await Api.CreatePolicyCertificateAsync(new CreatePolicyCertificateRequest(
+                    _tenantId, PolicyId, _policy.PolicyNumber, _policy.Account, _actionCertHolder, _actionCertAddr,
+                    string.IsNullOrWhiteSpace(_actionReason) ? _certTypeOpts.FirstOrDefault()?.Value ?? "ACORD25" : _actionReason,
+                    _actionDate, _policy.ExpDate, _policy.Lob, _policy.Csr, "Issued", false, false,
+                    _actionNote, null, false, null, _currentUserId));
+                refreshLifecycleData = true;
+                toastMessage = "Certificate record issued and synchronized.";
                 break;
             case "esign":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder) || string.IsNullOrWhiteSpace(_actionCertAddr))
@@ -2452,18 +2851,13 @@ else
                     await ShowErrorToast("Signer name and email are required.");
                     return;
                 }
-                _comms.Insert(0, new CommRow
+                await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
                 {
-                    SentAt = DateTime.Now,
-                    Channel = "Email",
-                    Direction = "Outbound",
-                    Subject = "E-signature request",
-                    From = "Agency",
-                    To = _actionCertAddr,
-                    Status = "Sent",
+                    TenantId = _tenantId, PolicyId = PolicyId, ChannelCode = "Email", Recipient = _actionCertAddr,
+                    Subject = "E-signature request", Body = string.IsNullOrWhiteSpace(_actionNote) ? $"Electronic signature requested from {_actionCertHolder}." : _actionNote
                 });
-                _activities.Insert(0, NewActivity($"E-sign request sent to {_actionCertHolder}", "Email", "Email", "Pending", _actionReason));
-                AddAuditEntry("E-Sign Requested", "Communications", "?", _actionCertAddr);
+                refreshLifecycleData = true;
+                toastMessage = "E-signature communication queued.";
                 break;
             case "message":
                 if (string.IsNullOrWhiteSpace(_actionCertHolder))
@@ -2471,22 +2865,93 @@ else
                     await ShowErrorToast("Recipient is required.");
                     return;
                 }
-                _comms.Insert(0, new CommRow
+                await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
                 {
-                    SentAt = DateTime.Now,
-                    Channel = string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason,
-                    Direction = "Outbound",
+                    TenantId = _tenantId, PolicyId = PolicyId,
+                    ChannelCode = string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason,
+                    Recipient = _actionCertHolder,
                     Subject = string.IsNullOrWhiteSpace(_actionCertAddr) ? $"Policy {_policy.PolicyNumber}" : _actionCertAddr,
-                    From = "Agency",
-                    To = _actionCertHolder,
-                    Status = "Sent",
+                    Body = string.IsNullOrWhiteSpace(_actionNote) ? $"Communication regarding policy {_policy.PolicyNumber}." : _actionNote
                 });
-                _activities.Insert(0, NewActivity("Policy message sent", "Email", string.IsNullOrWhiteSpace(_actionReason) ? "Email" : _actionReason, "Completed", _actionNote));
-                AddAuditEntry("Message Sent", "Communications", "?", _actionCertHolder);
+                refreshLifecycleData = true;
+                toastMessage = "Policy communication queued.";
                 break;
         }
         _showActionDlg = false;
+        if (refreshLifecycleData)
+        {
+            await LoadAsync();
+        }
         await ShowToast(toastMessage);
+    }
+
+    private async Task<Guid> CreateLifecycleTransactionAsync(string transactionTypeCode, string transactionStatusCode, string? reasonCode, string? notes, decimal priorPremium, decimal premiumChange, decimal newPremium)
+    {
+        if (_policy is null)
+        {
+            throw new InvalidOperationException("A policy must be loaded before creating a lifecycle transaction.");
+        }
+
+        var request = new CreatePolicyLifecycleTransactionRequest
+        {
+            TenantId = _tenantId,
+            PolicyId = PolicyId,
+            TransactionTypeCode = transactionTypeCode,
+            TransactionStatusCode = transactionStatusCode,
+            EffectiveDate = DateOnly.FromDateTime(_actionDate),
+            ExpirationDate = transactionTypeCode.Equals("Renewal", StringComparison.OrdinalIgnoreCase) ? DateOnly.FromDateTime(_policy.ExpDate) : null,
+            PriorWrittenPremium = priorPremium,
+            PremiumChange = premiumChange,
+            NewWrittenPremium = newPremium,
+            TotalCostChange = premiumChange,
+            ReasonCode = string.IsNullOrWhiteSpace(reasonCode) ? transactionTypeCode : reasonCode,
+            SourceCode = "PolicyDetail",
+            Description = $"{transactionTypeCode} for {_policy.PolicyNumber}",
+            Notes = notes,
+            RequestedByUserId = await GetCurrentUserIdAsync()
+        };
+
+        if (!string.IsNullOrWhiteSpace(_policy.Lob))
+        {
+            request.LineChanges.Add(new PolicyLifecycleLineChangeRequest
+            {
+                LineOfBusinessCode = _policy.Lob,
+                LineOfBusinessName = _policy.Lob,
+                ChangeTypeCode = transactionTypeCode.Equals("Cancellation", StringComparison.OrdinalIgnoreCase) ? "RemoveLine" : "UpdateLine",
+                PriorPremium = priorPremium,
+                PremiumChange = premiumChange,
+                NewPremium = newPremium
+            });
+        }
+
+        return await Api.CreatePolicyLifecycleTransactionAsync(request);
+    }
+
+    private async Task<RenewalRetentionCaseDto> EnsureRenewalCaseAsync()
+    {
+        if (_policy is null) throw new InvalidOperationException("A policy must be loaded before starting renewal servicing.");
+        var center = await Api.GetRenewalRetentionCenterAsync(_tenantId);
+        var existing = center?.Cases.FirstOrDefault(x => x.PolicyId == PolicyId);
+        if (existing is not null) return existing;
+
+        var retentionCaseId = await Api.CreateRenewalRetentionCaseAsync(new CreateRenewalRetentionCaseRequest
+        {
+            TenantId = _tenantId, PolicyId = PolicyId, AccountId = _policy.AccountId,
+            AccountName = _policy.Account, PolicyNumber = _policy.PolicyNumber, LineOfBusiness = _policy.Lob,
+            Carrier = _policy.Carrier, Producer = _policy.Producer, Csr = _policy.Csr,
+            ExpirationDate = _policy.ExpDate, CurrentPremium = _policy.WrittenPremium,
+            Stage = "Intake", Priority = "Normal", OutreachStatus = "Not Started", Sentiment = "Neutral",
+            AssignedToName = _policy.Csr, CreatedByUserId = _currentUserId
+        });
+        center = await Api.GetRenewalRetentionCenterAsync(_tenantId);
+        return center?.Cases.FirstOrDefault(x => x.RetentionCaseId == retentionCaseId)
+            ?? throw new InvalidOperationException("The renewal case was created but could not be reloaded.");
+    }
+
+    private async Task<Guid?> GetCurrentUserIdAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        return context.UserId == Guid.Empty ? null : context.UserId;
     }
 
     private void OpenCoverageForm()
@@ -2879,54 +3344,33 @@ else
 
     private async Task SaveRiskItemAsync()
     {
-        var item = new RiskItem
-        {
-            ItemType = _riskForm.ItemType,
-            Description = _riskForm.Description.Trim(),
-            Year = _riskForm.Year,
-            Make = _riskForm.Make,
-            Vin = _riskForm.Vin,
-            Value = _riskForm.Value,
-            Location = _riskForm.Location,
-            IsActive = true,
-        };
-        _riskItems.Insert(0, item);
-        _activities.Insert(0, NewActivity($"Risk item added: {item.Description}", "Endorsement", "Portal", "Completed", item.Location ?? string.Empty));
-        AddAuditEntry("Risk Item Added", "Risk Schedule", "?", item.Description);
+        if (_policy is null || string.IsNullOrWhiteSpace(_riskForm.Description)) return;
         _showRiskForm = false;
-        await ShowToast("Risk item added.");
+        Nav.NavigateTo($"/policies/endorsements?policyId={PolicyId}");
     }
 
-    private void OpenDocumentForm()
+    private void OpenDocumentUpload() => _showDocumentUpload = true;
+
+    private async Task HandlePolicyDocumentUploadedAsync(Guid documentId)
     {
-        _docForm = new DocumentForm();
-        _showDocForm = true;
+        await LoadPolicyRelatedDataAsync();
+        await ShowToast("Policy document uploaded successfully.");
     }
 
-    private void CloseDocumentForm() => _showDocForm = false;
-
-    private async Task SaveDocumentAsync()
-    {
-        var doc = NewDocument(_docForm.Name.Trim(), _docForm.Category, _docForm.FileType, EstimateFileSize(_docForm.FileType));
-        _documents.Insert(0, doc);
-        _activities.Insert(0, NewActivity($"Document uploaded: {doc.Name}", "Note", "Portal", "Completed", _docForm.Notes));
-        AddAuditEntry("Document Uploaded", "Documents", "?", doc.Name);
-        _showDocForm = false;
-        await ShowToast("Document uploaded.");
-    }
+    private Task HandlePolicyDocumentUploadFailed(string message) => ShowErrorToast(message);
 
     private async Task DownloadDocumentAsync(DocRow doc)
     {
-        _activities.Insert(0, NewActivity($"Document downloaded: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
-        AddAuditEntry("Document Downloaded", "Documents", doc.Name, "Downloaded");
-        await ShowToast($"Download queued for {doc.Name}.");
+        if (!doc.DocumentId.HasValue || !doc.HasStoredContent) return;
+        Nav.NavigateTo(Api.GetPolicyDocumentDownloadUrl(_tenantId, PolicyId, doc.DocumentId.Value), forceLoad: true);
+        await Task.CompletedTask;
     }
 
     private async Task PreviewDocumentAsync(DocRow doc)
     {
-        _activities.Insert(0, NewActivity($"Document previewed: {doc.Name}", "Note", "Portal", "Completed", doc.Category));
-        AddAuditEntry("Document Previewed", "Documents", doc.Name, "Previewed");
-        await ShowToast($"Preview opened for {doc.Name}.");
+        if (!doc.DocumentId.HasValue || !doc.HasStoredContent) return;
+        Nav.NavigateTo(Api.GetPolicyDocumentPreviewUrl(_tenantId, PolicyId, doc.DocumentId.Value), forceLoad: true);
+        await Task.CompletedTask;
     }
 
     private void OpenClaimForm()
@@ -2944,25 +3388,28 @@ else
     private async Task SaveClaimAsync()
     {
         if (_policy is null) return;
-        var claim = new ClaimRow
+        var claimId = await Api.CreateClaimAsync(new CreateClaimRequest
         {
-            ClaimId = Guid.NewGuid(),
-            ClaimNum = $"CLM-{DateTime.Today:yyyy}-{_claims.Count + 1:0000}",
-            LossDate = _claimForm.LossDate,
+            TenantId = _tenantId,
+            PolicyId = PolicyId,
+            AccountId = _policy.AccountId,
+            PolicyNumber = _policy.PolicyNumber,
+            AccountName = _policy.Account,
+            Lob = _policy.Lob,
+            Carrier = _policy.Carrier,
             LossType = _claimForm.LossType.Trim(),
-            Description = _claimForm.Description.Trim(),
+            PrimaryClaimant = _policy.PrimaryInsured,
+            DateOfLoss = _claimForm.LossDate,
+            DateReported = DateTime.UtcNow,
+            LossDescription = _claimForm.Description.Trim(),
             Status = "Open",
-            Reserve = _claimForm.Reserve,
-            Paid = 0m,
-            Adjuster = string.IsNullOrWhiteSpace(_claimForm.Adjuster) ? "Pending assignment" : _claimForm.Adjuster.Trim(),
-        };
-        _claims.Insert(0, claim);
-        _policy.OpenClaims = _claims.Count(c => c.Status == "Open");
-        _documents.Insert(0, NewDocument($"First Notice of Loss ? {claim.ClaimNum}", "Claims", "PDF", "132 KB"));
-        _activities.Insert(0, NewActivity($"Claim reported: {claim.ClaimNum}", "Claim", "Portal", "Pending", claim.Description));
-        AddAuditEntry("Claim Reported", "Open Claims", (_policy.OpenClaims - 1).ToString(), _policy.OpenClaims.ToString());
+            TotalReserves = _claimForm.Reserve,
+            AssignedHandler = string.IsNullOrWhiteSpace(_claimForm.Adjuster) ? "Unassigned" : _claimForm.Adjuster.Trim(),
+            CreatedByUserId = _currentUserId
+        });
         _showClaimForm = false;
-        await ShowToast($"Claim {claim.ClaimNum} reported.");
+        await LoadAsync();
+        await ShowToast($"Claim {claimId} reported.");
     }
 
     private async Task NotifyValidationAsync(EditContext _)
@@ -3167,74 +3614,66 @@ else
         __builder.CloseElement();
     };
 
+    private IEnumerable<PdLv> EndorsementOptionValues(string groupCode)
+    {
+        var options = _endorsementOptions
+            .Where(x => string.Equals(x.OptionGroupCode, groupCode, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.DisplayName)
+            .Select(x => new PdLv(x.OptionCode, x.DisplayName))
+            .ToList();
+
+        if (options.Count == 0 && !string.IsNullOrWhiteSpace(_actionForm.GetOptionValue(groupCode)))
+        {
+            var value = _actionForm.GetOptionValue(groupCode)!;
+            options.Add(new PdLv(value, value));
+        }
+
+        return options;
+    }
+
+    private string DefaultEndorsementOption(string groupCode)
+        => _endorsementOptions
+            .Where(x => string.Equals(x.OptionGroupCode, groupCode, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.IsDefault)
+            .ThenBy(x => x.SortOrder)
+            .Select(x => x.OptionCode)
+            .FirstOrDefault() ?? string.Empty;
+
+    private IEnumerable<PdLv> DistinctOptionValues(IEnumerable<string?> values)
+        => values
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x)
+            .Select(x => new PdLv(x, x));
+
     private async Task SaveActivityAsync()
     {
         if (string.IsNullOrWhiteSpace(_actForm.Subject)) return;
-        _activities.Insert(0, new ActivityRow
+        await Api.CreatePolicyServicingActivityAsync(new CreatePolicyServicingActivityRequest
         {
-            Subject = _actForm.Subject, Category = _actForm.Category,
-            Channel = _actForm.Channel, Outcome = _actForm.Outcome,
-            ActivityDate = _actForm.ActivityDate, Notes = _actForm.Notes, CreatedBy = "Current User",
+            TenantId = _tenantId, PolicyId = PolicyId, Subject = _actForm.Subject,
+            ActivityTypeCode = _actForm.Category, ChannelCode = _actForm.Channel,
+            OutcomeCode = _actForm.Outcome.Replace(" ", string.Empty), ActivityDateUtc = _actForm.ActivityDate.ToUniversalTime(), Notes = _actForm.Notes
         });
         _showActForm = false;
+        await LoadAsync();
         await ShowToast("Activity logged.");
     }
 
     private async Task SendMessageAsync()
     {
         if (string.IsNullOrWhiteSpace(_commForm.To)) return;
-        _comms.Insert(0, new CommRow
+        await Api.SendPolicyCommunicationAsync(new SendPolicyCommunicationRequest
         {
-            SentAt = DateTime.Now, Channel = _commForm.Channel, Direction = "Outbound",
-            Subject = _commForm.Subject, From = "Agency", To = _commForm.To, Status = "Sent",
+            TenantId = _tenantId, PolicyId = PolicyId, ChannelCode = _commForm.Channel,
+            Recipient = _commForm.To, Subject = _commForm.Subject, Body = _commForm.Body
         });
         _showCommForm = false;
-        await ShowToast("Message sent.");
+        await LoadAsync();
+        await ShowToast("Message queued.");
     }
-
-    private void AddAuditEntry(string action, string field, string oldVal, string newVal)
-    {
-        _auditLog.Insert(0, new AuditEntry
-        {
-            Timestamp = DateTime.Now, Action = action, Field = field,
-            OldValue = oldVal, NewValue = newVal, ChangedBy = "Current User", IpAddress = "10.0.0.1",
-        });
-    }
-
-    private void AddEndorsement(string type, string description, decimal premiumChange, DateTime effectiveDate, string status = "Issued")
-    {
-        if (_policy is not null && status == "Issued" && premiumChange != 0m)
-        {
-            _policy.WrittenPremium += premiumChange;
-            _policy.AnnualPremium += premiumChange;
-            _policy.BalanceDue += Math.Round(premiumChange / 10m, 2);
-        }
-
-        var nextNumber = $"END-{_endorsements.Count + 1:000}";
-        _endorsements.Insert(0, new EndorsementRow
-        {
-            EndNum = nextNumber,
-            EffDate = effectiveDate,
-            Type = type,
-            Description = description,
-            PremChange = premiumChange,
-            Status = status,
-            IssuedBy = "Current User",
-        });
-        _activities.Insert(0, NewActivity($"{type}: {nextNumber}", "Endorsement", "Portal", status == "Issued" ? "Completed" : "Pending", description));
-        AddAuditEntry(status == "Issued" ? "Endorsement Issued" : "Endorsement Started", "Endorsement", "?", nextNumber);
-    }
-
-    private ActivityRow NewActivity(string subject, string category, string channel, string outcome, string? notes) => new()
-    {
-        Subject = subject,
-        Category = category,
-        Channel = channel,
-        Outcome = outcome,
-        ActivityDate = DateTime.Now,
-        Notes = notes,
-        CreatedBy = "Current User",
-    };
 
     private DocRow NewDocument(string name, string category, string fileType, string fileSize) => new()
     {
@@ -3302,12 +3741,12 @@ else
 
     private async Task ShowToast(string msg)
     {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-success" });
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "enterprise-toast-success" });
     }
 
     private async Task ShowErrorToast(string msg)
     {
-        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "e-toast-danger" });
+        if (_toast is not null) await _toast.ShowAsync(new ToastModel { Content = msg, CssClass = "enterprise-toast-danger" });
     }
 
     // -- Helpers -------------------------------------------------------------
@@ -3403,6 +3842,55 @@ else
         _ => "pd-command-card--danger",
     };
 
+    private int TermProgressPercent
+    {
+        get
+        {
+            if (_policy is null || _policy.ExpDate <= _policy.EffDate) return 100;
+            var total = (_policy.ExpDate - _policy.EffDate).TotalDays;
+            var elapsed = (DateTime.Today - _policy.EffDate).TotalDays;
+            return Math.Clamp((int)Math.Round(elapsed * 100d / total), 0, 100);
+        }
+    }
+
+    private IEnumerable<CockpitAction> RecommendedActions
+    {
+        get
+        {
+            if (_policy is null) yield break;
+            if (_policy.BalanceDue > 0) yield return new("message", "Follow up receivable", $"{_policy.BalanceDue:C0} balance due", "bi-wallet2");
+            if (_policy.OpenClaims > 0) yield return new("message", "Review claims", $"{_policy.OpenClaims} open claim(s)", "bi-exclamation-diamond");
+            if ((_policy.ExpDate - DateTime.Today).TotalDays <= 90) yield return new("remarket", "Start renewal review", DaysLabel(_policy.ExpDate), "bi-arrow-repeat");
+            yield return new("endorse", "Create endorsement", "Update limits, insureds, or schedules", "bi-pen");
+        }
+    }
+
+    private RenderFragment CockpitCard(string label, string value, string description, string icon, string tone) => __builder =>
+    {
+        __builder.OpenElement(0, "article");
+        __builder.AddAttribute(1, "class", $"pd-cockpit-card pd-cockpit-card--{tone}");
+        __builder.OpenElement(2, "i");
+        __builder.AddAttribute(3, "class", $"bi {icon}");
+        __builder.AddAttribute(4, "aria-hidden", "true");
+        __builder.CloseElement();
+        __builder.OpenElement(5, "div");
+        __builder.AddAttribute(6, "class", "pd-cockpit-card-body");
+        __builder.OpenElement(7, "span");
+        __builder.AddAttribute(8, "class", "pd-cockpit-card-label");
+        __builder.AddContent(9, label);
+        __builder.CloseElement();
+        __builder.OpenElement(10, "strong");
+        __builder.AddAttribute(11, "class", "pd-cockpit-card-value");
+        __builder.AddContent(12, value);
+        __builder.CloseElement();
+        __builder.OpenElement(13, "small");
+        __builder.AddAttribute(14, "class", "pd-cockpit-card-desc");
+        __builder.AddContent(15, description);
+        __builder.CloseElement();
+        __builder.CloseElement();
+        __builder.CloseElement();
+    };
+
     // Field label helper
     private RenderFragment F(string label, string value) => __builder =>
     {
@@ -3428,21 +3916,14 @@ else
         __builder.CloseElement();
     };
 
-    // KPI helper
-    private RenderFragment PdKpi(string label, string value, string icon, string colorCss) => __builder =>
-    {
-        __builder.OpenElement(0, "div"); __builder.AddAttribute(1, "class", $"pd-kpi-card {colorCss}");
-        __builder.OpenElement(2, "div"); __builder.AddAttribute(3, "class", "pd-kpi-icon");
-        __builder.OpenElement(4, "i");   __builder.AddAttribute(5, "class", $"bi {icon}"); __builder.CloseElement();
-        __builder.CloseElement();
-        __builder.OpenElement(6, "div");
-        __builder.OpenElement(7, "div"); __builder.AddAttribute(8, "class", "pd-kpi-val"); __builder.AddContent(9, value); __builder.CloseElement();
-        __builder.OpenElement(10, "div"); __builder.AddAttribute(11, "class", "pd-kpi-lbl"); __builder.AddContent(12, label); __builder.CloseElement();
-        __builder.CloseElement();
-        __builder.CloseElement();
-    };
-
     // -- Models ---------------------------------------------------------------
+    private sealed class PolicyServiceAssignmentForm
+    {
+        public Guid? AccountManagerUserId { get; set; }
+        public Guid? ProducerUserId { get; set; }
+        public Guid? CsrUserId { get; set; }
+    }
+
     private sealed class PolicyRecord
     {
         public string   PolicyNumber  { get; set; } = string.Empty;
@@ -3591,6 +4072,8 @@ else
     private sealed class DocRow
     {
         public Guid?    DocumentId { get; set; }
+        public Guid?    ComplianceDocumentId { get; set; }
+        public bool     HasStoredContent { get; set; }
         public string   Name       { get; set; } = string.Empty;
         public string   Category   { get; set; } = string.Empty;
         public string   FileType   { get; set; } = string.Empty;
@@ -3830,11 +4313,49 @@ else
         public string? PartyAddress { get; set; }
         [Range(-999999999, 999999999)]
         public decimal PremiumDelta { get; set; }
+        [Range(-999999999, 999999999)]
+        public decimal TaxFeeDelta { get; set; }
+        [StringLength(120)]
+        public string? EndorsementType { get; set; }
+        [StringLength(50)]
+        public string? RequestSourceCode { get; set; }
+        [StringLength(50)]
+        public string? ChangeCategoryCode { get; set; }
+        [StringLength(40)]
+        public string Priority { get; set; } = string.Empty;
+        [StringLength(50)]
+        public string? BillingImpactCode { get; set; }
+        [StringLength(50)]
+        public string? ApprovalLevelCode { get; set; }
+        [StringLength(50)]
+        public string? DocumentDeliveryCode { get; set; }
+        [StringLength(50)]
+        public string? AgentAuthorityCode { get; set; }
+        [StringLength(80)]
+        public string? CarrierReferenceNumber { get; set; }
+        [StringLength(160)]
+        public string? ClientContactName { get; set; }
+        [StringLength(1000)]
+        public string? RequiredDocuments { get; set; }
         [StringLength(2000)]
         public string? Note { get; set; }
 
+        public string? GetOptionValue(string groupCode) => groupCode switch
+        {
+            "RequestSource" => RequestSourceCode,
+            "ChangeCategory" => ChangeCategoryCode,
+            "Priority" => Priority,
+            "BillingImpact" => BillingImpactCode,
+            "ApprovalLevel" => ApprovalLevelCode,
+            "DocumentDelivery" => DocumentDeliveryCode,
+            "AgentAuthority" => AgentAuthorityCode,
+            _ => null
+        };
+
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
+            if (Action is "endorse" or "rewrite" && string.IsNullOrWhiteSpace(EndorsementType))
+                yield return new ValidationResult("Endorsement type is required.", [nameof(EndorsementType)]);
             if (Action == "cancel" && string.IsNullOrWhiteSpace(Reason))
                 yield return new ValidationResult("Cancellation reason is required.", [nameof(Reason)]);
             if (Action is "cancel" or "remarket" or "rewrite" && string.IsNullOrWhiteSpace(Note))
@@ -4081,6 +4602,7 @@ else
 
     private sealed record PdLv(string Value, string Label);
     private sealed record DetailTab(int Index, string Label, string Icon);
+    private sealed record CockpitAction(string ActionKey, string Title, string Description, string Icon);
 }
 
 

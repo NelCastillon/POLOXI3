@@ -1,10 +1,13 @@
+using System.Security.Claims;
 using Ams.Application.Abstractions.Services;
 using Ams.Application.Features.Submissions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/proposals")]
 public sealed class ProposalsController : ControllerBase
 {
@@ -12,16 +15,42 @@ public sealed class ProposalsController : ControllerBase
     public ProposalsController(ISubmissionService service) => _service = service;
 
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetById(Guid id, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
     {
-        var item = await _service.GetProposalByIdAsync(id, cancellationToken);
+        if (!CanAccess(tenantId, "PROPOSAL_VIEW", out var denied)) return denied;
+        var item = await _service.GetProposalByIdAsync(id, tenantId, cancellationToken);
         return item is null ? NotFound() : Ok(item);
     }
 
     [HttpPost]
     public async Task<IActionResult> Generate([FromBody] GenerateProposalRequest request, CancellationToken cancellationToken)
     {
-        var id = await _service.GenerateProposalAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        if (!CanAccess(request.TenantId, "PROPOSAL_CREATE", out var denied)) return denied;
+        var userId = GetUserId();
+        var id = await _service.GenerateProposalAsync(request with { GeneratedByUserId = userId }, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id, tenantId = request.TenantId }, new { id });
+    }
+
+    private bool TryTenant(Guid requestedTenantId, out IActionResult denied)
+    {
+        denied = Forbid();
+        var claim = User.FindFirstValue("tenant_id") ?? User.FindFirstValue("tenantId") ?? User.FindFirstValue("TenantId");
+        return requestedTenantId != Guid.Empty && Guid.TryParse(claim, out var authenticatedTenantId) && authenticatedTenantId == requestedTenantId;
+    }
+
+    private bool CanAccess(Guid tenantId, string permission, out IActionResult denied)
+    {
+        if (!TryTenant(tenantId, out denied)) return false;
+        return User.HasClaim("permission", permission)
+            || User.HasClaim("permission", "NAV_ALL")
+            || User.IsInRole("SYSTEM_ADMIN")
+            || User.IsInRole("TENANT_ADMIN")
+            || User.Identity?.AuthenticationType == "Development";
+    }
+
+    private Guid? GetUserId()
+    {
+        var claim = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        return Guid.TryParse(claim, out var userId) ? userId : null;
     }
 }

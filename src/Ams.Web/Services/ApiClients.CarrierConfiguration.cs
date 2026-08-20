@@ -15,6 +15,8 @@ public sealed partial class ApiClient
 
     public Task<PagedResult<CarrierContactDto>?> SearchCarrierContactsAsync(Guid tenantId, string? searchTerm = null, int pageNumber = 1, int pageSize = 50, CancellationToken ct = default)
         => _httpClient.GetFromJsonAsync<PagedResult<CarrierContactDto>>($"api/carriers/contacts?tenantId={tenantId}&searchTerm={Uri.EscapeDataString(searchTerm ?? string.Empty)}&pageNumber={pageNumber}&pageSize={pageSize}", ct);
+    public Task<IReadOnlyList<CarrierContactDto>?> GetActiveCarrierContactsAsync(Guid tenantId, Guid carrierId, CancellationToken ct = default)
+        => _httpClient.GetFromJsonAsync<IReadOnlyList<CarrierContactDto>>($"api/carriers/contacts/by-carrier/{carrierId}?tenantId={tenantId}", ct);
     public async Task<Guid> CreateCarrierContactAsync(CreateCarrierContactRequest request, CancellationToken ct = default) { var r = await _httpClient.PostAsJsonAsync("api/carriers/contacts", request, ct); r.EnsureSuccessStatusCode(); return (await r.Content.ReadFromJsonAsync<IdResult>(cancellationToken: ct))!.Id; }
     public async Task UpdateCarrierContactAsync(Guid id, UpdateCarrierContactRequest request, CancellationToken ct = default) { (await _httpClient.PutAsJsonAsync($"api/carriers/contacts/{id}", request, ct)).EnsureSuccessStatusCode(); }
     public async Task DeleteCarrierContactAsync(Guid id, CancellationToken ct = default) { (await _httpClient.DeleteAsync($"api/carriers/contacts/{id}", ct)).EnsureSuccessStatusCode(); }

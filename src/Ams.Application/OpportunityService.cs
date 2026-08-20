@@ -33,14 +33,29 @@ public sealed class OpportunityService : IOpportunityService
     public Task<OpportunityDetailDto?> GetDetailAsync(Guid id, CancellationToken cancellationToken = default)
         => _repository.GetDetailAsync(id, cancellationToken);
 
+    public Task<OpportunityConversionLaunchDto?> GetConversionLaunchAsync(Guid id, CancellationToken cancellationToken = default)
+        => _repository.GetConversionLaunchAsync(id, cancellationToken);
+
     public Task<PagedResult<OpportunityDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
         => _repository.SearchAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
+
+    public Task<PagedResult<OpportunityCompetitorLookupDto>> SearchCompetitorLookupsAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default)
+        => _repository.SearchCompetitorLookupsAsync(tenantId, searchTerm, pageNumber, pageSize, cancellationToken);
 
     public Task UpdateAsync(Guid id, UpdateOpportunityRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateAsync(id, request, cancellationToken);
 
-    public Task UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
+    public Task<OpportunityStageUpdateResult> UpdateStageAsync(Guid id, UpdateOpportunityStageRequest request, CancellationToken cancellationToken = default)
         => _repository.UpdateStageAsync(id, request, cancellationToken);
+
+    public Task<Guid> UpsertLineAsync(UpsertOpportunityLineRequest request, CancellationToken cancellationToken = default)
+        => _repository.UpsertLineAsync(request, cancellationToken);
+
+    public Task SetPrimaryLineAsync(Guid opportunityId, Guid opportunityLineId, Guid? userId, CancellationToken cancellationToken = default)
+        => _repository.SetPrimaryLineAsync(opportunityId, opportunityLineId, userId, cancellationToken);
+
+    public Task DeleteLineAsync(Guid opportunityLineId, Guid? modifiedByUserId, CancellationToken cancellationToken = default)
+        => _repository.DeleteLineAsync(opportunityLineId, modifiedByUserId, cancellationToken);
 
     public Task<Guid> UpsertActivityAsync(UpsertOpportunityActivityRequest request, CancellationToken cancellationToken = default)
         => _repository.UpsertActivityAsync(request, cancellationToken);

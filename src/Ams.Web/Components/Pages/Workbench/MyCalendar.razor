@@ -89,7 +89,7 @@
     </section>
 
     <section class="cal-search-panel" aria-label="Search calendar">
-        <div class="cal-search-wrap"><span class="cal-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span><div class="cal-search-body"><label for="calendar-search">Search calendar</label><input id="calendar-search" class="cal-search-input" type="search" placeholder="Search title, notes, type, status, or owner..." @bind="_search" @bind:event="oninput" /><span class="cal-search-hint">Month, week, agenda, analytics, and detail panel update from active filters.</span></div></div>
+        <div class="cal-search-wrap"><i class="bi bi-search cal-search-icon" aria-hidden="true"></i><div class="cal-search-body"><label for="calendar-search">Search calendar</label><input id="calendar-search" class="cal-search-input" type="search" placeholder="Search title, notes, type, status, or owner..." @bind="_search" @bind:event="oninput" /><span class="cal-search-hint">Month, week, agenda, analytics, and detail panel update from active filters.</span></div></div>
         <div class="cal-search-result"><strong>@FilteredEvents.Count()</strong><span>visible</span></div>
     </section>
 
@@ -116,10 +116,11 @@
                         {
                             var date = DateOnly.FromDateTime(day);
                             var dayEvents = EventsOn(date).ToList();
-                            <button type="button" class="cal-day @(day.Month == _viewDate.Month ? null : "cal-day-other") @(date == Today ? "cal-day-today" : null) @(date == _selectedDate ? "cal-day-selected" : null)" @onclick="() => SelectDay(date)">
+                            <div class="cal-day @(day.Month == _viewDate.Month ? null : "cal-day-other") @(date == Today ? "cal-day-today" : null) @(date == _selectedDate ? "cal-day-selected" : null) @(dayEvents.Count == 0 ? "cal-day-empty" : "cal-day-occupied")" role="button" tabindex="0" aria-label="@DayAriaLabel(date, dayEvents.Count)" @onclick="() => HandleDayClick(date)">
                                 <span class="cal-day-head"><span class="cal-day-num">@day.Day</span>@if (dayEvents.Count > 0) { <span class="cal-day-count">@dayEvents.Count</span> }</span>
-                                <span class="cal-day-events">@foreach (var item in dayEvents.Take(4)) { <span class="cal-day-event cal-event-@TypeCss(item.Type)" title="@item.Title"><i></i>@item.Title</span> } @if (dayEvents.Count > 4) { <span class="cal-day-more">+@(dayEvents.Count - 4) more</span> }</span>
-                            </button>
+                                <span class="cal-day-events">@foreach (var item in dayEvents.Take(4)) { <button type="button" class="cal-day-event cal-event-@TypeCss(item.Type)" title="Open @item.Title details" @onclick:stopPropagation="true" @onclick="() => SelectEvent(item)"><i></i><span>@item.Title</span></button> } @if (dayEvents.Count > 4) { <span class="cal-day-more">+@(dayEvents.Count - 4) more</span> }</span>
+                                @if (dayEvents.Count == 0) { <span class="cal-day-empty-action"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add event</span> }
+                            </div>
                         }
                     </div>
                 </div>
@@ -131,9 +132,9 @@
                     {
                         var date = DateOnly.FromDateTime(day);
                         var dayEvents = EventsOn(date).ToList();
-                        <section class="cal-week-col @(date == Today ? "cal-week-today" : null)">
+                        <section class="cal-week-col @(date == Today ? "cal-week-today" : null) @(dayEvents.Count == 0 ? "cal-week-col-empty" : null)" role="button" tabindex="0" aria-label="@DayAriaLabel(date, dayEvents.Count)" @onclick="() => HandleDayClick(date)">
                             <header><span>@day.ToString("ddd", CultureInfo.CurrentCulture)</span><strong>@day.Day</strong><small>@dayEvents.Count</small></header>
-                            <div class="cal-week-events">@foreach (var item in dayEvents) { <button type="button" class="cal-week-event cal-event-@TypeCss(item.Type)" @onclick="() => SelectEvent(item)"><span>@DisplayTime(item)</span><strong>@item.Title</strong><small>@item.Type</small></button> } @if (!dayEvents.Any()) { <div class="cal-week-empty">Open</div> }</div>
+                            <div class="cal-week-events">@foreach (var item in dayEvents) { <button type="button" class="cal-week-event cal-event-@TypeCss(item.Type)" @onclick:stopPropagation="true" @onclick="() => SelectEvent(item)"><span>@DisplayTime(item)</span><strong>@item.Title</strong><small>@item.Type</small></button> } @if (!dayEvents.Any()) { <div class="cal-week-empty"><i class="bi bi-plus-circle" aria-hidden="true"></i><strong>Open schedule</strong><span>Click to add an event</span></div> }</div>
                         </section>
                     }
                 </div>
@@ -262,7 +263,19 @@
         finally { _loading = false; }
     }
 
-    private void SelectDay(DateOnly date) { _selectedDate = date; _selected = EventsOn(date).FirstOrDefault(); }
+    private void HandleDayClick(DateOnly date)
+    {
+        _selectedDate = date;
+        var firstEvent = EventsOn(date).FirstOrDefault();
+        if (firstEvent is not null)
+        {
+            SelectEvent(firstEvent);
+            return;
+        }
+
+        NewEvent(date);
+    }
+
     private void SelectEvent(CalEvent item) { _selected = item; _selectedDate = item.Date; }
     private async Task PrevPeriod() { if (_activeTab == "week") _selectedDate = DateOnly.FromDateTime(_selectedDate.ToDateTime(TimeOnly.MinValue).AddDays(-7)); else _viewDate = _viewDate.AddMonths(-1); await LoadAsync(); }
     private async Task NextPeriod() { if (_activeTab == "week") _selectedDate = DateOnly.FromDateTime(_selectedDate.ToDateTime(TimeOnly.MinValue).AddDays(7)); else _viewDate = _viewDate.AddMonths(1); await LoadAsync(); }
@@ -270,7 +283,16 @@
     private void SetFilter(string? filter) => _activeFilter = _activeFilter == (filter ?? string.Empty) ? string.Empty : (filter ?? string.Empty);
     private void SetStatusFilter(string? status) => _statusFilter = _statusFilter == (status ?? string.Empty) ? string.Empty : (status ?? string.Empty);
     private void ResetFilters() { _activeFilter = string.Empty; _statusFilter = string.Empty; _search = string.Empty; }
-    private void NewEvent() { _editId = null; var start = _selectedDate.ToDateTime(new TimeOnly(9, 0)); _form = new() { StartLocal = start, EndLocal = start.AddHours(1), Type = "Meeting", Status = "Scheduled" }; _showForm = true; }
+    private void NewEvent() => NewEvent(_selectedDate);
+    private void NewEvent(DateOnly date)
+    {
+        _selectedDate = date;
+        _selected = null;
+        _editId = null;
+        var start = date.ToDateTime(new TimeOnly(9, 0));
+        _form = new() { StartLocal = start, EndLocal = start.AddHours(1), Type = "Meeting", Status = "Scheduled" };
+        _showForm = true;
+    }
     private void OpenEdit(CalEvent item) { _editId = item.Id; _form = new() { StartLocal = item.StartLocal, EndLocal = item.EndLocal, Type = item.Type, Status = item.Status, Title = item.Title, Notes = item.Notes, AllDay = item.AllDay, TimeZoneId = item.TimeZoneId }; _showForm = true; }
     private void ShowDelete(CalEvent item) { _selected = item; _showDelete = true; }
     private void CloseForm() { _showForm = false; _form = new(); }
@@ -303,6 +325,9 @@
     private string MetricCardClass(KpiMetric metric) => string.Concat("cal-kpi-card ", _activeFilter == (metric.Filter ?? string.Empty) ? "cal-kpi-card-active" : string.Empty);
     private static CalEvent ToEvent(CalendarEventDto item) => new(item.EventId, item.Title, item.EventTypeCode, item.StatusCode, item.Notes ?? string.Empty, DateOnly.FromDateTime(item.StartDateTimeUtc.ToLocalTime()), item.StartDateTimeUtc.ToLocalTime(), item.EndDateTimeUtc?.ToLocalTime(), item.AllDay, item.TimeZoneId, item.AssignedToUserId ?? item.OrganizerUserId);
     private static string DisplayTime(CalEvent item) => item.AllDay ? "All day" : item.EndLocal is null ? item.StartLocal.ToString("h:mm tt", CultureInfo.CurrentCulture) : string.Concat(item.StartLocal.ToString("h:mm tt", CultureInfo.CurrentCulture), "-", item.EndLocal.Value.ToString("h:mm tt", CultureInfo.CurrentCulture));
+    private static string DayAriaLabel(DateOnly date, int eventCount) => eventCount == 0
+        ? string.Concat(date.ToString("dddd, MMMM d, yyyy", CultureInfo.CurrentCulture), ", no events. Open new event form")
+        : string.Concat(date.ToString("dddd, MMMM d, yyyy", CultureInfo.CurrentCulture), ", ", eventCount.ToString(CultureInfo.CurrentCulture), eventCount == 1 ? " event. Open details" : " events. Open first event details");
     private string DisplayOwner(CalEvent item) => item.AssignedToUserId == TenantAdminUserId ? "Tenant Admin" : "Assigned user";
     private static string TypeCss(string type) => type.ToLowerInvariant().Replace(" ", "-");
     private static string TypeChip(string type) => string.Concat("cal-type-chip cal-type-", TypeCss(type));

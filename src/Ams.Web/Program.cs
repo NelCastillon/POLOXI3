@@ -10,14 +10,9 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Threading.RateLimiting;
-using Syncfusion.Blazor;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
-
-var syncfusionKey = builder.Configuration["Syncfusion:LicenseKey"];
-if (!string.IsNullOrWhiteSpace(syncfusionKey))
-    Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense(syncfusionKey);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -38,8 +33,10 @@ builder.Services.AddCors(options =>
         if (contactAllowedOrigins.Length > 0)
         {
             policy.WithOrigins(contactAllowedOrigins)
-                .WithMethods("POST", "OPTIONS")
+                .SetIsOriginAllowedToAllowWildcardSubdomains()
+                .WithMethods("GET", "POST", "OPTIONS")
                 .WithHeaders(
+                    "accept",
                     "content-type",
                     "x-requested-with",
                     "x-contact-rendered-at",
@@ -95,14 +92,32 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("ReportsView", policy => policy.AddRequirements(new PermissionRequirement("REPORT_VIEW")));
     options.AddPolicy("CrmView", policy => policy.AddRequirements(new PermissionRequirement("CRM_VIEW")));
     options.AddPolicy("BillingView", policy => policy.AddRequirements(new PermissionRequirement("BILLING_VIEW")));
+    foreach (var permission in new[]
+    {
+        KnowledgePolicies.ConceptsRead,
+        KnowledgePolicies.ConceptsManage,
+        KnowledgePolicies.MappingsRead,
+        KnowledgePolicies.MappingsManage,
+        KnowledgePolicies.MappingsApprove,
+        KnowledgePolicies.RulesManage,
+        KnowledgePolicies.Publish,
+        KnowledgePolicies.Import,
+        KnowledgePolicies.AuditRead,
+        DocumentIntakePolicies.Read,
+        DocumentIntakePolicies.Upload,
+        DocumentIntakePolicies.Review,
+        DocumentIntakePolicies.Reprocess,
+        DocumentIntakePolicies.Promote,
+        DocumentIntakePolicies.Admin
+    }.Concat(IntelligencePolicies.All))
+    {
+        options.AddPolicy(permission, policy => policy.AddRequirements(new PermissionRequirement(permission)));
+    }
 });
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.Configure<ContactIntakeNotificationOptions>(builder.Configuration.GetSection("ContactIntake:Notification"));
-builder.Services.AddScoped<IContactIntakeNotificationService, SmtpContactIntakeNotificationService>();
-
-builder.Services.AddSyncfusionBlazor();
+builder.Services.AddScoped<IContactIntakeNotificationService, ContactIntakeNotificationService>();
 
 // Scoped: each Blazor Server circuit gets its own shell state
 builder.Services.AddHttpContextAccessor();
@@ -121,11 +136,9 @@ builder.Services.AddTransient<ActingUserHeaderHandler>();
 builder.Services.AddHttpClient<ApiClient>(client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
-}).AddHttpMessageHandler<ActingUserHeaderHandler>();
-
-builder.Services.AddHttpClient<ProducerWorkbenchApiClient>(client =>
-{
-    client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
+    // Long-running intelligence searches (EPH Wide progressive disambiguation) can exceed the
+    // 100-second HttpClient default; the pipeline governs its own budgets via AI.FeaturePolicy.
+    client.Timeout = TimeSpan.FromSeconds(300);
 }).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
 var app = builder.Build();

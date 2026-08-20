@@ -71,7 +71,7 @@ Each workflow page follows a consistent Blazor pattern:
 <PageTitle>{Workflow Name}</PageTitle>
 <AppPageHeader Title="{Workflow Name}" Icon="{bi-icon}" />
 <div class="toolbar">
-    <SfTextBox Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></SfTextBox>
+    <native input Placeholder="Search..." @bind-Value="_searchTerm" Width="320px"></native input>
     <button class="um-btn um-btn-ghost" @onclick="LoadAsync">
         <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
     </button>
@@ -83,12 +83,12 @@ Each workflow page follows a consistent Blazor pattern:
     </div> 
 }
 else {
-    <SfGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
+    <AppGrid DataSource="_items" AllowPaging="true" AllowSorting="true" Height="520px">
         <GridPageSettings PageSize="12"></GridPageSettings>
         <GridColumns>
             <!-- Columns specific to each workflow -->
         </GridColumns>
-    </SfGrid>
+    </AppGrid>
 }
 
 @code {
@@ -120,7 +120,7 @@ Each workflow page includes:
 
 ## Technology Stack
 - **Framework**: Blazor Server (.NET 9)
-- **UI Components**: Syncfusion (SfTab, SfGrid, SfTextBox, SfButton)
+- **UI Components**: enterprise CSS (SfTab, AppGrid, native input, enterprise button)
 - **Icons**: Bootstrap Icons (bi-*)
 - **API**: ApiClient service for backend communication
 - **Styling**: Custom CSS with responsive design

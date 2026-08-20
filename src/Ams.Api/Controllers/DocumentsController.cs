@@ -1,27 +1,40 @@
 using Ams.Application.Abstractions.Services;
+using Ams.Application.Features.DocumentIntake;
 using Ams.Application.Features.Documents;
+using Ams.Api.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
 
 namespace Ams.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public sealed class DocumentsController : ControllerBase
 {
+    private const long MaxVersionFileSizeBytes = 104_857_600;
+    private static readonly HashSet<string> AllowedVersionExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".tif", ".tiff"
+    };
+
     private readonly IDocumentService _service;
     private readonly IDocumentStorageService _storageService;
+    private readonly IDocumentIntakeService _documentIntakeService;
 
-    public DocumentsController(IDocumentService service, IDocumentStorageService storageService)
+    public DocumentsController(IDocumentService service, IDocumentStorageService storageService, IDocumentIntakeService documentIntakeService)
     {
         _service = service;
         _storageService = storageService;
+        _documentIntakeService = documentIntakeService;
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
+        if (item is not null && !CanViewDocument(item.TenantId)) return Forbid();
         return item is null ? NotFound() : Ok(item);
     }
 
@@ -30,6 +43,7 @@ public sealed class DocumentsController : ControllerBase
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         if (item is null) return NotFound();
+        if (!CanViewDocument(item.TenantId)) return Forbid();
 
         var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
         if (download is null) return NotFound();
@@ -44,6 +58,7 @@ public sealed class DocumentsController : ControllerBase
     {
         var item = await _service.GetByIdAsync(id, cancellationToken);
         if (item is null) return NotFound();
+        if (!CanViewDocument(item.TenantId)) return Forbid();
 
         var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
         if (download is null) return NotFound();
@@ -57,6 +72,25 @@ public sealed class DocumentsController : ControllerBase
         await _service.LogAccessAsync(item.TenantId, item.DocumentId, GetCurrentUserId(), null, "Preview", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
         return File(download.Content, contentType);
     }
+
+    [HttpGet("policies/{policyId:guid}/documents/{documentId:guid}/download")]
+    public async Task<IActionResult> DownloadPolicyDocument(Guid policyId, Guid documentId, [FromQuery] Guid tenantId, [FromQuery] bool inline = false, CancellationToken cancellationToken = default)
+    {
+        if (!AuthenticatedRequestContext.CanViewPolicy(User, tenantId)) return Forbid();
+        var item = await _service.GetPolicyDocumentAsync(tenantId, policyId, documentId, cancellationToken);
+        if (item is null) return NotFound();
+
+        var download = await _storageService.DownloadAsync(item.StoragePath, cancellationToken);
+        if (download is null) return NotFound();
+
+        await _service.LogAccessAsync(tenantId, documentId, AuthenticatedRequestContext.GetUserId(User), null, inline ? "PolicyPreview" : "PolicyDownload", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        var contentType = download.ContentType ?? item.ContentType ?? "application/octet-stream";
+        return inline ? File(download.Content, contentType) : File(download.Content, contentType, item.FileName);
+    }
+
+    [HttpGet("policies/{policyId:guid}/documents/{documentId:guid}/preview")]
+    public Task<IActionResult> PreviewPolicyDocument(Guid policyId, Guid documentId, [FromQuery] Guid tenantId, CancellationToken cancellationToken)
+        => DownloadPolicyDocument(policyId, documentId, tenantId, true, cancellationToken);
 
     [HttpGet]
     public async Task<IActionResult> Search([FromQuery] Guid tenantId, [FromQuery] string? categoryCode, [FromQuery] string? entityName, [FromQuery] Guid? entityId, [FromQuery] string? searchTerm, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default)
@@ -101,7 +135,43 @@ public sealed class DocumentsController : ControllerBase
         }, cancellationToken);
 
         await _service.LogAccessAsync(form.TenantId, documentId, form.CreatedByUserId ?? GetCurrentUserId(), null, "Upload", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        await EnsureSubmissionIntakeAsync(form,documentId,cancellationToken);
         return Ok(documentId);
+    }
+
+    private async Task EnsureSubmissionIntakeAsync(UploadDocumentForm form,Guid documentId,CancellationToken cancellationToken)
+    {
+        if (!string.Equals(form.EntityName,"Submission",StringComparison.OrdinalIgnoreCase) || form.EntityId is not Guid submissionId || submissionId==Guid.Empty)
+            return;
+        if (string.Equals(form.DocumentTypeCode,"QUOTE",StringComparison.OrdinalIgnoreCase) || string.Equals(form.CategoryCode,"QUOTE",StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var actorUserId=form.CreatedByUserId ?? GetCurrentUserId() ?? throw new UnauthorizedAccessException("An authenticated user is required to queue Submission document analysis.");
+        var correlationId=Guid.NewGuid().ToString("N");
+        var intakeId=await _documentIntakeService.CreateAsync(new(
+            form.TenantId,
+            $"SUBMISSION:{submissionId:D}:DOCUMENT:{documentId:D}",
+            DocumentIntakeModules.Submission,
+            "SUBMISSION_DOCUMENTS",
+            "NORMAL",
+            submissionId,
+            null,
+            correlationId,
+            actorUserId),cancellationToken);
+
+        var detail=await _documentIntakeService.GetAsync(form.TenantId,intakeId,cancellationToken)
+            ?? throw new InvalidOperationException("The Submission document intake session could not be loaded after upload.");
+        if (detail.Session.StatusCode!=DocumentIntakeStatuses.Draft)
+            return;
+
+        if (!detail.Documents.Any(document=>document.DocumentId==documentId))
+        {
+            await _documentIntakeService.AttachDocumentAsync(new(form.TenantId,intakeId,documentId,"SOURCE",null,detail.Documents.Count+1,actorUserId),cancellationToken);
+            detail=await _documentIntakeService.GetAsync(form.TenantId,intakeId,cancellationToken)
+                ?? throw new InvalidOperationException("The Submission document intake session could not be refreshed after upload.");
+        }
+
+        await _documentIntakeService.QueueAsync(new(form.TenantId,intakeId,"Queued Submission document automatically after upload.",correlationId,actorUserId,detail.Session.RowVersion),cancellationToken);
     }
 
     [HttpPut("metadata")]
@@ -124,6 +194,19 @@ public sealed class DocumentsController : ControllerBase
     public async Task<IActionResult> GetVersions(Guid id, CancellationToken cancellationToken)
         => Ok(await _service.GetVersionsAsync(id, cancellationToken));
 
+    [HttpGet("{id:guid}/versions/{versionId:guid}/download")]
+    public async Task<IActionResult> DownloadVersion(Guid id, Guid versionId, CancellationToken cancellationToken)
+    {
+        var version = await _service.GetVersionAsync(id, versionId, cancellationToken);
+        if (version is null) return NotFound();
+
+        var download = await _storageService.DownloadAsync(version.StoragePath, cancellationToken);
+        if (download is null) return NotFound();
+
+        await _service.LogAccessAsync(version.TenantId, id, GetCurrentUserId(), null, $"DownloadVersion:{version.VersionNumber}", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        return File(download.Content, download.ContentType ?? version.ContentType ?? "application/octet-stream", version.FileName);
+    }
+
     [HttpPost("versions")]
     public async Task<IActionResult> CreateVersion([FromBody] CreateDocumentVersionRequest request, CancellationToken cancellationToken)
         => Ok(await _service.CreateVersionAsync(request, cancellationToken));
@@ -138,29 +221,52 @@ public sealed class DocumentsController : ControllerBase
         if (form.File is null || form.File.Length == 0)
             return BadRequest("A document version file is required.");
 
+        if (form.File.Length > MaxVersionFileSizeBytes)
+            return BadRequest("The document version file cannot exceed 100 MB.");
+
+        var originalFileName = Path.GetFileName(form.File.FileName);
+        var requestedFileName = Path.GetFileName(string.IsNullOrWhiteSpace(form.FileName) ? originalFileName : form.FileName.Trim());
+        if (string.IsNullOrWhiteSpace(requestedFileName) || requestedFileName.Length > 260)
+            return BadRequest("The version file name is required and cannot exceed 260 characters.");
+
+        var extension = Path.GetExtension(requestedFileName);
+        if (!AllowedVersionExtensions.Contains(extension))
+            return BadRequest("The selected file type is not supported. Upload a PDF, Office document, CSV, or supported image file.");
+
+        if (string.IsNullOrWhiteSpace(form.ChangeNotes) || form.ChangeNotes.Trim().Length is < 3 or > 1000)
+            return BadRequest("Change notes are required and must be between 3 and 1,000 characters.");
+
         await using var stream = form.File.OpenReadStream();
         var upload = await _storageService.UploadAsync(new DocumentStorageUploadRequest
         {
             TenantId = item.TenantId,
-            FileName = form.File.FileName,
+            FileName = originalFileName,
             ContentType = form.File.ContentType,
             Content = stream
         }, cancellationToken);
 
-        var versionId = await _service.CreateVersionAsync(new CreateDocumentVersionRequest
+        try
         {
-            TenantId = item.TenantId,
-            DocumentId = id,
-            FileName = form.FileName ?? form.File.FileName,
-            StoragePath = upload.StoragePath,
-            ContentType = upload.ContentType ?? form.File.ContentType,
-            FileSizeBytes = upload.FileSizeBytes,
-            ChangeNotes = form.ChangeNotes,
-            CreatedByUserId = form.CreatedByUserId
-        }, cancellationToken);
+            var versionId = await _service.CreateVersionAsync(new CreateDocumentVersionRequest
+            {
+                TenantId = item.TenantId,
+                DocumentId = id,
+                FileName = requestedFileName,
+                StoragePath = upload.StoragePath,
+                ContentType = upload.ContentType ?? form.File.ContentType,
+                FileSizeBytes = upload.FileSizeBytes,
+                ChangeNotes = form.ChangeNotes.Trim(),
+                CreatedByUserId = form.CreatedByUserId ?? GetCurrentUserId()
+            }, cancellationToken);
 
-        await _service.LogAccessAsync(item.TenantId, id, form.CreatedByUserId ?? GetCurrentUserId(), null, "UploadVersion", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
-        return Ok(versionId);
+            await _service.LogAccessAsync(item.TenantId, id, form.CreatedByUserId ?? GetCurrentUserId(), null, "UploadVersion", HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+            return Ok(versionId);
+        }
+        catch
+        {
+            await _storageService.DeleteAsync(upload.StoragePath, cancellationToken);
+            throw;
+        }
     }
 
     // ── Secure sharing ───────────────────────────────────────
@@ -213,6 +319,15 @@ public sealed class DocumentsController : ControllerBase
         var value = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub") ?? User.FindFirstValue("userId");
         return Guid.TryParse(value, out var userId) ? userId : null;
     }
+
+    private bool CanViewDocument(Guid tenantId)
+        => AuthenticatedRequestContext.GetTenantId(User) == tenantId
+            && (User.HasClaim("permission", "DMS.POLICY_DOCUMENTS.READ")
+                || User.HasClaim("permission", "POLICY_VIEW")
+                || User.HasClaim("permission", "NAV_ALL")
+                || User.IsInRole("SYSTEM_ADMIN")
+                || User.IsInRole("TENANT_ADMIN")
+                || User.Identity?.AuthenticationType == "Development");
 }
 
 public sealed class UploadDocumentForm

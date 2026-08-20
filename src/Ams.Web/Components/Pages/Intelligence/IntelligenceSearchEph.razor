@@ -1,0 +1,183 @@
+@page "/intelligence/search/eph"
+@attribute [Authorize(Policy=Ams.Web.Security.IntelligencePolicies.Search)]
+@using Ams.Application.Features.Intelligence
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+
+<IntelligenceWorkspace>
+    <div class="eph-page">
+        <header class="eph-hero">
+            <div class="eph-hero-icon"><i class="bi bi-diagram-3"></i></div>
+            <div>
+                <span>Dynamic hierarchy · fixed enterprise grounding</span>
+                <h1>Intelligent Search Using EPH</h1>
+                <p>The LLM proposes how to reason. EPH validates every branch against approved capabilities, executes deterministic authorized searches, and explains only retrieved evidence.</p>
+            </div>
+        </header>
+
+        <section class="um-search-filter-row" aria-label="EPH enterprise question">
+            <div class="um-search-box">
+                <i class="bi bi-search"></i>
+                <input id="eph-query" class="um-search-input" placeholder="Example: Which policies are in trouble?" @bind="_query" @bind:event="oninput" @onkeydown="KeyDown" />
+            </div>
+            <label class="eph-toggle"><input type="checkbox" @bind="_useEphEngine" /><span></span><strong>EPH Engine</strong></label>
+            <label class="eph-toggle"><input type="checkbox" @bind="_includeExplanation" /><span></span><strong>Grounded explanation</strong></label>
+            <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@_loading"><i class="bi bi-stars"></i> Build &amp; Execute EPH</button>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="eph-loading"><div class="eph-spinner"><i class="bi bi-diagram-3"></i></div><div><strong>Building a governed reasoning hierarchy</strong><p>Proposing branches, validating enterprise grounding, executing approved capabilities, and ranking evidence.</p></div></section>
+        }
+        else if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+        }
+        else if (_response is not null)
+        {
+            @if (_response.GroundedExplanation is not null)
+            {
+                <section class="eph-explanation">
+                    <div class="eph-explanation-icon"><i class="bi bi-chat-square-quote"></i></div>
+                    <div class="eph-explanation-body">
+                        <div class="eph-panel-header"><div><span>Evidence-only LLM response</span><h2>Grounded explanation</h2></div><span class="eph-status">@_response.ExplanationStatusCode</span></div>
+                        <p>@_response.GroundedExplanation</p>
+                        @if (ValidBranches.Count > 0)
+                        {
+                            <div class="eph-grounded-branches">
+                                <small>Grounded branches used:</small>
+                                @foreach (var level in GroundedBranchLevels)
+                                {
+                                    <div class="eph-branch-level">
+                                        <span class="eph-level-label">Level @level.Key</span>
+                                        @foreach (var branch in level)
+                                        {
+                                            <span class="eph-branch-chip" title="@branch.ProposedCondition"><i class="bi bi-check2-circle"></i>@branch.DisplayName<em>@branch.CapabilityCode</em></span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </section>
+            }
+            else if (ValidBranches.Count > 0)
+            {
+                <section class="eph-grounded-branches eph-grounded-branches-strip">
+                    <small>Grounded branches used:</small>
+                    @foreach (var level in GroundedBranchLevels)
+                    {
+                        <div class="eph-branch-level">
+                            <span class="eph-level-label">Level @level.Key</span>
+                            @foreach (var branch in level)
+                            {
+                                <span class="eph-branch-chip" title="@branch.ProposedCondition"><i class="bi bi-check2-circle"></i>@branch.DisplayName<em>@branch.CapabilityCode</em></span>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+
+            <section class="eph-kpis">
+                <article><span>Hierarchy</span><strong>v@_response.HierarchyVersion</strong><small>@(_response.WasHierarchyReused ? "Validated cache reused" : "Newly generated")</small></article>
+                <article><span>Grounded branches</span><strong>@ValidBranches.Count</strong><small>@UnsupportedBranches.Count unsupported</small></article>
+                <article><span>Evidence</span><strong>@_response.Evidence.Count</strong><small>@_response.DurationMilliseconds ms</small></article>
+                <article><span>Confidence</span><strong>@_response.Confidence.ToString("P0")</strong><small>EPH hierarchy</small></article>
+            </section>
+
+            <div class="eph-layout">
+                <section class="eph-panel eph-hierarchy-panel">
+                    <div class="eph-panel-header"><div><span>Validated reasoning plan</span><h2>@_response.ConceptDisplayName</h2></div><span class="eph-version">@_response.ConceptCode</span></div>
+                    <div class="eph-tree">
+                        @foreach (var branch in _response.Branches.OrderBy(x => x.SortOrder))
+                        {
+                            <article class="eph-branch @(branch.ValidationStatusCode == "VALID" ? "eph-branch-valid" : "eph-branch-unsupported")">
+                                <span class="eph-branch-icon"><i class="bi @(branch.ValidationStatusCode == "VALID" ? "bi-check2-circle" : "bi-slash-circle")"></i></span>
+                                <div><strong>@branch.DisplayName</strong><p>@branch.ProposedCondition</p><small>@(branch.ValidationMessage ?? branch.ValidationStatusCode)</small></div>
+                                <div class="eph-branch-meta"><span>@branch.ValidationStatusCode</span><small>@branch.Confidence.ToString("P0")</small></div>
+                            </article>
+                        }
+                    </div>
+                </section>
+
+                <section class="eph-panel eph-evidence-panel">
+                    <div class="eph-panel-header"><div><span>Deterministic retrieval</span><h2>Authorized evidence</h2></div></div>
+                    @if (_response.Evidence.Count == 0)
+                    {
+                        <div class="eph-empty"><i class="bi bi-shield-check"></i><strong>No grounded evidence matched</strong><p>EPH executed only approved branches and did not fabricate an answer.</p></div>
+                    }
+                    @foreach (var evidence in _response.Evidence)
+                    {
+                        var canOpen = !string.IsNullOrWhiteSpace(evidence.NavigationRoute);
+                        <article class="eph-evidence @(canOpen ? "eph-evidence-clickable" : null)" @ondblclick="() => OpenEvidence(evidence)" title="@(canOpen ? "Double-click to open the source record." : null)">
+                            <span class="eph-rank">@evidence.RankNumber</span>
+                            <div class="eph-evidence-main"><strong>@evidence.Title</strong><small>@evidence.ModuleCode · @evidence.EntityTypeCode</small><p>@evidence.Excerpt</p><div>@foreach (var branch in evidence.MatchedBranches) { <span class="um-badge um-badge-neutral">@branch</span> }</div></div>
+                            <div class="eph-score"><strong>@evidence.RelevanceScore.ToString("P0")</strong><small>EPH score</small></div>
+                        </article>
+                    }
+                </section>
+            </div>
+        }
+    </div>
+</IntelligenceWorkspace>
+
+@code {
+    private string _query = "";
+    private bool _loading, _includeExplanation = true, _useEphEngine = true;
+    private string? _error;
+    private EphSearchResponse? _response;
+    private IReadOnlyCollection<EphBranchRecord> ValidBranches => _response?.Branches.Where(x => x.ValidationStatusCode == "VALID").ToArray() ?? [];
+    private IEnumerable<IGrouping<int, EphBranchRecord>> GroundedBranchLevels => ValidBranches.OrderBy(x => x.SortOrder).GroupBy(GetBranchLevel).OrderBy(group => group.Key);
+
+    private int GetBranchLevel(EphBranchRecord branch)
+    {
+        var level = 1;
+        var parentId = branch.ParentHierarchyBranchId;
+        while (parentId is not null && level < 10)
+        {
+            var parent = _response?.Branches.FirstOrDefault(x => x.HierarchyBranchId == parentId);
+            if (parent is null) break;
+            level++;
+            parentId = parent.ParentHierarchyBranchId;
+        }
+        return level;
+    }
+    private IReadOnlyCollection<EphBranchRecord> UnsupportedBranches => _response?.Branches.Where(x => x.ValidationStatusCode != "VALID").ToArray() ?? [];
+
+    protected override Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Intelligent Search Using EPH", "/intelligence/search/eph"));
+        return Task.CompletedTask;
+    }
+
+    private async Task SearchAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_query) || _query.Trim().Length < 2) return;
+        _loading = true;
+        _error = null;
+        try
+        {
+            _response = await Api.IntelligentSearchUsingEphAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { IncludeExplanation = _includeExplanation, UseEphEngine = _useEphEngine });
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task KeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter") await SearchAsync();
+    }
+
+    private void OpenEvidence(EphEvidenceDto evidence)
+    {
+        if (!string.IsNullOrWhiteSpace(evidence.NavigationRoute)) Navigation.NavigateTo(evidence.NavigationRoute);
+    }
+}
+

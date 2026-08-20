@@ -96,6 +96,15 @@ public sealed class BillingAccountServiceTests
         public Task DeleteAsync(Guid id, Guid? userId = null, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<ContactDto>> GetContactsByAccountIdAsync(Guid accountId, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<ContactDto>>([]);
+        public Task<Account360Dto?> GetAccount360Async(Guid tenantId, Guid accountId, CancellationToken cancellationToken = default) => Task.FromResult<Account360Dto?>(null);
+        public Task ReplaceServiceAssignmentsAsync(ReplaceAccountServiceAssignmentsRequest request, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<Guid> UpsertNamedInsuredAsync(UpsertAccountNamedInsuredRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> UpsertLocationAsync(UpsertAccountLocationRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> UpsertVehicleAsync(UpsertAccountVehicleRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> UpsertDriverAsync(UpsertAccountDriverRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> UpsertPropertyAsync(UpsertAccountPropertyRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task<Guid> UpsertScheduleItemAsync(UpsertAccountScheduleItemRequest request, CancellationToken cancellationToken = default) => Task.FromResult(Guid.NewGuid());
+        public Task DeleteAccount360ItemAsync(Guid tenantId, Guid accountId, string entityType, Guid entityId, Guid? userId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<AccountDto>> FindMatchCandidatesAsync(AccountMatchCriteria criteria, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<AccountDto>>([]);
     }

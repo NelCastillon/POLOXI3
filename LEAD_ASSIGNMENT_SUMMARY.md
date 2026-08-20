@@ -106,7 +106,7 @@ Successfully created a **comprehensive Lead Assignment management page** at `/cr
 ### Consistency
 - ✅ Follows established AMS design patterns
 - ✅ Matches LeadScoring and Leads pages
-- ✅ Uses unified component library (Syncfusion)
+- ✅ Uses unified component library (enterprise CSS)
 - ✅ Consistent color scheme and typography
 
 ### Responsiveness
@@ -213,7 +213,7 @@ Scores: 62-91 (distributed across Hot/Warm/Cold ranges)
 
 - **Framework**: Blazor Server (.NET 9)
 - **Language**: C# 14.0, Razor
-- **UI Components**: Syncfusion (SfDropDownList, SfToast)
+- **UI Components**: enterprise CSS (native select, enterprise toast)
 - **Styling**: CSS Isolation (.razor.css)
 - **Icons**: Bootstrap Icons (bi-*)
 - **Navigation**: NavSidebar integration via NavigationManager
@@ -366,7 +366,7 @@ The implementation demonstrates:
 - ✅ Complex state management
 - ✅ Event handling and delegation
 - ✅ CSS isolation with responsive design
-- ✅ Syncfusion component integration
+- ✅ enterprise native component integration
 - ✅ Service injection patterns
 - ✅ Mock data strategy for testing
 - ✅ Breadcrumb integration

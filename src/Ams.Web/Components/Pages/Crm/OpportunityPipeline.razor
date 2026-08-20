@@ -1,3 +1,4 @@
+@page "/crm/opportunities/pipeline"
 @page "/tenant/crm/pipeline"
 @page "/tenant/crm/pipeline-settings"
 @namespace Ams.Web.Components.Pages.Crm
@@ -99,10 +100,10 @@
             <button type="button" class="opl-workflow-card" @onclick='() => SetView("settings")'><i class="bi bi-sliders2" aria-hidden="true"></i><span><strong>Configuration</strong><span>Inspect synced stage and pipeline rules.</span></span></button>
         </section>
 
-        <section class="opl-filter-panel">
-            <div class="opl-search-wrap">
-                <span class="opl-search-icon"><i class="bi bi-search" aria-hidden="true"></i></span>
-                <div class="opl-search-body">
+        <section class="opl-filter-panel opportunity-search-panel">
+            <div class="opl-search-wrap opportunity-search-box">
+                <i class="bi bi-search opl-search-icon" aria-hidden="true"></i>
+                <div class="opl-search-body opportunity-search-body">
                     <label for="pipelineSearch">Search pipeline</label>
                     <input id="pipelineSearch" class="opl-search-input" value="@_search" @oninput="OnSearchChanged" placeholder="Search opportunity, account, owner, stage, forecast, lead, or description..." />
                     <span>Search filters every view, KPI, stage board, forecast analytics, and operating table.</span>
@@ -224,21 +225,21 @@
     private List<AccountDto> _accounts = [];
     private List<UserDto> _users = [];
     private List<OpportunityStageDto> _stages = [];
+    private List<OpportunityForecastCategoryDto> _forecastCategories = [];
     private List<PipelineSettingDto> _settings = [];
     private HashSet<Guid> _selectedIds = [];
 
-    private static readonly string[] DefaultStageOptions = ["Qualification", "Needs Analysis", "Proposal", "Negotiation", "Closed Won", "Closed Lost"];
-    private static readonly string[] ForecastOptions = ["Pipeline", "Best Case", "Commit", "Closed"];
     private readonly ViewDef[] _views = [new("overview", "Overview", "bi-speedometer2"), new("board", "Stage Board", "bi-kanban"), new("forecast", "Forecast", "bi-graph-up-arrow"), new("owners", "Owners", "bi-people"), new("risk", "At Risk", "bi-exclamation-octagon"), new("settings", "Settings", "bi-sliders2"), new("table", "Table", "bi-table")];
 
     private string ToastIconClass => _toastKind switch { "danger" => "bi-exclamation-triangle-fill", "warning" => "bi-exclamation-circle-fill", _ => "bi-check-circle-fill" };
-    private IReadOnlyList<string> StageOptions => _stages.Count == 0 ? DefaultStageOptions : _stages.Where(s => s.IsActive).OrderBy(s => s.SortOrder).ThenBy(s => s.StageName).Select(s => s.StageName).DefaultIfEmpty().Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+    private IReadOnlyList<string> StageOptions => OpportunityPageConstants.ActiveStageNames(_stages);
+    private IReadOnlyList<string> ForecastOptions => OpportunityPageConstants.ForecastCategoryNames(_forecastCategories);
     private IReadOnlyList<PipelineRow> FilteredRows => ApplyFilters(_rows).ToList();
     private IReadOnlyList<DistributionRow> StageRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Stage, 1, r.Amount)));
     private IReadOnlyList<DistributionRow> ForecastRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(r.Forecast, 1, r.WeightedAmount)));
     private IReadOnlyList<DistributionRow> WinRows => BuildDistribution(FilteredRows.Select(r => new DistributionSource(WinBand(r.WinPct), 1, r.WeightedAmount)));
     private IReadOnlyList<OwnerRow> OwnerRows => BuildOwnerRows();
-    private IReadOnlyList<OpportunityStageDto> StageConfigRows => _stages.Count > 0 ? _stages : DefaultStageOptions.Select((name, index) => new OpportunityStageDto { StageCode = name.Replace(" ", string.Empty).ToUpperInvariant(), StageName = name, SortOrder = (index + 1) * 10, ProbabilityPercent = DefaultProbability(name), IsClosedStage = name.StartsWith("Closed", StringComparison.OrdinalIgnoreCase), IsWonStage = name.Equals("Closed Won", StringComparison.OrdinalIgnoreCase), IsActive = true }).ToList();
+    private IReadOnlyList<OpportunityStageDto> StageConfigRows => _stages;
     private IEnumerable<string> OwnerOptions => _rows.Select(r => r.Owner).Where(o => !string.IsNullOrWhiteSpace(o) && o != "Unassigned").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(o => o);
     private PipelineRow? TopOpportunity => FilteredRows.OrderByDescending(r => r.PriorityScore).ThenByDescending(r => r.Amount).FirstOrDefault();
     private int OpenCount => _rows.Count(r => r.IsOpen);
@@ -295,10 +296,9 @@
 
     private PipelineRow MapOpportunity(OpportunityDto dto)
     {
-        var stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName! : StageName(dto.StatusCode);
+        var stage = !string.IsNullOrWhiteSpace(dto.StageName) ? dto.StageName! : OpportunityPageConstants.StageName(dto.StatusCode);
         var owner = !string.IsNullOrWhiteSpace(dto.OwnerName) ? dto.OwnerName! : OwnerName(dto.OwnerUserId);
-        var close = dto.CloseDate ?? DateTime.UtcNow.AddDays(30);
-        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, dto.WinProbability, dto.ForecastCategoryCode ?? "Pipeline", dto.OwnerUserId, owner, close, dto.Description, dto.SourceLead, dto.CreatedDateUtc);
+        return new(dto.OpportunityId, dto.OpportunityNumber, dto.OpportunityName, dto.AccountName ?? AccountName(dto.AccountId), stage, dto.EstimatedAmount, dto.WinProbability, OpportunityPageConstants.NormalizeForecast(dto.ForecastCategoryCode), dto.OwnerUserId, owner, dto.CloseDate, dto.Description, dto.SourceLead, dto.CreatedDateUtc);
     }
 
     private IEnumerable<PipelineRow> ApplyFilters(IEnumerable<PipelineRow> rows)
@@ -377,7 +377,7 @@
     private void SelectStage(string stage) { _stageFilter = _stageFilter == stage ? string.Empty : stage; _view = "table"; _selected = FilteredRows.FirstOrDefault(); }
     private void ToggleSelection(Guid id) { if (!_selectedIds.Remove(id)) _selectedIds.Add(id); }
     private void ClearSelection() => _selectedIds.Clear();
-    private void OpenStageModal() { if (_selected is not null) _selectedIds.Add(_selected.Id); _bulkStage = StageOptions.FirstOrDefault() ?? DefaultStageOptions[0]; _modalError = string.Empty; _showStageModal = true; }
+    private void OpenStageModal() { if (_selected is not null) _selectedIds.Add(_selected.Id); _bulkStage = StageOptions.FirstOrDefault() ?? OpportunityPageConstants.DefaultStageName; _modalError = string.Empty; _showStageModal = true; }
     private void CloseStageModal() { if (!_busy) { _showStageModal = false; _modalError = string.Empty; } }
     private void ResetFilters() { _activeFilter = "all"; _search = string.Empty; _stageFilter = string.Empty; _ownerFilter = string.Empty; _forecastFilter = string.Empty; _selected = FilteredRows.FirstOrDefault(); _selectedOwner = null; }
     private void OnSearchChanged(BlazorChangeEventArgs e) { _search = e.Value?.ToString() ?? string.Empty; _selected = FilteredRows.FirstOrDefault(); }
@@ -395,13 +395,11 @@
     private string OwnerName(Guid? ownerId) { if (!ownerId.HasValue) return "Unassigned"; var user = _users.FirstOrDefault(u => u.UserId == ownerId.Value); return user is null ? "Unknown owner" : DisplayUser(user); }
     private static string DisplayUser(UserDto user) => !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : !string.IsNullOrWhiteSpace(user.FullName) ? user.FullName : user.UserName;
     private static string Initials(string name) { var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries); return parts.Length >= 2 ? $"{parts[0][0]}{parts[^1][0]}" : parts.Length == 1 ? parts[0][..1] : "?"; }
-    private static string StageName(int statusCode) => statusCode switch { 2 => "Needs Analysis", 3 => "Proposal", 4 => "Negotiation", 5 => "Closed Won", 6 => "Closed Lost", _ => "Qualification" };
     private string NextStage(string stage) { var stages = StageOptions.ToList(); var index = stages.FindIndex(s => string.Equals(s, stage, StringComparison.OrdinalIgnoreCase)); return index < 0 || index >= stages.Count - 1 ? stage : stages[index + 1]; }
     private static string WinBand(decimal winPct) => winPct >= 70 ? "High 70%+" : winPct >= 40 ? "Medium 40-69%" : "Low <40%";
-    private static int DefaultProbability(string stage) => stage switch { "Needs Analysis" => 25, "Proposal" => 50, "Negotiation" => 75, "Closed Won" => 100, "Closed Lost" => 0, _ => 10 };
     private static bool Contains(string? value, string term) => !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
     private static string FormatCurrency(decimal value) => value.ToString("C0", CultureInfo.CurrentCulture);
-    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture);
+    private static string FormatDate(DateTime? value) => value.HasValue ? value.Value.ToLocalTime().ToString("MMM d, yyyy", CultureInfo.CurrentCulture) : "Not set";
     private static string WidthPct(decimal value, decimal max) => (max <= 0 ? 4 : Math.Max(4, Math.Min(100, (double)(value / max * 100)))).ToString("F1", CultureInfo.InvariantCulture) + "%";
     private static string ToastKind(string value) => value.Contains("danger", StringComparison.OrdinalIgnoreCase) || value.Contains("error", StringComparison.OrdinalIgnoreCase) ? "danger" : value.Contains("warning", StringComparison.OrdinalIgnoreCase) ? "warning" : "success";
     private string MetricCardClass(Metric metric) => $"opl-kpi-card {metric.Tone} {(_activeFilter == metric.Filter ? "opl-kpi-card-active" : string.Empty)}";
@@ -441,11 +439,11 @@
     private sealed record DistributionSource(string Label, int Count, decimal Amount);
     private sealed record DistributionRow(string Label, int Count, decimal Amount, string Width);
     private sealed record OwnerRow(string OwnerName, int Count, int OpenCount, decimal TotalAmount, decimal WeightedAmount, int ClosingCount, string Status, string Summary);
-    private sealed record PipelineRow(Guid Id, string Number, string Name, string AccountName, string Stage, decimal Amount, decimal WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime CloseDate, string? Description, string? SourceLead, DateTime CreatedDateUtc)
+    private sealed record PipelineRow(Guid Id, string Number, string Name, string AccountName, string Stage, decimal Amount, decimal WinPct, string Forecast, Guid? OwnerUserId, string Owner, DateTime? CloseDate, string? Description, string? SourceLead, DateTime CreatedDateUtc)
     {
         public bool IsOpen => Stage is not "Closed Won" and not "Closed Lost";
-        public int DaysToClose => (int)Math.Ceiling((CloseDate.Date - DateTime.UtcNow.Date).TotalDays);
-        public bool IsOverdue => IsOpen && CloseDate.Date < DateTime.UtcNow.Date;
+        public int DaysToClose => CloseDate.HasValue ? (int)Math.Ceiling((CloseDate.Value.Date - DateTime.UtcNow.Date).TotalDays) : int.MaxValue;
+        public bool IsOverdue => IsOpen && CloseDate.HasValue && CloseDate.Value.Date < DateTime.UtcNow.Date;
         public decimal WeightedAmount => Amount * WinPct / 100m;
         public decimal RiskScore => (IsOverdue ? 500000 : 0) + (Owner == "Unassigned" ? 300000 : 0) + (DaysToClose <= 7 ? 250000 : 0) + (WinPct < 35 ? 125000 : 0) + Amount;
         public decimal PriorityScore => (IsOpen ? 500 : 0) + WeightedAmount + (DaysToClose <= 7 ? 250000 : 0) + (Forecast == "Commit" ? 150000 : 0) + (WinPct * 1000);

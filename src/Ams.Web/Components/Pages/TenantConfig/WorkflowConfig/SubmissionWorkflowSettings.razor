@@ -1,0 +1,268 @@
+@page "/tenant/workflow/submission-settings"
+@using System.ComponentModel.DataAnnotations
+@using System.Globalization
+@using Ams.Application.Common.Dtos
+@using Ams.Application.Features.Submissions
+@inject ApiClient Api
+@inject CurrentUserContext CurrentUser
+@inject BreadcrumbService Breadcrumbs
+
+<PageTitle>Submission Workflow Settings - AMS</PageTitle>
+
+<div class="sws-page">
+    <section class="sws-hero">
+        <div class="sws-hero-left">
+            <div class="sws-hero-icon"><i class="bi bi-diagram-3" aria-hidden="true"></i></div>
+            <div class="sws-hero__content">
+                <div class="sws-hero__eyebrow"><i class="bi bi-sliders" aria-hidden="true"></i> Tenant workflow configuration</div>
+                <div class="sws-title-row">
+                    <h1>Submission Workflow Settings</h1>
+                    <span><i class="bi bi-database-check" aria-hidden="true"></i> DB-backed</span>
+                </div>
+                <p>Manage intake templates and required document checklists used by submission readiness without hardcoded UI options.</p>
+                <div class="sws-hero__meta">
+                    <span><i class="bi bi-ui-checks" aria-hidden="true"></i>@(_summary?.IntakeTemplateCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—") intake templates</span>
+                    <span><i class="bi bi-file-earmark-check" aria-hidden="true"></i>@(_summary?.DocumentRequirementCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—") document requirements</span>
+                    <span><i class="bi bi-layers" aria-hidden="true"></i>@(_summary?.LineOfBusinessCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—") lines configured</span>
+                </div>
+            </div>
+        </div>
+        <div class="sws-hero__actions">
+            <button type="button" class="sws-btn sws-btn--light" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise @(_loading ? "sws-spin" : null)" aria-hidden="true"></i> Refresh</button>
+            <button type="button" class="sws-btn sws-btn--primary" @onclick="OpenCreateIntake"><i class="bi bi-plus-lg" aria-hidden="true"></i> Intake Question</button>
+            <button type="button" class="sws-btn sws-btn--success" @onclick="OpenCreateDocument"><i class="bi bi-plus-lg" aria-hidden="true"></i> Document Requirement</button>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div class="alert alert-danger sws-alert" role="alert"><i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i> @_error</div>
+    }
+
+    <section class="sws-kpi-strip" aria-label="Submission workflow summary">
+        <article class="sws-kpi sws-kpi--blue"><i class="bi bi-ui-checks" aria-hidden="true"></i><div><span>Intake templates</span><strong>@(_summary?.IntakeTemplateCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—")</strong><small>@(_summary?.RequiredIntakeTemplateCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—") required</small></div></article>
+        <article class="sws-kpi sws-kpi--green"><i class="bi bi-file-earmark-check" aria-hidden="true"></i><div><span>Document requirements</span><strong>@(_summary?.DocumentRequirementCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—")</strong><small>@(_summary?.RequiredDocumentRequirementCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—") required</small></div></article>
+        <article class="sws-kpi sws-kpi--purple"><i class="bi bi-layers" aria-hidden="true"></i><div><span>Lines configured</span><strong>@(_summary?.LineOfBusinessCount.ToString("N0", CultureInfo.CurrentCulture) ?? "—")</strong><small>LOB-specific rules</small></div></article>
+        <article class="sws-kpi sws-kpi--amber"><i class="bi bi-database-check" aria-hidden="true"></i><div><span>Readiness source</span><strong>Database</strong><small>No hardcoded UI options</small></div></article>
+    </section>
+
+    <section class="sws-filter-panel" aria-label="Submission workflow filters">
+        <div class="sws-search-wrap">
+            <i class="bi bi-search sws-search-icon" aria-hidden="true"></i>
+            <input class="sws-search-input" placeholder="Search code, question, category, display name..." value="@_search" @oninput="OnSearchInput" aria-label="Search submission workflow settings" />
+        </div>
+        <label class="sws-filter-field"><span>Status</span><select class="form-select" @bind="_statusFilter"><option value="">All</option><option value="Active">Active</option><option value="Inactive">Inactive</option><option value="Required">Required</option><option value="Optional">Optional</option></select></label>
+        <div class="sws-search-result"><strong>@(FilteredIntake.Count() + FilteredDocuments.Count())</strong><span>matches</span></div>
+    </section>
+
+    @if (_loading)
+    {
+        <div class="sws-loading"><div class="sws-spinner" role="status"></div><span>Loading submission workflow settings...</span></div>
+    }
+    else
+    {
+        <div class="sws-grid">
+            <section class="sws-card">
+                <div class="sws-card-header"><div><span class="sws-section-kicker">Template bank</span><h2>Intake Question Templates</h2><p>Questions seeded onto submissions by line of business.</p></div><span class="sws-count-pill">@FilteredIntake.Count()</span></div>
+                <div class="sws-table-wrap">
+                    <table class="sws-table">
+                            <thead><tr><th>Question</th><th>LOB</th><th>Sort</th><th>Status</th><th class="sws-actions-col">Actions</th></tr></thead>
+                            <tbody>
+                                @foreach (var item in FilteredIntake)
+                                {
+                                    <tr>
+                                        <td><button type="button" class="sws-link-button" @onclick="() => OpenEditIntake(item)">@item.QuestionText</button><div class="sws-subtext"><code>@item.QuestionCode</code> · @item.HelpText</div></td>
+                                        <td>@item.LineOfBusiness</td>
+                                        <td>@item.SortOrder</td>
+                                        <td>@Badges(item.IsRequired, item.IsActive)</td>
+                                        <td class="sws-actions-col"><button type="button" class="sws-icon-btn" @onclick="() => OpenEditIntake(item)" aria-label="Edit intake template"><i class="bi bi-pencil"></i></button><button type="button" class="sws-icon-btn sws-icon-btn--danger" @onclick="() => DeleteIntakeAsync(item)" aria-label="Delete intake template"><i class="bi bi-trash3"></i></button></td>
+                                    </tr>
+                                }
+                                @if (!FilteredIntake.Any())
+                                {
+                                    <tr><td colspan="5"><div class="sws-empty"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No intake questions found</strong><span>Adjust filters or create a new intake question.</span></div></td></tr>
+                                }
+                            </tbody>
+                        </table>
+                </div>
+            </section>
+            <section class="sws-card">
+                <div class="sws-card-header"><div><span class="sws-section-kicker">Readiness checklist</span><h2>Document Requirements</h2><p>Checklist categories used to calculate marketing readiness.</p></div><span class="sws-count-pill sws-count-pill--green">@FilteredDocuments.Count()</span></div>
+                <div class="sws-table-wrap">
+                    <table class="sws-table">
+                            <thead><tr><th>Requirement</th><th>LOB</th><th>Sort</th><th>Status</th><th class="sws-actions-col">Actions</th></tr></thead>
+                            <tbody>
+                                @foreach (var item in FilteredDocuments)
+                                {
+                                    <tr>
+                                        <td><button type="button" class="sws-link-button" @onclick="() => OpenEditDocument(item)">@item.DisplayName</button><div class="sws-subtext"><code>@item.CategoryCode</code></div></td>
+                                        <td>@item.LineOfBusiness</td>
+                                        <td>@item.SortOrder</td>
+                                        <td>@Badges(item.IsRequired, item.IsActive)</td>
+                                        <td class="sws-actions-col"><button type="button" class="sws-icon-btn" @onclick="() => OpenEditDocument(item)" aria-label="Edit document requirement"><i class="bi bi-pencil"></i></button><button type="button" class="sws-icon-btn sws-icon-btn--danger" @onclick="() => DeleteDocumentAsync(item)" aria-label="Delete document requirement"><i class="bi bi-trash3"></i></button></td>
+                                    </tr>
+                                }
+                                @if (!FilteredDocuments.Any())
+                                {
+                                    <tr><td colspan="5"><div class="sws-empty"><i class="bi bi-inbox" aria-hidden="true"></i><strong>No document requirements found</strong><span>Adjust filters or create a new document requirement.</span></div></td></tr>
+                                }
+                            </tbody>
+                        </table>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@if (_showIntakeForm)
+{
+    <div class="modal d-block sws-modal-backdrop" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content sws-modal"><EditForm Model="_intakeForm" OnValidSubmit="SaveIntakeAsync"><DataAnnotationsValidator />
+            <div class="modal-header sws-modal-header"><h2 class="h5 modal-title">@(_intakeEditId.HasValue ? "Edit Intake Template" : "Create Intake Template")</h2><button type="button" class="btn-close btn-close-white" @onclick="CloseForms"></button></div>
+            <div class="modal-body"><ValidationSummary />
+                <div class="row g-3"><div class="col-md-6"><label class="form-label">Line of business</label><InputText class="form-control" @bind-Value="_intakeForm.LineOfBusiness" /></div><div class="col-md-6"><label class="form-label">Question code</label><InputText class="form-control" @bind-Value="_intakeForm.QuestionCode" /></div><div class="col-12"><label class="form-label">Question text</label><InputText class="form-control" @bind-Value="_intakeForm.QuestionText" /></div><div class="col-12"><label class="form-label">Help text</label><InputTextArea class="form-control" rows="3" @bind-Value="_intakeForm.HelpText" /></div><div class="col-md-4"><label class="form-label">Sort order</label><InputNumber class="form-control" @bind-Value="_intakeForm.SortOrder" /></div><div class="col-md-4 form-check mt-5"><InputCheckbox class="form-check-input" @bind-Value="_intakeForm.IsRequired" /><label class="form-check-label">Required</label></div><div class="col-md-4 form-check mt-5"><InputCheckbox class="form-check-input" @bind-Value="_intakeForm.IsActive" /><label class="form-check-label">Active</label></div></div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" @onclick="CloseForms">Cancel</button><button type="submit" class="btn btn-primary" disabled="@_saving">Save</button></div>
+        </EditForm></div></div>
+    </div>
+}
+
+@if (_showDocumentForm)
+{
+    <div class="modal d-block sws-modal-backdrop" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered"><div class="modal-content sws-modal"><EditForm Model="_documentForm" OnValidSubmit="SaveDocumentAsync"><DataAnnotationsValidator />
+            <div class="modal-header sws-modal-header"><h2 class="h5 modal-title">@(_documentEditId.HasValue ? "Edit Document Requirement" : "Create Document Requirement")</h2><button type="button" class="btn-close btn-close-white" @onclick="CloseForms"></button></div>
+            <div class="modal-body"><ValidationSummary />
+                <div class="row g-3"><div class="col-md-6"><label class="form-label">Line of business</label><InputText class="form-control" @bind-Value="_documentForm.LineOfBusiness" /></div><div class="col-md-6"><label class="form-label">Category code</label><InputText class="form-control" @bind-Value="_documentForm.CategoryCode" /></div><div class="col-12"><label class="form-label">Display name</label><InputText class="form-control" @bind-Value="_documentForm.DisplayName" /></div><div class="col-md-4"><label class="form-label">Sort order</label><InputNumber class="form-control" @bind-Value="_documentForm.SortOrder" /></div><div class="col-md-4 form-check mt-5"><InputCheckbox class="form-check-input" @bind-Value="_documentForm.IsRequired" /><label class="form-check-label">Required</label></div><div class="col-md-4 form-check mt-5"><InputCheckbox class="form-check-input" @bind-Value="_documentForm.IsActive" /><label class="form-check-label">Active</label></div></div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" @onclick="CloseForms">Cancel</button><button type="submit" class="btn btn-success" disabled="@_saving">Save</button></div>
+        </EditForm></div></div>
+    </div>
+}
+
+@code {
+    private Guid _tenantId;
+    private Guid _userId;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _error;
+    private string _search = string.Empty;
+    private string _lineFilter = string.Empty;
+    private string _statusFilter = string.Empty;
+    private SubmissionWorkflowConfigurationSummaryDto? _summary;
+    private List<SubmissionIntakeTemplateDto> _intakeTemplates = [];
+    private List<SubmissionDocumentRequirementDto> _documentRequirements = [];
+    private bool _showIntakeForm;
+    private bool _showDocumentForm;
+    private Guid? _intakeEditId;
+    private Guid? _documentEditId;
+    private IntakeTemplateForm _intakeForm = new();
+    private DocumentRequirementForm _documentForm = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var context = await CurrentUser.RequireAsync();
+        _tenantId = context.TenantId;
+        _userId = context.UserId;
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Tenant Configuration", null), new("Submission Workflow", null));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _summary = await Api.GetSubmissionWorkflowConfigurationSummaryAsync(_tenantId);
+            _intakeTemplates = (await Api.GetSubmissionIntakeTemplatesAsync(_tenantId, _lineFilter))?.ToList() ?? [];
+            _documentRequirements = (await Api.GetSubmissionDocumentRequirementsAsync(_tenantId, _lineFilter))?.ToList() ?? [];
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load submission workflow settings: {ex.Message}";
+        }
+        finally { _loading = false; }
+    }
+
+    private IEnumerable<SubmissionIntakeTemplateDto> FilteredIntake => _intakeTemplates.Where(x => Matches(x.QuestionCode, x.QuestionText, x.HelpText, x.LineOfBusiness) && MatchesStatus(x.IsRequired, x.IsActive));
+    private IEnumerable<SubmissionDocumentRequirementDto> FilteredDocuments => _documentRequirements.Where(x => Matches(x.CategoryCode, x.DisplayName, x.LineOfBusiness) && MatchesStatus(x.IsRequired, x.IsActive));
+
+    private bool Matches(params string?[] values) => string.IsNullOrWhiteSpace(_search) || values.Any(v => (v ?? string.Empty).Contains(_search, StringComparison.OrdinalIgnoreCase));
+    private bool MatchesStatus(bool isRequired, bool isActive) => _statusFilter switch { "Active" => isActive, "Inactive" => !isActive, "Required" => isRequired, "Optional" => !isRequired, _ => true };
+    private void OnSearchInput(ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
+
+    private static RenderFragment Badges(bool isRequired, bool isActive) => builder =>
+    {
+        builder.OpenElement(0, "span"); builder.AddAttribute(1, "class", isRequired ? "sws-pill sws-pill--amber" : "sws-pill sws-pill--neutral"); builder.AddContent(2, isRequired ? "Required" : "Optional"); builder.CloseElement();
+        builder.OpenElement(3, "span"); builder.AddAttribute(4, "class", isActive ? "sws-pill sws-pill--green" : "sws-pill sws-pill--neutral"); builder.AddContent(5, isActive ? "Active" : "Inactive"); builder.CloseElement();
+    };
+
+    private void OpenCreateIntake() { _intakeEditId = null; _intakeForm = new() { LineOfBusiness = string.IsNullOrWhiteSpace(_lineFilter) ? "General Liability" : _lineFilter, IsRequired = true, IsActive = true, SortOrder = NextSort(_intakeTemplates.Select(x => x.SortOrder)) }; _showIntakeForm = true; }
+    private void OpenEditIntake(SubmissionIntakeTemplateDto item) { _intakeEditId = item.IntakeTemplateId; _intakeForm = new() { LineOfBusiness = item.LineOfBusiness, QuestionCode = item.QuestionCode, QuestionText = item.QuestionText, HelpText = item.HelpText, IsRequired = item.IsRequired, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showIntakeForm = true; }
+    private void OpenCreateDocument() { _documentEditId = null; _documentForm = new() { LineOfBusiness = string.IsNullOrWhiteSpace(_lineFilter) ? "General Liability" : _lineFilter, IsRequired = true, IsActive = true, SortOrder = NextSort(_documentRequirements.Select(x => x.SortOrder)) }; _showDocumentForm = true; }
+    private void OpenEditDocument(SubmissionDocumentRequirementDto item) { _documentEditId = item.DocumentRequirementId; _documentForm = new() { LineOfBusiness = item.LineOfBusiness, CategoryCode = item.CategoryCode, DisplayName = item.DisplayName, IsRequired = item.IsRequired, SortOrder = item.SortOrder, IsActive = item.IsActive }; _showDocumentForm = true; }
+    private void CloseForms() { if (_saving) return; _showIntakeForm = false; _showDocumentForm = false; }
+    private static int NextSort(IEnumerable<int> values) => values.DefaultIfEmpty(0).Max() + 10;
+
+    private async Task SaveIntakeAsync()
+    {
+        _saving = true;
+        try
+        {
+            var request = new UpsertSubmissionIntakeTemplateRequest(_tenantId, _intakeForm.LineOfBusiness, _intakeForm.QuestionCode, _intakeForm.QuestionText, _intakeForm.HelpText, _intakeForm.IsRequired, _intakeForm.SortOrder, _intakeForm.IsActive, _userId);
+            if (_intakeEditId.HasValue) await Api.UpdateSubmissionIntakeTemplateAsync(_intakeEditId.Value, request); else await Api.CreateSubmissionIntakeTemplateAsync(request);
+            CloseForms();
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = $"Failed to save intake template: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task SaveDocumentAsync()
+    {
+        _saving = true;
+        try
+        {
+            var request = new UpsertSubmissionDocumentRequirementRequest(_tenantId, _documentForm.LineOfBusiness, _documentForm.CategoryCode, _documentForm.DisplayName, _documentForm.IsRequired, _documentForm.SortOrder, _documentForm.IsActive, _userId);
+            if (_documentEditId.HasValue) await Api.UpdateSubmissionDocumentRequirementAsync(_documentEditId.Value, request); else await Api.CreateSubmissionDocumentRequirementAsync(request);
+            CloseForms();
+            await LoadAsync();
+        }
+        catch (Exception ex) { _error = $"Failed to save document requirement: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task DeleteIntakeAsync(SubmissionIntakeTemplateDto item)
+    {
+        try { await Api.DeleteSubmissionIntakeTemplateAsync(item.IntakeTemplateId, _tenantId, _userId); await LoadAsync(); }
+        catch (Exception ex) { _error = $"Failed to delete intake template: {ex.Message}"; }
+    }
+
+    private async Task DeleteDocumentAsync(SubmissionDocumentRequirementDto item)
+    {
+        try { await Api.DeleteSubmissionDocumentRequirementAsync(item.DocumentRequirementId, _tenantId, _userId); await LoadAsync(); }
+        catch (Exception ex) { _error = $"Failed to delete document requirement: {ex.Message}"; }
+    }
+
+    private sealed class IntakeTemplateForm
+    {
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = "General Liability";
+        [Required, StringLength(100)] public string QuestionCode { get; set; } = string.Empty;
+        [Required, StringLength(500)] public string QuestionText { get; set; } = string.Empty;
+        [StringLength(1000)] public string? HelpText { get; set; }
+        public bool IsRequired { get; set; } = true;
+        public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class DocumentRequirementForm
+    {
+        [Required, StringLength(100)] public string LineOfBusiness { get; set; } = "General Liability";
+        [Required, StringLength(100)] public string CategoryCode { get; set; } = string.Empty;
+        [Required, StringLength(200)] public string DisplayName { get; set; } = string.Empty;
+        public bool IsRequired { get; set; } = true;
+        public int SortOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+}

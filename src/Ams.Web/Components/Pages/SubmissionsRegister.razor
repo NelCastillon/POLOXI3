@@ -7,6 +7,7 @@
 @inject NavigationManager Nav
 @inject BreadcrumbService Breadcrumbs
 @inject CurrentUserContext CurrentUser
+@implements IDisposable
 
 <PageTitle>Submissions Command Center - AMS</PageTitle>
 
@@ -86,8 +87,8 @@
             <div class="sde-search-icon"><i class="bi bi-search" aria-hidden="true"></i></div>
             <div class="sde-search-body">
                 <label for="submission-search-input">Enterprise search</label>
-                <input id="submission-search-input" class="sde-search-input" @bind="SearchText" @bind:event="oninput" placeholder="Search submission #, account, opportunity, LOB, status, priority, assignee, premium, markets..." />
-                <span class="sde-search-hint">Searches all visible and supporting submission fields as you type.</span>
+                <input id="submission-search-input" class="sde-search-input" value="@_searchText" @oninput="OnSearchChanged" placeholder="Search submissions, accounts, contacts, lines, markets, carriers, quotes, proposals, policies, or workflow history..." />
+                <span class="sde-search-hint">Search includes tenant-scoped submission details and linked workflow records.</span>
             </div>
         </div>
         <div class="sde-filter-grid">
@@ -101,44 +102,11 @@
                     }
                 </select>
             </label>
-            <label>
-                <span>Line of Business</span>
-                <select class="form-select" @bind="LobFilter">
-                    <option value="">All lines</option>
-                    @foreach (var lob in LobOptions)
-                    {
-                        <option value="@lob">@lob</option>
-                    }
-                </select>
-            </label>
-            <label>
-                <span>Importance</span>
-                <select class="form-select" @bind="ImportanceFilter">
-                    <option value="">All importance levels</option>
-                    <option value="Critical">Critical</option>
-                    <option value="High">High</option>
-                    <option value="Medium">Medium</option>
-                    <option value="Standard">Standard</option>
-                </select>
-            </label>
-            <label>
-                <span>Sort</span>
-                <select class="form-select" @bind="SortMode">
-                    <option value="importance">Importance</option>
-                    <option value="effective">Effective date</option>
-                    <option value="premium">Target premium</option>
-                    <option value="status">Status</option>
-                    <option value="markets">Market activity</option>
-                </select>
-            </label>
         </div>
         <div class="sde-search-result">
             <strong>@FilteredRows.Count()</strong>
             <span>matches</span>
         </div>
-        <button type="button" class="sde-btn sde-btn--ghost" @onclick="ClearFilters" disabled="@(!HasFilters)">
-            <i class="bi bi-x-lg" aria-hidden="true"></i> Reset
-        </button>
     </section>
 
     <nav class="sde-tabs" aria-label="Submission views">
@@ -219,7 +187,7 @@
             }
             else
             {
-                <div class="sde-table-wrap">
+                <div class="@(_openActionMenuFor.HasValue ? "sde-table-wrap sde-table-wrap--menu-open" : "sde-table-wrap")">
                     <table class="sde-table">
                         <thead>
                             <tr>
@@ -240,10 +208,10 @@
                         <tbody>
                             @foreach (var row in PagedRows)
                             {
-                                <tr class="@(_selected?.SubmissionId == row.SubmissionId ? "sde-row sde-row--selected" : "sde-row")" @onclick="() => SelectRow(row)">
+                                <tr class="@(_selected?.SubmissionId == row.SubmissionId ? "sde-row sde-row--selected" : "sde-row")" @onclick="() => SelectRow(row)" @ondblclick="() => OpenSubmission(row)">
                                     <td>@ImportanceBadge(row)</td>
                                     <td>
-                                        <button type="button" class="sde-link-button" @onclick:stopPropagation="true" @onclick="() => OpenSubmission(row)">@row.SubmissionNumber</button>
+                                        <button type="button" class="sde-link-button" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onclick="() => OpenSubmission(row)">@row.SubmissionNumber</button>
                                         <small>@row.CreatedDateUtc.ToString("MMM d, yyyy")</small>
                                     </td>
                                     <td>
@@ -258,7 +226,7 @@
                                     <td>@PremiumCell(row)</td>
                                     <td><span class="sde-count-pill">@row.MarketCount</span></td>
                                     <td><span class="sde-count-pill sde-count-pill--quote">@row.QuoteCount</span></td>
-                                    <td class="sde-actions-col">
+                                    <td class="sde-actions-col" @ondblclick:stopPropagation="true">
                                         <button type="button" class="sde-icon-btn" title="Open action menu" @onclick:stopPropagation="true" @onclick="() => ToggleActionMenu(row)">
                                             <i class="bi bi-three-dots-vertical" aria-hidden="true"></i>
                                         </button>
@@ -368,7 +336,7 @@
                         <span>@_selected?.SubmissionNumber - @_selected?.AccountName</span>
                     </div>
                     <div class="sde-form-grid">
-                        @if (_pendingAction is "Submit to Market" or "Request Quote" or "Bind" or "Create Policy")
+                        @if (_pendingAction is "Submit to Market" or "Request Quote" or "Bind")
                         {
                             <label class="sde-field sde-field--full">
                                 <span>Carrier ID <small>optional</small></span>
@@ -376,7 +344,7 @@
                                 <ValidationMessage For="() => _actionForm.CarrierIdText" class="text-danger" />
                             </label>
                         }
-                        @if (_pendingAction is "Request Quote" or "Bind" or "Create Policy")
+                        @if (_pendingAction is "Request Quote" or "Bind")
                         {
                             <label class="sde-field">
                                 <span>Annual Premium <em>*</em></span>
@@ -483,6 +451,7 @@
     string _activeKpi = "all";
     string _sortMode = "importance";
     string? _searchText;
+    CancellationTokenSource? _searchCts;
     string? _statusFilter;
     string? _lobFilter;
     string? _importanceFilter;
@@ -504,6 +473,7 @@
     readonly List<ToastMessage> _toasts = new();
     List<SubmissionOption> _statusOptions = [];
     List<SubmissionOption> _lobOptions = [];
+    List<PolicyCreationSourceDto> _policyCreationSources = [];
 
     readonly TabDef[] _tabs =
     [
@@ -524,9 +494,8 @@
         new("Quote Register", "Quote Register", "bi-table", false),
         new("Submit to Market", "Submit to Market", "bi-send", false),
         new("Request Quote", "Request Quote", "bi-file-earmark-text", false),
-        new("Bind", "Bind", "bi-shield-check", false),
+        new("Bind", "Request Bind", "bi-shield-check", false),
         new("Copy", "Copy", "bi-copy", false),
-        new("Create Policy", "Create Policy", "bi-shield-plus", false),
         new("Initiate Workflow", "Initiate Workflow", "bi-diagram-3", false),
         new("Decline", "Decline", "bi-x-circle", true)
     ];
@@ -537,11 +506,11 @@
     bool HasFilters => _activeKpi != "all" || !string.IsNullOrWhiteSpace(_searchText) || !string.IsNullOrWhiteSpace(_statusFilter) || !string.IsNullOrWhiteSpace(_lobFilter) || !string.IsNullOrWhiteSpace(_importanceFilter);
     int TotalPages => Math.Max(1, (int)Math.Ceiling(FilteredRows.Count() / (double)PageSize));
     string ActiveViewTitle => _tabs.FirstOrDefault(t => t.Key == _activeTab)?.Label ?? "All";
-    string? SearchText { get => _searchText; set { _searchText = value; _page = 1; } }
     string? StatusFilter { get => _statusFilter; set { _statusFilter = value; _page = 1; } }
     string? LobFilter { get => _lobFilter; set { _lobFilter = value; _page = 1; } }
     string? ImportanceFilter { get => _importanceFilter; set { _importanceFilter = value; _page = 1; } }
     string SortMode { get => _sortMode; set { _sortMode = value; _page = 1; } }
+    PolicyCreationSourceDto? SelectedPolicyCreationSource => _policyCreationSources.FirstOrDefault(x => string.Equals(x.SourceCode, _actionForm.PolicySourceCode, StringComparison.OrdinalIgnoreCase));
 
     IEnumerable<string> StatusOptions => MergeOptions(_statusOptions.Select(o => o.Code), _rows.Select(r => NormalizeStatus(r.Status)));
     IEnumerable<string> LobOptions => MergeOptions(_lobOptions.Select(o => o.Code), _rows.Select(r => r.LineOfBusiness));
@@ -594,10 +563,14 @@
 
     async Task LoadReferenceDataAsync()
     {
-        var options = await Api.GetSubmissionReferenceOptionsAsync(_tenantId);
+        var optionsTask = Api.GetSubmissionReferenceOptionsAsync(_tenantId);
+        var policySourcesTask = Api.GetPolicyCreationSourcesAsync(_tenantId);
+        await Task.WhenAll(optionsTask, policySourcesTask);
+        var options = optionsTask.Result;
         var activeOptions = options?.Where(o => o.IsActive).ToList() ?? [];
         _statusOptions = ToOptions(activeOptions, "SubmissionStatus");
         _lobOptions = ToOptions(activeOptions, "LineOfBusiness");
+        _policyCreationSources = policySourcesTask.Result?.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ThenBy(x => x.SourceName).ToList() ?? [];
     }
 
     async Task LoadAsync()
@@ -606,7 +579,7 @@
         _loadError = null;
         try
         {
-            var result = await Api.SearchSubmissionsAsync(_tenantId, pageSize: 500);
+            var result = await Api.SearchSubmissionsAsync(_tenantId, _searchText, pageSize: 500);
             _rows.Clear();
             _rows.AddRange(result?.Items ?? []);
             _selected = _selected is null ? _rows.OrderByDescending(ImportanceScore).FirstOrDefault() : _rows.FirstOrDefault(r => r.SubmissionId == _selected.SubmissionId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
@@ -650,25 +623,45 @@
             rows = rows.Where(r => string.Equals(ImportanceLevel(r), _importanceFilter, StringComparison.OrdinalIgnoreCase));
         }
 
-        if (!string.IsNullOrWhiteSpace(_searchText))
-        {
-            var term = _searchText.Trim();
-            rows = rows.Where(r => Contains(r.SubmissionNumber, term)
-                || Contains(r.AccountName, term)
-                || Contains(r.OpportunityName, term)
-                || Contains(r.LineOfBusiness, term)
-                || Contains(r.Status, term)
-                || Contains(r.Priority, term)
-                || Contains(r.AssignedToUserName, term)
-                || Contains(r.SubmissionId.ToString(), term)
-                || Contains(r.EffectiveDate.ToString("MM/dd/yyyy"), term)
-                || Contains(r.EffectiveDate.ToString("yyyy-MM-dd"), term)
-                || Contains((r.TargetPremium ?? 0).ToString("C0"), term)
-                || Contains(r.MarketCount.ToString(), term)
-                || Contains(r.QuoteCount.ToString(), term));
-        }
-
         return rows;
+    }
+
+    async Task OnSearchChanged(ChangeEventArgs e)
+    {
+        _searchText = e.Value?.ToString();
+        _page = 1;
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = new CancellationTokenSource();
+        var cancellationToken = _searchCts.Token;
+
+        try
+        {
+            await Task.Delay(300, cancellationToken);
+            _loading = true;
+            _loadError = null;
+            var result = await Api.SearchSubmissionsAsync(_tenantId, _searchText, pageSize: 500, cancellationToken: cancellationToken);
+            _rows.Clear();
+            _rows.AddRange(result?.Items ?? []);
+            _selected = _rows.FirstOrDefault(r => r.SubmissionId == _selected?.SubmissionId) ?? _rows.OrderByDescending(ImportanceScore).FirstOrDefault();
+            _page = Math.Min(_page, TotalPages);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Search failed: {ex.Message}";
+            ShowToast($"Search failed: {ex.Message}", "sde-toast--danger");
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _loading = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
     }
 
     IEnumerable<SubmissionDto> SortRows(IEnumerable<SubmissionDto> rows) => _sortMode switch
@@ -732,7 +725,7 @@
         _page = 1;
     }
 
-    void ClearFilters()
+    async Task ClearFilters()
     {
         _activeKpi = "all";
         _searchText = null;
@@ -740,6 +733,7 @@
         _lobFilter = null;
         _importanceFilter = null;
         _page = 1;
+        await LoadAsync();
     }
 
     void PreviousPage()
@@ -779,11 +773,12 @@
         _openActionMenuFor = _openActionMenuFor == row.SubmissionId ? null : row.SubmissionId;
     }
 
-    void FilterByOwner(string owner)
+    async Task FilterByOwner(string owner)
     {
         _searchText = owner == "Unassigned" ? "Unassigned" : owner;
         _activeTab = "all";
         _page = 1;
+        await LoadAsync();
     }
 
     void FilterByLob(string lob)
@@ -820,7 +815,6 @@
             case "Request Quote":
             case "Bind":
             case "Copy":
-            case "Create Policy":
             case "Decline":
                 OpenActionDialog(action);
                 break;
@@ -843,9 +837,8 @@
         {
             "Submit to Market" => ($"Submit {_selected.SubmissionNumber} to Market", "bi-send", "Submit"),
             "Request Quote" => ($"Request Quote for {_selected.SubmissionNumber}", "bi-file-earmark-text", "Request Quote"),
-            "Bind" => ($"Bind {_selected.SubmissionNumber}", "bi-shield-check", "Bind Policy"),
+            "Bind" => ($"Request Bind for {_selected.SubmissionNumber}", "bi-shield-check", "Create Bind Request"),
             "Copy" => ($"Copy {_selected.SubmissionNumber}", "bi-copy", "Create Copy"),
-            "Create Policy" => ($"Create Policy from {_selected.SubmissionNumber}", "bi-shield-plus", "Create Policy"),
             "Decline" => ($"Decline {_selected.SubmissionNumber}", "bi-x-circle", "Decline"),
             _ => ("Submission Action", "bi-send", "Save")
         };
@@ -853,9 +846,8 @@
         {
             "Submit to Market" => "Send this underwriting package to the recommended or selected carrier market.",
             "Request Quote" => "Create a quote request with a valid annual premium and optional carrier targeting.",
-            "Bind" => "Bind the selected submission into a policy using the entered premium and effective date.",
+            "Bind" => "Create a bind request. The system creates the policy only after carrier confirmation is recorded from the Bind Center.",
             "Copy" => "Create a new submission copy with a required effective date and line of business.",
-            "Create Policy" => "Create a policy from this submission after validating the premium and effective date.",
             "Decline" => "Record the decline reason before marking this submission declined.",
             _ => "Review the submission action details, complete required fields, and confirm before changes are applied."
         };
@@ -889,9 +881,8 @@
         {
             "Submit to Market" => ($"Submit {_selected.SubmissionNumber} to market?", "This will add or update a carrier market record and move the submission into review.", "bi-send"),
             "Request Quote" => ($"Request quote for {_selected.SubmissionNumber}?", "This will create a quote request and update submission quote progress.", "bi-file-earmark-text"),
-            "Bind" => ($"Bind {_selected.SubmissionNumber}?", "This will create a bound policy from the selected submission workflow.", "bi-shield-check"),
+            "Bind" => ($"Create bind request for {_selected.SubmissionNumber}?", "This records a bind request. Policy creation is automatic only after carrier confirmation.", "bi-shield-check"),
             "Copy" => ($"Copy {_selected.SubmissionNumber}?", "This will create a new submission copy using the selected form values.", "bi-copy"),
-            "Create Policy" => ($"Create policy from {_selected.SubmissionNumber}?", "This will create or resolve a quote and bind a policy for this submission.", "bi-shield-plus"),
             "Initiate Workflow" => ($"Initiate workflow for {_selected.SubmissionNumber}?", "This will start a workflow instance for the selected submission.", "bi-diagram-3"),
             "Decline" => ($"Decline {_selected.SubmissionNumber}?", "This will mark the submission and non-final market responses as declined.", "bi-exclamation-triangle"),
             _ => ("Confirm action", "Confirm this submission action?", "bi-question-circle")
@@ -925,15 +916,23 @@
         try
         {
             var carrierId = _actionForm.TryGetCarrierId();
-            var result = _pendingAction switch
+            SubmissionActionResult result;
+            if (_pendingAction == "Bind")
+            {
+                result = new SubmissionActionResult(_selected.SubmissionId, "Continue in the Bind Center to record the bind request and carrier confirmation. The system creates the policy after confirmation.");
+                Nav.NavigateTo("/quotes/bind");
+            }
+            else
+            {
+                result = _pendingAction switch
             {
                 "Submit to Market" => await Api.SubmitSubmissionToMarketAsync(_selected.SubmissionId, new SubmitSubmissionToMarketRequest(_tenantId, carrierId, _actionForm.Notes)),
                 "Request Quote" => await Api.RequestSubmissionQuoteAsync(_selected.SubmissionId, new RequestSubmissionQuoteRequest(_tenantId, carrierId, _actionForm.AnnualPremium, null, null, _actionForm.Notes)),
-                "Bind" or "Create Policy" => await Api.CreatePolicyFromSubmissionAsync(_selected.SubmissionId, new CreatePolicyFromSubmissionRequest(_tenantId, null, carrierId, _actionForm.AnnualPremium, _actionForm.EffectiveDate, _actionForm.EffectiveDate?.AddYears(1))),
                 "Copy" => await Api.CopySubmissionAsync(_selected.SubmissionId, new CopySubmissionRequest(_tenantId, _actionForm.EffectiveDate, _actionForm.LineOfBusiness, _selected.Priority)),
                 "Decline" => await Api.DeclineSubmissionAsync(_selected.SubmissionId, new DeclineSubmissionRequest(_tenantId, string.IsNullOrWhiteSpace(_actionForm.Notes) ? "Declined from submissions command center." : _actionForm.Notes)),
                 _ => new SubmissionActionResult(_selected.SubmissionId, "No action executed.")
             };
+            }
 
             _showActionDialog = false;
             _showConfirmDialog = false;
@@ -1034,7 +1033,11 @@
         "Rejected" => "Declined",
         var value => value
     };
-    static bool Contains(string? source, string term) => !string.IsNullOrWhiteSpace(source) && source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    public void Dispose()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+    }
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string Slug(string value) => value.ToLowerInvariant().Replace(" ", "-").Replace("/", "-");
     static IEnumerable<string> MergeOptions(IEnumerable<string> configured, IEnumerable<string> observed) => configured.Concat(observed).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(s => s);
@@ -1053,6 +1056,9 @@
         [Range(0, 999999999999)] public decimal? AnnualPremium { get; set; }
         public DateTime? EffectiveDate { get; set; }
         [StringLength(100)] public string? LineOfBusiness { get; set; }
+        [StringLength(80)] public string? PolicyNumber { get; set; }
+        [Required, StringLength(50)] public string PolicySourceCode { get; set; } = "QuoteBound";
+        [StringLength(500)] public string? PolicySourceReason { get; set; }
         [StringLength(1000)] public string? Notes { get; set; }
         string _action = string.Empty;
 
@@ -1064,6 +1070,9 @@
             EffectiveDate = row.EffectiveDate == default ? DateTime.Today.AddDays(30) : row.EffectiveDate;
             LineOfBusiness = row.LineOfBusiness;
             Notes = action == "Decline" ? "Carrier declined or account withdrawn." : string.Empty;
+            PolicyNumber = string.Empty;
+            PolicySourceReason = string.Empty;
+            PolicySourceCode = "QuoteBound";
         }
 
         public Guid? TryGetCarrierId() => Guid.TryParse(CarrierIdText, out var carrierId) ? carrierId : null;
@@ -1074,7 +1083,7 @@
                 yield return new ValidationResult("Carrier ID must be a valid GUID.", [nameof(CarrierIdText)]);
             if (_action == "Decline" && string.IsNullOrWhiteSpace(Notes))
                 yield return new ValidationResult("Decline reason is required.", [nameof(Notes)]);
-            if (_action is "Request Quote" or "Bind" or "Create Policy")
+            if (_action is "Request Quote" or "Bind")
             {
                 if (AnnualPremium is null or <= 0)
                     yield return new ValidationResult("Annual premium is required and must be greater than zero.", [nameof(AnnualPremium)]);

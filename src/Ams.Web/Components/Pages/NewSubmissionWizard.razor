@@ -49,7 +49,7 @@
         @KpiCard("importance", "Importance", ImportanceLabel, "Priority based on premium, timing, rush, and markets", "bi-lightning-charge", "red")
         @KpiCard("opportunity", "Opportunities", OpportunityCount.ToString(), "Available opportunities from CRM pipeline", "bi-trophy", "cyan")
         @KpiCard("markets", "Markets", _selectedCarrierIds.Count.ToString(), "Selected carriers for post-create submission workflow", "bi-bank", "emerald")
-        @KpiCard("forms", "Forms", _selectedFormIds.Count.ToString(), "ACORD forms staged for the submission packet", "bi-file-earmark-text", "amber")
+        @KpiCard("forms", "Forms", _acordForms.Count.ToString(), "Database-backed ACORD forms available for the detail workflow", "bi-file-earmark-text", "amber")
         @KpiCard("premium", "Target Premium", TargetPremiumDisplay, "Premium target that drives importance ranking", "bi-cash-stack", "green")
     </section>
 
@@ -57,18 +57,6 @@
         <button type="button" class="nsw-workflow" @onclick="GoToCriticalFields">
             <i class="bi bi-exclamation-octagon" aria-hidden="true"></i>
             <span><strong>Critical fields</strong><small>Jump to missing required data</small></span>
-        </button>
-        <button type="button" class="nsw-workflow" @onclick="ApplyRushWorkflow">
-            <i class="bi bi-lightning" aria-hidden="true"></i>
-            <span><strong>Rush setup</strong><small>Mark urgent and advance dates</small></span>
-        </button>
-        <button type="button" class="nsw-workflow" @onclick="SelectRecommendedMarkets">
-            <i class="bi bi-bank" aria-hidden="true"></i>
-            <span><strong>Best markets</strong><small>Select preferred appetite matches</small></span>
-        </button>
-        <button type="button" class="nsw-workflow" @onclick="SelectRequiredForms">
-            <i class="bi bi-file-earmark-check" aria-hidden="true"></i>
-            <span><strong>Required packet</strong><small>Add ACORD forms by LOB</small></span>
         </button>
         <button type="button" class="nsw-workflow" @onclick="ReviewSubmission">
             <i class="bi bi-clipboard-check" aria-hidden="true"></i>
@@ -167,33 +155,20 @@
                     {
                         <section class="nsw-step-panel">
                             <div class="nsw-lob-grid">
-                                @foreach (var lob in _lobCards)
+                                @foreach (var line in _opportunityLines)
                                 {
-                                    var selected = _form.LineOfBusiness == lob.Key;
-                                    <button type="button" class="nsw-lob-card @(selected ? "nsw-lob-card--active" : string.Empty)" style="--nsw-lob-color:@lob.Color" @onclick="() => SelectLob(lob.Key)">
-                                        <span class="nsw-lob-icon"><i class="bi @lob.Icon" aria-hidden="true"></i></span>
-                                        <strong>@lob.Label</strong>
-                                        <small>@lob.Description</small>
-                                        @if (selected)
+                                    <div class="nsw-lob-card @(line.IsPrimary ? "nsw-lob-card--active" : string.Empty)">
+                                        <span class="nsw-lob-icon"><i class="bi bi-layers" aria-hidden="true"></i></span>
+                                        <strong>@line.LineOfBusiness</strong>
+                                        <small>@line.EstPremium.ToString("C0") estimated premium</small>
+                                        @if (line.IsPrimary)
                                         {
                                             <i class="bi bi-check-circle-fill nsw-card-check" aria-hidden="true"></i>
                                         }
-                                    </button>
+                                    </div>
                                 }
                             </div>
-
-                            @if (!string.IsNullOrWhiteSpace(_form.LineOfBusiness))
-                            {
-                                <div class="nsw-subline-panel">
-                                    <span>Coverage focus</span>
-                                    <div class="nsw-pill-row">
-                                        @foreach (var subline in SelectedLobSublines)
-                                        {
-                                            <button type="button" class="nsw-pill @(_form.SubLine == subline ? "nsw-pill--active" : string.Empty)" @onclick="() => _form.SubLine = _form.SubLine == subline ? string.Empty : subline">@subline</button>
-                                        }
-                                    </div>
-                                </div>
-                            }
+                            <div class="nsw-subline-panel"><span>Inherited from Opportunity</span><p>Coverage lines are maintained on the selected Opportunity and are copied to this Submission when it is created.</p></div>
                         </section>
                     }
                     else if (_step == 2)
@@ -210,9 +185,9 @@
                             <label class="nsw-field">
                                 <span>Priority <em>*</em></span>
                                 <InputSelect class="form-select" @bind-Value="_form.Priority">
-                                    @foreach (var priority in _priorities)
+                                    @foreach (var priority in _priorityOptions)
                                     {
-                                        <option value="@priority">@priority</option>
+                                        <option value="@priority.OptionCode">@priority.OptionName</option>
                                     }
                                 </InputSelect>
                             </label>
@@ -228,9 +203,9 @@
                             <label class="nsw-field">
                                 <span>Primary Risk State <em>*</em></span>
                                 <InputSelect class="form-select" @bind-Value="_form.RiskState">
-                                    @foreach (var state in _states)
+                                    @foreach (var state in _stateOptions)
                                     {
-                                        <option value="@state">@state</option>
+                                        <option value="@state.OptionCode">@state.OptionName</option>
                                     }
                                 </InputSelect>
                             </label>
@@ -240,21 +215,21 @@
                             </label>
                             <label class="nsw-field">
                                 <span>Producer</span>
-                                <InputSelect class="form-select" @bind-Value="_form.ProducerName">
+                                <InputSelect class="form-select" @bind-Value="_form.ProducerUserId">
                                     <option value="">Unassigned</option>
                                     @foreach (var producer in _producers)
                                     {
-                                        <option value="@producer">@producer</option>
+                                        <option value="@producer.UserId">@UserDisplayName(producer)</option>
                                     }
                                 </InputSelect>
                             </label>
                             <label class="nsw-field">
                                 <span>Assigned CSR</span>
-                                <InputSelect class="form-select" @bind-Value="_form.CsrName">
+                                <InputSelect class="form-select" @bind-Value="_form.CsrUserId">
                                     <option value="">Unassigned</option>
                                     @foreach (var csr in _csrs)
                                     {
-                                        <option value="@csr">@csr</option>
+                                        <option value="@csr.UserId">@UserDisplayName(csr)</option>
                                     }
                                 </InputSelect>
                             </label>
@@ -274,24 +249,20 @@
                             <div class="nsw-market-summary">
                                 <span><strong>@_selectedCarrierIds.Count</strong> selected markets</span>
                                 <div>
-                                    <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="SelectRecommendedMarkets">Select recommended</button>
                                     <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="() => _selectedCarrierIds.Clear()">Clear</button>
                                 </div>
                             </div>
                             <div class="nsw-carrier-grid">
                                 @foreach (var carrier in SortedCarriers)
                                 {
-                                    var selected = _selectedCarrierIds.Contains(carrier.Id);
-                                    <button type="button" class="nsw-carrier-card @(selected ? "nsw-carrier-card--active" : string.Empty)" @onclick="() => ToggleCarrier(carrier.Id)">
+                                    var selected = _selectedCarrierIds.Contains(carrier.CarrierId);
+                                    <button type="button" class="nsw-carrier-card @(selected ? "nsw-carrier-card--active" : string.Empty)" @onclick="() => ToggleCarrier(carrier.CarrierId)">
                                         <span class="nsw-carrier-top">
-                                            <strong>@carrier.Name</strong>
-                                            @if (carrier.Preferred)
-                                            {
-                                                <em>Preferred</em>
-                                            }
+                                            <strong>@carrier.CarrierName</strong>
+                                            @if (carrier.IsAdmitted) { <em>Admitted</em> }
                                         </span>
-                                        <small>AM Best @carrier.AMBest - @string.Join(", ", carrier.States.Take(3))@(carrier.States.Length > 3 ? "..." : string.Empty)</small>
-                                        <span class="nsw-appetite">@CarrierAppetiteText(carrier)</span>
+                                        <small>AM Best @carrier.AmBestRating - NAIC @carrier.NaicCode</small>
+                                        <span class="nsw-appetite">Active tenant carrier</span>
                                         @if (selected)
                                         {
                                             <i class="bi bi-check-circle-fill nsw-card-check" aria-hidden="true"></i>
@@ -305,57 +276,33 @@
                     {
                         <section class="nsw-step-panel">
                             <div class="nsw-market-summary">
-                                <span><strong>@_selectedFormIds.Count</strong> selected ACORD forms</span>
-                                <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="SelectRequiredForms">Select required</button>
+                                <span><strong>@_acordForms.Count</strong> available ACORD forms</span>
                             </div>
                             <div class="nsw-forms-list">
                                 @foreach (var form in AcordFormOptions)
                                 {
-                                    var formId = FormSelectionId(form);
-                                    var selected = _selectedFormIds.Contains(formId);
-                                    <button type="button" class="nsw-form-row @(selected ? "nsw-form-row--active" : string.Empty)" @onclick="() => ToggleForm(formId)">
+                                    <div class="nsw-form-row">
                                         <span class="nsw-form-num">@FormNumberLabel(form)</span>
                                         <span class="nsw-form-info"><strong>@form.FormName</strong><small>@form.LineOfBusiness</small></span>
-                                        @if (IsRequiredForm(form))
-                                        {
-                                            <span class="nsw-required-pill">Required</span>
-                                        }
-                                        @if (selected)
-                                        {
-                                            <i class="bi bi-check-circle-fill nsw-card-check" aria-hidden="true"></i>
-                                        }
-                                    </button>
+                                    </div>
                                 }
                             </div>
-                            <div class="nsw-upload-zone" @onclick="SimulateUpload">
-                                <i class="bi bi-cloud-upload" aria-hidden="true"></i>
-                                <strong>Stage supporting documents</strong>
-                                <span>Click to add a document placeholder. Upload persistence can be completed from the submission detail workflow.</span>
+                            <div class="nsw-upload-zone">
+                                <i class="bi bi-info-circle" aria-hidden="true"></i>
+                                <strong>Packet assembly follows submission creation</strong>
+                                <span>Required documents and persisted uploads are managed from the submission detail workflow using tenant configuration.</span>
                             </div>
-                            @if (_uploadedFiles.Any())
-                            {
-                                <div class="nsw-uploaded-list">
-                                    @foreach (var file in _uploadedFiles)
-                                    {
-                                        <div class="nsw-uploaded-file">
-                                            <i class="bi bi-file-earmark" aria-hidden="true"></i>
-                                            <span>@file</span>
-                                            <button type="button" class="nsw-icon-btn" @onclick="() => ConfirmRemoveFile(file)"><i class="bi bi-x" aria-hidden="true"></i></button>
-                                        </div>
-                                    }
-                                </div>
-                            }
                         </section>
                     }
                     else
                     {
                         <section class="nsw-review-grid">
                             @ReviewCard("Opportunity", "bi-trophy", 0, _form.OpportunityName, _form.AccountName)
-                            @ReviewCard("Line of Business", "bi-layers", 1, _form.LineOfBusiness, Safe(_form.SubLine, "No sub-line selected"))
+                            @ReviewCard("Line of Business", "bi-layers", 1, _form.LineOfBusiness, $"{_opportunityLines.Count} inherited coverage line(s)")
                             @ReviewCard("Timing", "bi-calendar-range", 2, $"{_form.EffectiveDate:MMM d, yyyy} - {_form.ExpirationDate:MMM d, yyyy}", $"{_form.Priority} priority - {TargetPremiumDisplay}")
-                            @ReviewCard("Team", "bi-people", 2, Safe(_form.ProducerName, "Producer unassigned"), Safe(_form.CsrName, "CSR unassigned"))
+                            @ReviewCard("Team", "bi-people", 2, SelectedUserName(_form.ProducerUserId, "Producer unassigned"), SelectedUserName(_form.CsrUserId, "CSR unassigned"))
                             @ReviewCard("Markets", "bi-bank", 3, $"{_selectedCarrierIds.Count} markets selected", string.Join(", ", SelectedCarrierNames.Take(3)))
-                            @ReviewCard("Packet", "bi-paperclip", 4, $"{_selectedFormIds.Count} ACORD forms", $"{_uploadedFiles.Count} staged documents")
+                            @ReviewCard("Packet", "bi-paperclip", 4, $"{_acordForms.Count} available ACORD forms", "Required forms and documents are finalized after creation")
                         </section>
                     }
                 </div>
@@ -387,7 +334,7 @@
                         <div><span>LOB</span><strong>@StepStateText(1)</strong></div>
                         <div><span>Details</span><strong>@StepStateText(2)</strong></div>
                         <div><span>Markets</span><strong>@_selectedCarrierIds.Count</strong></div>
-                        <div><span>Forms</span><strong>@_selectedFormIds.Count</strong></div>
+                        <div><span>Forms</span><strong>@_acordForms.Count</strong></div>
                     </dl>
                 </section>
 
@@ -395,7 +342,6 @@
                     <span class="nsw-section-kicker">Actions</span>
                     <div class="nsw-selected-actions">
                         <button type="button" class="nsw-btn nsw-btn--primary" disabled="@(!CanCreate || _submitting)" @onclick="OpenCreateConfirm"><i class="bi bi-send-fill" aria-hidden="true"></i> Create Submission</button>
-                        <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="SaveDraft"><i class="bi bi-floppy" aria-hidden="true"></i> Save Draft</button>
                         <button type="button" class="nsw-btn nsw-btn--ghost" @onclick="ConfirmCancel"><i class="bi bi-arrow-left" aria-hidden="true"></i> Cancel</button>
                     </div>
                 </section>
@@ -468,13 +414,10 @@
     string _confirmButtonText = "Confirm";
     string _confirmIcon = "bi-question-circle";
     string _confirmKind = "primary";
-    string? _pendingFileRemoval;
 
     readonly SubmissionIntakeForm _form = new();
     readonly List<OpportunityOption> _opportunities = [];
-    readonly HashSet<string> _selectedCarrierIds = [];
-    readonly HashSet<string> _selectedFormIds = [];
-    readonly List<string> _uploadedFiles = [];
+    readonly HashSet<Guid> _selectedCarrierIds = [];
     readonly List<ToastMessage> _toasts = [];
 
     readonly StepDef[] _steps =
@@ -487,38 +430,13 @@
         new(5, "Review", "Create", "Review & Create", "Validate the intake and create the submission through the existing API workflow.", "bi-check2-square")
     ];
 
-    readonly LobCard[] _lobCards =
-    [
-        new("General Liability", "General Liability", "bi-shield-check", "#2563eb", "Premises, operations, products, and completed ops", ["Commercial General Liability", "Products-Completed Ops", "Premises Ops"]),
-        new("Commercial Property", "Commercial Property", "bi-building", "#7c3aed", "Buildings, BPP, BI, equipment, and schedules", ["Building Only", "Contents Only", "Building & Contents", "BOP"]),
-        new("Commercial Auto", "Commercial Auto", "bi-truck", "#d97706", "Fleet, hired/non-owned, symbols, and filings", ["Business Auto", "Hired & Non-Owned", "Fleet Auto"]),
-        new("Workers Comp", "Workers Comp", "bi-person-badge", "#059669", "Payroll, class codes, experience mods, and states", ["Standard WC", "USL&H", "Employers Liability"]),
-        new("Umbrella / Excess", "Umbrella / Excess", "bi-umbrella", "#dc2626", "Layered liability towers and attachment points", ["Commercial Umbrella", "Excess Liability"]),
-        new("Professional Liab.", "Professional Liab.", "bi-briefcase", "#0891b2", "E&O, cyber, EPLI, D&O, and management liability", ["E&O", "D&O", "Cyber", "EPLI"]),
-        new("Home / Dwelling", "Home / Dwelling", "bi-house", "#65a30d", "Personal residential property placements", ["Homeowners", "Dwelling Fire", "Renters"]),
-        new("Personal Auto", "Personal Auto", "bi-car-front", "#f59e0b", "Personal auto, motorcycles, and collector cars", ["Personal Auto", "Motorcycle", "Collector Car"])
-    ];
-
-    readonly CarrierRow[] _carriers =
-    [
-        new("c-01", "Travelers Indemnity", "A++", ["General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess"], true, ["TX", "CA", "FL", "NY", "IL"]),
-        new("c-02", "Hartford Fire & Casualty", "A+", ["General Liability", "Commercial Property", "Commercial Auto", "Workers Comp"], true, ["TX", "CA", "FL", "NY"]),
-        new("c-03", "Liberty Mutual Insurance", "A", ["General Liability", "Commercial Property", "Commercial Auto", "Workers Comp", "Umbrella / Excess"], true, ["TX", "CA", "FL"]),
-        new("c-04", "Zurich American", "A+", ["General Liability", "Commercial Property", "Commercial Auto", "Umbrella / Excess", "Professional Liab."], false, ["TX", "NY", "IL"]),
-        new("c-05", "CNA Insurance", "A", ["General Liability", "Commercial Property", "Professional Liab.", "Umbrella / Excess"], false, ["TX", "CA", "NY"]),
-        new("c-06", "Markel Insurance", "A", ["Professional Liab.", "Umbrella / Excess", "General Liability"], false, ["TX", "CA", "FL", "NY"]),
-        new("c-07", "EMPLOYERS Ins. Co.", "A-", ["Workers Comp"], false, ["TX", "CA", "FL", "NV"]),
-        new("c-08", "State Auto", "A-", ["Home / Dwelling", "Personal Auto", "General Liability"], false, ["TX", "OH", "IN", "KY"]),
-        new("c-09", "Nationwide Insurance", "A+", ["General Liability", "Commercial Property", "Personal Auto", "Home / Dwelling"], false, ["TX", "CA", "FL", "OH"]),
-        new("c-10", "Chubb Insurance", "A++", ["General Liability", "Commercial Property", "Umbrella / Excess", "Professional Liab."], true, ["TX", "CA", "NY", "IL"])
-    ];
-
+    readonly List<OpportunityLineDto> _opportunityLines = [];
+    readonly List<CarrierDto> _carriers = [];
+    readonly List<SubmissionReferenceOptionDto> _priorityOptions = [];
+    readonly List<SubmissionReferenceOptionDto> _stateOptions = [];
+    readonly List<UserDto> _producers = [];
+    readonly List<UserDto> _csrs = [];
     readonly List<AcordFormDto> _acordForms = [];
-
-    readonly string[] _priorities = ["Low", "Standard", "High", "Urgent"];
-    readonly string[] _states = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"];
-    readonly string[] _producers = ["Thornton & Associates", "Pacific Bridge Insurance", "Allied Risk Group", "Midwest Coverage Partners"];
-    readonly string[] _csrs = ["Maria Santos", "James Patel", "Chen Li", "Aisha Williams"];
 
     StepDef CurrentStep => _steps[_step];
     int OpportunityCount => _opportunities.Count;
@@ -534,17 +452,16 @@
         2 => HasDetails,
         _ => true
     };
-    int ReadinessPercent => Math.Min(100, (HasOpportunity ? 20 : 0) + (HasLob ? 20 : 0) + (HasDetails ? 25 : 0) + (_selectedCarrierIds.Any() ? 20 : 0) + (_selectedFormIds.Any() ? 15 : 0));
+    int ReadinessPercent => Math.Min(100, (HasOpportunity ? 25 : 0) + (HasLob ? 25 : 0) + (HasDetails ? 30 : 0) + (_selectedCarrierIds.Any() ? 20 : 0));
     int ImportanceScore => CalculateImportanceScore();
     string ImportanceLabel => ImportanceScore >= 85 ? "Critical" : ImportanceScore >= 70 ? "High" : ImportanceScore >= 50 ? "Medium" : "Standard";
-    IEnumerable<string> SelectedLobSublines => _lobCards.FirstOrDefault(x => x.Key == _form.LineOfBusiness)?.SubLines ?? [];
     IEnumerable<OpportunityOption> FilteredOpportunities => string.IsNullOrWhiteSpace(_searchText)
         ? _opportunities
         : _opportunities.Where(x => x.OpportunityName.Contains(_searchText, StringComparison.OrdinalIgnoreCase) || Safe(x.AccountName, string.Empty).Contains(_searchText, StringComparison.OrdinalIgnoreCase));
-    IEnumerable<CarrierRow> SortedCarriers => _carriers.OrderByDescending(c => c.AppetiteLobs.Contains(_form.LineOfBusiness)).ThenByDescending(c => c.Preferred).ThenBy(c => c.Name);
-    IEnumerable<string> SelectedCarrierNames => _selectedCarrierIds.Select(id => _carriers.FirstOrDefault(c => c.Id == id)?.Name).Where(name => !string.IsNullOrWhiteSpace(name))!;
+    IEnumerable<CarrierDto> SortedCarriers => _carriers.Where(c => c.IsActive).OrderByDescending(c => c.IsAdmitted).ThenBy(c => c.CarrierName);
+    IEnumerable<string> SelectedCarrierNames => _selectedCarrierIds.Select(id => _carriers.FirstOrDefault(c => c.CarrierId == id)?.CarrierName).Where(name => !string.IsNullOrWhiteSpace(name))!;
     IEnumerable<string> ImportanceReasons => BuildImportanceReasons();
-    IEnumerable<AcordFormDto> AcordFormOptions => _acordForms.OrderByDescending(IsRequiredForm).ThenBy(f => f.FormNumber);
+    IEnumerable<AcordFormDto> AcordFormOptions => _acordForms.OrderBy(f => f.FormNumber);
     string ConfirmIconClass => _confirmKind == "danger" ? "nsw-confirm-icon nsw-confirm-icon--danger" : "nsw-confirm-icon";
     string ConfirmButtonClass => _confirmKind == "danger" ? "nsw-btn nsw-btn--danger" : "nsw-btn nsw-btn--primary";
 
@@ -553,10 +470,8 @@
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Submissions", "/submissions"), new("New Submission", "/submissions/new"));
         _form.EffectiveDate = DateTime.Today.AddDays(30);
         _form.ExpirationDate = DateTime.Today.AddDays(395);
-        _form.Priority = "Standard";
-        _form.RiskState = "TX";
         await ResolveCurrentUserContextAsync();
-        await Task.WhenAll(LoadOpportunitiesAsync(), LoadAcordFormsAsync());
+        await Task.WhenAll(LoadOpportunitiesAsync(), LoadAcordFormsAsync(), LoadReferenceDataAsync());
     }
 
     async Task LoadAcordFormsAsync()
@@ -569,6 +484,38 @@
         catch (Exception ex)
         {
             ShowToast($"Unable to load ACORD forms: {ex.Message}", true);
+        }
+    }
+
+    async Task LoadReferenceDataAsync()
+    {
+        try
+        {
+            var prioritiesTask = Api.GetSubmissionReferenceOptionsAsync(_tenantId, "SubmissionPriority");
+            var statesTask = Api.GetSubmissionReferenceOptionsAsync(_tenantId, "RiskState");
+            var carriersTask = Api.SearchCarriersAsync(_tenantId, null, 1, 200);
+            var usersTask = Api.SearchUsersAsync(_tenantId, null, 1, 500);
+            await Task.WhenAll(prioritiesTask, statesTask, carriersTask, usersTask);
+
+            _priorityOptions.Clear();
+            _priorityOptions.AddRange((await prioritiesTask) ?? []);
+            _stateOptions.Clear();
+            _stateOptions.AddRange((await statesTask) ?? []);
+            _carriers.Clear();
+            _carriers.AddRange((await carriersTask)?.Items ?? []);
+
+            var users = (await usersTask)?.Items ?? [];
+            _producers.Clear();
+            _producers.AddRange(users.Where(user => HasRole(user, "Producer")));
+            _csrs.Clear();
+            _csrs.AddRange(users.Where(user => HasRole(user, "CSR")));
+
+            _form.Priority = _priorityOptions.FirstOrDefault(option => option.IsDefault)?.OptionCode ?? string.Empty;
+            _form.RiskState = _stateOptions.FirstOrDefault(option => option.IsDefault)?.OptionCode ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Unable to load submission reference data: {ex.Message}";
         }
     }
 
@@ -609,7 +556,7 @@
                 var match = _opportunities.FirstOrDefault(x => x.OpportunityId == OpportunityId.Value);
                 if (match is not null)
                 {
-                    SelectOpportunity(match);
+                    await SelectOpportunity(match);
                 }
             }
         }
@@ -631,7 +578,7 @@
     void GoToCriticalFields() => _step = !HasOpportunity ? 0 : !HasLob ? 1 : !HasDetails ? 2 : 5;
     void ReviewSubmission() => _step = 5;
 
-    void SelectOpportunity(OpportunityOption opportunity)
+    async Task SelectOpportunity(OpportunityOption opportunity)
     {
         _form.OpportunityId = opportunity.OpportunityId;
         _form.AccountId = opportunity.AccountId;
@@ -641,74 +588,17 @@
         {
             _form.TargetPremium = opportunity.EstimatedAmount;
         }
+        var detail = await Api.GetOpportunityDetailAsync(opportunity.OpportunityId);
+        _opportunityLines.Clear();
+        _opportunityLines.AddRange(detail?.Lines ?? []);
+        var primaryLine = _opportunityLines.OrderByDescending(line => line.IsPrimary).ThenByDescending(line => line.EstPremium).FirstOrDefault();
+        _form.LineOfBusiness = primaryLine?.LineOfBusiness ?? string.Empty;
     }
 
-    void SelectLob(string lob)
-    {
-        _form.LineOfBusiness = lob;
-        _form.SubLine = string.Empty;
-        SelectRequiredForms();
-    }
-
-    void ToggleCarrier(string id)
+    void ToggleCarrier(Guid id)
     {
         if (!_selectedCarrierIds.Add(id)) _selectedCarrierIds.Remove(id);
     }
-
-    void SelectRecommendedMarkets()
-    {
-        _selectedCarrierIds.Clear();
-        foreach (var carrier in SortedCarriers.Where(c => c.AppetiteLobs.Contains(_form.LineOfBusiness)).Take(4))
-        {
-            _selectedCarrierIds.Add(carrier.Id);
-        }
-        ShowToast("Recommended markets selected.");
-    }
-
-    void ToggleForm(string id)
-    {
-        if (!_selectedFormIds.Add(id)) _selectedFormIds.Remove(id);
-    }
-
-    void SelectRequiredForms()
-    {
-        foreach (var form in _acordForms.Where(IsRequiredForm).Concat(_acordForms.Where(f => IsLobMatch(f.LineOfBusiness, _form.LineOfBusiness))).DistinctBy(f => f.AcordFormId))
-        {
-            _selectedFormIds.Add(FormSelectionId(form));
-        }
-        ShowToast("Required forms selected.");
-    }
-
-    void ApplyRushWorkflow()
-    {
-        _form.IsRush = true;
-        _form.Priority = "Urgent";
-        _form.EffectiveDate = DateTime.Today.AddDays(14);
-        _form.ExpirationDate = _form.EffectiveDate.AddYears(1);
-        ShowToast("Rush workflow applied.");
-        _step = 2;
-    }
-
-    void SimulateUpload()
-    {
-        var name = $"Supporting document {_uploadedFiles.Count + 1}.pdf";
-        _uploadedFiles.Add(name);
-        ShowToast($"{name} staged for detail upload.");
-    }
-
-    void ConfirmRemoveFile(string fileName)
-    {
-        _pendingAction = "remove-file";
-        _pendingFileRemoval = fileName;
-        _confirmTitle = "Remove staged document";
-        _confirmMessage = $"Remove {fileName} from this intake packet?";
-        _confirmButtonText = "Remove";
-        _confirmIcon = "bi-trash";
-        _confirmKind = "danger";
-        _showConfirmDialog = true;
-    }
-
-    void SaveDraft() => ShowToast("Draft retained in this browser session.");
 
     void ConfirmCancel()
     {
@@ -749,7 +639,6 @@
         if (_submitting) return;
         _showConfirmDialog = false;
         _pendingAction = null;
-        _pendingFileRemoval = null;
     }
 
     async Task ExecuteConfirmedActionAsync()
@@ -757,12 +646,6 @@
         if (_pendingAction == "create")
         {
             await SubmitAsync();
-        }
-        else if (_pendingAction == "remove-file" && _pendingFileRemoval is not null)
-        {
-            _uploadedFiles.Remove(_pendingFileRemoval);
-            ShowToast($"{_pendingFileRemoval} removed.");
-            CloseConfirmDialog();
         }
         else if (_pendingAction == "cancel")
         {
@@ -779,14 +662,24 @@
                 TenantId: _tenantId,
                 AccountId: _form.AccountId!.Value,
                 OpportunityId: _form.OpportunityId!.Value,
-                LineOfBusiness: _form.LineOfBusiness,
                 Priority: _form.Priority,
                 EffectiveDate: _form.EffectiveDate,
                 ExpirationDate: _form.ExpirationDate,
                 TargetPremium: _form.TargetPremium > 0 ? _form.TargetPremium : null,
-                AssignedToUserId: null);
+                AssignedToUserId: _form.ProducerUserId,
+                RiskState: _form.RiskState,
+                NamedInsured: Normalize(_form.NamedInsured),
+                CsrUserId: _form.CsrUserId,
+                Description: Normalize(_form.Description),
+                InternalNotes: Normalize(_form.InternalNotes),
+                IsRush: _form.IsRush,
+                CreatedByUserId: _tenantAdminUserId);
 
             var newId = await Api.CreateSubmissionAsync(request);
+            foreach (var carrierId in _selectedCarrierIds)
+            {
+                await Api.AddSubmissionMarketAsync(newId, new AddSubmissionMarketRequest(newId, carrierId));
+            }
             ShowToast("Submission created successfully.");
             await Task.Delay(700);
             Nav.NavigateTo($"/submissions/{newId}");
@@ -839,7 +732,7 @@
         1 => HasLob ? "Done" : "Open",
         2 => HasDetails ? "Done" : "Open",
         3 => _selectedCarrierIds.Count.ToString(),
-        4 => _selectedFormIds.Count.ToString(),
+        4 => _acordForms.Count.ToString(),
         _ => CanCreate ? "Ready" : "Open"
     };
 
@@ -856,11 +749,11 @@
 
     RenderFragment ReviewCard(string title, string icon, int editStep, string value, string subValue) => @<div class="nsw-review-card"><div class="nsw-review-card__head"><span><i class="bi @icon" aria-hidden="true"></i>@title</span><button type="button" class="nsw-link-button" @onclick="() => _step = editStep">Edit</button></div><strong>@Safe(value, "-")</strong><small>@Safe(subValue, "-")</small></div>;
 
-    string CarrierAppetiteText(CarrierRow carrier) => carrier.AppetiteLobs.Contains(_form.LineOfBusiness) ? "Appetite match" : "Available market";
-    static string FormSelectionId(AcordFormDto form) => form.AcordFormId.ToString("N");
+    static bool HasRole(UserDto user, string role) => (user.AssignedRoleNames ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Any(value => value.Equals(role, StringComparison.OrdinalIgnoreCase)) || (user.AssignedRoleCodes ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Any(value => value.Equals(role, StringComparison.OrdinalIgnoreCase));
+    static string UserDisplayName(UserDto user) => string.IsNullOrWhiteSpace(user.DisplayName) ? user.FullName : user.DisplayName;
+    string SelectedUserName(Guid? userId, string fallback) => userId.HasValue ? UserDisplayName(_producers.Concat(_csrs).FirstOrDefault(user => user.UserId == userId.Value) ?? new UserDto { FullName = fallback }) : fallback;
     static string FormNumberLabel(AcordFormDto form) => form.FormNumber.StartsWith("ACORD", StringComparison.OrdinalIgnoreCase) ? form.FormNumber : $"ACORD {form.FormNumber}";
-    static bool IsRequiredForm(AcordFormDto form) => string.Equals(form.FormNumber, "125", StringComparison.OrdinalIgnoreCase) || form.FormName.Contains("Commercial Insurance Application", StringComparison.OrdinalIgnoreCase);
-    static bool IsLobMatch(string formLob, string selectedLob) => !string.IsNullOrWhiteSpace(selectedLob) && (formLob.Contains(selectedLob, StringComparison.OrdinalIgnoreCase) || selectedLob.Contains(formLob, StringComparison.OrdinalIgnoreCase));
+    static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     static string Safe(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
     static string ToastIconClass(ToastMessage toast) => toast.CssClass.Contains("danger", StringComparison.OrdinalIgnoreCase) ? "bi-exclamation-triangle" : "bi-check-circle";
 
@@ -890,9 +783,6 @@
         [Required, StringLength(100)]
         public string LineOfBusiness { get; set; } = string.Empty;
 
-        [StringLength(100)]
-        public string SubLine { get; set; } = string.Empty;
-
         [Required, StringLength(50)]
         public string Priority { get; set; } = "Standard";
 
@@ -911,11 +801,9 @@
         [StringLength(200)]
         public string NamedInsured { get; set; } = string.Empty;
 
-        [StringLength(150)]
-        public string ProducerName { get; set; } = string.Empty;
+        public Guid? ProducerUserId { get; set; }
 
-        [StringLength(150)]
-        public string CsrName { get; set; } = string.Empty;
+        public Guid? CsrUserId { get; set; }
 
         [StringLength(1000)]
         public string Description { get; set; } = string.Empty;
@@ -927,8 +815,6 @@
     }
 
     sealed record StepDef(int Index, string Label, string Kicker, string Title, string Description, string Icon);
-    sealed record LobCard(string Key, string Label, string Icon, string Color, string Description, string[] SubLines);
-    sealed record CarrierRow(string Id, string Name, string AMBest, string[] AppetiteLobs, bool Preferred, string[] States);
     sealed record OpportunityOption(Guid OpportunityId, Guid AccountId, string AccountName, string OpportunityName, decimal EstimatedAmount, string? StageName, decimal WinProbability, DateTime? CloseDate, string? OwnerName);
     sealed record ToastMessage(Guid Id, string Message, string CssClass);
 }

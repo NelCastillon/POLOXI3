@@ -8,9 +8,11 @@ public interface ILeadService
 {
     Task<Guid> CreateAsync(Ams.Application.Features.Leads.CreateLeadRequest request, CancellationToken cancellationToken = default);
     Task<LeadDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<LeadConversionResultDto> ConvertAsync(ConvertLeadRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadScoreFactorDto>> GetScoreFactorsAsync(Guid leadId, CancellationToken cancellationToken = default);
     Task<LeadEngagementSummaryDto?> GetEngagementSummaryAsync(Guid leadId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadEngagementOptionDto>> GetEngagementOptionsAsync(Guid tenantId, string? optionType = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadTypeDto>> GetLeadTypesAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<LeadCampaignOptionDto>> GetCampaignOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<PagedResult<LeadDto>> SearchAsync(Guid tenantId, string? searchTerm, int pageNumber = 1, int pageSize = 25, CancellationToken cancellationToken = default);
     Task UpdateAsync(UpdateLeadRequest request, CancellationToken cancellationToken = default);
@@ -43,4 +45,14 @@ public interface ILeadService
     Task<Guid> CreateEngagementFactorAsync(CreateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default);
     Task UpdateEngagementFactorAsync(UpdateLeadEngagementFactorRequest request, CancellationToken cancellationToken = default);
     Task DeleteEngagementFactorAsync(Guid engagementFactorId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<PhoneComplianceReferenceDto>> GetPhoneComplianceReferencesAsync(Guid tenantId, string? referenceTypeCode = null, CancellationToken cancellationToken = default);
+    Task<PhoneComplianceWorkspaceDto> GetPhoneComplianceWorkspaceAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<LeadPhoneComplianceDto>> GetPhoneComplianceAsync(Guid leadId, CancellationToken cancellationToken = default);
+    Task<Guid> CreatePhoneSuppressionAsync(CreatePhoneSuppressionRequest request, CancellationToken cancellationToken = default);
+    Task RevokePhoneSuppressionAsync(RevokePhoneSuppressionRequest request, CancellationToken cancellationToken = default);
+    Task<Guid> CreatePhoneConsentAsync(CreatePhoneConsentRequest request, CancellationToken cancellationToken = default);
+    Task RevokePhoneConsentAsync(RevokePhoneConsentRequest request, CancellationToken cancellationToken = default);
+    Task<PhoneContactEligibilityDto> EvaluatePhoneContactAsync(EvaluatePhoneContactRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<DuePhoneScreeningDto>> GetDuePhoneScreeningsAsync(int batchSize, CancellationToken cancellationToken = default);
+    Task<Guid> RecordPhoneScreeningAsync(RecordPhoneScreeningRequest request, CancellationToken cancellationToken = default);
 }
