@@ -5,7 +5,7 @@ SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
 -- ============================================================================
--- EPH Wide latency optimization: bounded-concurrency settings.
+-- POLOXI Wide latency optimization: bounded-concurrency settings.
 -- Branch grounding and external retrieval are parallelized per level; these
 -- settings cap concurrent work so retrieval providers are not hammered.
 -- ============================================================================

@@ -4,29 +4,29 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'EPH') EXEC(N'CREATE SCHEMA EPH');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'POLOXI') EXEC(N'CREATE SCHEMA POLOXI');
 
 -- Cached live external knowledge snippets used to ground time-sensitive interpretive
 -- results in the Wide search pipeline (retrieved via the configured provider, e.g. Tavily).
-IF OBJECT_ID(N'EPH.ExternalKnowledge',N'U') IS NULL
+IF OBJECT_ID(N'POLOXI.ExternalKnowledge',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.ExternalKnowledge
+	CREATE TABLE POLOXI.ExternalKnowledge
 	(
-		ExternalKnowledgeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphExternalKnowledge PRIMARY KEY,
+		ExternalKnowledgeId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiExternalKnowledge PRIMARY KEY,
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		NormalizedQuery NVARCHAR(400) NOT NULL,
 		Title NVARCHAR(500) NOT NULL,
 		Url NVARCHAR(2000) NOT NULL,
 		Snippet NVARCHAR(MAX) NOT NULL,
-		Score DECIMAL(5,4) NOT NULL CONSTRAINT DF_EphExternalKnowledge_Score DEFAULT 0,
+		Score DECIMAL(5,4) NOT NULL CONSTRAINT DF_PoloxiExternalKnowledge_Score DEFAULT 0,
 		RetrievedDateUtc DATETIME2(3) NOT NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphExternalKnowledge_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiExternalKnowledge_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphExternalKnowledge_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiExternalKnowledge_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphExternalKnowledge_TenantQuery ON EPH.ExternalKnowledge(TenantId,NormalizedQuery,RetrievedDateUtc DESC) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiExternalKnowledge_TenantQuery ON POLOXI.ExternalKnowledge(TenantId,NormalizedQuery,RetrievedDateUtc DESC) WHERE IsDeleted=0;
 END;
 
 -- External grounding configuration settings (Platform scope, tenant-overridable).

@@ -5,7 +5,7 @@ SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
 -- ============================================================================
--- EPH V2.3: Semantic branch types + entropy re-aiming.
+-- POLOXI V2.3: Semantic branch types + entropy re-aiming.
 -- ALTERNATIVE branches are mutually exclusive competing interpretations and
 -- participate in Shannon entropy. DIMENSION branches are jointly valid
 -- criteria (importance/coverage-scored) and are EXCLUDED from winner-take-all
@@ -16,25 +16,25 @@ BEGIN TRANSACTION;
 -- configuration.
 -- ============================================================================
 
--- ── EPH.WideBranch: semantic type (ALTERNATIVE | DIMENSION) ──
-IF OBJECT_ID(N'EPH.WideBranch',N'U') IS NOT NULL
+-- ── POLOXI.WideBranch: semantic type (ALTERNATIVE | DIMENSION) ──
+IF OBJECT_ID(N'POLOXI.WideBranch',N'U') IS NOT NULL
 BEGIN
-	IF COL_LENGTH(N'EPH.WideBranch',N'SemanticTypeCode') IS NULL
-		ALTER TABLE EPH.WideBranch ADD SemanticTypeCode NVARCHAR(20) NOT NULL CONSTRAINT DF_EphWideBranch_SemanticType DEFAULT N'ALTERNATIVE';
+	IF COL_LENGTH(N'POLOXI.WideBranch',N'SemanticTypeCode') IS NULL
+		ALTER TABLE POLOXI.WideBranch ADD SemanticTypeCode NVARCHAR(20) NOT NULL CONSTRAINT DF_PoloxiWideBranch_SemanticType DEFAULT N'ALTERNATIVE';
 END;
 
--- ── EPH.WideInformationRound: which distribution entropy was measured over ──
-IF OBJECT_ID(N'EPH.WideInformationRound',N'U') IS NOT NULL
+-- ── POLOXI.WideInformationRound: which distribution entropy was measured over ──
+IF OBJECT_ID(N'POLOXI.WideInformationRound',N'U') IS NOT NULL
 BEGIN
-	IF COL_LENGTH(N'EPH.WideInformationRound',N'EntropyBasisCode') IS NULL
-		ALTER TABLE EPH.WideInformationRound ADD EntropyBasisCode NVARCHAR(20) NOT NULL CONSTRAINT DF_EphWideInfoRound_EntropyBasis DEFAULT N'BRANCH';
+	IF COL_LENGTH(N'POLOXI.WideInformationRound',N'EntropyBasisCode') IS NULL
+		ALTER TABLE POLOXI.WideInformationRound ADD EntropyBasisCode NVARCHAR(20) NOT NULL CONSTRAINT DF_PoloxiWideInfoRound_EntropyBasis DEFAULT N'BRANCH';
 END;
 
--- ── EPH.WideExecution: execution-level entropy basis ──
-IF OBJECT_ID(N'EPH.WideExecution',N'U') IS NOT NULL
+-- ── POLOXI.WideExecution: execution-level entropy basis ──
+IF OBJECT_ID(N'POLOXI.WideExecution',N'U') IS NOT NULL
 BEGIN
-	IF COL_LENGTH(N'EPH.WideExecution',N'EntropyBasisCode') IS NULL
-		ALTER TABLE EPH.WideExecution ADD EntropyBasisCode NVARCHAR(20) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'EntropyBasisCode') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD EntropyBasisCode NVARCHAR(20) NULL;
 END;
 
 -- ── V2.3 configuration settings (DB is the source of truth) ──
@@ -50,7 +50,7 @@ BEGIN
 
 	INSERT @Settings(SettingKey,SettingValue,DataTypeCode,Description)
 	VALUES
-		(N'Intelligence.SearchWide.EvidencePriorityMinimumDepth',N'4',N'Integer',N'Depth at or beyond which the evidence-priority expansion guard is evaluated: when semantic understanding is adequate but evidence coverage is the actual weakness, EPH stops generating deeper hierarchy and investigates instead.'),
+		(N'Intelligence.SearchWide.EvidencePriorityMinimumDepth',N'4',N'Integer',N'Depth at or beyond which the evidence-priority expansion guard is evaluated: when semantic understanding is adequate but evidence coverage is the actual weakness, POLOXI stops generating deeper hierarchy and investigates instead.'),
 		(N'Intelligence.SearchWide.EvidencePriorityCoverageFloor',N'0.35',N'Decimal',N'Share of surviving branches with any evidence support below which (at/after the minimum depth) hierarchy expansion stops with EVIDENCE_COVERAGE_PRIORITY so retrieval effort goes to distinguishing candidates.'),
 		(N'Intelligence.SearchWide.MinimumCandidateDimensionSupport',N'2',N'Integer',N'Minimum number of distinct interpretive dimensions a candidate must appear in to be admitted into the candidate competition. Single-dimension appearances (for example an affordability-only list) are flagged as constraint-style exclusions, never silently dropped.');
 

@@ -9,9 +9,9 @@ namespace Ams.Application.Features.Intelligence;
 public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
 {
     public IReadOnlyCollection<string> GrantedPermissions{get;init;}=[];
-    // 'EPH Engine' filter: true runs the full dynamic disambiguation + enterprise grounding pipeline;
+    // 'POLOXI Engine' filter: true runs the full dynamic disambiguation + enterprise grounding pipeline;
     // false returns a pure LLM answer without hierarchy, grounding, or elimination.
-    public bool UseEphEngine{get;init;}=true;
+    public bool UsePoloxiEngine{get;init;}=true;
     // V2.8 Clarification continuation: when the previous execution ended USER_CLARIFICATION_REQUIRED,
     // the follow-up request carries the user's clarification answer plus the target it answers.
     // The pipeline treats the answer as an added hard constraint and reweights — it never restarts blind.
@@ -32,10 +32,10 @@ public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,in
     // V2.3 semantic type: ALTERNATIVE (mutually exclusive competing interpretation, entropy-eligible)
     // or DIMENSION (jointly valid criterion; excluded from winner-take-all entropy).
     public string SemanticTypeCode{get;init;}=WideBranchSemanticTypes.Alternative;
-    // Three-score model: what the LLM initially thought, what evidence supports, and what EPH concludes.
+    // Three-score model: what the LLM initially thought, what evidence supports, and what POLOXI concludes.
     public decimal InterpretationPrior{get;init;}
     public decimal EvidenceSupport{get;init;}
-    public decimal EphConfidence{get;init;}
+    public decimal PoloxiConfidence{get;init;}
 }
 
 // V2.1 branch lifecycle states. PRUNED is reserved for hard-constraint violations, explicit
@@ -69,7 +69,7 @@ public static class WideEntropyBases
     public const string Candidate="CANDIDATE";
 }
 
-public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<EphEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
+public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
 {
     // Real-world references produced by the LLM from the top interpretive narrowing paths.
     // Displayed in Authorized Evidence with links to the actual external sites; never enterprise-verified.
@@ -109,11 +109,11 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // 1.0 when fewer than two measurement points exist (neutral, never penalizing).
     public decimal? WinnerStability{get;init;}
     public decimal? TopKStability{get;init;}
-    // V2.6 Decision Confidence: how confident EPH is in the FINAL RANKING — blends decision evidence
+    // V2.6 Decision Confidence: how confident POLOXI is in the FINAL RANKING — blends decision evidence
     // coverage, top-candidate separation, winner stability, and answer confidence. Replaces
     // hierarchy-coverage-dominated confidence as the user-facing confidence for wide searches.
     public decimal? DecisionConfidence{get;init;}
-    // V2.8 Clarification Gate: when EPH cannot responsibly resolve the ambiguity (compound gate:
+    // V2.8 Clarification Gate: when POLOXI cannot responsibly resolve the ambiguity (compound gate:
     // low decision confidence AND unstable winner AND thin candidate margin AND a high-value
     // unresolved information target), it returns USER_CLARIFICATION_REQUIRED with a deterministic
     // clarification question instead of pretending certainty. Options are rendered from the top
@@ -153,9 +153,9 @@ public static class WideResponseModes
     public const string LimitedEvidence="LIMITED_EVIDENCE";           // weak grounding → answer + evidence warning UX
 }
 
-// V2.9 Answer Composer contract: the structured EPH outcome the presentation layer communicates.
+// V2.9 Answer Composer contract: the structured POLOXI outcome the presentation layer communicates.
 // Everything here is computed deterministically from candidates, branch scores, and telemetry —
-// the presentation layer never reranks, invents evidence, or resolves uncertainty EPH did not.
+// the presentation layer never reranks, invents evidence, or resolves uncertainty POLOXI did not.
 public sealed record WideAnswerContext(string ResponseMode,string ConfidenceLabel,string ConfidenceNarrative)
 {
     // The winning candidate's name (deterministic final ranking #1). Null in clarification mode.
@@ -233,8 +233,8 @@ public sealed record WideCandidateContrastDto(string AlternativeDisplayName,deci
 // often do not recognize the legal name — recognition beats recall.
 public sealed record WideClarificationOptionDto(string Key,string Label);
 
-// V2.1 Query Contract: separates hard constraints from ambiguous concepts so EPH only branches ambiguity.
-public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+// V2.1 Query Contract: separates hard constraints from ambiguous concepts so POLOXI only branches ambiguity.
+public sealed record WideQueryContract(string? EntityType,string? ExpectedAnswerType,string? ExpectedAnswerGranularity,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
 
 // V2.1 candidate competition: a candidate with its composite score and per-branch evidence scores.
 public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string DisplayName,string? Detail,decimal CompositeScore,IReadOnlyCollection<WideCandidateBranchScoreDto> BranchScores)
@@ -315,7 +315,7 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public bool EnableInformationValue{get;init;}=true;
     public decimal InformationValueTriggerEntropy{get;init;}=.45m;
     // V2.8 Clarification Gate thresholds (DB-seeded; see migration 0152). ALL conditions must hold
-    // for EPH to ask instead of answer — a single low metric never triggers a question.
+    // for POLOXI to ask instead of answer — a single low metric never triggers a question.
     public bool EnableClarificationGate{get;init;}=true;
     public decimal ClarificationConfidenceThreshold{get;init;}=.60m;
     public decimal ClarificationWinnerStabilityThreshold{get;init;}=.50m;
@@ -350,7 +350,7 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
 // A blank ApiKey or Enabled=false disables live retrieval; the pipeline degrades to interpretive-only answers.
 public sealed record WideExternalGroundingConfiguration(bool Enabled,string ProviderCode,string ApiKey,int MaximumQueriesPerExecution,int MaximumSnippetsPerQuery,int CacheHours,int TimeoutSeconds);
 
-// A fresh real-world snippet retrieved at answer time (live provider call or EPH.ExternalKnowledge cache hit).
+// A fresh real-world snippet retrieved at answer time (live provider call or POLOXI.ExternalKnowledge cache hit).
 public sealed record WideExternalKnowledgeSnippet(string Query,string Title,string Url,string Snippet,decimal Score,DateTime RetrievedDateUtc);
 
 // LLM structured outputs (strict JSON schema payloads).
@@ -388,7 +388,7 @@ public sealed record WideInterpretiveResultItem(int RankNumber,string Name,strin
 public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,string Rationale);
 
 // V2.1 LLM structured outputs.
-public sealed record WideQueryContractProposal(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+public sealed record WideQueryContractProposal(string? EntityType,string? ExpectedAnswerType,string? ExpectedAnswerGranularity,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
 
 public sealed record WideCandidateScoringProposal(IReadOnlyCollection<WideCandidateScore> Candidates);
 
@@ -405,7 +405,7 @@ public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Gui
     public string SemanticTypeCode{get;init;}=WideBranchSemanticTypes.Alternative;
     public decimal InterpretationPrior{get;init;}
     public decimal EvidenceSupport{get;init;}
-    public decimal EphConfidence{get;init;}
+    public decimal PoloxiConfidence{get;init;}
 }
 
 public sealed record WideCandidateRecord(Guid WideCandidateId,Guid WideExecutionId,Guid TenantId,string DisplayName,string? Detail,decimal CompositeScore,int RankNumber,bool IsConstraintViolation,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchScoreRecord> BranchScores);
@@ -415,7 +415,7 @@ public sealed record WideCandidateBranchScoreRecord(Guid WideCandidateBranchScor
 // Batch persistence rows (one round trip per level/phase instead of per branch).
 public sealed record WideBranchOutcomeUpdate(Guid WideBranchId,string GroundingStatusCode,int EvidenceCount,bool IsEliminated,string? EliminationReason);
 
-public sealed record WideBranchScoreUpdate(Guid WideBranchId,string BranchStateCode,decimal InterpretationPrior,decimal EvidenceSupport,decimal EphConfidence);
+public sealed record WideBranchScoreUpdate(Guid WideBranchId,string BranchStateCode,decimal InterpretationPrior,decimal EvidenceSupport,decimal PoloxiConfidence);
 
 // ── V2.2 Information-Directed Exploration ──────────────────────────────────────
 // Terminology is deliberate: EstimatedInformationValue is the LLM-assisted PREDICTION of how
@@ -461,13 +461,13 @@ public sealed record WideInformationValueProposal(IReadOnlyCollection<WideInform
 public sealed record WideInformationTargetProposal(string BranchCode,string Uncertainty,string RankingImpact,string CandidateDiscrimination,string EvidenceAvailability,string Novelty,string Redundancy,string? EvidenceTarget,string Rationale)
 {
     // Falsifiable predictions: which current candidates should move, and in what direction/magnitude,
-    // if this branch is investigated. EPH later scores direction/magnitude accuracy against reality.
+    // if this branch is investigated. POLOXI later scores direction/magnitude accuracy against reality.
     public IReadOnlyCollection<WideRankingChangePrediction> PredictedRankingChanges{get;init;}=[];
 }
 
 public sealed record WideRankingChangePrediction(string Candidate,string Direction,string Magnitude);
 
-// Persistence records (EPH.WideInformationRound / Target / Prediction; see migration 0149).
+// Persistence records (POLOXI.WideInformationRound / Target / Prediction; see migration 0149).
 public sealed record WideInformationRoundRecord(Guid WideInformationRoundId,Guid WideExecutionId,Guid TenantId,int RoundNumber,decimal EntropyBefore,decimal NormalizedEntropyBefore,DateTime StartedDateUtc)
 {
     public string EntropyBasisCode{get;init;}=WideEntropyBases.Branch;
@@ -508,16 +508,16 @@ public sealed record WideInformationPredictionRecord(Guid WideInformationPredict
     public bool? MagnitudeCorrect{get;init;}
 }
 
-// Execution-level entropy summary persisted at completion (EPH.WideExecution V2.2 columns).
+// Execution-level entropy summary persisted at completion (POLOXI.WideExecution V2.2 columns).
 public sealed record WideExecutionEntropyUpdate(Guid WideExecutionId,decimal? InitialEntropy,decimal? FinalEntropy,decimal? InitialNormalizedEntropy,decimal? FinalNormalizedEntropy,decimal? TotalActualInformationGain,int InformationRoundCount,int InformationTargetCount,int InformationRetrievalCount)
 {
     public string? EntropyBasisCode{get;init;}
-    // V2.8 clarification state (EPH.WideExecution columns; see migration 0152). Persisted so a
+    // V2.8 clarification state (POLOXI.WideExecution columns; see migration 0152). Persisted so a
     // follow-up user answer continues the same reasoning context instead of restarting blind.
     public decimal? DecisionConfidence{get;init;}
     public string? ClarificationTarget{get;init;}
     public string? ClarificationQuestion{get;init;}
-    // V2.8.5 Clarification Calibration (EPH.WideExecution columns; see migration 0153). Persisted
+    // V2.8.5 Clarification Calibration (POLOXI.WideExecution columns; see migration 0153). Persisted
     // per execution so calibration queries can measure which clarification targets actually work.
     public decimal? IntentEntropy{get;init;}
     public decimal? PriorIntentEntropy{get;init;}

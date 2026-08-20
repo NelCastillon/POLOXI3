@@ -5,76 +5,76 @@ SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
 -- ============================================================================
--- EPH V2.1: Query Contract, Branch States, Three-Score Model, Candidate Engine.
+-- POLOXI V2.1: Query Contract, Branch States, Three-Score Model, Candidate Engine.
 -- LLM branch percentages become Interpretation Priors (retrieval allocation),
--- evidence produces Evidence Support, and EPH Confidence is the post-evidence
+-- evidence produces Evidence Support, and POLOXI Confidence is the post-evidence
 -- conclusion. Branches move through ACTIVE / SECONDARY / DORMANT / PRUNED
 -- instead of hard elimination; PRUNED is reserved for constraint violations.
 -- ============================================================================
 
 -- Execution: persist the extracted query contract and evidence coverage metrics.
-IF COL_LENGTH(N'EPH.WideExecution',N'QueryContractJson') IS NULL
-	ALTER TABLE EPH.WideExecution ADD QueryContractJson NVARCHAR(MAX) NULL;
-IF COL_LENGTH(N'EPH.WideExecution',N'EvidenceCoverage') IS NULL
-	ALTER TABLE EPH.WideExecution ADD EvidenceCoverage DECIMAL(5,4) NULL;
-IF COL_LENGTH(N'EPH.WideExecution',N'ExternalEvidenceCount') IS NULL
-	ALTER TABLE EPH.WideExecution ADD ExternalEvidenceCount INT NOT NULL CONSTRAINT DF_EphWideExecution_ExternalEvidence DEFAULT 0;
-IF COL_LENGTH(N'EPH.WideExecution',N'EnterpriseEvidenceCount') IS NULL
-	ALTER TABLE EPH.WideExecution ADD EnterpriseEvidenceCount INT NOT NULL CONSTRAINT DF_EphWideExecution_EnterpriseEvidence DEFAULT 0;
-IF COL_LENGTH(N'EPH.WideExecution',N'CandidateCount') IS NULL
-	ALTER TABLE EPH.WideExecution ADD CandidateCount INT NOT NULL CONSTRAINT DF_EphWideExecution_Candidates DEFAULT 0;
+IF COL_LENGTH(N'POLOXI.WideExecution',N'QueryContractJson') IS NULL
+	ALTER TABLE POLOXI.WideExecution ADD QueryContractJson NVARCHAR(MAX) NULL;
+IF COL_LENGTH(N'POLOXI.WideExecution',N'EvidenceCoverage') IS NULL
+	ALTER TABLE POLOXI.WideExecution ADD EvidenceCoverage DECIMAL(5,4) NULL;
+IF COL_LENGTH(N'POLOXI.WideExecution',N'ExternalEvidenceCount') IS NULL
+	ALTER TABLE POLOXI.WideExecution ADD ExternalEvidenceCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_ExternalEvidence DEFAULT 0;
+IF COL_LENGTH(N'POLOXI.WideExecution',N'EnterpriseEvidenceCount') IS NULL
+	ALTER TABLE POLOXI.WideExecution ADD EnterpriseEvidenceCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_EnterpriseEvidence DEFAULT 0;
+IF COL_LENGTH(N'POLOXI.WideExecution',N'CandidateCount') IS NULL
+	ALTER TABLE POLOXI.WideExecution ADD CandidateCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_Candidates DEFAULT 0;
 
 -- Branch: three-score model + branch lifecycle state.
-IF COL_LENGTH(N'EPH.WideBranch',N'BranchStateCode') IS NULL
-	ALTER TABLE EPH.WideBranch ADD BranchStateCode NVARCHAR(20) NOT NULL CONSTRAINT DF_EphWideBranch_State DEFAULT N'ACTIVE';
-IF COL_LENGTH(N'EPH.WideBranch',N'InterpretationPrior') IS NULL
-	ALTER TABLE EPH.WideBranch ADD InterpretationPrior DECIMAL(5,4) NULL;
-IF COL_LENGTH(N'EPH.WideBranch',N'EvidenceSupport') IS NULL
-	ALTER TABLE EPH.WideBranch ADD EvidenceSupport DECIMAL(5,4) NULL;
-IF COL_LENGTH(N'EPH.WideBranch',N'EphConfidence') IS NULL
-	ALTER TABLE EPH.WideBranch ADD EphConfidence DECIMAL(5,4) NULL;
+IF COL_LENGTH(N'POLOXI.WideBranch',N'BranchStateCode') IS NULL
+	ALTER TABLE POLOXI.WideBranch ADD BranchStateCode NVARCHAR(20) NOT NULL CONSTRAINT DF_PoloxiWideBranch_State DEFAULT N'ACTIVE';
+IF COL_LENGTH(N'POLOXI.WideBranch',N'InterpretationPrior') IS NULL
+	ALTER TABLE POLOXI.WideBranch ADD InterpretationPrior DECIMAL(5,4) NULL;
+IF COL_LENGTH(N'POLOXI.WideBranch',N'EvidenceSupport') IS NULL
+	ALTER TABLE POLOXI.WideBranch ADD EvidenceSupport DECIMAL(5,4) NULL;
+IF COL_LENGTH(N'POLOXI.WideBranch',N'PoloxiConfidence') IS NULL
+	ALTER TABLE POLOXI.WideBranch ADD PoloxiConfidence DECIMAL(5,4) NULL;
 
 -- Candidate universe surviving the hard-constraint filter (never deleted).
-IF OBJECT_ID(N'EPH.WideCandidate',N'U') IS NULL
+IF OBJECT_ID(N'POLOXI.WideCandidate',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideCandidate
+	CREATE TABLE POLOXI.WideCandidate
 	(
-		WideCandidateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideCandidate PRIMARY KEY,
-		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideCandidate_Execution REFERENCES EPH.WideExecution(WideExecutionId),
+		WideCandidateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideCandidate PRIMARY KEY,
+		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideCandidate_Execution REFERENCES POLOXI.WideExecution(WideExecutionId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		DisplayName NVARCHAR(300) NOT NULL,
 		Detail NVARCHAR(1000) NULL,
-		CompositeScore DECIMAL(5,4) NOT NULL CONSTRAINT DF_EphWideCandidate_Composite DEFAULT 0,
+		CompositeScore DECIMAL(5,4) NOT NULL CONSTRAINT DF_PoloxiWideCandidate_Composite DEFAULT 0,
 		RankNumber INT NOT NULL,
-		IsConstraintViolation BIT NOT NULL CONSTRAINT DF_EphWideCandidate_Violation DEFAULT 0,
+		IsConstraintViolation BIT NOT NULL CONSTRAINT DF_PoloxiWideCandidate_Violation DEFAULT 0,
 		ConstraintViolationReason NVARCHAR(400) NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideCandidate_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideCandidate_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideCandidate_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideCandidate_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideCandidate_Execution ON EPH.WideCandidate(WideExecutionId,RankNumber) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideCandidate_Execution ON POLOXI.WideCandidate(WideExecutionId,RankNumber) WHERE IsDeleted=0;
 END;
 
 -- Candidate x Branch evidence score matrix.
-IF OBJECT_ID(N'EPH.WideCandidateBranchScore',N'U') IS NULL
+IF OBJECT_ID(N'POLOXI.WideCandidateBranchScore',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideCandidateBranchScore
+	CREATE TABLE POLOXI.WideCandidateBranchScore
 	(
-		WideCandidateBranchScoreId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideCandidateBranchScore PRIMARY KEY,
-		WideCandidateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideCandidateBranchScore_Candidate REFERENCES EPH.WideCandidate(WideCandidateId),
-		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideCandidateBranchScore_Branch REFERENCES EPH.WideBranch(WideBranchId),
+		WideCandidateBranchScoreId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideCandidateBranchScore PRIMARY KEY,
+		WideCandidateId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideCandidateBranchScore_Candidate REFERENCES POLOXI.WideCandidate(WideCandidateId),
+		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideCandidateBranchScore_Branch REFERENCES POLOXI.WideBranch(WideBranchId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		BranchDisplayName NVARCHAR(300) NOT NULL,
-		EvidenceScore DECIMAL(5,4) NOT NULL CONSTRAINT DF_EphWideCandidateBranchScore_Score DEFAULT 0,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideCandidateBranchScore_Created DEFAULT SYSUTCDATETIME(),
+		EvidenceScore DECIMAL(5,4) NOT NULL CONSTRAINT DF_PoloxiWideCandidateBranchScore_Score DEFAULT 0,
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideCandidateBranchScore_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideCandidateBranchScore_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideCandidateBranchScore_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideCandidateBranchScore_Candidate ON EPH.WideCandidateBranchScore(WideCandidateId) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideCandidateBranchScore_Candidate ON POLOXI.WideCandidateBranchScore(WideCandidateId) WHERE IsDeleted=0;
 END;
 
 -- V2.1 configuration settings (Platform scope, tenant-overridable).
@@ -92,8 +92,8 @@ BEGIN
 	VALUES
 		(N'Intelligence.SearchWide.SecondaryBranchThreshold',N'0.35',N'Decimal',N'Interpretation prior below this makes a branch SECONDARY (smaller retrieval budget) instead of eliminated.'),
 		(N'Intelligence.SearchWide.DormantBranchThreshold',N'0.20',N'Decimal',N'Interpretation prior below this makes a branch DORMANT (not searched deeper, reactivatable) instead of eliminated.'),
-		(N'Intelligence.SearchWide.PriorWeight',N'0.30',N'Decimal',N'Weight of the LLM interpretation prior when computing branch EPH confidence.'),
-		(N'Intelligence.SearchWide.EvidenceWeight',N'0.70',N'Decimal',N'Weight of evidence support when computing branch EPH confidence.'),
+		(N'Intelligence.SearchWide.PriorWeight',N'0.30',N'Decimal',N'Weight of the LLM interpretation prior when computing branch POLOXI confidence.'),
+		(N'Intelligence.SearchWide.EvidenceWeight',N'0.70',N'Decimal',N'Weight of evidence support when computing branch POLOXI confidence.'),
 		(N'Intelligence.SearchWide.MaximumCandidates',N'10',N'Integer',N'Maximum candidates ranked in the candidate-by-branch competition matrix.'),
 		(N'Intelligence.SearchWide.EnableQueryContract',N'true',N'Boolean',N'Extract a query contract (hard constraints, ambiguous concepts, output requirements) before hierarchy generation.');
 

@@ -4,43 +4,43 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
-IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'EPH') EXEC(N'CREATE SCHEMA EPH');
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'POLOXI') EXEC(N'CREATE SCHEMA POLOXI');
 
 -- Wide dynamic disambiguation pipeline execution log.
-IF OBJECT_ID(N'EPH.WideExecution',N'U') IS NULL
+IF OBJECT_ID(N'POLOXI.WideExecution',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideExecution
+	CREATE TABLE POLOXI.WideExecution
 	(
-		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideExecution PRIMARY KEY,
+		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideExecution PRIMARY KEY,
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		UserId UNIQUEIDENTIFIER NOT NULL,
 		QueryText NVARCHAR(1000) NOT NULL,
 		CorrelationId NVARCHAR(120) NOT NULL,
-		StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_EphWideExecution_Status DEFAULT N'RUNNING',
+		StatusCode NVARCHAR(50) NOT NULL CONSTRAINT DF_PoloxiWideExecution_Status DEFAULT N'RUNNING',
 		TerminationReasonCode NVARCHAR(50) NULL,
-		DepthReached INT NOT NULL CONSTRAINT DF_EphWideExecution_Depth DEFAULT 0,
-		LlmCallCount INT NOT NULL CONSTRAINT DF_EphWideExecution_Calls DEFAULT 0,
+		DepthReached INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_Depth DEFAULT 0,
+		LlmCallCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_Calls DEFAULT 0,
 		FinalConfidence DECIMAL(5,4) NULL,
 		AnswerVerificationCode NVARCHAR(50) NULL,
 		FinalAnswer NVARCHAR(MAX) NULL,
 		DurationMilliseconds BIGINT NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideExecution_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideExecution_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideExecution_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideExecution_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideExecution_Tenant ON EPH.WideExecution(TenantId,CreatedDateUtc DESC) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideExecution_Tenant ON POLOXI.WideExecution(TenantId,CreatedDateUtc DESC) WHERE IsDeleted=0;
 END;
 
 -- Wide branch audit: every proposed branch per level, including eliminated ones (never deleted).
-IF OBJECT_ID(N'EPH.WideBranch',N'U') IS NULL
+IF OBJECT_ID(N'POLOXI.WideBranch',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideBranch
+	CREATE TABLE POLOXI.WideBranch
 	(
-		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideBranch PRIMARY KEY,
-		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideBranch_Execution REFERENCES EPH.WideExecution(WideExecutionId),
-		ParentWideBranchId UNIQUEIDENTIFIER NULL CONSTRAINT FK_EphWideBranch_Parent REFERENCES EPH.WideBranch(WideBranchId),
+		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideBranch PRIMARY KEY,
+		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideBranch_Execution REFERENCES POLOXI.WideExecution(WideExecutionId),
+		ParentWideBranchId UNIQUEIDENTIFIER NULL CONSTRAINT FK_PoloxiWideBranch_Parent REFERENCES POLOXI.WideBranch(WideBranchId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		LevelNumber INT NOT NULL,
 		BranchCode NVARCHAR(120) NOT NULL,
@@ -49,20 +49,20 @@ BEGIN
 		CapabilityCode NVARCHAR(100) NULL,
 		SearchText NVARCHAR(400) NULL,
 		GroundingStatusCode NVARCHAR(50) NOT NULL,
-		EvidenceCount INT NOT NULL CONSTRAINT DF_EphWideBranch_Evidence DEFAULT 0,
+		EvidenceCount INT NOT NULL CONSTRAINT DF_PoloxiWideBranch_Evidence DEFAULT 0,
 		Confidence DECIMAL(5,4) NOT NULL,
-		ContinueNarrowing BIT NOT NULL CONSTRAINT DF_EphWideBranch_Continue DEFAULT 0,
+		ContinueNarrowing BIT NOT NULL CONSTRAINT DF_PoloxiWideBranch_Continue DEFAULT 0,
 		StopReason NVARCHAR(50) NULL,
-		IsEliminated BIT NOT NULL CONSTRAINT DF_EphWideBranch_Eliminated DEFAULT 0,
+		IsEliminated BIT NOT NULL CONSTRAINT DF_PoloxiWideBranch_Eliminated DEFAULT 0,
 		EliminationReason NVARCHAR(400) NULL,
 		SortOrder INT NOT NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideBranch_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideBranch_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideBranch_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideBranch_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideBranch_Execution ON EPH.WideBranch(WideExecutionId,LevelNumber,SortOrder) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideBranch_Execution ON POLOXI.WideBranch(WideExecutionId,LevelNumber,SortOrder) WHERE IsDeleted=0;
 END;
 
 -- Wide pipeline configuration settings (Platform scope, tenant-overridable).

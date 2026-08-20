@@ -94,7 +94,7 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
     {
         const string sql="""
 DECLARE @WideExecutionId UNIQUEIDENTIFIER=NEWID();
-INSERT EPH.WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',SYSUTCDATETIME(),@UserId,0);
 SELECT @WideExecutionId;
 """;
@@ -106,18 +106,18 @@ SELECT @WideExecutionId;
     {
         if(branches.Count==0)return;
         const string sql="""
-INSERT EPH.WideBranch(WideBranchId,WideExecutionId,ParentWideBranchId,TenantId,LevelNumber,BranchCode,DisplayName,Interpretation,CapabilityCode,SearchText,GroundingStatusCode,EvidenceCount,Confidence,ContinueNarrowing,StopReason,IsEliminated,EliminationReason,SortOrder,BranchStateCode,SemanticTypeCode,InterpretationPrior,EvidenceSupport,EphConfidence,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideBranchId,@WideExecutionId,@ParentWideBranchId,@TenantId,@LevelNumber,@BranchCode,@DisplayName,@Interpretation,@CapabilityCode,@SearchText,@GroundingStatusCode,@EvidenceCount,@Confidence,@ContinueNarrowing,@StopReason,@IsEliminated,@EliminationReason,@SortOrder,@BranchStateCode,@SemanticTypeCode,@InterpretationPrior,@EvidenceSupport,@EphConfidence,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.WideBranch(WideBranchId,WideExecutionId,ParentWideBranchId,TenantId,LevelNumber,BranchCode,DisplayName,Interpretation,CapabilityCode,SearchText,GroundingStatusCode,EvidenceCount,Confidence,ContinueNarrowing,StopReason,IsEliminated,EliminationReason,SortOrder,BranchStateCode,SemanticTypeCode,InterpretationPrior,EvidenceSupport,PoloxiConfidence,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchId,@WideExecutionId,@ParentWideBranchId,@TenantId,@LevelNumber,@BranchCode,@DisplayName,@Interpretation,@CapabilityCode,@SearchText,@GroundingStatusCode,@EvidenceCount,@Confidence,@ContinueNarrowing,@StopReason,@IsEliminated,@EliminationReason,@SortOrder,@BranchStateCode,@SemanticTypeCode,@InterpretationPrior,@EvidenceSupport,@PoloxiConfidence,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         foreach(var branch in branches)
-            await connection.ExecuteAsync(new CommandDefinition(sql,new{branch.WideBranchId,branch.WideExecutionId,branch.ParentWideBranchId,branch.TenantId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder,branch.BranchStateCode,branch.SemanticTypeCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.EphConfidence,UserId=userId},cancellationToken:cancellationToken));
+            await connection.ExecuteAsync(new CommandDefinition(sql,new{branch.WideBranchId,branch.WideExecutionId,branch.ParentWideBranchId,branch.TenantId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder,branch.BranchStateCode,branch.SemanticTypeCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.PoloxiConfidence,UserId=userId},cancellationToken:cancellationToken));
     }
 
     public async Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE POLOXI.WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
 WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -128,7 +128,7 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
     {
         if(outcomes.Count==0)return;
         const string sql="""
-UPDATE EPH.WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE POLOXI.WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
 WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -138,43 +138,43 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
     public async Task CompleteWideExecutionAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string statusCode,string terminationReasonCode,int depthReached,int llmCallCount,decimal finalConfidence,string answerVerificationCode,string? finalAnswer,long durationMilliseconds,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideExecution SET StatusCode=@StatusCode,TerminationReasonCode=@TerminationReasonCode,DepthReached=@DepthReached,LlmCallCount=@LlmCallCount,FinalConfidence=@FinalConfidence,AnswerVerificationCode=@AnswerVerificationCode,FinalAnswer=@FinalAnswer,DurationMilliseconds=@DurationMilliseconds,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+UPDATE POLOXI.WideExecution SET StatusCode=@StatusCode,TerminationReasonCode=@TerminationReasonCode,DepthReached=@DepthReached,LlmCallCount=@LlmCallCount,FinalConfidence=@FinalConfidence,AnswerVerificationCode=@AnswerVerificationCode,FinalAnswer=@FinalAnswer,DurationMilliseconds=@DurationMilliseconds,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
 WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,StatusCode=statusCode,TerminationReasonCode=terminationReasonCode,DepthReached=depthReached,LlmCallCount=llmCallCount,FinalConfidence=finalConfidence,AnswerVerificationCode=answerVerificationCode,FinalAnswer=finalAnswer,DurationMilliseconds=durationMilliseconds},cancellationToken:cancellationToken));
     }
 
-    public async Task UpdateWideBranchScoresAsync(Guid tenantId,Guid wideBranchId,string branchStateCode,decimal interpretationPrior,decimal evidenceSupport,decimal ephConfidence,CancellationToken cancellationToken=default)
+    public async Task UpdateWideBranchScoresAsync(Guid tenantId,Guid wideBranchId,string branchStateCode,decimal interpretationPrior,decimal evidenceSupport,decimal poloxiConfidence,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,EphConfidence=@EphConfidence,ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE POLOXI.WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,PoloxiConfidence=@PoloxiConfidence,ModifiedDateUtc=SYSUTCDATETIME()
 WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,BranchStateCode=branchStateCode,InterpretationPrior=interpretationPrior,EvidenceSupport=evidenceSupport,EphConfidence=ephConfidence},cancellationToken:cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,BranchStateCode=branchStateCode,InterpretationPrior=interpretationPrior,EvidenceSupport=evidenceSupport,PoloxiConfidence=poloxiConfidence},cancellationToken:cancellationToken));
     }
 
     public async Task UpdateWideBranchScoresAsync(Guid tenantId,IReadOnlyCollection<WideBranchScoreUpdate> scores,CancellationToken cancellationToken=default)
     {
         if(scores.Count==0)return;
         const string sql="""
-UPDATE EPH.WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,EphConfidence=@EphConfidence,ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE POLOXI.WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,PoloxiConfidence=@PoloxiConfidence,ModifiedDateUtc=SYSUTCDATETIME()
 WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        await connection.ExecuteAsync(new CommandDefinition(sql,scores.Select(s=>new{TenantId=tenantId,s.WideBranchId,s.BranchStateCode,s.InterpretationPrior,s.EvidenceSupport,s.EphConfidence}),cancellationToken:cancellationToken));
+        await connection.ExecuteAsync(new CommandDefinition(sql,scores.Select(s=>new{TenantId=tenantId,s.WideBranchId,s.BranchStateCode,s.InterpretationPrior,s.EvidenceSupport,s.PoloxiConfidence}),cancellationToken:cancellationToken));
     }
 
     public async Task SaveWideCandidatesAsync(IReadOnlyCollection<WideCandidateRecord> candidates,Guid userId,CancellationToken cancellationToken=default)
     {
         if(candidates.Count==0)return;
         const string candidateSql="""
-INSERT EPH.WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideCandidateId,@WideExecutionId,@TenantId,@DisplayName,@Detail,@CompositeScore,@RankNumber,@IsConstraintViolation,@ConstraintViolationReason,SYSUTCDATETIME(),@UserId,0);
 """;
         const string scoreSql="""
-INSERT EPH.WideCandidateBranchScore(WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideCandidateBranchScore(WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideCandidateBranchScoreId,@WideCandidateId,@WideBranchId,@TenantId,@BranchDisplayName,@EvidenceScore,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -189,7 +189,7 @@ VALUES(@WideCandidateBranchScoreId,@WideCandidateId,@WideBranchId,@TenantId,@Bra
     public async Task UpdateWideExecutionContractAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string? queryContractJson,decimal evidenceCoverage,int externalEvidenceCount,int enterpriseEvidenceCount,int candidateCount,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideExecution SET QueryContractJson=@QueryContractJson,EvidenceCoverage=@EvidenceCoverage,ExternalEvidenceCount=@ExternalEvidenceCount,EnterpriseEvidenceCount=@EnterpriseEvidenceCount,CandidateCount=@CandidateCount,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+UPDATE POLOXI.WideExecution SET QueryContractJson=@QueryContractJson,EvidenceCoverage=@EvidenceCoverage,ExternalEvidenceCount=@ExternalEvidenceCount,EnterpriseEvidenceCount=@EnterpriseEvidenceCount,CandidateCount=@CandidateCount,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
 WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -220,7 +220,7 @@ COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM
     {
         const string sql="""
 SELECT NormalizedQuery Query,Title,Url,Snippet,Score,RetrievedDateUtc
-FROM EPH.ExternalKnowledge
+FROM POLOXI.ExternalKnowledge
 WHERE TenantId=@TenantId AND NormalizedQuery=@NormalizedQuery AND RetrievedDateUtc>=@NotBeforeUtc AND IsDeleted=0
 ORDER BY Score DESC,RetrievedDateUtc DESC;
 """;
@@ -233,7 +233,7 @@ ORDER BY Score DESC,RetrievedDateUtc DESC;
     {
         if(snippets.Count==0)return;
         const string sql="""
-INSERT EPH.ExternalKnowledge(ExternalKnowledgeId,TenantId,NormalizedQuery,Title,Url,Snippet,Score,RetrievedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.ExternalKnowledge(ExternalKnowledgeId,TenantId,NormalizedQuery,Title,Url,Snippet,Score,RetrievedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(NEWID(),@TenantId,@NormalizedQuery,@Title,@Url,@Snippet,@Score,@RetrievedDateUtc,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -248,7 +248,7 @@ VALUES(NEWID(),@TenantId,@NormalizedQuery,@Title,@Url,@Snippet,@Score,@Retrieved
     public async Task SaveInformationRoundAsync(WideInformationRoundRecord round,Guid userId,CancellationToken cancellationToken=default)
     {
         const string sql="""
-INSERT EPH.WideInformationRound(WideInformationRoundId,WideExecutionId,TenantId,RoundNumber,EntropyBefore,NormalizedEntropyBefore,EntropyBasisCode,MaxEntropyBefore,PopulationCountBefore,SelectedTargetCount,StartedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideInformationRound(WideInformationRoundId,WideExecutionId,TenantId,RoundNumber,EntropyBefore,NormalizedEntropyBefore,EntropyBasisCode,MaxEntropyBefore,PopulationCountBefore,SelectedTargetCount,StartedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideInformationRoundId,@WideExecutionId,@TenantId,@RoundNumber,@EntropyBefore,@NormalizedEntropyBefore,@EntropyBasisCode,@MaxEntropyBefore,@PopulationCountBefore,@SelectedTargetCount,@StartedDateUtc,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -258,7 +258,7 @@ VALUES(@WideInformationRoundId,@WideExecutionId,@TenantId,@RoundNumber,@EntropyB
     public async Task CompleteInformationRoundAsync(Guid tenantId,Guid userId,Guid wideInformationRoundId,decimal entropyAfter,decimal normalizedEntropyAfter,decimal actualInformationGain,decimal rawEntropyDelta,int selectedTargetCount,decimal maxEntropyAfter,int populationCountAfter,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideInformationRound SET EntropyAfter=@EntropyAfter,NormalizedEntropyAfter=@NormalizedEntropyAfter,ActualInformationGain=@ActualInformationGain,RawEntropyDelta=@RawEntropyDelta,SelectedTargetCount=@SelectedTargetCount,MaxEntropyAfter=@MaxEntropyAfter,PopulationCountAfter=@PopulationCountAfter,CompletedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+UPDATE POLOXI.WideInformationRound SET EntropyAfter=@EntropyAfter,NormalizedEntropyAfter=@NormalizedEntropyAfter,ActualInformationGain=@ActualInformationGain,RawEntropyDelta=@RawEntropyDelta,SelectedTargetCount=@SelectedTargetCount,MaxEntropyAfter=@MaxEntropyAfter,PopulationCountAfter=@PopulationCountAfter,CompletedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
 WHERE WideInformationRoundId=@WideInformationRoundId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -269,7 +269,7 @@ WHERE WideInformationRoundId=@WideInformationRoundId AND TenantId=@TenantId AND 
     {
         if(targets.Count==0)return;
         const string sql="""
-INSERT EPH.WideInformationTarget(WideInformationTargetId,WideInformationRoundId,WideBranchId,TenantId,UncertaintyCode,RankingImpactCode,CandidateDiscriminationCode,EvidenceAvailabilityCode,NoveltyCode,RedundancyCode,RawEstimatedInformationValue,AdjustedInformationValue,CalibrationFactor,ExpectedRetrievalCost,InformationValuePerCost,WasSelected,SelectionRank,EvidenceTarget,Rationale,PredictedRankingImpactCount,PredictedUpCount,PredictedDownCount,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideInformationTarget(WideInformationTargetId,WideInformationRoundId,WideBranchId,TenantId,UncertaintyCode,RankingImpactCode,CandidateDiscriminationCode,EvidenceAvailabilityCode,NoveltyCode,RedundancyCode,RawEstimatedInformationValue,AdjustedInformationValue,CalibrationFactor,ExpectedRetrievalCost,InformationValuePerCost,WasSelected,SelectionRank,EvidenceTarget,Rationale,PredictedRankingImpactCount,PredictedUpCount,PredictedDownCount,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideInformationTargetId,@WideInformationRoundId,@WideBranchId,@TenantId,@UncertaintyCode,@RankingImpactCode,@CandidateDiscriminationCode,@EvidenceAvailabilityCode,@NoveltyCode,@RedundancyCode,@RawEstimatedInformationValue,@AdjustedInformationValue,@CalibrationFactor,@ExpectedRetrievalCost,@InformationValuePerCost,@WasSelected,@SelectionRank,@EvidenceTarget,@Rationale,@PredictedRankingImpactCount,@PredictedUpCount,@PredictedDownCount,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -280,7 +280,7 @@ VALUES(@WideInformationTargetId,@WideInformationRoundId,@WideBranchId,@TenantId,
     {
         if(predictions.Count==0)return;
         const string sql="""
-INSERT EPH.WideInformationPrediction(WideInformationPredictionId,WideInformationTargetId,TenantId,CandidateName,PredictedDirection,PredictedMagnitude,ScoreBefore,RankBefore,CreatedDateUtc,CreatedByUserId,IsDeleted)
+INSERT POLOXI.WideInformationPrediction(WideInformationPredictionId,WideInformationTargetId,TenantId,CandidateName,PredictedDirection,PredictedMagnitude,ScoreBefore,RankBefore,CreatedDateUtc,CreatedByUserId,IsDeleted)
 VALUES(@WideInformationPredictionId,@WideInformationTargetId,@TenantId,@CandidateName,@PredictedDirection,@PredictedMagnitude,@ScoreBefore,@RankBefore,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -291,7 +291,7 @@ VALUES(@WideInformationPredictionId,@WideInformationTargetId,@TenantId,@Candidat
     {
         if(outcomes.Count==0)return;
         const string sql="""
-UPDATE EPH.WideInformationPrediction SET ScoreAfter=@ScoreAfter,RankAfter=@RankAfter,ActualDirection=@ActualDirection,ActualMagnitude=@ActualMagnitude,DirectionCorrect=@DirectionCorrect,MagnitudeCorrect=@MagnitudeCorrect,ModifiedDateUtc=SYSUTCDATETIME()
+UPDATE POLOXI.WideInformationPrediction SET ScoreAfter=@ScoreAfter,RankAfter=@RankAfter,ActualDirection=@ActualDirection,ActualMagnitude=@ActualMagnitude,DirectionCorrect=@DirectionCorrect,MagnitudeCorrect=@MagnitudeCorrect,ModifiedDateUtc=SYSUTCDATETIME()
 WHERE WideInformationPredictionId=@WideInformationPredictionId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -301,7 +301,7 @@ WHERE WideInformationPredictionId=@WideInformationPredictionId AND TenantId=@Ten
     public async Task UpdateWideExecutionEntropyAsync(Guid tenantId,Guid userId,WideExecutionEntropyUpdate update,CancellationToken cancellationToken=default)
     {
         const string sql="""
-UPDATE EPH.WideExecution SET InitialEntropy=@InitialEntropy,FinalEntropy=@FinalEntropy,InitialNormalizedEntropy=@InitialNormalizedEntropy,FinalNormalizedEntropy=@FinalNormalizedEntropy,TotalActualInformationGain=@TotalActualInformationGain,InformationRoundCount=@InformationRoundCount,InformationTargetCount=@InformationTargetCount,InformationRetrievalCount=@InformationRetrievalCount,EntropyBasisCode=@EntropyBasisCode,DecisionConfidence=@DecisionConfidence,ClarificationTarget=@ClarificationTarget,ClarificationQuestion=@ClarificationQuestion,IntentEntropy=@IntentEntropy,PriorIntentEntropy=@PriorIntentEntropy,ClarificationGain=@ClarificationGain,ClarificationRound=@ClarificationRound,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+UPDATE POLOXI.WideExecution SET InitialEntropy=@InitialEntropy,FinalEntropy=@FinalEntropy,InitialNormalizedEntropy=@InitialNormalizedEntropy,FinalNormalizedEntropy=@FinalNormalizedEntropy,TotalActualInformationGain=@TotalActualInformationGain,InformationRoundCount=@InformationRoundCount,InformationTargetCount=@InformationTargetCount,InformationRetrievalCount=@InformationRetrievalCount,EntropyBasisCode=@EntropyBasisCode,DecisionConfidence=@DecisionConfidence,ClarificationTarget=@ClarificationTarget,ClarificationQuestion=@ClarificationQuestion,IntentEntropy=@IntentEntropy,PriorIntentEntropy=@PriorIntentEntropy,ClarificationGain=@ClarificationGain,ClarificationRound=@ClarificationRound,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
 WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

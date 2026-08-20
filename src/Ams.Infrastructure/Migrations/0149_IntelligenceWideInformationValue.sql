@@ -5,7 +5,7 @@ SET QUOTED_IDENTIFIER ON;
 BEGIN TRANSACTION;
 
 -- ============================================================================
--- EPH V2.2: Information-Directed Exploration.
+-- POLOXI V2.2: Information-Directed Exploration.
 -- Deterministic Shannon entropy + one batched LLM Information Value estimate
 -- (with falsifiable candidate ranking predictions) + measured Actual
 -- Information Gain + calibration data capture.
@@ -13,13 +13,13 @@ BEGIN TRANSACTION;
 -- Information Gain; ActualInformationGain is the measured entropy reduction.
 -- ============================================================================
 
--- ── EPH.WideInformationRound: one row per information-directed exploration round ──
-IF OBJECT_ID(N'EPH.WideInformationRound',N'U') IS NULL
+-- ── POLOXI.WideInformationRound: one row per information-directed exploration round ──
+IF OBJECT_ID(N'POLOXI.WideInformationRound',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideInformationRound
+	CREATE TABLE POLOXI.WideInformationRound
 	(
-		WideInformationRoundId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideInformationRound PRIMARY KEY,
-		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideInformationRound_Execution REFERENCES EPH.WideExecution(WideExecutionId),
+		WideInformationRoundId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideInformationRound PRIMARY KEY,
+		WideExecutionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideInformationRound_Execution REFERENCES POLOXI.WideExecution(WideExecutionId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		RoundNumber INT NOT NULL,
 		EntropyBefore DECIMAL(9,4) NOT NULL,
@@ -28,26 +28,26 @@ BEGIN
 		NormalizedEntropyAfter DECIMAL(5,4) NULL,
 		ActualInformationGain DECIMAL(9,4) NULL,
 		RawEntropyDelta DECIMAL(9,4) NULL,
-		SelectedTargetCount INT NOT NULL CONSTRAINT DF_EphWideInfoRound_Selected DEFAULT 0,
-		StartedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideInfoRound_Started DEFAULT SYSUTCDATETIME(),
+		SelectedTargetCount INT NOT NULL CONSTRAINT DF_PoloxiWideInfoRound_Selected DEFAULT 0,
+		StartedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideInfoRound_Started DEFAULT SYSUTCDATETIME(),
 		CompletedDateUtc DATETIME2(3) NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideInfoRound_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideInfoRound_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideInfoRound_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideInfoRound_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideInfoRound_Execution ON EPH.WideInformationRound(WideExecutionId,RoundNumber) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideInfoRound_Execution ON POLOXI.WideInformationRound(WideExecutionId,RoundNumber) WHERE IsDeleted=0;
 END;
 
--- ── EPH.WideInformationTarget: one row per evaluated candidate investigation ──
-IF OBJECT_ID(N'EPH.WideInformationTarget',N'U') IS NULL
+-- ── POLOXI.WideInformationTarget: one row per evaluated candidate investigation ──
+IF OBJECT_ID(N'POLOXI.WideInformationTarget',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideInformationTarget
+	CREATE TABLE POLOXI.WideInformationTarget
 	(
-		WideInformationTargetId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideInformationTarget PRIMARY KEY,
-		WideInformationRoundId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideInfoTarget_Round REFERENCES EPH.WideInformationRound(WideInformationRoundId),
-		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideInfoTarget_Branch REFERENCES EPH.WideBranch(WideBranchId),
+		WideInformationTargetId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideInformationTarget PRIMARY KEY,
+		WideInformationRoundId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideInfoTarget_Round REFERENCES POLOXI.WideInformationRound(WideInformationRoundId),
+		WideBranchId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideInfoTarget_Branch REFERENCES POLOXI.WideBranch(WideBranchId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		UncertaintyCode NVARCHAR(20) NOT NULL,
 		RankingImpactCode NVARCHAR(20) NOT NULL,
@@ -60,31 +60,31 @@ BEGIN
 		CalibrationFactor DECIMAL(5,4) NULL,
 		ExpectedRetrievalCost DECIMAL(5,4) NULL,
 		InformationValuePerCost DECIMAL(9,4) NULL,
-		WasSelected BIT NOT NULL CONSTRAINT DF_EphWideInfoTarget_Selected DEFAULT 0,
+		WasSelected BIT NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_Selected DEFAULT 0,
 		SelectionRank INT NULL,
 		EvidenceTarget NVARCHAR(1000) NULL,
 		Rationale NVARCHAR(1000) NULL,
-		PredictedRankingImpactCount INT NOT NULL CONSTRAINT DF_EphWideInfoTarget_PredCount DEFAULT 0,
-		PredictedUpCount INT NOT NULL CONSTRAINT DF_EphWideInfoTarget_PredUp DEFAULT 0,
-		PredictedDownCount INT NOT NULL CONSTRAINT DF_EphWideInfoTarget_PredDown DEFAULT 0,
+		PredictedRankingImpactCount INT NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_PredCount DEFAULT 0,
+		PredictedUpCount INT NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_PredUp DEFAULT 0,
+		PredictedDownCount INT NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_PredDown DEFAULT 0,
 		DirectionAccuracy DECIMAL(5,4) NULL,
 		MagnitudeAccuracy DECIMAL(5,4) NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideInfoTarget_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideInfoTarget_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideInfoTarget_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideInfoTarget_Round ON EPH.WideInformationTarget(WideInformationRoundId) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideInfoTarget_Round ON POLOXI.WideInformationTarget(WideInformationRoundId) WHERE IsDeleted=0;
 END;
 
--- ── EPH.WideInformationPrediction: falsifiable per-candidate ranking predictions ──
-IF OBJECT_ID(N'EPH.WideInformationPrediction',N'U') IS NULL
+-- ── POLOXI.WideInformationPrediction: falsifiable per-candidate ranking predictions ──
+IF OBJECT_ID(N'POLOXI.WideInformationPrediction',N'U') IS NULL
 BEGIN
-	CREATE TABLE EPH.WideInformationPrediction
+	CREATE TABLE POLOXI.WideInformationPrediction
 	(
-		WideInformationPredictionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_EphWideInformationPrediction PRIMARY KEY,
-		WideInformationTargetId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_EphWideInfoPrediction_Target REFERENCES EPH.WideInformationTarget(WideInformationTargetId),
+		WideInformationPredictionId UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_PoloxiWideInformationPrediction PRIMARY KEY,
+		WideInformationTargetId UNIQUEIDENTIFIER NOT NULL CONSTRAINT FK_PoloxiWideInfoPrediction_Target REFERENCES POLOXI.WideInformationTarget(WideInformationTargetId),
 		TenantId UNIQUEIDENTIFIER NOT NULL,
 		CandidateName NVARCHAR(300) NOT NULL,
 		PredictedDirection NVARCHAR(10) NOT NULL,
@@ -97,34 +97,34 @@ BEGIN
 		ActualMagnitude NVARCHAR(10) NULL,
 		DirectionCorrect BIT NULL,
 		MagnitudeCorrect BIT NULL,
-		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_EphWideInfoPrediction_Created DEFAULT SYSUTCDATETIME(),
+		CreatedDateUtc DATETIME2(3) NOT NULL CONSTRAINT DF_PoloxiWideInfoPrediction_Created DEFAULT SYSUTCDATETIME(),
 		CreatedByUserId UNIQUEIDENTIFIER NULL,
 		ModifiedDateUtc DATETIME2(3) NULL,
 		ModifiedByUserId UNIQUEIDENTIFIER NULL,
-		IsDeleted BIT NOT NULL CONSTRAINT DF_EphWideInfoPrediction_Deleted DEFAULT 0
+		IsDeleted BIT NOT NULL CONSTRAINT DF_PoloxiWideInfoPrediction_Deleted DEFAULT 0
 	);
-	CREATE INDEX IX_EphWideInfoPrediction_Target ON EPH.WideInformationPrediction(WideInformationTargetId) WHERE IsDeleted=0;
+	CREATE INDEX IX_PoloxiWideInfoPrediction_Target ON POLOXI.WideInformationPrediction(WideInformationTargetId) WHERE IsDeleted=0;
 END;
 
 -- ── Execution-level entropy/IG columns ──
-IF OBJECT_ID(N'EPH.WideExecution',N'U') IS NOT NULL
+IF OBJECT_ID(N'POLOXI.WideExecution',N'U') IS NOT NULL
 BEGIN
-	IF COL_LENGTH(N'EPH.WideExecution',N'InitialEntropy') IS NULL
-		ALTER TABLE EPH.WideExecution ADD InitialEntropy DECIMAL(9,4) NULL;
-	IF COL_LENGTH(N'EPH.WideExecution',N'FinalEntropy') IS NULL
-		ALTER TABLE EPH.WideExecution ADD FinalEntropy DECIMAL(9,4) NULL;
-	IF COL_LENGTH(N'EPH.WideExecution',N'InitialNormalizedEntropy') IS NULL
-		ALTER TABLE EPH.WideExecution ADD InitialNormalizedEntropy DECIMAL(5,4) NULL;
-	IF COL_LENGTH(N'EPH.WideExecution',N'FinalNormalizedEntropy') IS NULL
-		ALTER TABLE EPH.WideExecution ADD FinalNormalizedEntropy DECIMAL(5,4) NULL;
-	IF COL_LENGTH(N'EPH.WideExecution',N'TotalActualInformationGain') IS NULL
-		ALTER TABLE EPH.WideExecution ADD TotalActualInformationGain DECIMAL(9,4) NULL;
-	IF COL_LENGTH(N'EPH.WideExecution',N'InformationRoundCount') IS NULL
-		ALTER TABLE EPH.WideExecution ADD InformationRoundCount INT NOT NULL CONSTRAINT DF_EphWideExecution_InfoRounds DEFAULT 0;
-	IF COL_LENGTH(N'EPH.WideExecution',N'InformationTargetCount') IS NULL
-		ALTER TABLE EPH.WideExecution ADD InformationTargetCount INT NOT NULL CONSTRAINT DF_EphWideExecution_InfoTargets DEFAULT 0;
-	IF COL_LENGTH(N'EPH.WideExecution',N'InformationRetrievalCount') IS NULL
-		ALTER TABLE EPH.WideExecution ADD InformationRetrievalCount INT NOT NULL CONSTRAINT DF_EphWideExecution_InfoRetrievals DEFAULT 0;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'InitialEntropy') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD InitialEntropy DECIMAL(9,4) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'FinalEntropy') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD FinalEntropy DECIMAL(9,4) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'InitialNormalizedEntropy') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD InitialNormalizedEntropy DECIMAL(5,4) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'FinalNormalizedEntropy') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD FinalNormalizedEntropy DECIMAL(5,4) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'TotalActualInformationGain') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD TotalActualInformationGain DECIMAL(9,4) NULL;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'InformationRoundCount') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD InformationRoundCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_InfoRounds DEFAULT 0;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'InformationTargetCount') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD InformationTargetCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_InfoTargets DEFAULT 0;
+	IF COL_LENGTH(N'POLOXI.WideExecution',N'InformationRetrievalCount') IS NULL
+		ALTER TABLE POLOXI.WideExecution ADD InformationRetrievalCount INT NOT NULL CONSTRAINT DF_PoloxiWideExecution_InfoRetrievals DEFAULT 0;
 END;
 
 -- ── V2.2 configuration settings (DB is the source of truth) ──
@@ -149,7 +149,7 @@ BEGIN
 		(N'Intelligence.SearchWide.InformationNoProgressRounds',N'2',N'Integer',N'Consecutive weak rounds after which exploration stops (INFORMATION_GAIN_STALLED).'),
 		(N'Intelligence.SearchWide.InformationValueLlmWeight',N'0.60',N'Decimal',N'Weight of the LLM categorical estimate inside the final information value.'),
 		(N'Intelligence.SearchWide.InformationValueEvidenceGapWeight',N'0.15',N'Decimal',N'Weight of (1 - evidence coverage) inside the final information value.'),
-		(N'Intelligence.SearchWide.InformationValueBranchWeight',N'0.15',N'Decimal',N'Weight of normalized branch importance (EPH confidence) inside the final information value.'),
+		(N'Intelligence.SearchWide.InformationValueBranchWeight',N'0.15',N'Decimal',N'Weight of normalized branch importance (POLOXI confidence) inside the final information value.'),
 		(N'Intelligence.SearchWide.InformationValueCandidateNeedWeight',N'0.10',N'Decimal',N'Weight of candidate discrimination need (ranking closeness) inside the final information value.'),
 		(N'Intelligence.SearchWide.VeryLowInformationValue',N'0.20',N'Decimal',N'Deterministic numeric value for the VERY_LOW LLM category.'),
 		(N'Intelligence.SearchWide.LowInformationValue',N'0.40',N'Decimal',N'Deterministic numeric value for the LOW LLM category.'),

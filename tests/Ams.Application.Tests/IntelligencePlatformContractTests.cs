@@ -18,13 +18,13 @@ namespace Ams.Application.Tests;
 public sealed class IntelligencePlatformContractTests
 {
     [Fact]
-    public void IntelligentSearchUsingEph_DefinesGovernedDatabaseApiAndUiFlow()
+    public void IntelligentSearchUsingPoloxi_DefinesGovernedDatabaseApiAndUiFlow()
     {
         var assembly=typeof(DatabaseMigrator).Assembly;
-        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0139_IntelligentSearchEph.sql",StringComparison.Ordinal));
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0139_IntelligentSearchPoloxi.sql",StringComparison.Ordinal));
         var sql=Read(assembly,resource);
-        foreach(var table in new[]{"EPH.Capability","EPH.Hierarchy","EPH.HierarchyBranch","EPH.Execution","EPH.ExecutionEvidence"})Assert.Contains(table,sql,StringComparison.OrdinalIgnoreCase);
-        foreach(var feature in new[]{"INTELLIGENCE_EPH_HIERARCHY","INTELLIGENCE_EPH_EXPLANATION"})Assert.Contains(feature,sql,StringComparison.Ordinal);
+        foreach(var table in new[]{"POLOXI.Capability","POLOXI.Hierarchy","POLOXI.HierarchyBranch","POLOXI.Execution","POLOXI.ExecutionEvidence"})Assert.Contains(table,sql,StringComparison.OrdinalIgnoreCase);
+        foreach(var feature in new[]{"INTELLIGENCE_POLOXI_HIERARCHY","INTELLIGENCE_POLOXI_EXPLANATION"})Assert.Contains(feature,sql,StringComparison.Ordinal);
         Assert.Contains("AUTHORIZED_SEARCH_DOCUMENT",sql,StringComparison.Ordinal);
         Assert.Contains("TenantId",sql,StringComparison.Ordinal);
         Assert.Contains("CreatedDateUtc",sql,StringComparison.Ordinal);
@@ -32,20 +32,20 @@ public sealed class IntelligencePlatformContractTests
 
         var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
         var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","IntelligenceService.cs"));
-        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.Eph.cs"));
+        var repository=File.ReadAllText(Path.Combine(root,"src","Ams.Infrastructure","Persistence","Repositories","IntelligenceRepository.Poloxi.cs"));
         var controller=File.ReadAllText(Path.Combine(root,"src","Ams.Api","Controllers","IntelligenceController.cs"));
         var client=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Services","ApiClients.Intelligence.cs"));
-        var page=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Pages","Intelligence","IntelligenceSearchEph.razor"));
+        var page=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Pages","Intelligence","IntelligenceSearchPoloxi.razor"));
         var navigation=File.ReadAllText(Path.Combine(root,"src","Ams.Web","Components","Layout","NavSidebar.razor"));
-        Assert.Contains("INTELLIGENCE_EPH_HIERARCHY",service,StringComparison.Ordinal);
-        Assert.Contains("INTELLIGENCE_EPH_EXPLANATION",service,StringComparison.Ordinal);
+        Assert.Contains("INTELLIGENCE_POLOXI_HIERARCHY",service,StringComparison.Ordinal);
+        Assert.Contains("INTELLIGENCE_POLOXI_EXPLANATION",service,StringComparison.Ordinal);
         Assert.Contains("ValidationStatusCode.Equals(\"VALID\"",service,StringComparison.Ordinal);
         Assert.Contains("AI.SearchPermission",repository,StringComparison.Ordinal);
         Assert.Contains("permission.PrincipalTypeCode=N'USER'",repository,StringComparison.Ordinal);
-        Assert.Contains("HttpPost(\"search/eph\")",controller,StringComparison.Ordinal);
-        Assert.Contains("IntelligentSearchUsingEphAsync",client,StringComparison.Ordinal);
-        Assert.Contains("@page \"/intelligence/search/eph\"",page,StringComparison.Ordinal);
-        Assert.Contains("Intelligent Search Using EPH",navigation,StringComparison.Ordinal);
+        Assert.Contains("HttpPost(\"search/poloxi\")",controller,StringComparison.Ordinal);
+        Assert.Contains("IntelligentSearchUsingPoloxiAsync",client,StringComparison.Ordinal);
+        Assert.Contains("@page \"/intelligence/search/poloxi\"",page,StringComparison.Ordinal);
+        Assert.Contains("Intelligent Search Using POLOXI",navigation,StringComparison.Ordinal);
         Assert.DoesNotContain("ExecuteSql",service,StringComparison.OrdinalIgnoreCase);
     }
 
