@@ -1622,7 +1622,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .OrderBy(token=>token,StringComparer.Ordinal)
                 .ToArray();
         }
-        return string.Join(' ',core.Select(token=>token.ToLowerInvariant()))+"|"+string.Join(' ',qualifierTokens);
+        return string.Join(' ',core.Select(token=>TokenIdentityForm(token).ToLowerInvariant()))+"|"+string.Join(' ',qualifierTokens);
     }
 
     private static bool IsValidCandidateName(string name)
@@ -1652,19 +1652,63 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // a different Mercury entity — a candidate recall loss.
     private static readonly string[] CanonicalNoiseSuffixes=["inc","inc.","llc","corp","corp.","co","co.","ltd","ltd.","company","corporation"];
 
+    // V2.9.6 Candidate Normalization (deterministic, zero-LLM): measurement and packaging
+    // descriptors are not identity — "GARSEN Pool Cue Stick 58 inch" and "GARSEN Pool Cue Stick"
+    // are the SAME candidate, as are "HMQQ Pool Cue Sticks 2-Piece" and "HMQQ Pool Cue Sticks".
+    // Removal is intentionally narrow so genuine model designators survive: a bare number is
+    // stripped ONLY when the following token is a unit word (both go), and self-contained
+    // measurement/count tokens (58", 58in, 2-piece, 3-pack) are stripped on their own.
+    // "Predator 314-3", "9K-1", and "G439" are untouched — no trailing unit word.
+    private static readonly HashSet<string> MeasurementUnitWords=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "inch","inches","in","in.","\"","cm","mm","ft","foot","feet","oz","ounce","ounces","lb","lbs","pound","pounds","gram","grams","g","kg"
+    };
+
+    private static readonly System.Text.RegularExpressions.Regex SelfContainedMeasurementToken=new(
+        @"^\d+(\.\d+)?(""|''|in|inch|inches|cm|mm|ft|oz|lb|lbs|g|kg)$|^\d+[-–]?(piece|pieces|pack|packs|pc|pcs|pk)$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static bool IsBareNumber(string token)=>token.Length>0&&token.All(character=>char.IsDigit(character)||character=='.'||character==',');
+
+    private static string[] StripMeasurementTokens(string[] tokens)
+    {
+        var result=new List<string>(tokens.Length);
+        for(var index=0;index<tokens.Length;index++)
+        {
+            var token=tokens[index].TrimEnd(',');
+            if(SelfContainedMeasurementToken.IsMatch(token))continue;
+            if(IsBareNumber(token)&&index+1<tokens.Length&&MeasurementUnitWords.Contains(tokens[index+1].TrimEnd(',','.')))
+            {
+                index++; // skip the unit word too
+                continue;
+            }
+            result.Add(tokens[index]);
+        }
+        return result.Count==0?tokens:result.ToArray();
+    }
+
     private static string[] CanonicalTokens(string name)
     {
         var core=name.Split('(')[0].Split(',')[0].Trim();
-        return core.Split(' ',StringSplitOptions.RemoveEmptyEntries)
+        var tokens=core.Split(' ',StringSplitOptions.RemoveEmptyEntries)
             .Where(token=>!CanonicalNoiseSuffixes.Contains(token,StringComparer.OrdinalIgnoreCase))
             .ToArray();
+        return StripMeasurementTokens(tokens);
     }
+
+    // V2.9.6: trivial plural folding for IDENTITY COMPARISON only ("Sticks" == "Stick").
+    // Applies to alphabetic tokens longer than 3 characters ending in a single 's' — never
+    // "ss" endings ("Glass") and never alphanumeric model designators ("G439", "9K-1").
+    private static string TokenIdentityForm(string token)=>
+        token.Length>3&&char.IsLetter(token[0])&&token.All(char.IsLetter)
+            &&token.EndsWith('s')&&!token.EndsWith("ss",StringComparison.OrdinalIgnoreCase)
+            ?token[..^1]:token;
 
     private static bool IsTokenPrefix(string[] shorter,string[] longer)
     {
         if(shorter.Length==0||shorter.Length>longer.Length)return false;
         for(var index=0;index<shorter.Length;index++)
-            if(!string.Equals(shorter[index],longer[index],StringComparison.OrdinalIgnoreCase))return false;
+            if(!string.Equals(TokenIdentityForm(shorter[index]),TokenIdentityForm(longer[index]),StringComparison.OrdinalIgnoreCase))return false;
         return true;
     }
 
