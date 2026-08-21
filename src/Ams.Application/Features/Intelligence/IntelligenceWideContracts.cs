@@ -234,7 +234,7 @@ public sealed record WideCandidateContrastDto(string AlternativeDisplayName,deci
 public sealed record WideClarificationOptionDto(string Key,string Label);
 
 // V2.1 Query Contract: separates hard constraints from ambiguous concepts so POLOXI only branches ambiguity.
-public sealed record WideQueryContract(string? EntityType,string? ExpectedAnswerType,string? ExpectedAnswerGranularity,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
 
 // V2.1 candidate competition: a candidate with its composite score and per-branch evidence scores.
 public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string DisplayName,string? Detail,decimal CompositeScore,IReadOnlyCollection<WideCandidateBranchScoreDto> BranchScores)
@@ -388,7 +388,7 @@ public sealed record WideInterpretiveResultItem(int RankNumber,string Name,strin
 public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,string Rationale);
 
 // V2.1 LLM structured outputs.
-public sealed record WideQueryContractProposal(string? EntityType,string? ExpectedAnswerType,string? ExpectedAnswerGranularity,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+public sealed record WideQueryContractProposal(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
 
 public sealed record WideCandidateScoringProposal(IReadOnlyCollection<WideCandidateScore> Candidates);
 
