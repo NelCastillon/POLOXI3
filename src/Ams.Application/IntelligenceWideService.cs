@@ -167,6 +167,48 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     }
     private static string NormalizeCode(string value)=>new(value.Trim().ToUpperInvariant().Select(character=>char.IsLetterOrDigit(character)?character:'_').ToArray());
     private static string NormalizeQuery(string query)=>string.Join(' ',query.Trim().Split((char[]?)null,StringSplitOptions.RemoveEmptyEntries));
+
+    // V3.5 Candidate-Seeking Retrieval Queries: the previous retrieval query was the FULL user query
+    // (often a multi-sentence paragraph) concatenated with the branch name. Long conversational
+    // queries return generic advice articles that name few concrete entities, so candidate discovery
+    // starved (3 candidates for a nationwide search space) and few deciding factors were evidence-
+    // backed (LIMITED EVIDENCE). Search engines reward short keyword queries that match listicle
+    // titles ("best cities software developer buy home good schools"). Deterministic distillation:
+    // keep content keywords of the query (stopwords/filler dropped, first-seen order, capped),
+    // append the branch display name VERBATIM - ComputeEvidenceSupport matches snippets to branches
+    // via snippet.Query.Contains(branch.DisplayName), so the branch name must survive intact.
+    private static string BuildCandidateSeekingQuery(string query,string branchDisplayName)
+    {
+        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keywords=new List<string>();
+        foreach(var raw in query.Split([' ','\t','\n','\r',',',';','/','(',')',':','.','?','!','"','\''],StringSplitOptions.RemoveEmptyEntries))
+        {
+            var token=raw.Trim('-','—','$');
+            if(token.Length<3||RetrievalQueryStopwords.Contains(token))continue;
+            if(!seen.Add(token))continue;
+            keywords.Add(token);
+            if(keywords.Count==8)break;
+        }
+        var distilled=keywords.Count==0?NormalizeQuery(query):string.Join(' ',keywords);
+        return NormalizeQuery($"{distilled} {branchDisplayName}").ToLowerInvariant();
+    }
+
+    // V3.5: conversational filler that never helps a keyword search. Content words (city, housing,
+    // crime, developer, numbers, place names) always survive.
+    private static readonly HashSet<string> RetrievalQueryStopwords=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the","and","for","with","that","this","these","those","them","they","their","there","then",
+        "what","which","when","where","who","whom","whose","why","how","would","could","should","shall",
+        "will","can","may","might","must","have","has","had","having","are","was","were","been","being",
+        "not","but","however","although","though","while","because","since","about","into","onto","upon",
+        "from","over","under","between","among","during","before","after","above","below","some","any",
+        "all","every","each","both","few","more","most","other","another","such","very","really","quite",
+        "rather","also","too","than","like","want","wants","wanted","need","needs","needed","prefer",
+        "prefers","preferred","consider","considering","assume","tell","give","please","currently",
+        "planning","plan","looking","somewhere","overall","good","best","strong","reasonable","quality",
+        "manageable","important","equally","factor","factors","trade-offs","tradeoffs","candidates",
+        "rather","instead","us","our","we","you","your","she","he","its"
+    };
     private static void Validate(object request){var context=new ValidationContext(request);Validator.ValidateObject(request,context,true);foreach(var property in request.GetType().GetProperties().Where(x=>x.PropertyType==typeof(Guid))){if((Guid)(property.GetValue(request)??Guid.Empty)==Guid.Empty)throw new ValidationException($"{property.Name} is required.");}}
 
     // ---------------------------------------------------------------------------------------------------
@@ -448,6 +490,31 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // No LLM call — this gives the information rounds a real candidate universe up front so
             // Information Gain targets "which candidate wins" from round 1, not after competition.
             candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
+            // V3.5 Candidate Enumeration Seeding: one cheap LLM call lists concrete candidates for the
+            // query so the universe is never limited to the handful of names the initial snippets
+            // happened to mention (nationwide search spaces were reaching competition with 3 names).
+            // Seeds are UNTRUSTED (mini-tier model): each passes the deterministic validity filters
+            // here and still has to earn evidence support at the existing admission gates - the gates
+            // are never lowered. A short verification retrieval per seed batch gives real seeds the
+            // chance to accumulate the host support the gates require. Fail-soft: enumeration or
+            // verification failure degrades to the harvested universe.
+            if(configuration.EnableInformationValue)
+            {
+                var seeds=await EnumerateCandidateSeedsAsync(request,queryContract,cancellationToken);
+                var queryTopicSeedTokens=BuildQueryTopicTokens(request.Query);
+                var validSeeds=seeds.Where(seed=>IsValidCandidateName(seed)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
+                if(validSeeds.Length>0)
+                {
+                    candidateUniverse.UnionWith(validSeeds);
+                    var verification=await GatherSeedVerificationKnowledgeAsync(request,executionId,validSeeds,cancellationToken);
+                    if(verification.Count>0)
+                    {
+                        var knownUrls=externalKnowledgeAll.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        externalKnowledgeAll.AddRange(verification.Where(snippet=>!knownUrls.Contains(snippet.Url)));
+                        candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
+                    }
+                }
+            }
             var initialEntropy=ComputeUncertainty(configuration,survivorsFinal,candidateUniverse,evidence,externalKnowledgeAll,queryContract);
             var finalEntropy=initialEntropy;
             if(configuration.EnableInformationValue&&survivorsFinal.Length>0)
@@ -1101,7 +1168,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 await retrievalGate.WaitAsync(cancellationToken);
                 try
                 {
-                    var query=NormalizeQuery($"{request.Query} {branch.DisplayName}").ToLowerInvariant();
+                    var query=BuildCandidateSeekingQuery(request.Query,branch.DisplayName);
                     var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
                     if(cached.Count>0){results[index]=cached.Take(configuration.MaximumSnippetsPerQuery).ToArray();return;}
                     var retrieved=await externalKnowledgeProvider.SearchAsync(query,configuration,cancellationToken);
@@ -1793,6 +1860,79 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
         }
         if(current.Count>0)yield return string.Join(' ',current);
+    }
+
+    // V3.5 enumeration seeding: one cheap LLM call naming concrete candidates. Enumeration is the one
+    // task mini-tier models do reliably; output is untrusted and every seed faces the deterministic
+    // filters and evidence gates downstream. Fail-soft: any failure returns an empty list.
+    private async Task<IReadOnlyCollection<string>> EnumerateCandidateSeedsAsync(WideSearchRequest request,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var contractContext=queryContract is null?"(none)":$"entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
+                "You are the POLOXI candidate enumerator. List the concrete, real-world named entities (specific cities, companies, products, institutions - never categories, criteria, approaches, or descriptions) that are commonly considered strong candidates for the question. Return 15 to 20 distinct names. Each name must be a specific proper noun exactly as commonly written (e.g. 'Raleigh, North Carolina'). Never include methodology labels, judging criteria, or attribute phrases.",
+                $"Question: {request.Query}\nQuery contract: {contractContext}",
+                CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideCandidateEnumerationProposal>(result.Content,JsonOptions);
+            return proposal?.Candidates?.Where(name=>!string.IsNullOrWhiteSpace(name)).Select(name=>name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()??[];
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
+    }
+
+    private sealed record WideCandidateEnumerationProposal(IReadOnlyList<string>? Candidates);
+
+    private const string CandidateEnumerationSchema="""
+{
+  "type": "object",
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["candidates"],
+  "additionalProperties": false
+}
+""";
+
+    // V3.5 seed verification retrieval: a few short comparative queries covering the seed batch so
+    // legitimate seeds can accumulate the multi-host evidence support the admission gates require.
+    // Batched (4 seeds per query, max 5 queries) to bound provider cost. Fail-soft per query.
+    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherSeedVerificationKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<string> seeds,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var configuration=await wideRepository.GetExternalGroundingConfigurationAsync(request.TenantId,cancellationToken);
+            if(!configuration.Enabled||string.IsNullOrWhiteSpace(configuration.ApiKey))return [];
+            var notBeforeUtc=DateTime.UtcNow.AddHours(-configuration.CacheHours);
+            var topic=BuildCandidateSeekingQuery(request.Query,string.Empty);
+            var batches=seeds.Chunk(4).Take(5).ToArray();
+            var collected=new List<WideExternalKnowledgeSnippet>();
+            foreach(var batch in batches)
+            {
+                try
+                {
+                    var query=NormalizeQuery($"{string.Join(" vs ",batch)} {topic} comparison").ToLowerInvariant();
+                    var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
+                    if(cached.Count>0){collected.AddRange(cached.Take(configuration.MaximumSnippetsPerQuery));continue;}
+                    var retrieved=await externalKnowledgeProvider.SearchAsync(query,configuration,cancellationToken);
+                    if(retrieved.Count==0)continue;
+                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,executionId,cancellationToken);
+                    collected.AddRange(retrieved);
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* one failed batch never blocks the rest */}
+            }
+            return collected;
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
     }
 
     // One BATCHED call estimates information value for all eligible branches, including falsifiable
