@@ -2,7 +2,7 @@ namespace Ams.Application.Abstractions.Intelligence;
 
 public interface IAiProviderRouter
 {
-    Task<AiGenerationResult> GenerateAsync(Guid tenantId,string featureCode,string systemPrompt,string userPrompt,string? outputSchemaJson,string correlationId,AiExecutionContext? executionContext=null,CancellationToken cancellationToken=default);
+    Task<AiGenerationResult> GenerateAsync(Guid tenantId,string featureCode,string systemPrompt,string userPrompt,string? outputSchemaJson,string correlationId,AiExecutionContext? executionContext=null,string? modelCodeOverride=null,CancellationToken cancellationToken=default);
     Task<AiEmbeddingResult> CreateEmbeddingAsync(Guid tenantId,string featureCode,IReadOnlyCollection<string> inputs,string correlationId,CancellationToken cancellationToken=default);
 }
 
@@ -14,7 +14,7 @@ public sealed class AiProviderUnavailableException:Exception
 
 public interface IAiProviderRouteRepository
 {
-    Task<IReadOnlyCollection<AiProviderRoute>> GetRoutesAsync(Guid tenantId,string featureCode,string capabilityCode,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<AiProviderRoute>> GetRoutesAsync(Guid tenantId,string featureCode,string capabilityCode,string? modelCodeOverride=null,CancellationToken cancellationToken=default);
     Task<AiSafetyPolicy> GetSafetyPolicyAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task RecordSafetyEventAsync(AiSafetyEventRecord safetyEvent,CancellationToken cancellationToken=default);
     Task RecordExecutionAsync(AiExecutionRecord execution,CancellationToken cancellationToken=default);

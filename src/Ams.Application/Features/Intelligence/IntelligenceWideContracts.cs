@@ -32,7 +32,13 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // execution row - the client-carried fields above become legacy fallbacks only. This is the
     // continuation token for API productization: tamper-proof, tenant-scoped, replayable.
     public Guid? ParentWideExecutionId{get;init;}
+    // Model selection: null/empty = Auto (feature-policy primary/fallback routing); otherwise an
+    // active CHAT AI.ModelDeployment.ModelCode the pipeline routes every LLM call through.
+    [StringLength(100)]public string? ModelCode{get;init;}
 }
+
+// Database-backed model option for the wide-search Model dropdown (active CHAT deployments).
+public sealed record WideModelOptionDto(string ModelCode,string DeploymentName,string? ModelFamily);
 
 // V3.4: continuation state loaded server-side from POLOXI.WideExecution (tenant-scoped).
 // Null when the parent id does not exist for the tenant - the service falls back to client fields.
@@ -151,6 +157,13 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // and whether kind-aware budget routing actually tuned this execution's workflow.
     public string? AnswerKindCode{get;init;}
     public bool AnswerKindRoutingApplied{get;init;}
+    // Actual provider/model that composed the final answer (resolved by the router: explicit override or Auto route).
+    public string? ProviderCodeUsed{get;init;}
+    public string? ModelCodeUsed{get;init;}
+    // Raw first LLM result: the ranked list the selected model returns for the PLAIN query in a single
+    // shot — exactly as if the user prompted the model's own chat interface. Captured in parallel with
+    // the POLOXI pipeline for comparison only; never evidence-weighted, filtered, or competed.
+    public IReadOnlyCollection<WideInterpretiveResultItemDto> LlmRawItems{get;init;}=[];
     // V2.1: cross-branch candidate competition results (composite ranking honoring hard constraints).
     public IReadOnlyCollection<WideCandidateDto> Candidates{get;init;}=[];
     // V2.1: share of surviving branches supported by at least one evidence item (external or enterprise).
@@ -361,7 +374,16 @@ public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string
     public int TotalSupportCount{get;init;}
 }
 
-public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore);
+public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore)
+{
+    // V3.5 hierarchical roll-up: when the dimension had scored child branches, EvidenceScore is the
+    // blended roll-up and DirectScore preserves the model's flat parent-level judgment for disclosure.
+    public decimal? DirectScore{get;init;}
+    // Child (next-level) branch scores that fed the roll-up, with each child's PoloxiConfidence weight.
+    public IReadOnlyCollection<WideCandidateChildScoreDto> ChildScores{get;init;}=[];
+}
+
+public sealed record WideCandidateChildScoreDto(string BranchDisplayName,decimal EvidenceScore,decimal Confidence);
 
 public sealed record WideExternalReferenceDto(string Title,string Url,string Source,string Summary,string BranchDisplayName);
 

@@ -6,6 +6,8 @@ namespace Ams.Application.Abstractions.Persistence;
 public interface IIntelligenceWideRepository
 {
     Task<WideConfiguration> GetWideConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    // Active CHAT model deployments selectable on the wide-search page (tenant-scoped or platform-wide).
+    Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<Guid> StartWideExecutionAsync(WideExecutionStart start,CancellationToken cancellationToken=default);
     Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default);
     Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default);

@@ -178,7 +178,7 @@ public sealed class DocumentOcrPromptPreparationTests
         private int _index;
         public List<string> UserPrompts { get; } = [];
 
-        public Task<AiGenerationResult> GenerateAsync(Guid tenantId, string featureCode, string systemPrompt, string userPrompt, string? outputSchemaJson, string correlationId, AiExecutionContext? executionContext = null, CancellationToken cancellationToken = default)
+        public Task<AiGenerationResult> GenerateAsync(Guid tenantId, string featureCode, string systemPrompt, string userPrompt, string? outputSchemaJson, string correlationId, AiExecutionContext? executionContext = null, string? modelCodeOverride = null, CancellationToken cancellationToken = default)
         {
             UserPrompts.Add(userPrompt);
             var output = outputs[Math.Min(_index++, outputs.Length - 1)];
@@ -194,7 +194,7 @@ public sealed class DocumentOcrPromptPreparationTests
         public Task<AiSafetyPolicy> GetSafetyPolicyAsync(Guid tenantId, CancellationToken cancellationToken = default)
             => Task.FromResult(new AiSafetyPolicy(maximumInputCharacters, 20_000, []));
 
-        public Task<IReadOnlyCollection<AiProviderRoute>> GetRoutesAsync(Guid tenantId, string featureCode, string capabilityCode, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyCollection<AiProviderRoute>> GetRoutesAsync(Guid tenantId, string featureCode, string capabilityCode, string? modelCodeOverride = null, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyCollection<AiProviderRoute>>([new(tenantId, featureCode, "TEST", "TEST", "TEST_MODEL", "test", null, null, null, 30, 0, 1_000, 0, false)]);
 
         public Task RecordSafetyEventAsync(AiSafetyEventRecord safetyEvent, CancellationToken cancellationToken = default)

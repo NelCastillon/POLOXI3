@@ -15,6 +15,11 @@ namespace Ams.Application;
 // tweaked freely without changing /intelligence/search/poloxi behavior.
 public sealed class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider):IIntelligenceWideService
 {
+    // Model selection: null/whitespace = Auto (feature-policy routing); otherwise route every wide LLM call through the requested model.
+    private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)?null:request.ModelCode.Trim();
+
+    public Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetWideModelsAsync(tenantId,cancellationToken);
+
     public async Task<PoloxiSearchResponse> SearchWithPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken cancellationToken=default)
     {
         Validate(request);
@@ -58,7 +63,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             try
             {
                 var grounding=string.Join('\n',ranked.Take(12).Select((item,index)=>$"[{index+1}] {item.Title} ({string.Join(", ",item.MatchedBranches)}): {item.Excerpt}"));
-                var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_EXPLANATION","Explain only the supplied authorized POLOXI evidence. Cite evidence numbers in brackets. Clearly state unsupported hierarchy branches and never invent facts.",$"Question: {request.Query}\nValidated concept: {hierarchy.DisplayName}\nEvidence:\n{grounding}",null,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_EVIDENCE",executionId,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_EXPLANATION","Explain only the supplied authorized POLOXI evidence. Cite evidence numbers in brackets. Clearly state unsupported hierarchy branches and never invent facts.",$"Question: {request.Query}\nValidated concept: {hierarchy.DisplayName}\nEvidence:\n{grounding}",null,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_EVIDENCE",executionId,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
                 explanation=result.Content;
                 explanationStatus="COMPLETED";
             }
@@ -136,7 +141,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 }
 """;
         var catalog=string.Join('\n',capabilities.Select(capability=>$"{capability.CapabilityCode}: {capability.Description}; approved terms: {string.Join(", ",capability.ApprovedTerms)}; recency: {capability.SupportsRecency}"));
-        var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY","Propose a concise enterprise progressive hierarchy at most two levels deep. Top-level branches are broad entry points; child branches must progressively narrow their parent toward a more specific subset (for example a status, lifecycle stage, or qualifier of the parent), and children must always have empty children arrays. A child narrows the same entity type as its parent and its results are intersected with the parent results, so only nest when top-down narrowing genuinely applies. You may invent reasoning branches, but map a branch to a capabilityCode only when the supplied catalog can ground it. Use null capabilityCode for unsupported branches. Never produce SQL or claim records exist.",$"Question: {request.Query}\nMaximum branches: {configuration.MaximumBranches}\nApproved capability catalog:\n{catalog}",schema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_HIERARCHY",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+        var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY","Propose a concise enterprise progressive hierarchy at most two levels deep. Top-level branches are broad entry points; child branches must progressively narrow their parent toward a more specific subset (for example a status, lifecycle stage, or qualifier of the parent), and children must always have empty children arrays. A child narrows the same entity type as its parent and its results are intersected with the parent results, so only nest when top-down narrowing genuinely applies. You may invent reasoning branches, but map a branch to a capabilityCode only when the supplied catalog can ground it. Use null capabilityCode for unsupported branches. Never produce SQL or claim records exist.",$"Question: {request.Query}\nMaximum branches: {configuration.MaximumBranches}\nApproved capability catalog:\n{catalog}",schema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_HIERARCHY",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
         var proposal=JsonSerializer.Deserialize<PoloxiHierarchyProposal>(result.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new ValidationException("The POLOXI hierarchy response was empty.");
         return (proposal,result.ProviderCode,result.ModelCode);
     }
@@ -270,6 +275,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var terminationReason="LLM_COMPLETE";
         var aggregateConfidence=0m;
         var poloxiRequest=new PoloxiSearchRequest(request.TenantId,request.UserId,request.Query,request.MaximumResults,request.CorrelationId){GrantedPermissions=request.GrantedPermissions};
+        // Raw first LLM result: fire the PLAIN query at the selected model in parallel — exactly what the
+        // user would get from the model's own chat interface, before POLOXI touches anything. Comparison
+        // only; fail-soft so a raw-call failure never blocks the POLOXI answer.
+        var llmRawTask=GetRawLlmRankingAsync(request,cancellationToken);
         try
         {
             // Stage 0 (V2.1): Query Contract — separate hard constraints, output requirements, and the
@@ -769,9 +778,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var scorePersistTask=wideRepository.UpdateWideBranchScoresAsync(request.TenantId,survivorsFinal.Select(branch=>new WideBranchScoreUpdate(branch.WideBranchId,branch.BranchStateCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.PoloxiConfidence)).ToArray(),cancellationToken);
             WideAnswerProposal answer;
             var answerStatus="COMPLETED";
+            string? providerCodeUsed=null,modelCodeUsed=null;
             try
             {
-                answer=await ComposeAnswerAsync(request,survivorsFinal,ranked,aggregateConfidence,externalKnowledge,queryContract,cancellationToken);
+                (answer,providerCodeUsed,modelCodeUsed)=await ComposeAnswerAsync(request,survivorsFinal,ranked,aggregateConfidence,externalKnowledge,queryContract,cancellationToken);
                 llmCalls++;
             }
             catch(Exception exception) when(exception is AiProviderUnavailableException or TimeoutException)
@@ -851,6 +861,18 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     }
                 }
                 outputContract=new(contractCount,deliveredCount,deliveredCount>=contractCount){RecoveryAttempted=recoveryAttempted};
+            }
+            // V3.6 Fix A: once the Candidate Competition has produced evidence-weighted quality scores,
+            // the reported final uncertainty must reflect the RESOLVED competition — the winner-
+            // probability entropy of the quality distribution — not the saturated mention-signal
+            // entropy (which stays ~100% whenever every well-known candidate has abundant evidence).
+            // Only adopt the outcome entropy when it is an improvement; it must never claim MORE
+            // uncertainty than the evidence-signal measurement already established.
+            if(candidates.Count>1)
+            {
+                var outcomeEntropy=ComputeCompetitionOutcomeEntropy(candidates);
+                if(outcomeEntropy.EligibleBranchCount>1&&outcomeEntropy.NormalizedEntropy<finalEntropy.NormalizedEntropy)
+                    finalEntropy=outcomeEntropy;
             }
             // V2.1 evidence metrics: coverage = share of surviving branches supported by any evidence.
             var coveredBranches=survivorsFinal.Count(branch=>branch.EvidenceSupport>0);
@@ -1066,7 +1088,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask};
         }
         catch
         {
@@ -1087,18 +1109,40 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                 "Answer the user's question directly using your own knowledge. Enterprise grounding is disabled for this request, so no enterprise data was retrieved or validated. Set verificationCode to INTERPRETIVE. Clearly note the answer is not verified against enterprise data. Suggested actions must be generic navigation suggestions only; never invent record identifiers. Also provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source, a one-sentence summary, and branchDisplayName set to the question topic. Return an empty array when no trustworthy reference exists. Also provide interpretiveResults: one entry answering the question topic with branchDisplayName set to the question topic, interpretation restating the question, and items: the actual, complete ranked result set the question asks for (rankNumber, name, one-sentence detail). Each item name must be the MOST SPECIFIC individual entity the question asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the question explicitly asks for brands. Return an empty interpretiveResults array only when the question does not ask for a ranked or enumerable result. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified.",
                 $"Question: {request.Query}",
-                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_ONLY",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_ONLY",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide LLM-only answer response was empty.");
             var confidence=Math.Clamp(answer.Confidence,0,1);
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"COMPLETED","LLM_ONLY",0,1,confidence,"INTERPRETIVE",string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,timer.ElapsedMilliseconds,cancellationToken);
-            return new(executionId,request.Query,"COMPLETED","LLM_ONLY",0,1,confidence,"INTERPRETIVE",string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,[],[],answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=MapInterpretiveResults(answer,[],[])};
+            return new(executionId,request.Query,"COMPLETED","LLM_ONLY",0,1,confidence,"INTERPRETIVE",string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer,[],[],answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=MapInterpretiveResults(answer,[],[]),ProviderCodeUsed=result.ProviderCode,ModelCodeUsed=result.ModelCode,LlmRawItems=(answer.InterpretiveResults??[]).FirstOrDefault(entry=>entry.Items is{Count:>0})?.Items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim())).ToArray()??[]};
         }
         catch
         {
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"FAILED","LLM_ONLY",0,1,0m,"NONE",null,timer.ElapsedMilliseconds,cancellationToken);
             throw;
+        }
+    }
+
+    // Raw first LLM result for the POLOXI comparison table: one single-shot call carrying ONLY the plain
+    // user query — no query contract, no branches, no evidence, no constraints — so the returned ranking
+    // is exactly what the model itself would answer in its own chat interface. Fail-soft: any failure
+    // returns an empty list and never disturbs the POLOXI pipeline.
+    private async Task<IReadOnlyCollection<WideInterpretiveResultItemDto>> GetRawLlmRankingAsync(WideSearchRequest request,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
+                "Answer the user's question directly using only your own knowledge, exactly as you would in a normal chat conversation. Do not ask clarifying questions; resolve any ambiguity yourself the way you naturally would. Set verificationCode to INTERPRETIVE. Provide interpretiveResults: exactly one entry with branchDisplayName set to the question topic, interpretation restating how you understood the question, and items: your actual ranked answer list in your own preferred order (rankNumber, name, one-sentence detail). Return an empty interpretiveResults array only when the question does not ask for a ranked or enumerable result. Leave externalReferences empty and suggestedActions empty.",
+                $"Question: {request.Query}",
+                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_RAW",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions);
+            var items=(answer?.InterpretiveResults??[]).FirstOrDefault(entry=>entry.Items is{Count:>0})?.Items;
+            return items is null?[]:items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim())).ToArray();
+        }
+        catch
+        {
+            return [];
         }
     }
 
@@ -1130,7 +1174,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
             "You disambiguate an ambiguous enterprise question by dynamically constructing a problem-specific hierarchy. Propose the top level: distinct interpretation branches of the question. Branches are NOT limited to the supplied capability catalog - general, industry, and conceptual interpretations are allowed. Map capabilityCode only when the catalog can genuinely ground the branch against enterprise data; otherwise use null. For each branch set continueNarrowing=true when a meaningfully narrower sub-level exists, otherwise false with a stopReason of FULLY_DISAMBIGUATED, NO_FURTHER_RELEVANT_SUBDIVISION, EVIDENCE_SUFFICIENT, or INTERPRETATION_EXHAUSTED. Confidence per branch must be CALIBRATED, not defaulted: it expresses how likely this interpretation matches what the user actually meant, so branches must be differentiated - the most plausible mainstream interpretation scores highest and niche or speculative interpretations score lower. Never assign the same confidence to every branch and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. For each branch also set semanticType using this strict test: could TWO sibling branches BOTH be true/relevant to the final answer at the same time? If yes, they are DIMENSION (jointly valid evaluation criteria - for example quality of life AND affordability AND jobs AND education for a best-city question; there does not need to be a winner among them). Only when selecting one branch makes its siblings incorrect interpretations of the same unknown (for example an incoming document is a claim OR renewal OR endorsement OR cancellation) are they ALTERNATIVE. When in doubt for ranking, comparison, or best-of questions, prefer DIMENSION. Never claim records exist and never produce SQL.",
             $"Ambiguous question: {request.Query}{contractContext}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
-            IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
 
@@ -1145,7 +1189,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
             "Continue a dynamic problem-specific disambiguation hierarchy. For each surviving parent branch, propose narrower child branches that progressively move toward a more specific subset of the parent interpretation, informed by the parent's enterprise grounding outcome (evidence counts and samples supplied). Set parentBranchCode to the exact parent branchCode. Children of grounded parents should stay in the same entity type so evidence can be intersected. Branches are not limited to the capability catalog; map capabilityCode only when the catalog genuinely grounds the child, otherwise null. Set continueNarrowing=false with a stopReason when no meaningfully narrower relevant subdivision remains - do not invent depth for its own sake. Confidence per child must be CALIBRATED, not defaulted: it expresses how likely this narrower interpretation matches the user's actual intent given the parent, so siblings must be differentiated - the most plausible subdivision scores highest and speculative ones score lower. A child may not exceed its parent's confidence, never assign the same confidence to every sibling, and never use 1.0; interpretive branches without enterprise grounding are capped at 0.9. For each child also set semanticType using this strict test: could TWO sibling children BOTH be true/relevant to the final answer at the same time? If yes, they are DIMENSION (jointly valid evaluation criteria such as affordability, safety, healthcare, or quality of life - there does not need to be a winner among them). Only when selecting one child makes its siblings incorrect interpretations of the same unknown are they ALTERNATIVE. When in doubt for ranking, comparison, or best-of questions, prefer DIMENSION. Never claim records exist and never produce SQL.",
             $"Original question: {request.Query}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {configuration.MaximumBranchesPerLevel}\nSurviving parent branches with grounding outcomes:\n{parentSummary}\nApproved capability catalog (for optional grounding):\n{catalog}",
-            LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+            LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
     }
 
@@ -1191,7 +1235,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }
     }
 
-    private async Task<WideAnswerProposal> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<PoloxiEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    private async Task<(WideAnswerProposal Proposal,string ProviderCode,string ModelCode)> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<PoloxiEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         // V2.1: hard constraints from the query contract are non-negotiable in the final answer.
         var contractContext=queryContract is null||queryContract.HardConstraints.Count==0?string.Empty:
@@ -1231,8 +1275,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
             "Compose the final answer of a progressive disambiguation pipeline. First judge each supplied enterprise evidence item: include its number in relevantEvidenceNumbers ONLY when the record genuinely answers or supports the question. Keyword search can match superficially (for example a name token matching an unrelated email address); such items are irrelevant and must be excluded. Statements supported by relevant evidence must cite evidence numbers in brackets. Reasoning not supported by evidence must be explicitly labeled as interpretation not verified against enterprise data. Set verificationCode to VERIFIED when the answer is fully evidence-backed, PARTIALLY_VERIFIED when mixed, INTERPRETIVE when no relevant evidence supports it. Suggested actions must be navigation suggestions only, using routes present in the evidence when available; never invent record identifiers. Additionally, for the supplied numbered interpretive narrowing paths, provide externalReferences: up to 6 real-world reference links from your knowledge that best answer the question along those paths. Each reference needs title, a well-known REAL absolute https URL (official sites, Wikipedia, or authoritative organizations only - never invent or guess deep links; prefer stable root/wiki pages you are certain exist), source (site or organization name), a one-sentence summary, and branchDisplayName set to the interpretive path it supports. If no trustworthy real-world reference exists, return an empty externalReferences array. Additionally provide interpretiveResults: the supplied interpretive narrowing paths are NUMBERED; you MUST return exactly one interpretiveResults entry for EVERY numbered path in the same order - if N numbered paths are supplied, return exactly N entries; never skip, merge, or summarize paths, and verify the entry count equals the path count before responding. For each path, directly answer that path's interpretation text using your own knowledge and return the actual, complete result set it asks for (for example, when the interpretation asks for a top 5 ranking, return all 5 ranked entries). Each interpretiveResults entry needs branchDisplayName set to the exact path display name, interpretation echoing the path interpretation text, and items: the complete ranked result set with rankNumber (1-based), name, and detail: a rich 2-3 sentence explanation covering WHY the item holds that rank, its most distinguishing attributes or specifications, and its main strength plus one notable trade-off or limitation compared to adjacent ranks. Each item name must be the MOST SPECIFIC individual entity the interpretation asks about - a concrete product model, title, or named instance (for example 'Predator P3 REVO', not 'Predator') - never just a brand, manufacturer, or category unless the interpretation explicitly asks for brands; when a brand is relevant, include it as part of the specific item name. This is interpretive knowledge, not enterprise data; never leave items empty when the interpretation asks for a ranked or enumerable result. Return an empty interpretiveResults array only when no interpretive paths are supplied. For each interpretiveResults entry also set dataVolatility: TIME_SENSITIVE when the result depends on current prices, interest rates, market rankings, availability, versions, or other facts that change over months; STABLE when the knowledge is durable. For TIME_SENSITIVE entries, unless external evidence snippets are supplied for that path, do NOT state specific prices, rates, percentages, model years, or numeric rankings from memory - instead describe the evaluation criteria, comparison factors, and where current figures can be verified. When external evidence snippets ARE supplied (the numbered E1..En list), you MUST extract and state the concrete figures from them: each item detail on an externally grounded TIME_SENSITIVE path must include the actual number the interpretation asks about (for example the MPG/MPGe rating, price in dollars, interest rate percentage, or ranking score) followed by the snippet citation in the form [E3]. Never replace available figures with vague qualifiers like 'great mileage' or 'excellent economy' - if a snippet states 57 MPG, write '57 MPG combined [E2]'. Only when the snippets genuinely contain no figure for a specific item may the detail fall back to criteria language, and it must then say the figure was not found in the retrieved sources. Finally provide candidateInsights: one entry per ranked candidate entity discussed in the answer, with candidateName echoing the candidate's name, bestFor (one short buyer-facing phrase describing what the candidate is genuinely best for based on the supplied material, or null), praisedFor (up to 4 short recurring strength themes such as 'Performance' or 'Build quality' that the supplied evidence, snippets, or result-set details actually support), and watchOutFor (up to 4 short recurring complaint or limitation themes the supplied material actually supports, such as 'Battery life' or 'Fan noise'). These themes are GROUNDED summaries, never inventions: only include a theme when the supplied enterprise evidence, external snippets, or interpretive result details genuinely mention or support it, and never present a low ranking score as a product flaw. Return empty arrays and a null bestFor when nothing in the supplied material supports themes for a candidate; return an empty candidateInsights array when there are no ranked candidate entities. RANKING LOCK: you do NOT decide the final ranking. The final ordered ranking of candidate entities is computed deterministically by the engine after your response and is authoritative. In the answer text NEVER output your own numbered or ordered ranking of candidate entities, never declare a #1/winner/best overall candidate, and never state that one candidate ranks above another; instead explain the evidence, criteria, and characteristics in prose. Interpretive result sets for the numbered narrowing paths are exempt: return their items as instructed.",
             userPrompt,
-            AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
-        return JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty.");
+            AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+        return (JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty."),result.ProviderCode,result.ModelCode);
     }
 
     private static WideBranchRecord[] MaterializeBranches(IReadOnlyCollection<WideProposedBranch> proposed,Guid executionId,Guid tenantId,int levelNumber,IReadOnlyDictionary<string,WideBranchRecord> parentsByCode,WideConfiguration configuration)=>
@@ -1596,7 +1640,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. answerKind: classify what the requested ANSWER ITEMS are — ENTITY_RANKING when the user asks to rank/compare/list NAMED, INDEPENDENTLY VERIFIABLE ENTITIES (cities, companies, products, schools, people); CONTENT_ENUMERATION when the requested items are PIECES OF CONTENT to be produced or compiled (exam questions, interview questions, tips, steps, examples, quotes, topics, ideas) — 'top 100 questions that come out in an exam' is CONTENT_ENUMERATION because each item is a question text, not a named entity; SINGLE_ANSWER when one direct answer is requested. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. Name references: 'called X' or 'named X' means the entity is COMMONLY KNOWN AS X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; phrase such constraints as 'commonly known as X', NEVER as 'name is exactly X'. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
                 $"Question: {request.Query}",
-                QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
             return new(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]){AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind)};
@@ -1631,6 +1675,23 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         var signals=ComputeCandidateSignals(candidateNames,evidence,knowledge).Values.Select(value=>Math.Max(value,.0001m)).ToArray();
         return EntropyFromValues(signals,WideEntropyBases.Candidate);
+    }
+
+    // V3.6 Fix A — competition-outcome entropy: mention-signal entropy saturates near 100% for
+    // well-known candidates (every city is mentioned everywhere, so signals are nearly uniform) and
+    // says "all candidates have evidence" rather than "we do not know who wins". After the Candidate
+    // Competition produces evidence-weighted quality scores, the true remaining uncertainty is the
+    // entropy of the WINNER-probability distribution. Quality scores are converted to winner
+    // probabilities via softmax with a sharpening temperature so real quality gaps (75% vs 52%)
+    // translate into genuinely lower measured uncertainty. Deterministic and zero-LLM.
+    private static WideEntropyResult ComputeCompetitionOutcomeEntropy(IReadOnlyCollection<WideCandidateDto> candidates)
+    {
+        const double Temperature=.1;
+        var qualities=candidates.Where(candidate=>!candidate.IsConstraintViolation).Select(candidate=>(double)candidate.QualityScore).ToArray();
+        if(qualities.Length<2)return new(0m,0m,0m,qualities.Length){EntropyBasisCode=WideEntropyBases.Candidate};
+        var max=qualities.Max();
+        var weights=qualities.Select(quality=>Math.Max((decimal)Math.Exp((quality-max)/Temperature),.0000001m)).ToArray();
+        return EntropyFromValues(weights,WideEntropyBases.Candidate);
     }
 
     // V2.3 basis selection: competing ALTERNATIVE branches use branch entropy; a dimension-dominated
@@ -1873,7 +1934,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 "You are the POLOXI candidate enumerator. List the concrete, real-world named entities (specific cities, companies, products, institutions - never categories, criteria, approaches, or descriptions) that are commonly considered strong candidates for the question. Return 15 to 20 distinct names. Each name must be a specific proper noun exactly as commonly written (e.g. 'Raleigh, North Carolina'). Never include methodology labels, judging criteria, or attribute phrases.",
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
-                CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateEnumerationProposal>(result.Content,JsonOptions);
             return proposal?.Candidates?.Where(name=>!string.IsNullOrWhiteSpace(name)).Select(name=>name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()??[];
         }
@@ -1946,7 +2007,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 "You are the POLOXI Information Value estimator. For EVERY listed branch, assess how valuable investigating it next is likely to be. This is a PREDICTION of usefulness, never a measurement. For each branch return: uncertainty (how unresolved this dimension is), rankingImpact (how likely new evidence changes the final answer ranking), candidateDiscrimination (how well evidence here separates currently close candidates), evidenceAvailability (how likely useful public evidence exists), novelty (how different from evidence already retrieved), redundancy (overlap with evidence already retrieved). Allowed values for all six: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH — no other values. evidenceTarget: one concrete sentence describing exactly what evidence to retrieve for this branch. rationale: one sentence why. predictedRankingChanges: which current candidates are most likely to move up or down if this branch is investigated — candidate (exact name), direction (UP or DOWN), magnitude (NONE, LOW, MEDIUM, or HIGH). Make these predictions falsifiable and specific; return an empty array when no candidate movement is expected. Return every branch exactly once.",
                 $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nBranches:\n{branchContext}",
-                InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             return JsonSerializer.Deserialize<WideInformationValueProposal>(result.Content,JsonOptions);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -2235,6 +2296,21 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .Take(6);
             var branches=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
             if(branches.Length==0)return [];
+            // V3.5 Hierarchical Roll-Up: the progressive-narrowing children of each scoring dimension
+            // carry concrete meaning ("Safe Environment" -> "Low Violent Crime Rate", "Police Response
+            // Time"). Scoring those children and rolling them up makes each parent dimension's score
+            // derived from specifics instead of one coarse judgment \u2014 WITHOUT double counting, because
+            // the composite still sums over the parent branches only. Children are capped per parent
+            // and by a confidence floor so the prompt stays bounded and noise branches stay out.
+            var scoringBranchIds=branches.Select(branch=>branch.WideBranchId).ToHashSet();
+            var childBranches=survivors
+                .Where(branch=>branch.ParentWideBranchId is not null&&scoringBranchIds.Contains(branch.ParentWideBranchId.Value)
+                    &&!branch.IsEliminated&&branch.PoloxiConfidence>=.15m&&!scoringBranchIds.Contains(branch.WideBranchId))
+                .GroupBy(branch=>branch.ParentWideBranchId!.Value)
+                .SelectMany(group=>group.OrderByDescending(branch=>branch.PoloxiConfidence).Take(5))
+                .Take(20)
+                .ToArray();
+            var childrenByParent=childBranches.ToLookup(branch=>branch.ParentWideBranchId!.Value);
             // V2.3 candidate admission: a candidate must appear in enough distinct interpretive
             // dimensions to compete for the OVERALL answer. Appearing in a single interpretive list
             // (for example an affordability-only ranking) is not cross-dimensional support; such
@@ -2292,17 +2368,26 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .ToDictionary(group=>group.Key,group=>group.Count(),StringComparer.OrdinalIgnoreCase);
             if(candidateNames.Length==0)return [];
             var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
+            // V3.5: child sub-criteria are appended as S-labelled lines referencing their parent so the
+            // model scores every candidate on the narrowed specifics too. They do NOT enter the
+            // composite directly — they feed the parent's roll-up.
+            if(childBranches.Length>0)
+            {
+                var parentIndexById=branches.Select((branch,index)=>(branch.WideBranchId,Index:index+1)).ToDictionary(pair=>pair.WideBranchId,pair=>pair.Index);
+                var childList=string.Join('\n',childBranches.Select((branch,index)=>$"S{index+1} (sub-criterion of B{parentIndexById[branch.ParentWideBranchId!.Value]}). {branch.DisplayName}: {branch.Interpretation}"));
+                branchList=$"{branchList}\n{childList}";
+            }
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
             var constraints=queryContract is null||queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                "Score each supplied candidate against each supplied interpretation branch. For every candidate return: name (echo exactly), detail (echo or improve, one sentence), violatesConstraint=true with constraintViolationReason when the candidate does NOT satisfy ALL hard constraints (for example a city outside the required geography); otherwise false with null reason. A name constraint like 'called X' or 'commonly known as X' is satisfied when the entity is commonly known as X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; never mark such candidates as violations for not being exactly named X. branchScores: one entry per supplied branch with branchDisplayName echoed exactly and evidenceScore between 0 and 1 expressing how strongly that candidate performs on that interpretation dimension based on your knowledge. Scores must be differentiated per candidate and branch; never assign identical scores across the board.",
+                "Score each supplied candidate against each supplied interpretation branch. For every candidate return: name (echo exactly), detail (echo or improve, one sentence), violatesConstraint=true with constraintViolationReason when the candidate does NOT satisfy ALL hard constraints (for example a city outside the required geography); otherwise false with null reason. A name constraint like 'called X' or 'commonly known as X' is satisfied when the entity is commonly known as X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; never mark such candidates as violations for not being exactly named X. branchScores: one entry per supplied branch AND per supplied sub-criterion line with branchDisplayName echoed exactly (without the B/S label) and evidenceScore between 0 and 1 expressing how strongly that candidate performs on that interpretation dimension based on your knowledge. Scores must be differentiated per candidate and branch; never assign identical scores across the board.",
                 $"Question: {request.Query}\nHard constraints: {constraints}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
-                CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
+                CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
             if(proposal?.Candidates is not{Count:>0})return [];
             var branchWeightTotal=branches.Sum(branch=>branch.PoloxiConfidence);
             if(branchWeightTotal<=0)branchWeightTotal=1;
-            var branchesByName=branches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
+            var branchesByName=branches.Concat(childBranches).GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
             // V2.8.2 Branch Identity Resolution: the prompt labels branches "B1. Name: Interpretation",
             // and models sometimes echo the label or append the interpretation. A strict dictionary miss
             // silently dropped the score — zeroing coverage and Quality for EVERY candidate while the
@@ -2311,17 +2396,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             WideBranchRecord? ResolveBranch(string echoed)
             {
                 var cleaned=echoed.Trim();
-                var labelMatch=System.Text.RegularExpressions.Regex.Match(cleaned,@"^B\d+\.\s*");
+                var labelMatch=System.Text.RegularExpressions.Regex.Match(cleaned,@"^[BS]\d+(\s*\([^)]*\))?\.\s*");
                 if(labelMatch.Success)cleaned=cleaned[labelMatch.Length..].Trim();
                 var colon=cleaned.IndexOf(':');
                 var withoutDetail=colon>0?cleaned[..colon].Trim():cleaned;
                 if(branchesByName.TryGetValue(cleaned,out var branch))return branch;
                 if(branchesByName.TryGetValue(withoutDetail,out branch))return branch;
-                var contains=branches.Where(candidate=>cleaned.Contains(candidate.DisplayName,StringComparison.OrdinalIgnoreCase)||candidate.DisplayName.Contains(withoutDetail,StringComparison.OrdinalIgnoreCase)).ToArray();
+                var contains=branches.Concat(childBranches).Where(candidate=>cleaned.Contains(candidate.DisplayName,StringComparison.OrdinalIgnoreCase)||candidate.DisplayName.Contains(withoutDetail,StringComparison.OrdinalIgnoreCase)).ToArray();
                 return contains.Length==1?contains[0]:null;
             }
             var entries=new List<(WideCandidateRecord Record,bool SupportExcluded,decimal RawComposite)>();
             var evidenceConfidences=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
+            // V3.5: per-candidate roll-up disclosure (parent dimension -> direct score + child scores).
+            var rollUpDisclosures=new Dictionary<string,Dictionary<string,(decimal Direct,IReadOnlyCollection<WideCandidateChildScoreDto> Children)>>(StringComparer.OrdinalIgnoreCase);
             // V2.9.3 admission provenance per candidate: mode, interpretive-dimension support,
             // independent-host support, and the total support credited at admission time.
             var admissionInfo=new Dictionary<string,(string Mode,int Interpretive,int Hosts,int Total)>(StringComparer.OrdinalIgnoreCase);
@@ -2342,24 +2429,91 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var supplied=candidateNames.FirstOrDefault(item=>string.Equals(item.Name,withoutDetail,StringComparison.OrdinalIgnoreCase));
                 return supplied.Name??cleaned;
             }
-            foreach(var candidate in proposal.Candidates)
+            // V3.6 pass 1: resolve each candidate's direct + child scores and rolled-up effective
+            // dimension scores. Composites are computed in pass 2, AFTER cross-candidate contrast
+            // normalization, because the confidence-weighted roll-up (a mean of sub-scores) compresses
+            // per-dimension differences between candidates and flattens the final ranking.
+            var prepared=proposal.Candidates.Select(candidate=>
             {
                 var candidateId=Guid.NewGuid();
                 var resolvedName=ResolveCandidateName(candidate.Name);
-                var scores=new List<WideCandidateBranchScoreRecord>();
-                var composite=0m;
+                // V3.5: split resolved scores into parent-dimension scores and child sub-criterion scores.
+                var directScores=new Dictionary<Guid,decimal>();
+                var childScoresByParent=new Dictionary<Guid,List<(WideBranchRecord Child,decimal Score)>>();
                 foreach(var score in candidate.BranchScores??[])
                 {
                     var branch=ResolveBranch(score.BranchDisplayName);
-                    if(branch is null||scores.Any(existing=>existing.WideBranchId==branch.WideBranchId))continue;
+                    if(branch is null)continue;
                     var clamped=Math.Clamp(score.EvidenceScore,0,1);
-                    scores.Add(new(Guid.NewGuid(),candidateId,branch.WideBranchId,request.TenantId,branch.DisplayName,clamped));
-                    composite+=branch.PoloxiConfidence/branchWeightTotal*clamped;
+                    if(branch.ParentWideBranchId is not null&&childrenByParent.Contains(branch.ParentWideBranchId.Value)&&!scoringBranchIds.Contains(branch.WideBranchId))
+                    {
+                        var list=childScoresByParent.TryGetValue(branch.ParentWideBranchId.Value,out var existing)?existing:childScoresByParent[branch.ParentWideBranchId.Value]=[];
+                        if(!list.Any(entry=>entry.Child.WideBranchId==branch.WideBranchId))list.Add((branch,clamped));
+                        continue;
+                    }
+                    if(!directScores.ContainsKey(branch.WideBranchId))directScores[branch.WideBranchId]=clamped;
+                }
+                // V3.5 Hierarchical Roll-Up: each parent dimension's effective score blends the model's
+                // direct parent-level judgment with the confidence-weighted mean of its scored children
+                // (50/50). Children carry the narrowed specifics; the direct score keeps the holistic
+                // judgment and protects against missing child echoes. Each dimension still counts ONCE
+                // in the composite, so the hierarchy informs the score without double counting.
+                var effectiveByBranch=new Dictionary<Guid,decimal>();
+                var childRows=new List<WideCandidateBranchScoreRecord>();
+                var childDisclosure=new Dictionary<string,(decimal Direct,IReadOnlyCollection<WideCandidateChildScoreDto> Children)>(StringComparer.OrdinalIgnoreCase);
+                foreach(var branch in branches)
+                {
+                    if(!directScores.TryGetValue(branch.WideBranchId,out var direct))continue;
+                    var effective=direct;
+                    if(childScoresByParent.TryGetValue(branch.WideBranchId,out var children)&&children.Count>0)
+                    {
+                        var weightTotal=children.Sum(entry=>entry.Child.PoloxiConfidence);
+                        var rollUp=weightTotal<=0?children.Average(entry=>entry.Score):children.Sum(entry=>entry.Child.PoloxiConfidence*entry.Score)/weightTotal;
+                        effective=Math.Clamp(.5m*direct+.5m*rollUp,0,1);
+                        childDisclosure[branch.DisplayName]=(direct,children.Select(entry=>new WideCandidateChildScoreDto(entry.Child.DisplayName,entry.Score,entry.Child.PoloxiConfidence)).ToArray());
+                        // Persist child scores so the roll-up is auditable per candidate.
+                        foreach(var(child,childScore)in children)childRows.Add(new(Guid.NewGuid(),candidateId,child.WideBranchId,request.TenantId,child.DisplayName,childScore));
+                    }
+                    effectiveByBranch[branch.WideBranchId]=effective;
+                }
+                return new{Candidate=candidate,CandidateId=candidateId,ResolvedName=resolvedName,Effective=effectiveByBranch,ChildRows=childRows,Disclosure=childDisclosure};
+            }).ToList();
+            // V3.6 Fix B — per-dimension contrast normalization: rolled-up dimension scores regress
+            // toward the mean (averaging many sub-scores compresses spread), which made POLOXI's final
+            // ranking collapse toward the unweighted mention baseline. For each dimension scored by 2+
+            // candidates, deviations from the cross-candidate mean are amplified by a fixed gain
+            // (order-preserving, mean-preserving, clamped to 0..1) so real differences between
+            // candidates stay visible in the composite. Child scores are never altered — only the
+            // parent-dimension score that feeds the composite.
+            const decimal ContrastGain=1.6m;
+            foreach(var branch in branches)
+            {
+                var scored=prepared.Where(entry=>entry.Effective.ContainsKey(branch.WideBranchId)).ToArray();
+                if(scored.Length<2)continue;
+                var mean=scored.Average(entry=>entry.Effective[branch.WideBranchId]);
+                foreach(var entry in scored)
+                    entry.Effective[branch.WideBranchId]=Math.Clamp(mean+(entry.Effective[branch.WideBranchId]-mean)*ContrastGain,0,1);
+            }
+            foreach(var item in prepared)
+            {
+                var candidate=item.Candidate;
+                var candidateId=item.CandidateId;
+                var resolvedName=item.ResolvedName;
+                var childDisclosure=item.Disclosure;
+                var scores=new List<WideCandidateBranchScoreRecord>(item.ChildRows);
+                var composite=0m;
+                foreach(var branch in branches)
+                {
+                    if(!item.Effective.TryGetValue(branch.WideBranchId,out var effective))continue;
+                    scores.Add(new(Guid.NewGuid(),candidateId,branch.WideBranchId,request.TenantId,branch.DisplayName,effective));
+                    composite+=branch.PoloxiConfidence/branchWeightTotal*effective;
                 }
                 // V2.1 Candidate Evidence Coverage: a candidate scored on only a fraction of the surviving
                 // dimensions must not compete equally with fully-covered candidates — missing data is not
                 // strength. Coverage scales the composite so gaps pull the ranking down, never up.
-                var coverage=branches.Length==0?0m:Math.Clamp((decimal)scores.Count/branches.Length,0,1);
+                // V3.5: coverage counts PARENT dimensions only; child rows never inflate coverage.
+                var parentScoreCount=scores.Count(entry=>scoringBranchIds.Contains(entry.WideBranchId));
+                var coverage=branches.Length==0?0m:Math.Clamp((decimal)parentScoreCount/branches.Length,0,1);
                 composite*=coverage;
                 // V2.6 separation of concerns: the coverage-scaled dimension composite IS the candidate's
                 // QUALITY ("how good is it?"). Evidence weakness must not rewrite quality — the V2.5
@@ -2394,6 +2548,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 }
                 entries.Add((new(candidateId,executionId,request.TenantId,Truncate(resolvedName,300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(violationReason,400),scores),supportExcluded,Math.Clamp(composite,0,1)));
                 evidenceConfidences[resolvedName]=evidenceConfidence;
+                rollUpDisclosures[resolvedName]=childDisclosure;
                 admissionInfo[resolvedName]=(supportTier is null?"EXCLUDED":admissionMode,interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
                 supportTiers[resolvedName]=supportTier??"LIMITED";
             }
@@ -2404,7 +2559,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var records=entries.Select(entry=>entry.Record).ToList();
             var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(targetCount).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
             await wideRepository.SaveWideCandidatesAsync(ranked,request.UserId,cancellationToken);
-            return ranked.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("NORMAL",0,0,0));return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,record.BranchScores.Select(score=>new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore)).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)record.BranchScores.Count/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"STRONG")};}).ToArray();
+            return ranked.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("NORMAL",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"STRONG")};}).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {

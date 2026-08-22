@@ -630,7 +630,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticQueryExpander, NullSemanticQueryExpander>();
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
         services.AddScoped<IAiProviderRouter, AiProviderRouter>();
-        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>();
+        // Timeout is governed per request by the database-backed route TimeoutSeconds (see AzureOpenAiProvider.CreateTimeout);
+        // the HttpClient default of 100s would otherwise abort long reasoning-model completions (gpt-5*) prematurely.
+        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         services.AddScoped<IDataConfigRepository, DataConfigRepository>();
         services.AddScoped<IDataConfigService, DataConfigService>();
         services.AddScoped<ISubscriptionConfigRepository, SubscriptionConfigRepository>();

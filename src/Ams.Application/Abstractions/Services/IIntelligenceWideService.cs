@@ -8,4 +8,6 @@ public interface IIntelligenceWideService
 {
     Task<PoloxiSearchResponse> SearchWithPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken cancellationToken=default);
     Task<WideSearchResponse> SearchDynamicAsync(WideSearchRequest request,CancellationToken cancellationToken=default);
+    // Database-backed model options for the wide-search Model dropdown (active CHAT deployments).
+    Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
 }

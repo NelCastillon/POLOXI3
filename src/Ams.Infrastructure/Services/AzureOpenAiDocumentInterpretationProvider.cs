@@ -24,7 +24,7 @@ public sealed class AzureOpenAiDocumentInterpretationProvider(IAiProviderRouter 
         {
             var userPrompt=BuildUserPrompt(request,chunks[index],index+1,chunks.Count);
             inputHash.Append(userPrompt);
-            var generated=await router.GenerateAsync(request.TenantId,request.PromptCode,request.SystemPrompt,userPrompt,request.OutputSchemaJson,request.CorrelationId,context,cancellationToken);
+            var generated=await router.GenerateAsync(request.TenantId,request.PromptCode,request.SystemPrompt,userPrompt,request.OutputSchemaJson,request.CorrelationId,context,cancellationToken:cancellationToken);
             results.Add(ParseChunk(generated,chunks[index].Length,request.PromptCode));
         }
 

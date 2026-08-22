@@ -7,6 +7,19 @@ namespace Ams.Infrastructure.Persistence.Repositories;
 // Dapper persistence for the isolated Wide dynamic disambiguation pipeline.
 public sealed class IntelligenceWideRepository(ISqlConnectionFactory connectionFactory):IIntelligenceWideRepository
 {
+    public async Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT model.ModelCode,model.DeploymentName,model.ModelFamily
+FROM AI.ModelDeployment model
+JOIN AI.Provider provider ON provider.ProviderId=model.ProviderId AND provider.IsActive=1 AND provider.IsDeleted=0
+WHERE model.CapabilityCode=N'CHAT' AND model.IsActive=1 AND model.IsDeleted=0 AND (model.TenantId=@TenantId OR model.TenantId IS NULL)
+ORDER BY model.Priority,model.ModelCode;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<WideModelOptionDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
     public async Task<WideConfiguration> GetWideConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
         const string sql="""

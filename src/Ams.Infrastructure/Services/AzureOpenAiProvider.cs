@@ -34,10 +34,65 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
     {
         EnsureConfigured(request.Context);var timer=Stopwatch.StartNew();using var timeout=CreateTimeout(request.Context,cancellationToken);object? responseFormat=null;
         if(!string.IsNullOrWhiteSpace(request.OutputSchemaJson)){var schema=JsonNode.Parse(request.OutputSchemaJson)!;NormalizeStrictSchema(schema);responseFormat=new{type="json_schema",json_schema=new{name=NormalizeName(request.FeatureCode),strict=true,schema}};}
-        var body=new{messages=new[]{new{role="system",content=request.SystemPrompt},new{role="user",content=request.UserPrompt}},temperature=request.Temperature,max_tokens=request.MaximumOutputTokens,response_format=responseFormat};
-        using var message=new HttpRequestMessage(HttpMethod.Post,BuildUri(request.Context,"chat/completions")){Content=JsonContent.Create(body)};await AuthorizeAsync(message,request.Context,timeout.Token);using var response=await httpClient.SendAsync(message,timeout.Token);var json=await response.Content.ReadAsStringAsync(timeout.Token);if(!response.IsSuccessStatusCode)throw new HttpRequestException($"Azure OpenAI generation failed with HTTP {(int)response.StatusCode}: {json}",null,response.StatusCode);
+        // Newer model families (gpt-5*, o-series reasoning models) reject the legacy max_tokens parameter and non-default
+        // temperature with HTTP 400 unsupported_parameter. The body is built as a mutable JSON object so a rejected
+        // parameter can be swapped (max_tokens -> max_completion_tokens) or dropped (temperature) and the call retried
+        // once per adjustment, keeping every configured deployment usable without per-model configuration.
+        var body=new JsonObject{["messages"]=new JsonArray(new JsonObject{["role"]="system",["content"]=request.SystemPrompt},new JsonObject{["role"]="user",["content"]=request.UserPrompt}),["temperature"]=request.Temperature,["max_tokens"]=request.MaximumOutputTokens};
+        if(responseFormat is not null)body["response_format"]=JsonSerializer.SerializeToNode(responseFormat);
+        string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;
+        for(var attempt=0;;attempt++)
+        {
+            using var message=new HttpRequestMessage(HttpMethod.Post,BuildUri(request.Context,"chat/completions")){Content=JsonContent.Create(body)};await AuthorizeAsync(message,request.Context,timeout.Token);using var response=await httpClient.SendAsync(message,timeout.Token);json=await response.Content.ReadAsStringAsync(timeout.Token);statusCode=response.StatusCode;requestId=response.Headers.TryGetValues("x-request-id",out var values)?values.FirstOrDefault()??string.Empty:string.Empty;
+            if(response.IsSuccessStatusCode)
+            {
+                // Reasoning-family models (gpt-5*, o-series) burn hidden reasoning tokens against max_completion_tokens,
+                // so a budget sized for standard models (e.g. gpt-4.1-mini, which is unaffected here) can truncate the
+                // visible answer. Retry ONCE for those specific models only, with doubled completion headroom.
+                if(!reasoningBudgetRaised&&IsReasoningModel(request.Context.ModelCode)&&body.ContainsKey("max_completion_tokens")&&IsTruncated(json))
+                {
+                    reasoningBudgetRaised=true;body["max_completion_tokens"]=request.MaximumOutputTokens*2;continue;
+                }
+                break;
+            }
+            if((int)statusCode==400&&attempt<3&&TryGetUnsupportedParameter(json,out var unsupported))
+            {
+                if(unsupported=="max_tokens"&&body.ContainsKey("max_tokens")){body.Remove("max_tokens");body["max_completion_tokens"]=request.MaximumOutputTokens;continue;}
+                if(unsupported is "temperature" or "max_completion_tokens"&&body.Remove(unsupported))continue;
+            }
+            throw new HttpRequestException($"Azure OpenAI generation failed with HTTP {(int)statusCode}: {json}",null,statusCode);
+        }
         using var envelope=JsonDocument.Parse(json);var choice=envelope.RootElement.GetProperty("choices")[0];if(choice.TryGetProperty("finish_reason",out var finishReasonNode)&&finishReasonNode.GetString()=="length")throw new InvalidOperationException($"Azure OpenAI output was truncated because the completion hit the configured maximum output tokens ({request.MaximumOutputTokens}); increase MaximumOutputTokens for feature '{request.FeatureCode}' in AI.FeaturePolicy.");var content=choice.GetProperty("message").GetProperty("content").GetString()??throw new InvalidOperationException("Azure OpenAI returned no content.");var usage=envelope.RootElement.TryGetProperty("usage",out var usageNode)?usageNode:default;decimal? confidence=null;if(content.Length>0&&content[0]=='{'){using var output=JsonDocument.Parse(content);if(output.RootElement.TryGetProperty("confidence",out var confidenceNode)&&confidenceNode.TryGetDecimal(out var parsed))confidence=Math.Clamp(parsed>1m?parsed/100m:parsed,0m,1m);}
-        return new(content,string.IsNullOrWhiteSpace(request.OutputSchemaJson)?null:content,Token(usage,"prompt_tokens"),Token(usage,"completion_tokens"),confidence,response.Headers.TryGetValues("x-request-id",out var values)?values.FirstOrDefault()??string.Empty:string.Empty,timer.Elapsed,request.Context.ProviderCode,request.Context.ModelCode);
+        return new(content,string.IsNullOrWhiteSpace(request.OutputSchemaJson)?null:content,Token(usage,"prompt_tokens"),Token(usage,"completion_tokens"),confidence,requestId,timer.Elapsed,request.Context.ProviderCode,request.Context.ModelCode);
+    }
+
+    // Extracts the offending parameter name from an Azure OpenAI 400 unsupported_parameter or
+    // unsupported_value error payload (e.g. gpt-5* models only accept the default temperature).
+    private static bool TryGetUnsupportedParameter(string json,out string parameter)
+    {
+        parameter=string.Empty;
+        try
+        {
+            using var document=JsonDocument.Parse(json);
+            if(document.RootElement.TryGetProperty("error",out var error)&&error.TryGetProperty("code",out var code)&&code.GetString() is "unsupported_parameter" or "unsupported_value"&&error.TryGetProperty("param",out var param)&&param.GetString() is { Length:>0 } name){parameter=name;return true;}
+        }
+        catch(JsonException){}
+        return false;
+    }
+
+    // Scoped to reasoning-family model codes only (gpt-5*, o1*, o3*, o4*); standard models like
+    // gpt-4.1-mini keep their configured budget untouched because they don't spend hidden reasoning tokens.
+    private static bool IsReasoningModel(string? modelCode)=>modelCode is not null&&(modelCode.StartsWith("gpt-5",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o1",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o3",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o4",StringComparison.OrdinalIgnoreCase));
+
+    // True when the successful completion envelope reports finish_reason=length (output truncated by token budget).
+    private static bool IsTruncated(string json)
+    {
+        try
+        {
+            using var document=JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("choices",out var choices)&&choices.GetArrayLength()>0&&choices[0].TryGetProperty("finish_reason",out var reason)&&reason.GetString()=="length";
+        }
+        catch(JsonException){return false;}
     }
 
     public async Task<AiEmbeddingResult> CreateEmbeddingAsync(AiEmbeddingRequest request,CancellationToken cancellationToken=default)
@@ -73,7 +128,10 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
         }
         finally{_tokenLock.Release();}
     }
-    private static CancellationTokenSource CreateTimeout(AiProviderContext context,CancellationToken cancellationToken){var source=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);source.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(context.TimeoutSeconds,1,900)));return source;}
+    // Reasoning-family models (gpt-5*, o-series) spend extended time on hidden reasoning tokens before emitting
+    // output, so the route timeout sized for standard models (e.g. gpt-4.1-mini) is tripled for those models only,
+    // still capped at the 900s hard ceiling. Standard models keep the configured TimeoutSeconds untouched.
+    private static CancellationTokenSource CreateTimeout(AiProviderContext context,CancellationToken cancellationToken){var seconds=Math.Clamp(context.TimeoutSeconds,1,900);if(IsReasoningModel(context.ModelCode))seconds=Math.Min(seconds*3,900);var source=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);source.CancelAfter(TimeSpan.FromSeconds(seconds));return source;}
     private static int Token(JsonElement usage,string property)=>usage.ValueKind==JsonValueKind.Object&&usage.TryGetProperty(property,out var node)?node.GetInt32():0;
     private static string NormalizeName(string value)=>new(value.Select(c=>char.IsLetterOrDigit(c)?char.ToLowerInvariant(c):'_').ToArray());
     private static void NormalizeStrictSchema(JsonNode? node)

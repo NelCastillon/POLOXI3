@@ -24,4 +24,9 @@ public sealed class IntelligenceWideController(IIntelligenceWideService service)
     [HttpPost("search/dynamic")]
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> SearchDynamic([FromBody]WideSearchRequest request,CancellationToken cancellationToken)=>Ok(await service.SearchDynamicAsync(request with{TenantId=TenantId,UserId=ActorUserId,GrantedPermissions=AuthenticatedRequestContext.GetGrantedPermissions(User)},cancellationToken));
+
+    // Database-backed model options for the wide-search Model dropdown (active CHAT deployments).
+    [HttpGet("models")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> Models(CancellationToken cancellationToken)=>Ok(await service.GetWideModelsAsync(TenantId,cancellationToken));
 }

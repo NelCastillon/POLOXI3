@@ -8,7 +8,7 @@ namespace Ams.Infrastructure.Services;
 
 public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,IEnumerable<IAiProvider> providers,ILogger<AiProviderRouter> logger):IAiProviderRouter
 {
-    public async Task<AiGenerationResult> GenerateAsync(Guid tenantId,string featureCode,string systemPrompt,string userPrompt,string? outputSchemaJson,string correlationId,AiExecutionContext? executionContext=null,CancellationToken cancellationToken=default)
+    public async Task<AiGenerationResult> GenerateAsync(Guid tenantId,string featureCode,string systemPrompt,string userPrompt,string? outputSchemaJson,string correlationId,AiExecutionContext? executionContext=null,string? modelCodeOverride=null,CancellationToken cancellationToken=default)
     {
         var executionId=Guid.NewGuid();var started=System.Diagnostics.Stopwatch.StartNew();
         var safety=await routeRepository.GetSafetyPolicyAsync(tenantId,cancellationToken);
@@ -22,7 +22,7 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         AiGenerationResult result;
         try
         {
-            result=await ExecuteAsync(tenantId,featureCode,"CHAT",correlationId,(provider,route,context,token)=>provider.GenerateAsync(new(context,featureCode,systemPrompt,userPrompt,outputSchemaJson,route.Temperature,route.MaximumOutputTokens,correlationId),token),cancellationToken);
+            result=await ExecuteAsync(tenantId,featureCode,"CHAT",correlationId,(provider,route,context,token)=>provider.GenerateAsync(new(context,featureCode,systemPrompt,userPrompt,outputSchemaJson,route.Temperature,route.MaximumOutputTokens,correlationId),token),cancellationToken,modelCodeOverride);
         }
         catch(Exception ex) when(ex is not OperationCanceledException)
         {
@@ -56,9 +56,9 @@ public sealed class AiProviderRouter(IAiProviderRouteRepository routeRepository,
         return await ExecuteAsync(tenantId,featureCode,"EMBEDDING",correlationId,(provider,_,context,token)=>provider.CreateEmbeddingAsync(new(context,inputs,correlationId),token),cancellationToken);
     }
 
-    private async Task<T> ExecuteAsync<T>(Guid tenantId,string featureCode,string capabilityCode,string correlationId,Func<IAiProvider,AiProviderRoute,AiProviderContext,CancellationToken,Task<T>> execute,CancellationToken cancellationToken)
+    private async Task<T> ExecuteAsync<T>(Guid tenantId,string featureCode,string capabilityCode,string correlationId,Func<IAiProvider,AiProviderRoute,AiProviderContext,CancellationToken,Task<T>> execute,CancellationToken cancellationToken,string? modelCodeOverride=null)
     {
-        var routes=await routeRepository.GetRoutesAsync(tenantId,featureCode,capabilityCode,cancellationToken);
+        var routes=await routeRepository.GetRoutesAsync(tenantId,featureCode,capabilityCode,modelCodeOverride,cancellationToken);
         if(routes.Count==0)throw new AiProviderUnavailableException(featureCode,$"No active {capabilityCode} model route is configured for this tenant and feature.");
         var adapters=providers.ToDictionary(x=>x.ProviderTypeCode,StringComparer.OrdinalIgnoreCase);var failures=new List<Exception>();
         foreach(var route in routes)

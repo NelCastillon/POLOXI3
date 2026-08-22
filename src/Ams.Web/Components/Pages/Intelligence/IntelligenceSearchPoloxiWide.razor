@@ -26,6 +26,16 @@
             </div>
             <div class="poloxi-composer-footer">
                 <span class="poloxi-composer-hint"><kbd>Enter</kbd> to search &middot; <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
+                <label class="poloxi-model-select" title="Choose the language model used for this search. Auto lets the platform route to the best available model.">
+                    <i class="bi bi-cpu" aria-hidden="true"></i>
+                    <select @bind="_selectedModelCode" aria-label="Model">
+                        <option value="">Auto</option>
+                        @foreach (var model in _models)
+                        {
+                            <option value="@model.ModelCode">@model.ModelCode</option>
+                        }
+                    </select>
+                </label>
                 <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
                 <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
             </div>
@@ -257,6 +267,7 @@
                             <h3><i class="bi bi-card-text"></i> Full answer</h3>
                             <p>@_response.FinalAnswer</p>
                         </div>
+                        @KpiStrip
                     }
                     @if (_response.QueryContract is { } answerCardContract && (answerCardContract.HardConstraints.Count > 0 || answerCardContract.AmbiguousConcepts.Count > 0))
                     {
@@ -498,27 +509,10 @@
                 </section>
             }
 
-            <section class="poloxi-kpis">
-                <article><i class="bi bi-activity poloxi-kpi-icon"></i><span>Status</span><strong>@_response.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
-                @if (!string.IsNullOrWhiteSpace(_response.AnswerKindCode))
-                {
-                    <article title="V3.2 answer-kind-aware workflow routing: the Stage 0 classification of what the answer items ARE. TUNED means kind-specific depth/round budgets shortened this execution; FULL PIPELINE means the complete budgets applied."><i class="bi bi-signpost-2 poloxi-kpi-icon"></i><span>Answer kind</span><strong>@_response.AnswerKindCode.Replace('_', ' ')</strong><small>@(_response.AnswerKindRoutingApplied ? "tuned budgets" : "full pipeline")</small></article>
-                }
-                <article><i class="bi bi-diagram-3 poloxi-kpi-icon"></i><span>Depth reached</span><strong>@_response.DepthReached</strong><small>@_response.LlmCallCount LLM calls</small></article>
-                <article><i class="bi bi-signpost-split poloxi-kpi-icon"></i><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
-                <article><i class="bi bi-database-check poloxi-kpi-icon"></i><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external · @_response.EnterpriseEvidenceCount enterprise</small></article>
-                <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence. Deep leaf branches without evidence lower this without necessarily weakening the answer."><i class="bi bi-bounding-box-circles poloxi-kpi-icon"></i><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
-                <article title="Decision coverage: share of the dimensions that actually drive the final Candidate × Branch ranking that are supported by evidence — the most meaningful grounding measure for the answer itself."><i class="bi bi-crosshair poloxi-kpi-icon"></i><span>Decision coverage</span><strong>@_response.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
-                <article title="Confidence in the final ranking decision itself: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage."><i class="bi bi-shield-check poloxi-kpi-icon"></i><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>decision confidence</small></article>
-                @if (_response.WinnerStability is { } winnerStability)
-                {
-                    <article title="Deterministic ranking stability across information rounds. Winner: share of consecutive measurements where the #1 candidate did not change. Top-3: average overlap of the top-3 set between consecutive measurements. High stability means additional evidence is not changing the answer — a convergence signal."><i class="bi bi-graph-up-arrow poloxi-kpi-icon"></i><span>Ranking stability</span><strong>@winnerStability.ToString("P0")</strong><small>winner · top-3 @(_response.TopKStability?.ToString("P0") ?? "—")</small></article>
-                }
-                @if (_response.InformationRounds.Count > 0)
-                {
-                    <article title="Deterministic Shannon entropy — 0% = fully resolved, 100% = maximal uncertainty. Measured by POLOXI math, never the LLM. Basis: BRANCH = competing ALTERNATIVE interpretations; CANDIDATE = deterministic candidate-signal distribution (which candidate wins)."><i class="bi bi-thermometer-half poloxi-kpi-icon"></i><span>Uncertainty</span><strong>@_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0")</strong><small>@_response.TotalActualInformationGain.ToString("0.###") bits gained · @(_response.EntropyBasisCode ?? "BRANCH") basis</small></article>
-                }
-            </section>
+            @if (!ShowAnswerView || string.IsNullOrWhiteSpace(_response.FinalAnswer))
+            {
+                @KpiStrip
+            }
 
             @if (_response.InformationRounds.Count > 0)
             {
@@ -591,9 +585,25 @@
                                     }
                                     @foreach (var score in candidate.BranchScores)
                                     {
-                                        <span class="um-badge um-badge-neutral" title="Evidence score for this interpretation dimension.">@score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                        @if (score.ChildScores.Count > 0)
+                                        {
+                                            <span class="um-badge um-badge-neutral" title="@RollUpTooltip(score)"><i class="bi bi-diagram-2" aria-hidden="true"></i> @score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="um-badge um-badge-neutral" title="Evidence score for this interpretation dimension.">@score.BranchDisplayName @score.EvidenceScore.ToString("P0")</span>
+                                        }
                                     }
                                 </div>
+                                @if (candidate.BranchScores.Any(score => score.ChildScores.Count > 0))
+                                {
+                                    <div class="poloxi-rollup">
+                                        @foreach (var score in candidate.BranchScores.Where(score => score.ChildScores.Count > 0))
+                                        {
+                                            <small class="poloxi-rollup-line"><strong>@score.BranchDisplayName</strong> = 50% direct @((score.DirectScore ?? score.EvidenceScore).ToString("P0")) + 50% sub-criteria: @string.Join(" · ", score.ChildScores.OrderByDescending(child => child.EvidenceScore).Select(child => $"{child.BranchDisplayName} {child.EvidenceScore:P0}"))</small>
+                                        }
+                                    </div>
+                                }
                             </div>
                             <div class="poloxi-score"><strong>@candidate.QualityScore.ToString("P0")</strong><small>Quality</small></div>
                             <div class="poloxi-score" title="How well the evidence supports the quality score: independent-source diversity and dimension coverage. Weak evidence lowers this confidence, never the quality itself."><strong>@candidate.EvidenceConfidence.ToString("P0")</strong><small>Evidence</small></div>
@@ -762,8 +772,229 @@
 </IntelligenceWorkspace>
 
 @code {
+    // Shared KPI strip: rendered below the Full answer section in Answer view, or standalone in Analysis view.
+    private RenderFragment KpiStrip => __builder =>
+    {
+        <section class="poloxi-kpis poloxi-kpis--compact">
+            <article><i class="bi bi-activity poloxi-kpi-icon"></i><span>Status</span><strong>@_response!.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
+            @if (!string.IsNullOrWhiteSpace(_response.AnswerKindCode))
+            {
+                <article title="V3.2 answer-kind-aware workflow routing: the Stage 0 classification of what the answer items ARE. TUNED means kind-specific depth/round budgets shortened this execution; FULL PIPELINE means the complete budgets applied."><i class="bi bi-signpost-2 poloxi-kpi-icon"></i><span>Answer kind</span><strong>@_response.AnswerKindCode.Replace('_', ' ')</strong><small>@(_response.AnswerKindRoutingApplied ? "tuned budgets" : "full pipeline")</small></article>
+            }
+            @if (!string.IsNullOrWhiteSpace(_response.ModelCodeUsed))
+            {
+                <article title="The AI model that composed the final answer, resolved by the platform router — your explicit selection when one was chosen, otherwise the Auto route."><i class="bi bi-cpu poloxi-kpi-icon"></i><span>Model used</span><strong>@_response.ModelCodeUsed</strong><small>@(string.IsNullOrWhiteSpace(_selectedModelCode) ? "auto-routed" : "user-selected")@(string.IsNullOrWhiteSpace(_response.ProviderCodeUsed) ? "" : $" · {_response.ProviderCodeUsed}")</small></article>
+            }
+            <article><i class="bi bi-diagram-3 poloxi-kpi-icon"></i><span>Depth reached</span><strong>@_response.DepthReached</strong><small>@_response.LlmCallCount LLM calls</small></article>
+            <article><i class="bi bi-signpost-split poloxi-kpi-icon"></i><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
+            <article><i class="bi bi-database-check poloxi-kpi-icon"></i><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external &middot; @_response.EnterpriseEvidenceCount enterprise</small></article>
+            <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence. Deep leaf branches without evidence lower this without necessarily weakening the answer."><i class="bi bi-bounding-box-circles poloxi-kpi-icon"></i><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
+            <article title="Decision coverage: share of the dimensions that actually drive the final Candidate &times; Branch ranking that are supported by evidence &mdash; the most meaningful grounding measure for the answer itself."><i class="bi bi-crosshair poloxi-kpi-icon"></i><span>Decision coverage</span><strong>@_response.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
+            <article title="Confidence in the final ranking decision itself: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage."><i class="bi bi-shield-check poloxi-kpi-icon"></i><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>decision confidence</small></article>
+            @if (_response.WinnerStability is { } winnerStability)
+            {
+                <article title="Deterministic ranking stability across information rounds. Winner: share of consecutive measurements where the #1 candidate did not change. Top-3: average overlap of the top-3 set between consecutive measurements. High stability means additional evidence is not changing the answer &mdash; a convergence signal."><i class="bi bi-graph-up-arrow poloxi-kpi-icon"></i><span>Ranking stability</span><strong>@winnerStability.ToString("P0")</strong><small>winner &middot; top-3 @(_response.TopKStability?.ToString("P0") ?? "—")</small></article>
+            }
+            @if (_response.InformationRounds.Count > 0)
+            {
+                <article title="Deterministic Shannon entropy &mdash; 0% = fully resolved, 100% = maximal uncertainty. Measured by POLOXI math, never the LLM. Basis: BRANCH = competing ALTERNATIVE interpretations; CANDIDATE = deterministic candidate-signal distribution (which candidate wins)."><i class="bi bi-thermometer-half poloxi-kpi-icon"></i><span>Uncertainty</span><strong>@_response.InitialNormalizedEntropy.ToString("P0") &rarr; @_response.FinalNormalizedEntropy.ToString("P0")</strong><small>@_response.TotalActualInformationGain.ToString("0.###") bits gained &middot; @(_response.EntropyBasisCode ?? "BRANCH") basis</small></article>
+            }
+        </section>
+        <section class="poloxi-decision-summary poloxi-reveal">
+            <h3><i class="bi bi-diagram-2"></i> Detailed summary — how POLOXI shaped this decision</h3>
+            <ol class="poloxi-decision-steps">
+                <li>
+                    <span class="poloxi-step-badge">1</span>
+                    <div>
+                        <strong>Query contract &amp; answer kind</strong>
+                        <p>
+                            POLOXI classified this task as <em>@(_response.AnswerKindCode?.Replace('_', ' ') ?? "unclassified")</em>@(_response.AnswerKindRoutingApplied ? " and tuned its depth/round budgets to that kind" : " and ran the full pipeline budgets").
+                            @if (_response.QueryContract is { } summaryContract)
+                            {
+                                <text> It locked @summaryContract.HardConstraints.Count hard constraint@(summaryContract.HardConstraints.Count == 1 ? "" : "s")@(summaryContract.HardConstraints.Count > 0 ? $" ({string.Join(", ", summaryContract.HardConstraints)})" : "") as fixed and isolated @summaryContract.AmbiguousConcepts.Count ambiguous concept@(summaryContract.AmbiguousConcepts.Count == 1 ? "" : "s")@(summaryContract.AmbiguousConcepts.Count > 0 ? $" ({string.Join(", ", summaryContract.AmbiguousConcepts)})" : "") as the only part it was allowed to disambiguate.</text>
+                            }
+                        </p>
+                    </div>
+                </li>
+                <li>
+                    <span class="poloxi-step-badge">2</span>
+                    <div>
+                        <strong>Interpretation hierarchy</strong>
+                        <p>The engine proposed @_response.Branches.Count competing interpretation paths and narrowed them progressively to depth @_response.DepthReached. @SurvivingBranches.Count path@(SurvivingBranches.Count == 1 ? "" : "s") survived grounding while @EliminatedBranches.Count @(EliminatedBranches.Count == 1 ? "was" : "were") ruled out — eliminated paths are how POLOXI prevented plausible-but-wrong readings of your question from steering the answer.</p>
+                    </div>
+                </li>
+                <li>
+                    <span class="poloxi-step-badge">3</span>
+                    <div>
+                        <strong>Evidence grounding</strong>
+                        <p>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount) evidence signals were retrieved (@_response.ExternalEvidenceCount external &middot; @_response.EnterpriseEvidenceCount enterprise), supporting @_response.EvidenceCoverage.ToString("P0") of surviving hierarchy branches and @_response.DecisionEvidenceCoverage.ToString("P0") of the dimensions that actually decided the final ranking. Branches without evidence lost influence — they could not vote on the outcome.</p>
+                    </div>
+                </li>
+                @if (_response.InformationRounds.Count > 0)
+                {
+                    <li>
+                        <span class="poloxi-step-badge">4</span>
+                        <div>
+                            <strong>Information-directed exploration</strong>
+                            <p>@_response.InformationRounds.Count measurement round@(_response.InformationRounds.Count == 1 ? "" : "s") targeted the highest-uncertainty dimensions, reducing measured uncertainty from @_response.InitialNormalizedEntropy.ToString("P0") to @_response.FinalNormalizedEntropy.ToString("P0") (@_response.TotalActualInformationGain.ToString("0.###") bits gained on the @(_response.EntropyBasisCode ?? "BRANCH") basis). Each round's gain was measured deterministically by POLOXI math — never self-reported by the LLM.</p>
+                        </div>
+                    </li>
+                }
+                <li>
+                    <span class="poloxi-step-badge">@(_response.InformationRounds.Count > 0 ? 5 : 4)</span>
+                    <div>
+                        <strong>Candidate &times; Branch competition — actual result</strong>
+                        @if (FinalRankedCandidates.Count > 0)
+                        {
+                            <p>Every candidate was scored against every surviving interpretation path; the composite of those evidence-weighted scores produced the authoritative ordering:</p>
+                            <ol class="poloxi-summary-ranking">
+                                @foreach (var candidate in FinalRankedCandidates.Take(5))
+                                {
+                                    <li><strong>@candidate.DisplayName</strong> <span>@candidate.CompositeScore.ToString("P0")</span></li>
+                                }
+                            </ol>
+                        }
+                        else
+                        {
+                            <p>No candidate competition applied to this execution — the answer was composed directly from the surviving grounded interpretation paths.</p>
+                        }
+                    </div>
+                </li>
+                <li>
+                    <span class="poloxi-step-badge">@(_response.InformationRounds.Count > 0 ? 6 : 5)</span>
+                    <div>
+                        <strong>Decision quality</strong>
+                        <p>The final decision carries @_response.FinalConfidence.ToString("P0") confidence@(_response.WinnerStability is { } summaryStability ? $" with {summaryStability:P0} winner stability across rounds (top-3 {(_response.TopKStability?.ToString("P0") ?? "—")})" : "") and finished as <em>@_response.StatusCode</em> (@_response.TerminationReasonCode.Replace('_', ' ')) after @_response.LlmCallCount LLM calls in @TimeSpan.FromMilliseconds(_response.DurationMilliseconds).TotalSeconds.ToString("0.#")s. High stability means additional evidence had stopped changing the answer — the convergence signal POLOXI requires before committing to a ranking.</p>
+                    </div>
+                </li>
+                <li class="poloxi-summary-conclusion">
+                    <span class="poloxi-step-badge poloxi-step-badge--conclusion"><i class="bi bi-award"></i></span>
+                    <div>
+                        <strong>Conclusion — POLOXI vs. the raw LLM answer</strong>
+                        <p>
+                            @if (LlmRawItems.Count > 0)
+                            {
+                                var rawTop = LlmRawItems[0].Name;
+                                var rawTopPoloxiRank = FindPoloxiRank(rawTop);
+                                var rawExcluded = LlmRawItems.Count(item => FindPoloxiRank(item.Name) is null);
+                                var rawMoved = LlmRawItems.Select((item, index) => (item, index)).Count(x => FindPoloxiRank(x.item.Name) is int rank && rank != x.index + 1);
+                                <text>The raw single-shot answer from the same model (the LLM Raw column) put “@rawTop” first@(rawTopPoloxiRank switch { 1 => " — and POLOXI's evidence competition agreed", int rank => $" — but POLOXI's evidence competition demoted it to #{rank}", null => " — a candidate POLOXI's evidence competition excluded from the final ranking entirely" }). Of the model's @LlmRawItems.Count raw picks, @rawMoved landed at a different position and @rawExcluded did not survive evidence review at all. </text>
+                            }
+                            else
+                            {
+                                <text>A non-POLOXI search would have asked the model once and accepted its first, unaudited answer — no competing interpretations, no evidence retrieval, no measured uncertainty, and no way to detect a confidently-worded wrong answer. </text>
+                            }
+                            POLOXI changed the outcome in concrete, measurable ways: it eliminated @EliminatedBranches.Count misreading@(EliminatedBranches.Count == 1 ? "" : "s") of your question before they could steer the result, forced the decision to rest on @(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount) retrieved evidence signals instead of the model's memory@(FinalRankedCandidates.Count > 0 ? $", and locked the final ordering to the deterministic Candidate × Branch competition — so \"{FinalRankedCandidates[0].DisplayName}\" ranks #1 because the evidence scored it there, not because the LLM asserted it" : "").
+                            @if (_response.InformationRounds.Count > 0)
+                            {
+                                <text>Measured uncertainty fell from @_response.InitialNormalizedEntropy.ToString("P0") to @_response.FinalNormalizedEntropy.ToString("P0") — a plain LLM answer reports no such number and offers no convergence proof. </text>
+                            }
+                            The result is an answer with @_response.FinalConfidence.ToString("P0") auditable decision confidence and a full provenance trail, versus a single-shot response whose reliability cannot be inspected at all.
+                        </p>
+                    </div>
+                </li>
+            </ol>
+            @if (FinalRankedCandidates.Count > 0)
+            {
+                <div class="poloxi-compare">
+                    <h4><i class="bi bi-columns-gap"></i> Ranking comparison — POLOXI vs. raw model vs. unweighted baseline</h4>
+                    <p><strong>LLM Raw</strong> is the actual answer the selected model returned for your plain question in a single shot — the same result you would get in the model's own chat interface, captured in parallel and never touched by POLOXI. <strong>Mention-frequency baseline</strong> is a “what if we skipped the smart part?” view: it takes the same candidates POLOXI discovered during its research and ranks them by how often they were mentioned, breaking ties with a plain unweighted average of the dimension scores — like a popularity contest with no evidence weighting, no constraint checks, and no head-to-head competition. Comparing the three columns shows exactly where POLOXI's evidence work changed the outcome.</p>
+                    <table class="poloxi-compare-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>With POLOXI <small>(evidence-weighted Candidate × Branch)</small></th>
+                                <th>LLM Raw <small>(actual single-shot model answer)</small></th>
+                                <th title="The same candidates POLOXI found, ranked only by mention count with a plain unweighted score average as tie-break — no evidence weighting, no filtering, no competition.">Mention-frequency baseline <small>(POLOXI candidates, unweighted)</small></th>
+                                <th>Ambiguity scale <small>(uncertainty funnel @_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0"))</small></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @{ var compareRowCount = Math.Max(Math.Max(FinalRankedCandidates.Count, BaselineRankedCandidates.Count), LlmRawItems.Count); }
+                            @for (var i = 0; i < compareRowCount; i++)
+                            {
+                                var poloxi = i < FinalRankedCandidates.Count ? FinalRankedCandidates[i] : null;
+                                var raw = i < LlmRawItems.Count ? LlmRawItems[i] : null;
+                                var baseline = i < BaselineRankedCandidates.Count ? BaselineRankedCandidates[i] : null;
+                                var moved = raw is not null && poloxi is not null && FindPoloxiRank(raw.Name) != i + 1;
+                                var ambiguity = AmbiguityAt(i, compareRowCount);
+                                var zone = ContestZoneAt(i);
+                                <tr class="@(moved ? "poloxi-compare-diff" : null)">
+                                    <td>@(i + 1)</td>
+                                    <td class="@(zone == 1 ? "poloxi-zone-contested" : zone == 2 ? "poloxi-zone-clear" : null)">
+                                        @if (poloxi is not null)
+                                        {
+                                            <strong>@poloxi.DisplayName</strong> <span>@poloxi.CompositeScore.ToString("P0") evidence score</span>
+                                            var margin = MarginToNext(i);
+                                            @if (margin is decimal gap)
+                                            {
+                                                <span class="poloxi-margin-gap @(gap < .03m ? "poloxi-margin-gap--contested" : gap >= .05m ? "poloxi-margin-gap--clear" : null)"
+                                                      title="@(gap < .03m ? $"Contested: only {gap:P0} ahead of the next candidate — within scoring noise, the order here is not settled." : gap >= .05m ? $"Clear lead: {gap:P0} ahead of the next candidate — a separation the evidence actually supports." : $"{gap:P0} ahead of the next candidate.")">
+                                                    <i class="bi @(gap < .03m ? "bi-arrows-collapse" : "bi-arrow-down-short")" aria-hidden="true"></i> +@gap.ToString("P0") vs next
+                                                </span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <em>—</em>
+                                        }
+                                    </td>
+                                    <td class="poloxi-compare-raw">
+                                        @if (raw is not null)
+                                        {
+                                            var poloxiPosition = FindPoloxiRank(raw.Name);
+                                            @raw.Name
+                                            @if (poloxiPosition is int position && position != i + 1)
+                                            {
+                                                <span>POLOXI #@position</span>
+                                            }
+                                            else if (poloxiPosition is null)
+                                            {
+                                                <span>not in POLOXI ranking</span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <em>—</em>
+                                        }
+                                    </td>
+                                    <td>
+                                        @if (baseline is not null)
+                                        {
+                                            @baseline.DisplayName <span class="poloxi-mention-detail" title="@MentionBreakdown(baseline)">@baseline.InterpretiveSupportCount mention@(baseline.InterpretiveSupportCount == 1 ? "" : "s")@(baseline.BranchScores.Count > 0 ? $" · avg {baseline.BranchScores.Average(s => s.EvidenceScore):P0}" : "") <i class="bi bi-info-circle" aria-hidden="true"></i></span>
+                                            @if (baseline.BranchScores.Count > 0)
+                                            {
+                                                <small class="poloxi-mention-dimensions">@string.Join(" · ", baseline.BranchScores.OrderByDescending(s => s.EvidenceScore).Select(s => $"{s.BranchDisplayName} {s.EvidenceScore:P0}"))</small>
+                                            }
+                                            @if (baseline.IsConstraintViolation)
+                                            {
+                                                <span class="poloxi-compare-flag">violates your constraints — POLOXI ruled it out</span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <em>—</em>
+                                        }
+                                    </td>
+                                    <td class="poloxi-compare-ambiguity">
+                                        <div class="poloxi-ambiguity-track" title="POLOXI measured uncertainty at this depth of the funnel — top rows reflect the initial ambiguity, bottom rows the resolved state after grounding, information rounds, and candidate competition.">
+                                            <span style="width: @ambiguity.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
+                                        </div>
+                                        <small>@((ambiguity / 100m).ToString("P0")) uncertainty</small>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    };
+
     private string _query = "";
     private string _clarificationAnswer = "";
+    private string _selectedModelCode = "";
+    private IReadOnlyCollection<WideModelOptionDto> _models = [];
     private bool _loading, _usePoloxiEngine = true;
     // V2.9 two-view UX: consumer Answer view by default; the full POLOXI Analysis stays one click away.
     private bool _showAnswerView = true, _showReasoning;
@@ -805,6 +1036,89 @@
     // V2.4: the final visible ranking deterministically follows the Candidate × Branch competition.
     private IReadOnlyList<WideCandidateDto> FinalRankedCandidates => _response is null ? []
         : _response.Candidates.Where(c => !c.IsConstraintViolation).OrderBy(c => c.RankNumber).Take(10).ToArray();
+    // Naive baseline ranking: mention frequency first, then a PLAIN unweighted average of the
+    // per-dimension scores as tie-break — never POLOXI's RankNumber, so tied mention counts don't
+    // silently mirror the POLOXI ranking. No coverage scaling, evidence confidence, or competition.
+    private IReadOnlyList<WideCandidateDto> BaselineRankedCandidates => _response is null ? []
+        : _response.Candidates
+            .OrderByDescending(c => c.InterpretiveSupportCount)
+            .ThenByDescending(c => c.BranchScores.Count > 0 ? c.BranchScores.Average(s => s.EvidenceScore) : 0m)
+            .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(FinalRankedCandidates.Count, 1)).ToArray();
+
+    // Tooltip text explaining a baseline mention count: every interpretive dimension that named the
+    // candidate with its evidence score, straight from the Candidate × Branch data — no re-ranking.
+    private static string MentionBreakdown(WideCandidateDto candidate) => candidate.BranchScores.Count == 0
+        ? $"Named by {candidate.InterpretiveSupportCount} interpretive dimension(s); per-dimension scores unavailable for this candidate."
+        : $"Named by {candidate.InterpretiveSupportCount} interpretive dimension(s):\n" + string.Join("\n",
+            candidate.BranchScores.OrderByDescending(s => s.EvidenceScore).Select(s => $"• {s.BranchDisplayName}: {s.EvidenceScore:P0} evidence score"));
+
+    // V3.5 hierarchical roll-up tooltip: shows how a parent dimension score was derived from the
+    // model's direct judgment blended with the confidence-weighted narrowing sub-criteria.
+    private static string RollUpTooltip(WideCandidateBranchScoreDto score) =>
+        $"Rolled up from progressive narrowing (50% direct + 50% sub-criteria).\nDirect judgment: {(score.DirectScore ?? score.EvidenceScore):P0}\n" + string.Join("\n",
+            score.ChildScores.OrderByDescending(child => child.EvidenceScore).Select(child => $"• {child.BranchDisplayName}: {child.EvidenceScore:P0} (weight {child.Confidence:P0})"));
+
+    // The raw first LLM result: a genuine single-shot answer to the plain query from the selected model,
+    // captured server-side in parallel with the POLOXI pipeline — exactly what the model's own chat
+    // interface would have returned, before any evidence, competition, or filtering.
+    private IReadOnlyList<WideInterpretiveResultItemDto> LlmRawItems => _response is null ? []
+        : _response.LlmRawItems.OrderBy(x => x.RankNumber).ToArray();
+
+    // Where a raw-LLM entry landed in the POLOXI ranking (1-based), or null when POLOXI excluded it.
+    // Tolerant match: raw chat answers often omit qualifiers like the state suffix ("Irvine" vs "Irvine, CA").
+    private int? FindPoloxiRank(string rawName)
+    {
+        for (var index = 0; index < FinalRankedCandidates.Count; index++)
+        {
+            var candidate = FinalRankedCandidates[index].DisplayName;
+            if (candidate.Equals(rawName, StringComparison.OrdinalIgnoreCase)
+                || candidate.Contains(rawName, StringComparison.OrdinalIgnoreCase)
+                || rawName.Contains(candidate, StringComparison.OrdinalIgnoreCase))
+                return index + 1;
+        }
+        return null;
+    }
+
+    // Contested/resolved zone for the POLOXI cell background tint: a candidate is CONTESTED (1)
+    // when it sits within scoring noise (<3%) of the candidate above or below — a visual band of
+    // near-ties. It is CLEAR (2) when separated by ≥5% on both sides (or the relevant side at the
+    // edges). Anything in between is neutral (0). Pure presentation over the same composite scores.
+    private int ContestZoneAt(int rowIndex)
+    {
+        if (rowIndex < 0 || rowIndex >= FinalRankedCandidates.Count) return 0;
+        var gapAbove = rowIndex > 0 ? FinalRankedCandidates[rowIndex - 1].CompositeScore - FinalRankedCandidates[rowIndex].CompositeScore : (decimal?)null;
+        var gapBelow = rowIndex < FinalRankedCandidates.Count - 1 ? FinalRankedCandidates[rowIndex].CompositeScore - FinalRankedCandidates[rowIndex + 1].CompositeScore : (decimal?)null;
+        if (gapAbove is < .03m || gapBelow is < .03m) return 1;
+        if ((gapAbove is null or >= .05m) && (gapBelow is null or >= .05m)) return 2;
+        return 0;
+    }
+
+    // Margin gap: how far this POLOXI-ranked candidate leads the next one. Complements the
+    // entropy funnel — the funnel measures the whole distribution, while the gap shows exactly
+    // WHERE the ranking is contested (tiny gap = within scoring noise) vs resolved (clear lead).
+    private decimal? MarginToNext(int rowIndex) =>
+        rowIndex >= 0 && rowIndex < FinalRankedCandidates.Count - 1
+            ? Math.Max(FinalRankedCandidates[rowIndex].CompositeScore - FinalRankedCandidates[rowIndex + 1].CompositeScore, 0m)
+            : null;
+
+    // Ambiguity funnel for the comparison table: row 0 shows the measured initial normalized entropy
+    // and the last row shows the final normalized entropy, passing through each information round's
+    // measured after-round entropy in order. All values come from POLOXI's deterministic measurements.
+    private decimal AmbiguityAt(int rowIndex, int rowCount)
+    {
+        if (_response is null || rowCount <= 0) return 0m;
+        var points = new List<decimal> { _response.InitialNormalizedEntropy };
+        points.AddRange(_response.InformationRounds.OrderBy(r => r.RoundNumber).Where(r => r.NormalizedEntropyAfter.HasValue).Select(r => r.NormalizedEntropyAfter!.Value));
+        points.Add(_response.FinalNormalizedEntropy);
+        if (rowCount == 1) return Math.Clamp(points[^1], 0m, 1m) * 100m;
+        var position = (decimal)rowIndex / (rowCount - 1) * (points.Count - 1);
+        var lower = (int)Math.Floor(position);
+        var upper = Math.Min(lower + 1, points.Count - 1);
+        var fraction = position - lower;
+        var value = points[lower] + (points[upper] - points[lower]) * fraction;
+        return Math.Clamp(value, 0m, 1m) * 100m;
+    }
     private string GroundingBadge => _response switch
     {
         { AnswerVerificationCode: "VERIFIED" } when HasEnterpriseEvidence => "VERIFIED",
@@ -821,10 +1135,10 @@
     };
     private int ActiveBranchCount => SurvivingBranches.Count(x => x.BranchStateCode == "ACTIVE");
 
-    protected override Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Intelligent Search Wide Using POLOXI Engine", "/intelligence/search/poloxi_wide"));
-        return Task.CompletedTask;
+        try { _models = await Api.GetIntelligenceWideModelsAsync(); } catch { _models = []; }
     }
 
     private async Task SearchAsync()
@@ -835,7 +1149,7 @@
         _error = null;
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine });
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode });
         }
         catch (Exception ex)
         {
@@ -868,7 +1182,7 @@
         _error = null;
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId });
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode });
             _clarificationAnswer = "";
         }
         catch (Exception ex)
