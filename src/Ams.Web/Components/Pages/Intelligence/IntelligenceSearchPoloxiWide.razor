@@ -17,13 +17,18 @@
             </div>
         </header>
 
-        <section class="um-search-filter-row" aria-label="Wide enterprise question">
-            <div class="um-search-box">
-                <i class="bi bi-search"></i>
-                <input id="poloxi-query" class="um-search-input" placeholder="Example: Which policies are in trouble?" @bind="_query" @bind:event="oninput" @onkeydown="KeyDown" />
+        <section class="poloxi-composer" aria-label="Wide enterprise question">
+            <div class="poloxi-composer-input">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <textarea id="poloxi-query" class="poloxi-query-area" rows="3"
+                          placeholder="Ask a detailed question — include your goals, constraints, and priorities. Example: Which policies are in trouble, considering lapse risk and claim history?"
+                          @bind="_query" @bind:event="oninput" @onkeydown="KeyDown"></textarea>
             </div>
-            <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
-            <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@_loading"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
+            <div class="poloxi-composer-footer">
+                <span class="poloxi-composer-hint"><kbd>Enter</kbd> to search &middot; <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
+                <label class="poloxi-toggle"><input type="checkbox" @bind="_usePoloxiEngine" /><span></span><strong>POLOXI Engine</strong></label>
+                <button class="um-btn um-btn-primary" @onclick="SearchAsync" disabled="@(_loading||string.IsNullOrWhiteSpace(_query))"><i class="bi bi-stars"></i> Disambiguate &amp; Answer</button>
+            </div>
         </section>
 
         @if (_loading)
@@ -57,7 +62,7 @@
                                 <div class="poloxi-branch-level">
                                     @foreach (var option in _response.ClarificationOptionItems)
                                     {
-                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option.Label)">@option.Label</button>
+                                        <button type="button" class="um-btn um-btn-secondary um-btn-sm" disabled="@_loading" @onclick="() => SubmitClarificationAsync(option.Value ?? option.Label)">@option.Label</button>
                                     }
                                 </div>
                             </div>
@@ -495,6 +500,10 @@
 
             <section class="poloxi-kpis">
                 <article><i class="bi bi-activity poloxi-kpi-icon"></i><span>Status</span><strong>@_response.StatusCode</strong><small>@_response.TerminationReasonCode</small></article>
+                @if (!string.IsNullOrWhiteSpace(_response.AnswerKindCode))
+                {
+                    <article title="V3.2 answer-kind-aware workflow routing: the Stage 0 classification of what the answer items ARE. TUNED means kind-specific depth/round budgets shortened this execution; FULL PIPELINE means the complete budgets applied."><i class="bi bi-signpost-2 poloxi-kpi-icon"></i><span>Answer kind</span><strong>@_response.AnswerKindCode.Replace('_', ' ')</strong><small>@(_response.AnswerKindRoutingApplied ? "tuned budgets" : "full pipeline")</small></article>
+                }
                 <article><i class="bi bi-diagram-3 poloxi-kpi-icon"></i><span>Depth reached</span><strong>@_response.DepthReached</strong><small>@_response.LlmCallCount LLM calls</small></article>
                 <article><i class="bi bi-signpost-split poloxi-kpi-icon"></i><span>Surviving paths</span><strong>@SurvivingBranches.Count</strong><small>@EliminatedBranches.Count pruned</small></article>
                 <article><i class="bi bi-database-check poloxi-kpi-icon"></i><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external · @_response.EnterpriseEvidenceCount enterprise</small></article>
@@ -848,11 +857,18 @@
         // can measure Clarification Gain and enforce the multi-round stop rules.
         var round = _response.ClarificationRound + 1;
         var priorIntentEntropy = _response.IntentEntropy;
+        // V3.2.3: carry the original run's AnswerKind so the continuation inherits the original task
+        // classification instead of re-classifying the answer-polluted text.
+        var originalAnswerKind = _response.AnswerKindCode;
+        // V3.4: the continuation token — the server derives the whole epistemic chain (round, prior
+        // entropy, answer kind, target, original query) from this persisted execution row; the
+        // client-carried fields below remain only as a legacy fallback.
+        var parentExecutionId = _response.WideExecutionId;
         _loading = true;
         _error = null;
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy });
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId });
             _clarificationAnswer = "";
         }
         catch (Exception ex)
@@ -872,7 +888,8 @@
 
     private async Task KeyDown(KeyboardEventArgs args)
     {
-        if (args.Key == "Enter") await SearchAsync();
+        // Enter submits; Shift+Enter inserts a new line (multi-line enterprise composer).
+        if (args.Key == "Enter" && !args.ShiftKey) await SearchAsync();
     }
 
     private void OpenEvidence(PoloxiEvidenceDto evidence)

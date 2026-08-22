@@ -398,6 +398,12 @@ public sealed partial class DatabaseMigrator
         new("0342_Intelligence_Wide_Clarification", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0152_IntelligenceWideClarification.sql")),
         new("0343_Intelligence_Wide_Clarification_Calibration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0153_IntelligenceWideClarificationCalibration.sql")),
         new("0344_Intelligence_Safety_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0154_IntelligenceSafetyOutputBudget.sql")),
+        new("0345_Intelligence_Wide_Adaptive_Narrowing", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0155_IntelligenceWideAdaptiveNarrowing.sql")),
+        new("0346_Intelligence_Wide_Information_Target_Breadth", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0156_IntelligenceWideInformationTargetBreadth.sql")),
+        new("0347_Intelligence_Wide_Answer_Kind_Routing", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0157_IntelligenceWideAnswerKindRouting.sql")),
+        new("0348_Intelligence_Wide_Clarification_Calibration", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0158_IntelligenceWideClarificationCalibration.sql")),
+        new("0349_Intelligence_Wide_Answer_Kind_Table", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0159_IntelligenceWideAnswerKindTable.sql")),
+        new("0350_Intelligence_Wide_Continuation_State", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0160_IntelligenceWideContinuationState.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

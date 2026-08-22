@@ -23,7 +23,20 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // floor deterministically without server-side session state.
     [Range(0,10)]public int ClarificationRound{get;init;}
     [Range(0,1)]public decimal? PriorIntentEntropy{get;init;}
+    // V3.2.3 AnswerKind carry-forward: the clarification answer is a parameter fill for the ORIGINAL
+    // task, not a new question — the continuation inherits the original run's AnswerKind instead of
+    // re-classifying the answer-polluted text (which reads like SINGLE_ANSWER/CONTENT_ENUMERATION).
+    [StringLength(30)]public string? OriginalAnswerKind{get;init;}
+    // V3.4 server-side continuation state: when set, the epistemic chain (original query, round,
+    // prior intent entropy, answer kind, clarification target) is derived from the persisted parent
+    // execution row - the client-carried fields above become legacy fallbacks only. This is the
+    // continuation token for API productization: tamper-proof, tenant-scoped, replayable.
+    public Guid? ParentWideExecutionId{get;init;}
 }
+
+// V3.4: continuation state loaded server-side from POLOXI.WideExecution (tenant-scoped).
+// Null when the parent id does not exist for the tenant - the service falls back to client fields.
+public sealed record WideContinuationState(Guid WideExecutionId,string QueryText,int ClarificationRound,decimal? IntentEntropy,string? AnswerKindCode,string? ClarificationTarget);
 
 public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,int LevelNumber,string BranchCode,string DisplayName,string Interpretation,string? CapabilityCode,string? SearchText,string GroundingStatusCode,int EvidenceCount,decimal Confidence,bool ContinueNarrowing,string? StopReason,bool IsEliminated,string? EliminationReason,int SortOrder)
 {
@@ -41,12 +54,64 @@ public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,in
 // V2.1 branch lifecycle states. PRUNED is reserved for hard-constraint violations, explicit
 // contradictions, or structurally invalid branches; lacking enterprise evidence or a low
 // interpretation prior demotes a branch to SECONDARY/DORMANT instead of eliminating it.
+// V3.0 adds RESOLVED: an evidence-settled branch removed from further INVESTIGATION attention
+// (it stays in the answer path with its final scores). Reversible: a material evidence-support
+// change reopens it — "reversible uncertainty, irreversible invalidation".
 public static class WideBranchStates
 {
     public const string Active="ACTIVE";
     public const string Secondary="SECONDARY";
     public const string Dormant="DORMANT";
     public const string Pruned="PRUNED";
+    public const string Resolved="RESOLVED";
+}
+
+// ── V3.0 Evidence-Guided Adaptive Narrowing ────────────────────────────────────
+// POLOXI's default behavior is NARROW: each useful iteration should shrink the reasoning space
+// (branches), the candidate space, and unresolved uncertainty. Expansion is permitted ONLY when
+// newly grounded evidence demonstrates the current space may be incomplete (discovery admission
+// gate + per-round budget), after which narrowing resumes. All decisions are deterministic — the
+// LLM proposes; evidence validates; the POLOXI Narrowing Policy decides.
+
+// Per-round directional trend of the reasoning/candidate spaces.
+public static class WideNarrowingTrends
+{
+    public const string Narrowing="NARROWING";   // spaces shrank or uncertainty fell
+    public const string Stable="STABLE";         // no material change
+    public const string Expansion="EXPANSION";   // evidence-justified admissions grew a space
+    public const string Reopened="REOPENED";     // a resolved branch was reopened by changed evidence
+    public const string Converged="CONVERGED";   // uncertainty below trigger — no further rounds needed
+}
+
+// V3.0 candidate narrowing states. ELIMINATED is soft (evidence currently uncompetitive — can
+// return); INVALIDATED is hard (constraint violation — terminal). A candidate is NEVER deferred
+// or eliminated solely because evidence is missing: missing evidence ⇒ WATCH ⇒ investigate.
+public static class WideCandidateStates
+{
+    public const string Active="ACTIVE";
+    public const string Watch="WATCH";
+    public const string Deferred="DEFERRED";
+    public const string Eliminated="ELIMINATED";
+    public const string Invalidated="INVALIDATED";
+    public const string Admitted="ADMITTED";
+    public const string NewlyDiscovered="NEWLY_DISCOVERED";
+    public const string DiscoveredNotAdmitted="DISCOVERED_NOT_ADMITTED";
+}
+
+// One provenance-preserving narrowing state transition (branch or candidate) with its reason.
+public sealed record WideNarrowingTransitionDto(string SubjectTypeCode,string SubjectName,string PreviousStateCode,string NewStateCode,string Reason);
+
+// One narrowing evaluation: before/after space sizes, uncertainty, measured gain, trend, and the
+// individual audited transitions. Rendered by the UI and persisted for audit (never deleted).
+public sealed record WideNarrowingIterationDto(int RoundNumber,string TrendCode,int ActiveBranchCountBefore,int ActiveBranchCountAfter,int CandidateCountBefore,int CandidateCountAfter,decimal NormalizedEntropyBefore,decimal? NormalizedEntropyAfter,decimal? ActualInformationGain,IReadOnlyCollection<WideNarrowingTransitionDto> Transitions)
+{
+    // Candidates admitted this round through the discovery gate (joined the NEXT round's entropy basis).
+    public int AdmittedCandidateCount{get;init;}
+    // Names discovered but NOT admitted (insufficient discovery evidence or budget) — disclosed, never hidden.
+    public int DiscoveredNotAdmittedCount{get;init;}
+    // Branches marked RESOLVED (settled) and branches reopened by changed evidence this round.
+    public int ResolvedBranchCount{get;init;}
+    public int ReopenedBranchCount{get;init;}
 }
 
 // V2.3 semantic branch types. ALTERNATIVE branches compete (only one primary interpretation is
@@ -82,6 +147,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public IReadOnlyCollection<WideExternalKnowledgeSnippet> ExternalKnowledge{get;init;}=[];
     // V2.1: query contract extracted before hierarchy generation (constraints vs ambiguities vs output shape).
     public WideQueryContract? QueryContract{get;init;}
+    // V3.2: the governing AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER)
+    // and whether kind-aware budget routing actually tuned this execution's workflow.
+    public string? AnswerKindCode{get;init;}
+    public bool AnswerKindRoutingApplied{get;init;}
     // V2.1: cross-branch candidate competition results (composite ranking honoring hard constraints).
     public IReadOnlyCollection<WideCandidateDto> Candidates{get;init;}=[];
     // V2.1: share of surviving branches supported by at least one evidence item (external or enterprise).
@@ -142,6 +211,12 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // Branch outcome — the UI renders this instead of rediscovering the reasoning. Null when no
     // candidate competition ran (LLM-only mode or zero candidates).
     public WideAnswerContext? AnswerContext{get;init;}
+    // V3.0 Evidence-Guided Adaptive Narrowing: per-round deterministic narrowing audit — how the
+    // reasoning space, candidate space, and unresolved uncertainty changed, with every state
+    // transition and its evidence-based reason. Empty when narrowing is disabled or no rounds ran.
+    public IReadOnlyCollection<WideNarrowingIterationDto> NarrowingIterations{get;init;}=[];
+    // V3.0: the final directional statement of the run (NARROWING/STABLE/EXPANSION/REOPENED/CONVERGED).
+    public string? FinalNarrowingTrend{get;init;}
 }
 
 // V2.9 response modes: the Uncertainty Router controls PRESENTATION, not only reasoning.
@@ -231,10 +306,20 @@ public sealed record WideCandidateContrastDto(string AlternativeDisplayName,deci
 // V2.8.4 Clarification Intelligence: one recognition-based clarification choice. Label is
 // description-first (candidate's evidence-backed detail) because users searching a bare name
 // often do not recognize the legal name — recognition beats recall.
-public sealed record WideClarificationOptionDto(string Key,string Label);
+// V3.2.1: Label is what the user SEES (evidence-backed description); Value is what is SUBMITTED as the
+// clarification answer (the concise candidate name, so the continuation constraint stays clean). The
+// OTHER escape hatch uses Key=OTHER and a null Value: the continuation re-runs without a fake constraint.
+public sealed record WideClarificationOptionDto(string Key,string Label,string? Value=null);
 
 // V2.1 Query Contract: separates hard constraints from ambiguous concepts so POLOXI only branches ambiguity.
-public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements)
+{
+    // V3.1 answer-kind routing: ENTITY_RANKING (requested items are named, verifiable entities — the
+    // Candidate Competition applies), CONTENT_ENUMERATION (requested items are pieces of content such
+    // as questions, tips, steps, examples — not rankable entities; route to the interpretive answer
+    // path), or SINGLE_ANSWER. Null degrades to the pre-V3.1 heuristics.
+    public string? AnswerKind{get;init;}
+}
 
 // V2.1 candidate competition: a candidate with its composite score and per-branch evidence scores.
 public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string DisplayName,string? Detail,decimal CompositeScore,IReadOnlyCollection<WideCandidateBranchScoreDto> BranchScores)
@@ -317,7 +402,8 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // V2.8 Clarification Gate thresholds (DB-seeded; see migration 0152). ALL conditions must hold
     // for POLOXI to ask instead of answer — a single low metric never triggers a question.
     public bool EnableClarificationGate{get;init;}=true;
-    public decimal ClarificationConfidenceThreshold{get;init;}=.60m;
+    // V3.2.1: raised from .60 so low-stability rankings with stalled retrieval ask instead of committing.
+    public decimal ClarificationConfidenceThreshold{get;init;}=.65m;
     public decimal ClarificationWinnerStabilityThreshold{get;init;}=.50m;
     public decimal ClarificationMarginThreshold{get;init;}=.10m;
     // V2.8.5 Clarification Calibration (DB-seeded; see migration 0153): clarification must converge.
@@ -344,7 +430,45 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public int EvidencePriorityMinimumDepth{get;init;}=4;
     public decimal EvidencePriorityCoverageFloor{get;init;}=.35m;
     public int MinimumCandidateDimensionSupport{get;init;}=2;
+    // V3.0 Evidence-Guided Adaptive Narrowing (DB-seeded; see migration 0155). Fail-soft: any
+    // narrowing failure skips the evaluation and continues the V2.x pipeline unchanged.
+    public bool EnableAdaptiveNarrowing{get;init;}=true;
+    // Branch resolution eligibility: a branch may be RESOLVED only when its evidence support meets
+    // the coverage floor AND its share of the round's investigation value is below the IV floor.
+    public decimal NarrowingBranchCoverageFloor{get;init;}=.60m;
+    public decimal NarrowingInformationValueFloor{get;init;}=.35m;
+    // Reopen trigger: a RESOLVED branch reopens when its evidence support moves by at least this much.
+    public decimal NarrowingReopenSupportDelta{get;init;}=.15m;
+    // Candidate deferral eligibility: sufficient signal coverage AND at least this relative score gap
+    // behind the leader. Candidates below the coverage floor go to WATCH (investigate, never eliminate).
+    public decimal NarrowingCandidateCoverageFloor{get;init;}=.50m;
+    public decimal NarrowingCandidateScoreGap{get;init;}=.40m;
+    // Discovery admission gate: a newly discovered name is admitted only when attested by at least
+    // this many distinct evidence hosts/mentions; per-round admission budget caps expansion cost.
+    public int NarrowingDiscoveryMinimumSupport{get;init;}=2;
+    public int MaximumCandidateAdmissionsPerRound{get;init;}=5;
+    // V3.2 Answer-Kind-Aware Workflow Routing (DB-seeded; see migration 0157). The Stage 0
+    // AnswerKind classification tunes (never forks) the pipeline: depth ceilings and information
+    // round caps per kind. A depth ceiling of 0 means "use the full default"; unknown/null kinds
+    // always run the full pipeline (fail-safe toward thoroughness, never toward speed).
+    public bool EnableAnswerKindRouting{get;init;}=true;
+    public int ContentEnumerationDepthCeiling{get;init;}=2;
+    public int ContentEnumerationMaxInformationRounds{get;init;}=1;
+    public int SingleAnswerDepthCeiling{get;init;}=2;
+    public int SingleAnswerMaxInformationRounds{get;init;}
+    // V3.3 POLOXI.AnswerKind lookup table (DB-seeded; see migration 0159). When rows exist they are
+    // the source of truth for answer-kind recognition, per-kind budgets, and whether the deterministic
+    // Candidate Competition applies; the per-kind config keys above remain only as compiled fallbacks
+    // when the table is empty. Fail-safe toward the full pipeline.
+    public IReadOnlyCollection<WideAnswerKindDefinition>AnswerKinds{get;init;}=[];
+    // V3.3: the ReweightCandidatesByClarificationAnswer boost factor (score * (1 + boost * overlap)),
+    // moved from a compiled .35m constant to a DB-seeded dial.
+    public decimal ClarificationReweightBoost{get;init;}=.35m;
 }
+
+// V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds
+// null both mean "use the full defaults"; budgets only ever shrink, never expand.
+public sealed record WideAnswerKindDefinition(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 
 // Stage 2.5 external grounding configuration loaded from Core.ConfigurationSetting (DB is the source of truth).
 // A blank ApiKey or Enabled=false disables live retrieval; the pipeline degrades to interpretive-only answers.
@@ -388,7 +512,10 @@ public sealed record WideInterpretiveResultItem(int RankNumber,string Name,strin
 public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,string Rationale);
 
 // V2.1 LLM structured outputs.
-public sealed record WideQueryContractProposal(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements);
+public sealed record WideQueryContractProposal(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements)
+{
+    public string? AnswerKind{get;init;}
+}
 
 public sealed record WideCandidateScoringProposal(IReadOnlyCollection<WideCandidateScore> Candidates);
 
@@ -397,7 +524,11 @@ public sealed record WideCandidateScore(string Name,string? Detail,bool Violates
 public sealed record WideCandidateBranchEvidence(string BranchDisplayName,decimal EvidenceScore);
 
 // Persistence records.
-public sealed record WideExecutionStart(Guid TenantId,Guid UserId,string QueryText,string CorrelationId);
+public sealed record WideExecutionStart(Guid TenantId,Guid UserId,string QueryText,string CorrelationId)
+{
+    // V3.4: links a clarification continuation to the execution that asked the question.
+    public Guid? ParentWideExecutionId{get;init;}
+}
 
 public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Guid? ParentWideBranchId,Guid TenantId,int LevelNumber,string BranchCode,string DisplayName,string Interpretation,string? CapabilityCode,string? SearchText,string GroundingStatusCode,int EvidenceCount,decimal Confidence,bool ContinueNarrowing,string? StopReason,bool IsEliminated,string? EliminationReason,int SortOrder)
 {
@@ -507,6 +638,10 @@ public sealed record WideInformationPredictionRecord(Guid WideInformationPredict
     public bool? DirectionCorrect{get;init;}
     public bool? MagnitudeCorrect{get;init;}
 }
+
+// V3.0 persistence record (POLOXI.WideNarrowingIteration; see migration 0155). Transitions are
+// stored as JSON — every narrowing decision keeps its provenance (subject, states, reason).
+public sealed record WideNarrowingIterationRecord(Guid WideNarrowingIterationId,Guid WideExecutionId,Guid TenantId,int RoundNumber,string TrendCode,int ActiveBranchCountBefore,int ActiveBranchCountAfter,int CandidateCountBefore,int CandidateCountAfter,decimal NormalizedEntropyBefore,decimal? NormalizedEntropyAfter,decimal? ActualInformationGain,int ResolvedBranchCount,int ReopenedBranchCount,int AdmittedCandidateCount,int DiscoveredNotAdmittedCount,string TransitionsJson);
 
 // Execution-level entropy summary persisted at completion (POLOXI.WideExecution V2.2 columns).
 public sealed record WideExecutionEntropyUpdate(Guid WideExecutionId,decimal? InitialEntropy,decimal? FinalEntropy,decimal? InitialNormalizedEntropy,decimal? FinalNormalizedEntropy,decimal? TotalActualInformationGain,int InformationRoundCount,int InformationTargetCount,int InformationRetrievalCount)

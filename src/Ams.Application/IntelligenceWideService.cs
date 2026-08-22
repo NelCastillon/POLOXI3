@@ -182,6 +182,27 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(request.UserId==Guid.Empty)throw new UnauthorizedAccessException("An authenticated user is required for Wide search.");
         var timer=Stopwatch.StartNew();
         request=request with{Query=NormalizeQuery(request.Query),MaximumResults=Math.Clamp(request.MaximumResults,1,100),CorrelationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"wide-search:{Guid.NewGuid():N}":request.CorrelationId.Trim()};
+        // V3.4 server-side continuation state: when the client presents a continuation token
+        // (ParentWideExecutionId) the epistemic chain is derived from the persisted parent execution
+        // row - original query text, clarification round, prior intent entropy, answer kind, and
+        // clarification target. Client-carried fields are overridden, never trusted, so a tampered
+        // or buggy client cannot corrupt round math, gain math, or kind routing. Tenant scoping is
+        // enforced in the lookup; an unknown/foreign id degrades to the legacy client-carried path.
+        WideContinuationState? continuationState=null;
+        if(request.ParentWideExecutionId is{}parentExecutionId&&!string.IsNullOrWhiteSpace(request.ClarificationAnswer))
+        {
+            try{continuationState=await wideRepository.GetWideContinuationStateAsync(request.TenantId,parentExecutionId,cancellationToken);}
+            catch(Exception)when(!cancellationToken.IsCancellationRequested){/* fail-soft to client-carried fields */}
+            if(continuationState is not null)
+                request=request with
+                {
+                    Query=NormalizeQuery(continuationState.QueryText),
+                    ClarificationRound=continuationState.ClarificationRound+1,
+                    PriorIntentEntropy=continuationState.IntentEntropy??request.PriorIntentEntropy,
+                    OriginalAnswerKind=continuationState.AnswerKindCode??request.OriginalAnswerKind,
+                    ClarificationTarget=continuationState.ClarificationTarget??request.ClarificationTarget
+                };
+        }
         // V2.8 clarification continuation: a follow-up answer is appended as an added constraint so the
         // pipeline reweights interpretations instead of restarting blind. The clarified query flows through
         // the query contract, hierarchy, grounding, and candidate competition like any hard constraint.
@@ -198,7 +219,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // Wide search is knowledge-only: it never grounds branches against AMS enterprise records.
         // An empty capability catalog forces every branch onto the INTERPRETIVE reasoning path.
         var capabilities=Array.Empty<PoloxiCapabilityDto>();
-        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId),cancellationToken);
+        var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId){ParentWideExecutionId=continuationState?.WideExecutionId},cancellationToken);
         var llmCalls=0;
         var allBranches=new List<WideBranchRecord>();
         var evidence=new List<PoloxiEvidenceDto>();
@@ -215,9 +236,31 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             WideQueryContract? queryContract=null;
             if(configuration.EnableQueryContract)
             {
-                queryContract=await ExtractQueryContractAsync(request,cancellationToken);
+                queryContract=await ExtractQueryContractAsync(request,configuration,cancellationToken);
                 if(queryContract is not null)llmCalls++;
             }
+            // V3.2.3 AnswerKind carry-forward: a clarification continuation inherits the ORIGINAL run's
+            // classification. The appended answer text pollutes Stage 0 re-classification (it reads like
+            // a single-answer/enumeration fragment), but the task itself is unchanged — the user merely
+            // filled a missing parameter. Inheriting keeps budgets and the candidate competition keyed
+            // to the task that actually asked the question.
+            if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}inheritedKind)
+                queryContract=queryContract is null?new(null,null,null,null,[],[],[]){AnswerKind=inheritedKind}:queryContract with{AnswerKind=inheritedKind};
+            // V3.2 Answer-Kind-Aware Workflow Routing: the Stage 0 AnswerKind classification tunes
+            // (never forks) the pipeline budgets. CONTENT_ENUMERATION and SINGLE_ANSWER queries do not
+            // benefit from deep entity discrimination, so their depth ceiling and information-round
+            // caps shrink. Unknown/null kinds always keep the full budgets (fail-safe toward
+            // thoroughness, never toward speed). The governing kind is persisted for audit.
+            // V3.2.2/V3.2.3 clarification-continuation guard: when the original kind was carried forward
+            // the budgets flow naturally from the inherited classification; when an old client omits
+            // OriginalAnswerKind, fail safe toward thoroughness — full budgets, never shrunk by a
+            // re-classification of the answer-polluted text.
+            var isClarificationContinuation=!string.IsNullOrWhiteSpace(request.ClarificationAnswer);
+            var(effectiveDepthCeiling,effectiveInformationRounds,answerKindRoutingApplied)=!isClarificationContinuation||NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}
+                ?ResolveAnswerKindBudgets(configuration,queryContract)
+                :(configuration.AbsoluteDepthCeiling,configuration.MaximumInformationRounds,false);
+            if(queryContract?.AnswerKind is{Length:>0}answerKindCode)
+                try{await wideRepository.UpdateWideExecutionAnswerKindAsync(request.TenantId,request.UserId,executionId,answerKindCode,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
 
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
             var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
@@ -298,7 +341,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 if(depth>=2&&survivors.All(branch=>!branch.ContinueNarrowing)){terminationReason="LLM_COMPLETE";break;}
 
                 // Circuit breakers (never functional limits; audited when reached).
-                if(depth>=configuration.AbsoluteDepthCeiling){terminationReason="DEPTH_CEILING_REACHED";break;}
+                if(depth>=effectiveDepthCeiling){terminationReason=answerKindRoutingApplied&&effectiveDepthCeiling<configuration.AbsoluteDepthCeiling?"ANSWER_KIND_DEPTH_BUDGET":"DEPTH_CEILING_REACHED";break;}
                 if(llmCalls+2>configuration.MaximumTotalLlmCalls){terminationReason="LLM_CALL_CEILING_REACHED";break;}
 
                 // V2.3 evidence-priority expansion guard: when the hierarchy is already deep but most
@@ -339,7 +382,24 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(aggregateConfidence==0m&&survivorsFinal.Length>0)aggregateConfidence=ComputeAggregateConfidence(survivorsFinal);
             // Live external grounding (fail-soft): retrieve fresh web snippets for interpretive paths so
             // time-sensitive figures come from current sources instead of stale model memory.
-            var externalKnowledge=await GatherExternalKnowledgeAsync(request,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,cancellationToken);
+            // V3.4 evidence reuse: a verified continuation first inherits the parent execution's
+            // persisted evidence pool - the original run already grounded the base query, so the
+            // continuation only needs the clarification-driven delta. Reused and fresh snippets are
+            // URL-deduplicated (fresh wins) so the pool never double-counts a source.
+            var externalKnowledge=await GatherExternalKnowledgeAsync(request,executionId,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,cancellationToken);
+            if(continuationState is not null)
+            {
+                try
+                {
+                    var inherited=await wideRepository.GetExecutionExternalKnowledgeAsync(request.TenantId,continuationState.WideExecutionId,cancellationToken);
+                    if(inherited.Count>0)
+                    {
+                        var freshUrls=externalKnowledge.Select(snippet=>snippet.Url).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        externalKnowledge=externalKnowledge.Concat(inherited.Where(snippet=>!freshUrls.Contains(snippet.Url))).ToArray();
+                    }
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* reuse is an optimization; never blocks the run */}
+            }
             // V2.1 three-score model: Interpretation Prior (LLM), Evidence Support (deterministic, from
             // enterprise evidence and matched external snippets), POLOXI Confidence (weighted combination).
             survivorsFinal=survivorsFinal.Select(branch=>
@@ -367,6 +427,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Fail-soft: any estimator/entropy failure skips the round and continues V2.1 behavior.
             var totalActualInformationGain=0m;
             var informationRounds=new List<WideInformationRoundDto>();
+            // V3.0 Evidence-Guided Adaptive Narrowing: per-round deterministic narrowing audit plus
+            // cross-round memory (support at branch resolution for reopen detection; candidate states
+            // for transition provenance). Fail-soft: any narrowing failure degrades to V2.x behavior.
+            var narrowingIterations=new List<WideNarrowingIterationDto>();
+            var branchSupportAtResolution=new Dictionary<Guid,decimal>();
+            var previousCandidateStates=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
             // V2.6 Candidate Stability: deterministic per-round ranking snapshots (no LLM). If added
             // evidence stops changing the ranking, that is a convergence signal independent of entropy.
             var roundRankings=new List<string[]>();
@@ -382,7 +448,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // No LLM call — this gives the information rounds a real candidate universe up front so
             // Information Gain targets "which candidate wins" from round 1, not after competition.
             candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
-            var initialEntropy=ComputeUncertainty(survivorsFinal,candidateUniverse,evidence,externalKnowledgeAll,queryContract);
+            var initialEntropy=ComputeUncertainty(configuration,survivorsFinal,candidateUniverse,evidence,externalKnowledgeAll,queryContract);
             var finalEntropy=initialEntropy;
             if(configuration.EnableInformationValue&&survivorsFinal.Length>0)
             {
@@ -392,14 +458,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // question twice unless the first answer demonstrably helped.
                 var investigationCounts=new Dictionary<Guid,int>();
                     var priorRoundEffectiveness=1m;
-                for(var round=1;round<=configuration.MaximumInformationRounds;round++)
+                for(var round=1;round<=effectiveInformationRounds;round++)
                 {
                     // V2.5: freeze the candidate population for this round. EntropyBefore and EntropyAfter
                     // MUST be measured over the IDENTICAL candidate set, otherwise Hmax=log2(N) shifts and
                     // ActualInformationGain compares incomparable distributions. Names discovered during
                     // this round join the NEXT round's basis instead.
                     var roundCandidateBasis=candidateUniverse.ToArray();
-                    var entropyBefore=ComputeUncertainty(survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
+                    var entropyBefore=ComputeUncertainty(configuration,survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
                     finalEntropy=entropyBefore;
                     if(entropyBefore.NormalizedEntropy<configuration.InformationValueTriggerEntropy)break;
                     if(llmCalls+2>configuration.MaximumTotalLlmCalls)break;
@@ -504,11 +570,22 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         }
                         // Targeted parallel retrieval: evidence target text focuses the query per branch.
                         var retrievalBranches=selected.Select(item=>string.IsNullOrWhiteSpace(item.Target.EvidenceTarget)?item.Branch:item.Branch with{SearchText=Truncate(item.Target.EvidenceTarget,400)}).ToArray();
-                        var newKnowledge=await GatherExternalKnowledgeAsync(request,retrievalBranches,configuration.ExternalRetrievalConcurrency,cancellationToken);
+                        var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,cancellationToken);
                         informationRetrievalCount+=newKnowledge.Count;
                         externalKnowledgeAll.AddRange(newKnowledge);
                         // V2.4: newly retrieved snippets may name candidates not yet in the universe.
-                        candidateUniverse.UnionWith(HarvestCandidateNames(externalKnowledgeAll));
+                        // V3.0 discovery admission gate (Invariant 3): when adaptive narrowing is enabled,
+                        // a newly discovered name joins the universe ONLY with sufficient distinct-host
+                        // attestation, within the per-round admission budget. Rejections are disclosed.
+                        var harvestedNames=HarvestCandidateNames(externalKnowledgeAll);
+                        WideNarrowingPolicy.ExpansionResult? expansion=null;
+                        if(configuration.EnableAdaptiveNarrowing)
+                        {
+                            var discoveredNames=harvestedNames.Where(name=>!candidateUniverse.Contains(name)).ToArray();
+                            expansion=WideNarrowingPolicy.EvaluateExpansion(discoveredNames,externalKnowledgeAll,configuration);
+                            candidateUniverse.UnionWith(expansion.AdmittedNames);
+                        }
+                        else candidateUniverse.UnionWith(harvestedNames);
                         // Normal POLOXI scoring/reweighting on the enriched evidence pool (never LLM-calculated).
                         survivorsFinal=survivorsFinal.Select(branch=>
                         {
@@ -526,7 +603,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         // candidate population the round started with; preserve negative deltas for
                         // diagnostics — evidence can legitimately INCREASE uncertainty (it revealed
                         // overconfidence). Fractional bits are preserved at 4-decimal precision.
-                        var entropyAfter=ComputeUncertainty(survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
+                        var entropyAfter=ComputeUncertainty(configuration,survivorsFinal,roundCandidateBasis,evidence,externalKnowledgeAll,queryContract);
                         var rawDelta=entropyBefore.Entropy-entropyAfter.Entropy;
                         var actualGain=Math.Max(0,rawDelta);
                         totalActualInformationGain+=actualGain;
@@ -566,6 +643,49 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                             var roundSignals=ComputeCandidateSignals(roundCandidateBasis,evidence,externalKnowledgeAll);
                             roundRankings.Add(roundSignals.OrderByDescending(entry=>entry.Value).Select(entry=>entry.Key).ToArray());
                         }
+                        // ── V3.0 Evidence-Guided Adaptive Narrowing ──────────────────────────────────
+                        // Deterministic, zero-LLM: resolve settled branches, reopen branches whose
+                        // evidence materially changed, transition candidate states, and record the
+                        // round's directional trend with full transition provenance.
+                        if(configuration.EnableAdaptiveNarrowing)
+                        {
+                            try
+                            {
+                                var activeBranchesBefore=eligible.Length;
+                                var adjustedByBranch=scored.GroupBy(item=>item.Branch.WideBranchId).ToDictionary(group=>group.Key,group=>group.Max(item=>item.Adjusted));
+                                var branchResult=WideNarrowingPolicy.EvaluateBranches(survivorsFinal,adjustedByBranch,branchSupportAtResolution,configuration);
+                                foreach(var branchId in branchResult.ResolvedBranchIds)
+                                    branchSupportAtResolution[branchId]=survivorsFinal.First(branch=>branch.WideBranchId==branchId).EvidenceSupport;
+                                foreach(var branchId in branchResult.ReopenedBranchIds)
+                                    branchSupportAtResolution.Remove(branchId);
+                                if(branchResult.ResolvedBranchIds.Count>0||branchResult.ReopenedBranchIds.Count>0)
+                                {
+                                    survivorsFinal=survivorsFinal.Select(branch=>
+                                        branchResult.ResolvedBranchIds.Contains(branch.WideBranchId)?branch with{BranchStateCode=WideBranchStates.Resolved}
+                                        :branchResult.ReopenedBranchIds.Contains(branch.WideBranchId)?branch with{BranchStateCode=WideBranchStates.Active}
+                                        :branch).ToArray();
+                                    foreach(var branch in survivorsFinal)
+                                        allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
+                                }
+                                var candidateSignals=ComputeCandidateSignals(roundCandidateBasis,evidence,externalKnowledgeAll);
+                                var candidateResult=WideNarrowingPolicy.EvaluateCandidates(candidateSignals,externalKnowledgeAll,previousCandidateStates,configuration);
+                                foreach(var(candidateName,candidateState)in candidateResult.CandidateStates)
+                                    previousCandidateStates[candidateName]=candidateState;
+                                var transitions=branchResult.Transitions.Concat(expansion?.Transitions??[]).Concat(candidateResult.Transitions).ToArray();
+                                var activeBranchesAfter=survivorsFinal.Count(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary);
+                                var admittedCount=expansion?.AdmittedNames.Count??0;
+                                var notAdmittedCount=expansion?.RejectedNames.Count??0;
+                                var trend=WideNarrowingPolicy.ComputeTrend(activeBranchesBefore,activeBranchesAfter,roundCandidateBasis.Length,candidateUniverse.Count,branchResult.ReopenedBranchIds.Count,admittedCount,entropyAfter.NormalizedEntropy,configuration.InformationValueTriggerEntropy,actualGain);
+                                var iterationDto=new WideNarrowingIterationDto(round,trend,activeBranchesBefore,activeBranchesAfter,roundCandidateBasis.Length,candidateUniverse.Count,entropyBefore.NormalizedEntropy,entropyAfter.NormalizedEntropy,actualGain,transitions){AdmittedCandidateCount=admittedCount,DiscoveredNotAdmittedCount=notAdmittedCount,ResolvedBranchCount=branchResult.ResolvedBranchIds.Count,ReopenedBranchCount=branchResult.ReopenedBranchIds.Count};
+                                await wideRepository.SaveNarrowingIterationAsync(new(Guid.NewGuid(),executionId,request.TenantId,round,trend,activeBranchesBefore,activeBranchesAfter,roundCandidateBasis.Length,candidateUniverse.Count,entropyBefore.NormalizedEntropy,entropyAfter.NormalizedEntropy,actualGain,branchResult.ResolvedBranchIds.Count,branchResult.ReopenedBranchIds.Count,admittedCount,notAdmittedCount,JsonSerializer.Serialize(transitions,JsonOptions)),request.UserId,cancellationToken);
+                                narrowingIterations.Add(iterationDto);
+                            }
+                            catch(Exception exception) when(exception is not OperationCanceledException)
+                            {
+                                // Fail-soft (V3.0 invariant): a narrowing failure must never break the
+                                // information round — degrade to V2.x behavior and continue.
+                            }
+                        }
                         // Stall detection: stop after consecutive weak rounds (INFORMATION_GAIN_STALLED).
                         weakRounds=actualGain<configuration.MinimumActualInformationGain?weakRounds+1:0;
                         if(weakRounds>=configuration.InformationNoProgressRounds)break;
@@ -604,7 +724,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // composite ranking weighted by branch POLOXI confidence. Fail-soft: empty on LLM failure.
             var interpretiveResults=MapInterpretiveResults(answer,survivorsFinal,externalKnowledge);
             IReadOnlyCollection<WideCandidateDto> candidates=[];
-            if(interpretiveResults.Length>0&&llmCalls<configuration.MaximumTotalLlmCalls)
+            // V3.1 answer-kind routing: the FIRST LLM reply (query contract) decides the task type.
+            // CONTENT_ENUMERATION queries ask for pieces of content (exam questions, tips, examples),
+            // not named entities — running the Candidate Competition would force topic vocabulary
+            // ("Exam", "Questions") into candidate slots, producing rankings that contradict the
+            // interpretive answer. Route such queries to the interpretive composition instead.
+            // V3.2.3: the contract's AnswerKind is authoritative here — on a continuation it was
+            // inherited from the original run (carry-forward), so a genuinely enumerative original
+            // task stays interpretive while a ranking task keeps its Candidate Competition. Only a
+            // continuation WITHOUT a carried-forward kind (old client) forces the competition, because
+            // the re-classified kind is untrustworthy on answer-polluted text.
+            var isContentEnumeration=SkipsCandidateCompetition(configuration,queryContract)
+                &&(string.IsNullOrWhiteSpace(request.ClarificationAnswer)||NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0});
+            if(!isContentEnumeration&&interpretiveResults.Length>0&&llmCalls<configuration.MaximumTotalLlmCalls)
             {
                 candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,cancellationToken);
                 if(candidates.Count>0)llmCalls++;
@@ -619,14 +751,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // the user's answer get a deterministic composite boost and are re-ranked — zero-LLM, so the
             // user's choice reliably moves the ranking even when the re-executed evidence run was noisy.
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&candidates.Count>1)
-                candidates=ReweightCandidatesByClarificationAnswer(candidates,request.ClarificationAnswer);
+                candidates=ReweightCandidatesByClarificationAnswer(candidates,request.ClarificationAnswer,configuration.ClarificationReweightBoost);
             // V2.9.2 Output Contract Validation: the delivered ranking must mechanically satisfy the
             // query contract. Requested 10 cities → 10 valid candidates; a shortfall is a validation
             // failure, not a composition style choice. One recovery pass re-runs the competition with
             // relaxed candidate discovery (single-source evidence names admitted) to widen the pool;
             // any remaining shortfall is DISCLOSED via the answer contract, never silently accepted.
             WideOutputContractResultDto? outputContract=null;
-            if(queryContract?.RequestedCount is int contractCount&&contractCount>0&&candidates.Count>0)
+            // V3.1: the output contract counts VERIFIABLE CANDIDATES; a content-enumeration "top 100"
+            // refers to content items delivered in the interpretive answer, so candidate-count
+            // enforcement (and its recovery pass) would be a category error.
+            if(!isContentEnumeration&&queryContract?.RequestedCount is int contractCount&&contractCount>0&&candidates.Count>0)
             {
                 var deliveredCount=candidates.Count(candidate=>!candidate.IsConstraintViolation);
                 var recoveryAttempted=false;
@@ -639,7 +774,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         llmCalls++;
                         if(recovered.Count>1)recovered=DeduplicateCandidatesByCanonicalTokens(recovered);
                         if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&recovered.Count>1)
-                            recovered=ReweightCandidatesByClarificationAnswer(recovered,request.ClarificationAnswer);
+                            recovered=ReweightCandidatesByClarificationAnswer(recovered,request.ClarificationAnswer,configuration.ClarificationReweightBoost);
                         // Keep the recovery only when it actually improved contract compliance.
                         if(recovered.Count(candidate=>!candidate.IsConstraintViolation)>deliveredCount)
                         {
@@ -748,7 +883,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var margin=Math.Clamp((winner.CompositeScore-topCandidates[1].CompositeScore)/Math.Max(winner.CompositeScore,.0001m),0,1);
                 // V2.8.4 retrieval-stalled test: asking is justified only when retrieving more cannot
                 // help — information rounds exhausted, or the last measured gain fell to the floor.
-                var retrievalStalled=informationRounds.Count>=configuration.MaximumInformationRounds
+                var retrievalStalled=informationRounds.Count>=effectiveInformationRounds
                     ||totalActualInformationGain<=configuration.MinimumActualInformationGain;
                 // V2.8.1 Clarification Value (CV): what to ASK the user is NOT what to RETRIEVE (IV).
                 // Retrieval IV drops to ~0 once POLOXI has learned a dimension — which is precisely when
@@ -802,14 +937,22 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     // recognize legal names — options lead with the evidence-backed DESCRIPTION and
                     // keep the name as attribution, plus an OTHER escape hatch. POLOXI already did the
                     // research; the user only needs to recognize, not recall. Deterministic, zero-LLM.
+                    // V3.2.1: Label (shown) and Value (submitted) are separated so the continuation
+                    // constraint stays a concise candidate name instead of a full descriptive sentence,
+                    // keeping Stage 0 contract extraction clean on the re-run.
                     var optionItems=comparisonCandidates.Where(candidate=>!candidate.IsConstraintViolation)
                         .Select((candidate,index)=>new WideClarificationOptionDto($"OPTION_{index+1}",
-                            string.IsNullOrWhiteSpace(candidate.Detail)?candidate.DisplayName:$"{TrimDescription(candidate.Detail)} ({candidate.DisplayName})"))
+                            string.IsNullOrWhiteSpace(candidate.Detail)?candidate.DisplayName:$"{TrimDescription(candidate.Detail)} ({candidate.DisplayName})",
+                            candidate.DisplayName))
                         .ToList();
-                    optionItems.Add(new("OTHER","Something else — none of these match"));
+                    // OTHER submits a real exclusion constraint (not its display label), so the re-run
+                    // widens away from the rejected candidates instead of appending a nonsense filter.
+                    optionItems.Add(new("OTHER","Something else — none of these match","none of the previously suggested candidates; consider other possibilities"));
                     clarificationOptionItems=optionItems;
                     clarificationOptions=optionItems.Select(option=>option.Label).ToArray();
-                    clarificationQuestion=$"I found multiple plausible answers and the available evidence cannot determine which one you mean. Which sounds like the one you're looking for ({clarificationTarget} differs most between them)?";
+                    // V3.2.1 connected question: restate the user's own query and translate the internal
+                    // dimension name into plain terms so the follow-up visibly continues the same search.
+                    clarificationQuestion=$"Your search \u201C{request.Query}\u201D matches multiple plausible answers, and the available evidence cannot determine which one you mean \u2014 they differ most on {clarificationTarget}. Which sounds like the one you're looking for?";
                     answerStatus="USER_CLARIFICATION_REQUIRED";
                     terminationReason="USER_CLARIFICATION_REQUIRED";
                 }
@@ -854,7 +997,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,
             ClarificationQuestion=clarificationQuestion,ClarificationTarget=clarificationTarget,ClarificationOptions=clarificationOptions,
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
-            ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext};
+            ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
+            NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied};
         }
         catch
         {
@@ -940,7 +1085,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.
     // Retrievals run concurrently under a bounded gate; results merge in branch-priority order.
-    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,CancellationToken cancellationToken)
     {
         if(interpretiveBranches.Count==0)return [];
         try
@@ -961,7 +1106,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     if(cached.Count>0){results[index]=cached.Take(configuration.MaximumSnippetsPerQuery).ToArray();return;}
                     var retrieved=await externalKnowledgeProvider.SearchAsync(query,configuration,cancellationToken);
                     if(retrieved.Count==0){results[index]=[];return;}
-                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,cancellationToken);
+                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,executionId,cancellationToken);
                     results[index]=retrieved;
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -1197,6 +1342,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // V2.8.6 post-competition identity dedup: two ranked candidates whose CORE tokens are identical
     // ("Overland Park, Kansas" / "Overland Park") are one entity and must hold one ranking position.
     // The stronger instance (better rank; richer name on ties) survives; scores are never altered.
+    // V3.3.1 qualifier-echo merge: the comma strip in CanonicalTokens loses the qualifier tokens, so
+    // "White Beach, Boracay Island" ([White, Beach]) and "Boracay" ([Boracay]) never key-match even
+    // though the LLM echoed one entity twice. Bare containment would be WRONG ("Palawan" is not
+    // "Nacpan Beach, Palawan"), so the merge additionally requires an IDENTICAL detail payload —
+    // the LLM describing two rows with the exact same text is deterministic evidence of an echo,
+    // while genuinely distinct places always describe differently.
     private static IReadOnlyCollection<WideCandidateDto> DeduplicateCandidatesByCanonicalTokens(IReadOnlyCollection<WideCandidateDto> candidates)
     {
         var survivors=new List<WideCandidateDto>();
@@ -1212,13 +1363,82 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     survivors[existingIndex]=survivors[existingIndex] with{DisplayName=candidate.DisplayName,Detail=survivors[existingIndex].Detail??candidate.Detail};
                 continue;
             }
+            var echoIndex=survivors.FindIndex(existing=>IsQualifierEcho(existing,candidate));
+            if(echoIndex>=0)
+            {
+                if(candidate.DisplayName.Length>survivors[echoIndex].DisplayName.Length)
+                    survivors[echoIndex]=survivors[echoIndex] with{DisplayName=candidate.DisplayName,Detail=survivors[echoIndex].Detail??candidate.Detail};
+                continue;
+            }
+            // V3.4.3 subset-alias merge: within ONE ranked competition, a candidate whose significant
+            // tokens are a subset of another ranked candidate's is the same entity echoed under a
+            // shorter/partial name ("University of the Philippines" vs "University of the Philippines
+            // Diliman", "Santo Tomas" vs "University of Santo Tomas", "Manila University" vs "Ateneo de
+            // Manila University"). Connective tokens (of/the/de/la...) never count as distinguishing.
+            // Guardrail: the shorter side must have >=2 significant tokens - single-token names
+            // ("Manila", "Palawan") are legitimate standalone entities and are never subset-merged.
+            // The better-ranked instance keeps the position; scores are never altered.
+            var subsetIndex=survivors.FindIndex(existing=>!existing.IsConstraintViolation&&!candidate.IsConstraintViolation&&IsSubsetAlias(existing.DisplayName,candidate.DisplayName));
+            if(subsetIndex>=0)
+            {
+                if(candidate.DisplayName.Length>survivors[subsetIndex].DisplayName.Length)
+                    survivors[subsetIndex]=survivors[subsetIndex] with{DisplayName=candidate.DisplayName,Detail=survivors[subsetIndex].Detail??candidate.Detail};
+                continue;
+            }
             seen[key]=survivors.Count;
             survivors.Add(candidate);
         }
         return survivors.Select((candidate,index)=>candidate with{RankNumber=index+1}).ToArray();
     }
 
-    private static IReadOnlyCollection<WideCandidateDto> ReweightCandidatesByClarificationAnswer(IReadOnlyCollection<WideCandidateDto> candidates,string answer)
+    // V3.3.1: full-name tokens (qualifiers INCLUDED, noise suffixes removed) — the containment side
+    // of the qualifier-echo test. CanonicalTokens intentionally strips qualifiers for keying; this
+    // variant keeps them so "Boracay" can be found inside "White Beach, Boracay Island".
+    private static string[] FullNameTokens(string name)=>
+        name.Split([' ',',','(',')','-','—','/'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Where(token=>!CanonicalNoiseSuffixes.Contains(token,StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+
+    private static bool IsQualifierEcho(WideCandidateDto first,WideCandidateDto second)
+    {
+        // Identical detail payload is mandatory: containment alone falsely merges a region into a
+        // place within it. Blank details carry no echo evidence — never merge on them.
+        if(string.IsNullOrWhiteSpace(first.Detail)||string.IsNullOrWhiteSpace(second.Detail))return false;
+        if(!string.Equals(first.Detail.Trim(),second.Detail.Trim(),StringComparison.OrdinalIgnoreCase))return false;
+        var firstTokens=FullNameTokens(first.DisplayName);
+        var secondTokens=FullNameTokens(second.DisplayName);
+        if(firstTokens.Length==0||secondTokens.Length==0)return false;
+        var(shorter,longer)=firstTokens.Length<=secondTokens.Length?(firstTokens,secondTokens):(secondTokens,firstTokens);
+        return shorter.All(token=>longer.Contains(token,StringComparer.OrdinalIgnoreCase));
+    }
+
+    // V3.4.3: connective/filler tokens that never distinguish one institution/place from another.
+    private static readonly HashSet<string> SubsetConnectiveTokens=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "of","the","de","del","della","la","le","los","las","da","di","du","van","von","and","&","at","in","for","on"
+    };
+
+    // V3.4.3 subset-alias test: after removing connective and legal-suffix noise, if one name's
+    // significant tokens are a strict subset of the other's, the shorter form is a partial echo of
+    // the longer entity within the SAME ranked list. Requires >=2 significant tokens on the shorter
+    // side so standalone single-token entities are never merged into larger names that contain them.
+    private static bool IsSubsetAlias(string first,string second)
+    {
+        var firstTokens=SignificantNameTokens(first);
+        var secondTokens=SignificantNameTokens(second);
+        if(firstTokens.Count<2||secondTokens.Count<2)return false;
+        if(firstTokens.Count==secondTokens.Count)return false;
+        var(shorter,longer)=firstTokens.Count<secondTokens.Count?(firstTokens,secondTokens):(secondTokens,firstTokens);
+        return shorter.All(longer.Contains);
+    }
+
+    private static HashSet<string> SignificantNameTokens(string name)=>
+        FullNameTokens(name)
+            .Where(token=>!SubsetConnectiveTokens.Contains(token))
+            .Select(token=>token.ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyCollection<WideCandidateDto> ReweightCandidatesByClarificationAnswer(IReadOnlyCollection<WideCandidateDto> candidates,string answer,decimal boost)
     {
         var answerTokens=answer.Split([' ',',',';','/','(',')','-','—',':','.'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
             .Where(token=>token.Length>2).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -1231,7 +1451,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .Where(token=>token.Length>2).ToHashSet(StringComparer.OrdinalIgnoreCase);
             if(candidateTokens.Count==0)return(Candidate:candidate,Score:candidate.CompositeScore);
             var overlap=Math.Clamp((decimal)answerTokens.Count(candidateTokens.Contains)/answerTokens.Count,0,1);
-            return(Candidate:candidate,Score:Math.Clamp(candidate.CompositeScore*(1m+.35m*overlap),0,1));
+            return(Candidate:candidate,Score:Math.Clamp(candidate.CompositeScore*(1m+boost*overlap),0,1));
         }).ToArray();
         return reweighted
             .OrderBy(entry=>entry.Candidate.IsConstraintViolation)
@@ -1302,17 +1522,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // requirements) from what actually needs disambiguation (ambiguous concepts). Fail-soft: any LLM
     // failure returns null and the pipeline degrades to V2 whole-query branching.
     // -----------------------------------------------------------------------------------------------
-    private async Task<WideQueryContract?> ExtractQueryContractAsync(WideSearchRequest request,CancellationToken cancellationToken)
+    private async Task<WideQueryContract?> ExtractQueryContractAsync(WideSearchRequest request,WideConfiguration configuration,CancellationToken cancellationToken)
     {
         try
         {
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
-                "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. Name references: 'called X' or 'named X' means the entity is COMMONLY KNOWN AS X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; phrase such constraints as 'commonly known as X', NEVER as 'name is exactly X'. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
+                "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. answerKind: classify what the requested ANSWER ITEMS are — ENTITY_RANKING when the user asks to rank/compare/list NAMED, INDEPENDENTLY VERIFIABLE ENTITIES (cities, companies, products, schools, people); CONTENT_ENUMERATION when the requested items are PIECES OF CONTENT to be produced or compiled (exam questions, interview questions, tips, steps, examples, quotes, topics, ideas) — 'top 100 questions that come out in an exam' is CONTENT_ENUMERATION because each item is a question text, not a named entity; SINGLE_ANSWER when one direct answer is requested. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. Name references: 'called X' or 'named X' means the entity is COMMONLY KNOWN AS X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; phrase such constraints as 'commonly known as X', NEVER as 'name is exactly X'. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
                 $"Question: {request.Query}",
                 QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
-            return new(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]);
+            return new(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]){AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind)};
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {
@@ -1354,9 +1574,73 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // basis takes precedence whenever a competitive candidate universe exists.
     // Before any candidates are known, uncertainty is reported as maximal on the CANDIDATE basis so
     // information rounds keep investigating instead of falsely reporting resolution.
-    private static WideEntropyResult ComputeUncertainty(IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyCollection<string> candidateNames,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge,WideQueryContract? queryContract)
+    // V3.1 answer-kind routing: the FIRST LLM reply (the query contract) decides the task type the
+    // whole pipeline commits to. CONTENT_ENUMERATION means the requested items are pieces of content
+    // (questions, tips, steps, examples), not named entities — the Candidate Competition and the
+    // Output Contract are category errors for such queries. The value is LLM-proposed but validated
+    // to a strict enumeration; anything unrecognized degrades to null (pre-V3.1 heuristics).
+    private const string AnswerKindEntityRanking="ENTITY_RANKING";
+    private const string AnswerKindContentEnumeration="CONTENT_ENUMERATION";
+    private const string AnswerKindSingleAnswer="SINGLE_ANSWER";
+
+    // V3.3: answer kinds are recognized against the POLOXI.AnswerKind lookup table (DB is the source
+    // of truth) so new kinds (COMPARISON, YES_NO, ...) can be added without recompiling. When the
+    // table is empty the pre-V3.3 compiled constants remain as fail-safe fallbacks. Anything not
+    // recognized degrades to null (full pipeline, thoroughness over speed).
+    private static string? NormalizeAnswerKind(WideConfiguration configuration,string? value)
     {
-        var isRankingQuery=queryContract is not null&&(!string.IsNullOrWhiteSpace(queryContract.RankingConcept)||queryContract.RequestedCount is >1);
+        var normalized=value?.Trim().ToUpperInvariant();
+        if(string.IsNullOrEmpty(normalized))return null;
+        if(configuration.AnswerKinds.Count>0)
+            return configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode==normalized)?.AnswerKindCode;
+        return normalized switch
+        {
+            AnswerKindEntityRanking=>AnswerKindEntityRanking,
+            AnswerKindContentEnumeration=>AnswerKindContentEnumeration,
+            AnswerKindSingleAnswer=>AnswerKindSingleAnswer,
+            _=>null
+        };
+    }
+
+    private static WideAnswerKindDefinition? FindAnswerKind(WideConfiguration configuration,string? answerKindCode)=>
+        string.IsNullOrWhiteSpace(answerKindCode)?null:configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode.Equals(answerKindCode.Trim(),StringComparison.OrdinalIgnoreCase));
+
+    // V3.3: whether the deterministic Candidate Competition is a category error for this kind is now
+    // a lookup-table column (RunsCandidateCompetition); the CONTENT_ENUMERATION constant remains only
+    // as the compiled fallback when the table is empty.
+    private static bool SkipsCandidateCompetition(WideConfiguration configuration,WideQueryContract? queryContract)
+    {
+        if(FindAnswerKind(configuration,queryContract?.AnswerKind)is{}definition)return!definition.RunsCandidateCompetition;
+        return queryContract?.AnswerKind==AnswerKindContentEnumeration;
+    }
+
+    // V3.2 answer-kind budgets, V3.3 data-driven: kind-specific budgets come from the lookup table's
+    // per-kind columns; the five per-kind config keys remain only as compiled fallbacks. A kind depth
+    // ceiling of 0 (or null rounds) means "use the full default"; budgets only ever SHRINK the
+    // defaults, never expand them. Unknown/null kinds always run the full pipeline.
+    private static(int DepthCeiling,int InformationRounds,bool RoutingApplied)ResolveAnswerKindBudgets(WideConfiguration configuration,WideQueryContract? queryContract)
+    {
+        if(!configuration.EnableAnswerKindRouting)
+            return(configuration.AbsoluteDepthCeiling,configuration.MaximumInformationRounds,false);
+        var(kindDepth,kindRounds)=FindAnswerKind(configuration,queryContract?.AnswerKind)is{}definition
+            ?(definition.DepthCeiling,definition.MaxInformationRounds??configuration.MaximumInformationRounds)
+            :queryContract?.AnswerKind switch
+            {
+                AnswerKindContentEnumeration=>(configuration.ContentEnumerationDepthCeiling,configuration.ContentEnumerationMaxInformationRounds),
+                AnswerKindSingleAnswer=>(configuration.SingleAnswerDepthCeiling,configuration.SingleAnswerMaxInformationRounds),
+                _=>(0,configuration.MaximumInformationRounds)
+            };
+        var depthCeiling=kindDepth>0?Math.Min(kindDepth,configuration.AbsoluteDepthCeiling):configuration.AbsoluteDepthCeiling;
+        var informationRounds=Math.Min(kindRounds,configuration.MaximumInformationRounds);
+        return(depthCeiling,informationRounds,depthCeiling<configuration.AbsoluteDepthCeiling||informationRounds<configuration.MaximumInformationRounds);
+    }
+
+    private static WideEntropyResult ComputeUncertainty(WideConfiguration configuration,IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyCollection<string> candidateNames,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge,WideQueryContract? queryContract)
+    {
+        // V3.1: a content-enumeration query is NEVER a "which candidate wins" problem — its
+        // "candidates" would be topic vocabulary fragments, not competing entities.
+        var isRankingQuery=!SkipsCandidateCompetition(configuration,queryContract)
+            &&queryContract is not null&&(!string.IsNullOrWhiteSpace(queryContract.RankingConcept)||queryContract.RequestedCount is >1);
         if(isRankingQuery&&candidateNames.Count>=2)return ComputeCandidateEntropy(candidateNames,evidence,knowledge);
         var alternativeCount=branches.Count(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary
             &&branch.SemanticTypeCode==WideBranchSemanticTypes.Alternative);
@@ -1617,7 +1901,72 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(IsAttributeHypothesis(trimmed))return false;
         // Must look like a proper noun: first alphabetic character uppercase.
         var firstLetter=trimmed.FirstOrDefault(char.IsLetter);
-        return firstLetter!=default&&char.IsUpper(firstLetter);
+        if(firstLetter==default||!char.IsUpper(firstLetter))return false;
+        // V3.4.4 Proper-Noun Density: entities are Title Case ("Austin, TX", "De La Salle University
+        // Manila"); criterion/approach descriptions are sentence case ("Balanced multi-factor
+        // approach", "Commute times under 30 minutes", "Significantly below-average violent crime
+        // rates") - only their first word is capitalized. Excluding connective tokens (of/the/de...),
+        // ALL significant alphabetic words of a real entity name start uppercase. Any lowercase
+        // significant word marks the name as a description, not an entity - rejected.
+        var significantWords=words
+            .Select(word=>word.Trim(',','(',')'))
+            .Where(word=>word.Length>0&&char.IsLetter(word[0])&&!SubsetConnectiveTokens.Contains(word))
+            .ToArray();
+        if(significantWords.Length>0&&!significantWords.All(word=>char.IsUpper(word[0])))return false;
+        // V3.4.5 Methodology-Vocabulary Rejection: mini-tier models Title-Case criterion/approach
+        // labels ("Weighted Scoring Approach", "Prioritizing Key Factors", "Using Composite Indices",
+        // "Housing Affordability"), defeating the proper-noun density check above. These labels are
+        // built ENTIRELY from abstract analysis vocabulary; real entities always contain at least one
+        // token outside that vocabulary ("Austin", "Pfizer", "Silliman"). A name is rejected only when
+        // EVERY significant word is methodology vocabulary or the name starts with an instructional
+        // gerund - single abstract words inside real names ("Priority Health", "Scoring, MT") survive.
+        if(significantWords.Length>0)
+        {
+            if(MethodologyGerundStarters.Contains(significantWords[0]))return false;
+            if(significantWords.All(word=>MethodologyVocabulary.Contains(word.TrimEnd('s'))||MethodologyVocabulary.Contains(word)))return false;
+        }
+        return true;
+    }
+
+    // V3.4.5: abstract analysis/criterion vocabulary - names composed ONLY of these words describe a
+    // method or judging dimension, never a concrete entity. Checked singular/plural tolerant.
+    private static readonly HashSet<string> MethodologyVocabulary=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "approach","method","methodology","strategy","strategies","framework","analysis","assessment",
+        "evaluation","comparison","criteria","criterion","factor","priority","prioritization","weighted",
+        "weighting","scoring","score","ranking","rating","index","indices","composite","metric","measure",
+        "measurement","tradeoff","trade-off","balanced","overall","holistic","multi-factor","multifactor",
+        "consideration","key","primary","top","best","optimal","ideal","affordability","suitability",
+        "livability","quality","safety","opportunity","opportunities","employment","housing","education",
+        "healthcare","weather","climate","crime","traffic","commute","economic","prospect","growth",
+        "cost","costs","value","budget","income","schools","school","public"
+    };
+
+    // V3.4.5: instructional gerunds that begin methodology labels, never entity names.
+    private static readonly HashSet<string> MethodologyGerundStarters=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "using","prioritizing","considering","weighing","balancing","comparing","evaluating","applying",
+        "combining","assessing","analyzing","ranking","scoring","selecting","choosing","identifying"
+    };
+
+    // V3.4.1: tokens of the query itself (base query plus any clarification-constraint text), used to
+    // detect topic-echo pseudo-candidates. Singular/plural tolerant via a trailing-'s' stem.
+    private static HashSet<string> BuildQueryTopicTokens(string query)
+        =>query.Split([' ',',',';','/','(',')','-','\u2014',':','.','?','!'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Where(token=>token.Length>2)
+            .Select(StemToken)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static string StemToken(string token)=>token.Length>3&&token.EndsWith('s')?token[..^1]:token;
+
+    // A candidate name whose canonical tokens ALL echo the query's own vocabulary is a topic label
+    // ("Dividend Stocks", "High Yield Dividend"), not a competing entity. Names with at least one
+    // token the query never mentioned ("Pfizer", "Realty Income") always survive.
+    private static bool IsQueryTopicEcho(string name,HashSet<string> queryTopicTokens)
+    {
+        if(queryTopicTokens.Count==0)return false;
+        var tokens=CanonicalTokens(name);
+        return tokens.Length>0&&tokens.All(token=>token.Length<=2||queryTopicTokens.Contains(StemToken(token)));
     }
 
     // V2.7.1 Candidate Identity Resolution: collapse alias variants of the SAME entity ("Mercury",
@@ -1718,16 +2067,32 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         //     DistinctEvidenceHosts (repeat mentions within one branch and repeat articles from one
         //     host each count once — support is signal diversity, never raw mention count).
         var minimumDiscoverySourceHosts=isRecoveryPass?1:2;
+        // V3.4.1 Query-Topic Echo filter: the evidence-harvest and LLM lists can echo the query's own
+        // topic vocabulary as pseudo-candidates ("High Yield Dividend", "Dividend Stocks" for a
+        // dividend-stock ranking) because article titles repeat the query terms across many sources.
+        // Continuation evidence reuse widened the pool and made these echoes clear the 2-host gate.
+        // A name whose canonical tokens ALL appear in the query text (singular/plural tolerant)
+        // describes the topic, not a competing entity - deterministically rejected from the pool.
+        // Real entities (Pfizer, Realty Income) are never named inside a ranking query.
+        var queryTopicTokens=BuildQueryTopicTokens(request.Query);
         try
         {
             // V2.5: the final Candidate × Branch matrix must include EVERY primary (root-level,
             // non-pruned) DIMENSION branch POLOXI itself discovered — a top-level criterion like
             // "overall quality of life" must not silently drop out because deeper branches
             // out-scored it. Root dimensions are unioned with the top-confidence survivors.
+            // V3.4.2: the union no longer requires SemanticTypeCode==DIMENSION. The LLM frequently
+            // types every root interpretation as ALTERNATIVE, which made this safeguard a no-op:
+            // when an information round boosted one branch's evidence, the reweight demoted the
+            // other roots to DORMANT, the matrix collapsed to a single dimension, and the ranking
+            // was decided by one criterion (e.g. "Cultural Experience" winning a stay query).
+            // Root-level interpretation branches are the deciding criteria BY CONSTRUCTION - all
+            // non-pruned roots now always compete, weighted by their PoloxiConfidence as before.
             var topSurvivors=survivors.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).OrderByDescending(branch=>branch.PoloxiConfidence).Take(8);
             var rootDimensions=survivors.Where(branch=>branch.LevelNumber==1
-                &&branch.SemanticTypeCode==WideBranchSemanticTypes.Dimension
-                &&branch.BranchStateCode!=WideBranchStates.Pruned);
+                &&branch.BranchStateCode!=WideBranchStates.Pruned)
+                .OrderByDescending(branch=>branch.PoloxiConfidence)
+                .Take(6);
             var branches=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
             if(branches.Length==0)return [];
             // V2.3 candidate admission: a candidate must appear in enough distinct interpretive
@@ -1749,12 +2114,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // entities named by retrieved sources — e.g. a #1 city in a live ranking) are merged into the
             // scored pool after deterministic validity filtering. Category/placeholder phrases are
             // rejected everywhere — they are descriptions, not entities.
-            var interpretiveCandidates=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).Where(item=>IsValidCandidateName(item.Name)).GroupBy(item=>CandidateIdentityKey(item.Name),StringComparer.Ordinal).Select(group=>group.OrderByDescending(item=>item.Name.Length).First()).ToArray();
+            var interpretiveCandidates=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).Where(item=>IsValidCandidateName(item.Name)&&!IsQueryTopicEcho(item.Name,queryTopicTokens)).GroupBy(item=>CandidateIdentityKey(item.Name),StringComparer.Ordinal).Select(group=>group.OrderByDescending(item=>item.Name.Length).First()).ToArray();
             var knownNames=interpretiveCandidates.Select(item=>item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Discovered candidates ranked by independent-source diversity so the strongest evidence-named
             // entities are merged first; annotated so their admission path is visible and explainable.
             var evidenceCandidates=discoveredCandidates
-                .Where(name=>IsValidCandidateName(name)&&!knownNames.Contains(name))
+                .Where(name=>IsValidCandidateName(name)&&!knownNames.Contains(name)&&!IsQueryTopicEcho(name,queryTopicTokens))
                 .Select(name=>(Name:name,Hosts:CountDistinctSourceHosts(name,externalKnowledge)))
                 .Where(item=>item.Hosts>=minimumDiscoverySourceHosts)
                 .OrderByDescending(item=>item.Hosts)
@@ -1973,6 +2338,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 {
   "type": "object",
   "properties": {
+    "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", null] },
     "entityType": { "type": ["string", "null"] },
     "geographicConstraint": { "type": ["string", "null"] },
     "requestedCount": { "type": ["integer", "null"] },
@@ -1981,7 +2347,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     "ambiguousConcepts": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
     "outputRequirements": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
   },
-  "required": ["entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
+  "required": ["answerKind", "entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
   "additionalProperties": false
 }
 """;
