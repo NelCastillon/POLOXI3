@@ -1066,18 +1066,42 @@
         : _response.LlmRawItems.OrderBy(x => x.RankNumber).ToArray();
 
     // Where a raw-LLM entry landed in the POLOXI ranking (1-based), or null when POLOXI excluded it.
-    // Tolerant match: raw chat answers often omit qualifiers like the state suffix ("Irvine" vs "Irvine, CA").
+    // Tolerant match: raw chat answers often omit qualifiers ("Irvine" vs "Irvine, CA") or corporate
+    // suffixes ("Alphabet (GOOGL)" vs "Alphabet Inc. (GOOGL)"). Matching order: exact, then identical
+    // parenthetical code (ticker/symbol — the canonical key when both sides provide one), then
+    // containment, then primary-name (text before any comma/parenthesis/dash qualifier) equality.
     private int? FindPoloxiRank(string rawName)
     {
+        var rawCode = ParentheticalCode(rawName);
+        var rawPrimary = PrimaryName(rawName);
         for (var index = 0; index < FinalRankedCandidates.Count; index++)
         {
             var candidate = FinalRankedCandidates[index].DisplayName;
-            if (candidate.Equals(rawName, StringComparison.OrdinalIgnoreCase)
-                || candidate.Contains(rawName, StringComparison.OrdinalIgnoreCase)
-                || rawName.Contains(candidate, StringComparison.OrdinalIgnoreCase))
-                return index + 1;
+            if (candidate.Equals(rawName, StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (rawCode is not null && rawCode.Equals(ParentheticalCode(candidate), StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (candidate.Contains(rawName, StringComparison.OrdinalIgnoreCase)
+                || rawName.Contains(candidate, StringComparison.OrdinalIgnoreCase)) return index + 1;
+            if (rawPrimary.Length >= 4 && rawPrimary.Equals(PrimaryName(candidate), StringComparison.OrdinalIgnoreCase)) return index + 1;
         }
         return null;
+    }
+
+    // The code inside the last parentheses, e.g. "NVIDIA Corporation (NVDA)" -> "NVDA".
+    private static string? ParentheticalCode(string name)
+    {
+        var open = name.LastIndexOf('(');
+        var close = name.LastIndexOf(')');
+        return open >= 0 && close > open + 1 ? name[(open + 1)..close].Trim() : null;
+    }
+
+    // The entity name before any qualifier, with common corporate suffixes stripped:
+    // "Meta Platforms, Inc. (META)" -> "Meta Platforms".
+    private static string PrimaryName(string name)
+    {
+        var primary = name.Split(',', '(', '\u2013', '\u2014')[0].Trim();
+        foreach (var suffix in new[] { " Inc.", " Inc", " Corporation", " Corp.", " Corp", " Co.", " Company", " Ltd.", " Ltd", " PLC", " LLC" })
+            if (primary.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) { primary = primary[..^suffix.Length].Trim(); break; }
+        return primary;
     }
 
     // Contested/resolved zone for the POLOXI cell background tint: a candidate is CONTESTED (1)
