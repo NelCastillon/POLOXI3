@@ -412,6 +412,14 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal DormantBranchThreshold{get;init;}=.20m;
     public decimal PriorWeight{get;init;}=.30m;
     public decimal EvidenceWeight{get;init;}=.70m;
+    // V3.4 evidence-support calibration (DB-seeded; see migration 0163). Defaults preserve the
+    // original hardcoded curve: enterprise = min(ceiling, base + increment*(count-1));
+    // external = maxScore * min(1, base + increment*matchedCount).
+    public decimal EnterpriseSupportBase{get;init;}=.50m;
+    public decimal EnterpriseSupportIncrement{get;init;}=.20m;
+    public decimal EnterpriseSupportCeiling{get;init;}=.90m;
+    public decimal ExternalSupportBase{get;init;}=.60m;
+    public decimal ExternalSupportIncrement{get;init;}=.10m;
     public int MaximumCandidates{get;init;}=10;
     public bool EnableQueryContract{get;init;}=true;
     // Bounded parallelism (DB-seeded; see migration 0147). 1 disables parallel execution.

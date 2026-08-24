@@ -455,7 +455,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // enterprise evidence and matched external snippets), POLOXI Confidence (weighted combination).
             survivorsFinal=survivorsFinal.Select(branch=>
             {
-                var support=ComputeEvidenceSupport(branch,evidence,externalKnowledge);
+                var support=ComputeEvidenceSupport(branch,evidence,externalKnowledge,configuration);
                 var poloxiConfidence=Math.Clamp(configuration.PriorWeight*branch.Confidence+configuration.EvidenceWeight*support,0,1);
                 // V2.1 REWEIGHT: evidence revises the branch state — a DORMANT branch with strong evidence
                 // support is reactivated, and a high-prior branch without support is demoted. PRUNED
@@ -665,7 +665,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         // Normal POLOXI scoring/reweighting on the enriched evidence pool (never LLM-calculated).
                         survivorsFinal=survivorsFinal.Select(branch=>
                         {
-                            var support=ComputeEvidenceSupport(branch,evidence,externalKnowledgeAll);
+                            var support=ComputeEvidenceSupport(branch,evidence,externalKnowledgeAll,configuration);
                             var poloxiConfidence=Math.Clamp(configuration.PriorWeight*branch.InterpretationPrior+configuration.EvidenceWeight*support,0,1);
                             var state=branch.BranchStateCode==WideBranchStates.Pruned?WideBranchStates.Pruned
                                 :poloxiConfidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
@@ -2031,14 +2031,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     }
     // never invented by the LLM. Enterprise evidence dominates; matched external snippets contribute
     // with their provider relevance score; unsupported branches score 0.
-    private static decimal ComputeEvidenceSupport(WideBranchRecord branch,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    private static decimal ComputeEvidenceSupport(WideBranchRecord branch,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration)
     {
         var enterpriseCount=evidence.Count(item=>item.HierarchyBranchId==branch.WideBranchId);
-        // Saturating enterprise contribution: 1 item = .5, 3+ items ~ .9.
-        var enterpriseSupport=enterpriseCount==0?0m:Math.Min(.9m,.5m+.2m*(enterpriseCount-1));
+        // Saturating enterprise contribution (DB-calibrated; see migration 0163): 1 item = base, ceiling caps growth.
+        var enterpriseSupport=enterpriseCount==0?0m:Math.Min(configuration.EnterpriseSupportCeiling,configuration.EnterpriseSupportBase+configuration.EnterpriseSupportIncrement*(enterpriseCount-1));
         // External snippets match a branch when the retrieval query included the branch display name.
         var matchedSnippets=externalKnowledge.Where(snippet=>snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)).ToArray();
-        var externalSupport=matchedSnippets.Length==0?0m:Math.Clamp(matchedSnippets.Max(snippet=>snippet.Score),0,1)*Math.Min(1m,.6m+.1m*matchedSnippets.Length);
+        var externalSupport=matchedSnippets.Length==0?0m:Math.Clamp(matchedSnippets.Max(snippet=>snippet.Score),0,1)*Math.Min(1m,configuration.ExternalSupportBase+configuration.ExternalSupportIncrement*matchedSnippets.Length);
         return Math.Clamp(Math.Max(enterpriseSupport,externalSupport),0,1);
     }
 
