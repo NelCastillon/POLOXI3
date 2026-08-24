@@ -6,7 +6,7 @@ namespace Ams.Application.Features.Intelligence;
 // Pipeline: Ambiguous Intent -> Dynamic LLM Hierarchy -> Progressive Disambiguation -> Enterprise Grounding
 //           -> Candidate Elimination -> Confidence -> Verified Answer / Governed Action.
 
-public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
+public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(4000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
 {
     public IReadOnlyCollection<string> GrantedPermissions{get;init;}=[];
     // 'POLOXI Engine' filter: true runs the full dynamic disambiguation + enterprise grounding pipeline;

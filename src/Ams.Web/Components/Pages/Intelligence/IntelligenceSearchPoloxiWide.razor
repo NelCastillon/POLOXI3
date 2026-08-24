@@ -482,6 +482,7 @@
                         @if (SurvivingBranches.Count > 0)
                         {
                             <div class="poloxi-grounded-branches">
+                                <small>Interpretation branches:</small>
                                 @foreach (var level in UsedBranchLevels)
                                 {
                                     <div class="poloxi-branch-level">
@@ -899,6 +900,57 @@
                 <div class="poloxi-compare">
                     <h4><i class="bi bi-columns-gap"></i> Ranking comparison — POLOXI vs. raw model vs. unweighted baseline</h4>
                     <p><strong>LLM Raw</strong> is the actual answer the selected model returned for your plain question in a single shot — the same result you would get in the model's own chat interface, captured in parallel and never touched by POLOXI. <strong>Mention-frequency baseline</strong> is a “what if we skipped the smart part?” view: it takes the same candidates POLOXI discovered during its research and ranks them by how often they were mentioned, breaking ties with a plain unweighted average of the dimension scores — like a popularity contest with no evidence weighting, no constraint checks, and no head-to-head competition. Comparing the three columns shows exactly where POLOXI's evidence work changed the outcome.</p>
+                    <div class="poloxi-decision">
+                        <div class="poloxi-decision-header"><i class="bi bi-award" aria-hidden="true"></i> POLOXI Decision</div>
+                        <div class="poloxi-decision-grid">
+                            <section class="poloxi-decision-block" title="How strongly the evidence supports each of the top candidates. This is the evidence-weighted composite score, not confidence in the ranking itself.">
+                                <span class="poloxi-decision-label"><i class="bi bi-clipboard-data" aria-hidden="true"></i> Evidence</span>
+                                <ol class="poloxi-decision-podium">
+                                    @for (var p = 0; p < Math.Min(3, FinalRankedCandidates.Count); p++)
+                                    {
+                                        var podium = FinalRankedCandidates[p];
+                                        <li>
+                                            <span class="poloxi-decision-rank poloxi-decision-rank--@(p + 1)">@(p + 1)</span>
+                                            <span class="poloxi-decision-name">@podium.DisplayName</span>
+                                            <strong>@podium.CompositeScore.ToString("P0")</strong>
+                                        </li>
+                                    }
+                                </ol>
+                            </section>
+                            <section class="poloxi-decision-block" title="Competition: evidence-score gap between the #1 and #2 candidates. Under 3 percentage points is within scoring noise — the winner is directional, not settled.">
+                                <span class="poloxi-decision-label"><i class="bi bi-distribute-vertical" aria-hidden="true"></i> Winner margin</span>
+                                @if (MarginToNext(0) is decimal topMargin)
+                                {
+                                    <strong class="poloxi-decision-value">+@((topMargin * 100).ToString("0.#")) pp</strong>
+                                    <small>@(topMargin < .03m ? $"{FinalRankedCandidates[0].DisplayName} leads by only {topMargin:P0} — within scoring noise." : $"{FinalRankedCandidates[0].DisplayName} leads the runner-up by {topMargin:P0}.")</small>
+                                }
+                                else
+                                {
+                                    <strong class="poloxi-decision-value">—</strong>
+                                }
+                            </section>
+                            <section class="poloxi-decision-block" title="Decision confidence = 1 − final measured uncertainty (Shannon entropy). How certain POLOXI is that the ranking is sufficiently resolved. Low values are honest: they mean the field is genuinely contested, not that the ranking is wrong.">
+                                <span class="poloxi-decision-label"><i class="bi bi-bullseye" aria-hidden="true"></i> Decision confidence</span>
+                                @{
+                                    var decisionConfidence = 1m - _response.FinalNormalizedEntropy;
+                                    var confidenceBand = decisionConfidence >= .7m ? "HIGH" : decisionConfidence >= .4m ? "MODERATE" : "LOW";
+                                }
+                                <strong class="poloxi-decision-value">@confidenceBand <span>@decisionConfidence.ToString("P0")</span></strong>
+                                <small>Remaining ranking uncertainty @_response.FinalNormalizedEntropy.ToString("P0")</small>
+                            </section>
+                            <section class="poloxi-decision-block" title="Measured ambiguity at the start of the funnel vs. after interpretation, evidence evaluation, candidate competition, and convergence. The bar shows how much ambiguity was resolved. It does not represent confidence in an individual candidate.">
+                                <span class="poloxi-decision-label"><i class="bi bi-funnel" aria-hidden="true"></i> POLOXI funnel &mdash; ambiguity resolved</span>
+                                @{
+                                    var ambiguityResolved = _response.InitialNormalizedEntropy <= 0m ? 0m : (_response.InitialNormalizedEntropy - _response.FinalNormalizedEntropy) / _response.InitialNormalizedEntropy;
+                                }
+                                <div class="poloxi-decision-funnel">
+                                    <div class="poloxi-ambiguity-track"><span style="width: @((ambiguityResolved * 100m).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></span></div>
+                                    <strong>@ambiguityResolved.ToString("P0") <span>(ambiguity @_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0"))</span></strong>
+                                </div>
+                                <small>Initial ambiguity → evidence → convergence</small>
+                            </section>
+                        </div>
+                    </div>
                     <table class="poloxi-compare-table">
                         <thead>
                             <tr>
@@ -906,7 +958,7 @@
                                 <th>With POLOXI <small>(evidence-weighted Candidate × Branch)</small></th>
                                 <th>LLM Raw <small>(actual single-shot model answer)</small></th>
                                 <th title="The same candidates POLOXI found, ranked only by mention count with a plain unweighted score average as tie-break — no evidence weighting, no filtering, no competition.">Mention-frequency baseline <small>(POLOXI candidates, unweighted)</small></th>
-                                <th>Ambiguity scale <small>(uncertainty funnel @_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0"))</small></th>
+                                <th title="Pipeline-level ambiguity funnel — the strip descends from the initial measured ambiguity (top) to the resolved state after convergence (bottom). Rows are only a vertical axis for the funnel; it does not represent confidence in an individual candidate.">POLOXI funnel <small>(remaining ambiguity @_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0") — not per-candidate)</small></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -977,10 +1029,10 @@
                                         }
                                     </td>
                                     <td class="poloxi-compare-ambiguity">
-                                        <div class="poloxi-ambiguity-track" title="POLOXI measured uncertainty at this depth of the funnel — top rows reflect the initial ambiguity, bottom rows the resolved state after grounding, information rounds, and candidate competition.">
+                                        <div class="poloxi-ambiguity-track" title="Funnel progress at this depth — top rows reflect the initial ambiguity, bottom rows the resolved state after grounding, information rounds, and candidate competition. It does not represent confidence in this row's candidate.">
                                             <span style="width: @ambiguity.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
                                         </div>
-                                        <small>@((ambiguity / 100m).ToString("P0")) uncertainty</small>
+                                        <small>@((ambiguity / 100m).ToString("P0")) ambiguity</small>
                                     </td>
                                 </tr>
                             }

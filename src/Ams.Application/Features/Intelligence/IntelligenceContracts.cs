@@ -64,7 +64,7 @@ public sealed record IntelligenceSearchResponse(Guid SearchQueryId,string Query,
 public sealed record IntelligenceSearchConfiguration(IntelligenceSearchWeightsDto Weights,int RecencyWindowDays,int MaximumRelationshipResults,decimal MinimumUnifiedScore,bool EnableRules,bool EnableRelationships,bool EnableAiSummary,bool EnableLlmIntentFallback,decimal LlmIntentMinimumConfidence,int LlmIntentTimeoutSeconds,bool EnableQuickSearchIntelligentFallback,int QuickSearchFastPathMinimumResults,decimal QuickSearchFastPathMinimumScore);
 public sealed record IntelligenceSearchEntityKey(string EntityTypeCode,Guid EntityId);
 
-public sealed record PoloxiSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(1000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
+public sealed record PoloxiSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(4000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
 {
     public bool IncludeExplanation { get; init; } = true;
     public bool UsePoloxiEngine { get; init; } = true;

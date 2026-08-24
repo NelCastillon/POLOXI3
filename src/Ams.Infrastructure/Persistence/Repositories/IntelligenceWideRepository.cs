@@ -303,9 +303,13 @@ WHERE TenantId=@TenantId AND NormalizedQuery=@NormalizedQuery AND RetrievedDateU
 ORDER BY Score DESC,RetrievedDateUtc DESC;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        var rows=await connection.QueryAsync<WideExternalKnowledgeSnippet>(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=normalizedQuery,NotBeforeUtc=notBeforeUtc},cancellationToken:cancellationToken));
+        var rows=await connection.QueryAsync<WideExternalKnowledgeSnippet>(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=TruncateCacheKey(normalizedQuery),NotBeforeUtc=notBeforeUtc},cancellationToken:cancellationToken));
         return rows.ToList();
     }
+
+    // POLOXI.ExternalKnowledge.NormalizedQuery is NVARCHAR(400) (index key size limit); queries may
+    // now be up to 4,000 characters, so the cache key is deterministically capped to the column size.
+    private static string TruncateCacheKey(string normalizedQuery)=>normalizedQuery.Length<=400?normalizedQuery:normalizedQuery[..400];
 
     public async Task SaveExternalKnowledgeAsync(Guid tenantId,Guid userId,string normalizedQuery,IReadOnlyCollection<WideExternalKnowledgeSnippet> snippets,Guid? wideExecutionId=null,CancellationToken cancellationToken=default)
     {
@@ -316,7 +320,7 @@ VALUES(NEWID(),@TenantId,@NormalizedQuery,@Title,@Url,@Snippet,@Score,@Retrieved
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         foreach(var snippet in snippets)
-            await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=normalizedQuery,snippet.Title,snippet.Url,snippet.Snippet,snippet.Score,snippet.RetrievedDateUtc,WideExecutionId=wideExecutionId,UserId=userId},cancellationToken:cancellationToken));
+            await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=TruncateCacheKey(normalizedQuery),snippet.Title,snippet.Url,snippet.Snippet,snippet.Score,snippet.RetrievedDateUtc,WideExecutionId=wideExecutionId,UserId=userId},cancellationToken:cancellationToken));
     }
 
     // V3.4: tenant-scoped continuation state from the parent execution row. Null when not found -
