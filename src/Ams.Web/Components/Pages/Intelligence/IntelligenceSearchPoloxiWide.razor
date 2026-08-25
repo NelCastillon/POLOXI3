@@ -951,6 +951,17 @@
                             </section>
                         </div>
                     </div>
+                    <section class="poloxi-funnel-diagram" title="Pipeline-level ambiguity funnel — descends from the initial measured ambiguity through each information round to the resolved state after convergence. It does not represent confidence in any individual candidate.">
+                        <span class="poloxi-decision-label"><i class="bi bi-funnel" aria-hidden="true"></i> Ambiguity funnel <small>(execution-level &mdash; not per-candidate)</small></span>
+                        @foreach (var stage in FunnelStages)
+                        {
+                            <div class="poloxi-funnel-stage">
+                                <span class="poloxi-funnel-stage-label">@stage.Label</span>
+                                <div class="poloxi-ambiguity-track"><span style="width: @((Math.Clamp(stage.Value, 0m, 1m) * 100m).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></span></div>
+                                <strong>@stage.Value.ToString("P0")</strong>
+                            </div>
+                        }
+                    </section>
                     <table class="poloxi-compare-table">
                         <thead>
                             <tr>
@@ -958,7 +969,6 @@
                                 <th>With POLOXI <small>(evidence-weighted Candidate × Branch)</small></th>
                                 <th>LLM Raw <small>(actual single-shot model answer)</small></th>
                                 <th title="The same candidates POLOXI found, ranked only by mention count with a plain unweighted score average as tie-break — no evidence weighting, no filtering, no competition.">Mention-frequency baseline <small>(POLOXI candidates, unweighted)</small></th>
-                                <th title="Pipeline-level ambiguity funnel — the strip descends from the initial measured ambiguity (top) to the resolved state after convergence (bottom). Rows are only a vertical axis for the funnel; it does not represent confidence in an individual candidate.">POLOXI funnel <small>(remaining ambiguity @_response.InitialNormalizedEntropy.ToString("P0") → @_response.FinalNormalizedEntropy.ToString("P0") — not per-candidate)</small></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -969,7 +979,6 @@
                                 var raw = i < LlmRawItems.Count ? LlmRawItems[i] : null;
                                 var baseline = i < BaselineRankedCandidates.Count ? BaselineRankedCandidates[i] : null;
                                 var moved = raw is not null && poloxi is not null && FindPoloxiRank(raw.Name) != i + 1;
-                                var ambiguity = AmbiguityAt(i, compareRowCount);
                                 var zone = ContestZoneAt(i);
                                 <tr class="@(moved ? "poloxi-compare-diff" : null)">
                                     <td>@(i + 1)</td>
@@ -1027,12 +1036,6 @@
                                         {
                                             <em>—</em>
                                         }
-                                    </td>
-                                    <td class="poloxi-compare-ambiguity">
-                                        <div class="poloxi-ambiguity-track" title="Funnel progress at this depth — top rows reflect the initial ambiguity, bottom rows the resolved state after grounding, information rounds, and candidate competition. It does not represent confidence in this row's candidate.">
-                                            <span style="width: @ambiguity.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)%"></span>
-                                        </div>
-                                        <small>@((ambiguity / 100m).ToString("P0")) ambiguity</small>
                                     </td>
                                 </tr>
                             }
@@ -1178,22 +1181,20 @@
             ? Math.Max(FinalRankedCandidates[rowIndex].CompositeScore - FinalRankedCandidates[rowIndex + 1].CompositeScore, 0m)
             : null;
 
-    // Ambiguity funnel for the comparison table: row 0 shows the measured initial normalized entropy
-    // and the last row shows the final normalized entropy, passing through each information round's
-    // measured after-round entropy in order. All values come from POLOXI's deterministic measurements.
-    private decimal AmbiguityAt(int rowIndex, int rowCount)
+    // Ambiguity funnel diagram: starts at the measured initial normalized entropy, passes through
+    // each information round's measured after-round entropy in order, and ends at the final
+    // normalized entropy. All values come from POLOXI's deterministic measurements; this is an
+    // execution-level metric, not a per-candidate one.
+    private IReadOnlyList<(string Label, decimal Value)> FunnelStages
     {
-        if (_response is null || rowCount <= 0) return 0m;
-        var points = new List<decimal> { _response.InitialNormalizedEntropy };
-        points.AddRange(_response.InformationRounds.OrderBy(r => r.RoundNumber).Where(r => r.NormalizedEntropyAfter.HasValue).Select(r => r.NormalizedEntropyAfter!.Value));
-        points.Add(_response.FinalNormalizedEntropy);
-        if (rowCount == 1) return Math.Clamp(points[^1], 0m, 1m) * 100m;
-        var position = (decimal)rowIndex / (rowCount - 1) * (points.Count - 1);
-        var lower = (int)Math.Floor(position);
-        var upper = Math.Min(lower + 1, points.Count - 1);
-        var fraction = position - lower;
-        var value = points[lower] + (points[upper] - points[lower]) * fraction;
-        return Math.Clamp(value, 0m, 1m) * 100m;
+        get
+        {
+            if (_response is null) return [];
+            var stages = new List<(string, decimal)> { ("Initial ambiguity", _response.InitialNormalizedEntropy) };
+            stages.AddRange(_response.InformationRounds.OrderBy(r => r.RoundNumber).Where(r => r.NormalizedEntropyAfter.HasValue).Select(r => ($"After round {r.RoundNumber}", r.NormalizedEntropyAfter!.Value)));
+            stages.Add(("After convergence", _response.FinalNormalizedEntropy));
+            return stages;
+        }
     }
     private string GroundingBadge => _response switch
     {

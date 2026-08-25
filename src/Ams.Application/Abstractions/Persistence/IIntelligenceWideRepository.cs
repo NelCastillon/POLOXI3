@@ -23,6 +23,8 @@ public interface IIntelligenceWideRepository
     Task UpdateWideExecutionContractAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string? queryContractJson,decimal evidenceCoverage,int externalEvidenceCount,int enterpriseEvidenceCount,int candidateCount,CancellationToken cancellationToken=default);
     // V3.2: persists the governing Stage 0 AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER).
     Task UpdateWideExecutionAnswerKindAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string answerKindCode,CancellationToken cancellationToken=default);
+    // Phase 2a: persists the WATCH-ONLY challenge-the-winner outcome JSON for audit (never affects the answer).
+    Task UpdateWideExecutionChallengeOutcomeAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string challengeOutcomeJson,CancellationToken cancellationToken=default);
     Task CompleteWideExecutionAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string statusCode,string terminationReasonCode,int depthReached,int llmCallCount,decimal finalConfidence,string answerVerificationCode,string? finalAnswer,long durationMilliseconds,CancellationToken cancellationToken=default);
     Task<WideExternalGroundingConfiguration> GetExternalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GetCachedExternalKnowledgeAsync(Guid tenantId,string normalizedQuery,DateTime notBeforeUtc,CancellationToken cancellationToken=default);

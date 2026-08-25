@@ -230,6 +230,22 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public IReadOnlyCollection<WideNarrowingIterationDto> NarrowingIterations{get;init;}=[];
     // V3.0: the final directional statement of the run (NARROWING/STABLE/EXPANSION/REOPENED/CONVERGED).
     public string? FinalNarrowingTrend{get;init;}
+    // Phase 2a Challenge-the-Winner (WATCH MODE): audit-only adversarial assessment recorded when the
+    // top two candidates finished close. NEVER changes the winner, ranking, confidence, or answer.
+    // Null when the round is disabled (default), the margin is wide, or the assessment failed soft.
+    public WideChallengeOutcomeDto? ChallengeOutcome{get;init;}
+}
+
+// Phase 2a Challenge-the-Winner (WATCH MODE): the adversarial assessment outcome. VerdictCode is one
+// of WideChallengeVerdicts; Margin is the leader-vs-runner-up composite margin that triggered the
+// round. Audit-only: persisted on the execution and returned for display, never acted on.
+public sealed record WideChallengeOutcomeDto(string ChallengedCandidate,string ChallengerCandidate,decimal Margin,string VerdictCode,string Rationale,string? SuggestedWinner);
+
+public static class WideChallengeVerdicts
+{
+    public const string Upheld="UPHELD";                       // challenge found no credible case against the leader
+    public const string Weakened="WEAKENED";                   // credible concerns found but not enough to overturn
+    public const string OverturnSuggested="OVERTURN_SUGGESTED";// challenge argues the runner-up should win (watch-only; never applied)
 }
 
 // V2.9 response modes: the Uncertainty Router controls PRESENTATION, not only reasoning.
@@ -412,6 +428,14 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal DormantBranchThreshold{get;init;}=.20m;
     public decimal PriorWeight{get;init;}=.30m;
     public decimal EvidenceWeight{get;init;}=.70m;
+    // V3.4 evidence-support calibration (DB-seeded; see migration 0163). Defaults preserve the
+    // original hardcoded curve: enterprise = min(ceiling, base + increment*(count-1));
+    // external = maxScore * min(1, base + increment*matchedCount).
+    public decimal EnterpriseSupportBase{get;init;}=.50m;
+    public decimal EnterpriseSupportIncrement{get;init;}=.20m;
+    public decimal EnterpriseSupportCeiling{get;init;}=.90m;
+    public decimal ExternalSupportBase{get;init;}=.60m;
+    public decimal ExternalSupportIncrement{get;init;}=.10m;
     public int MaximumCandidates{get;init;}=10;
     public bool EnableQueryContract{get;init;}=true;
     // Bounded parallelism (DB-seeded; see migration 0147). 1 disables parallel execution.
@@ -442,6 +466,18 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal InformationValueEvidenceGapWeight{get;init;}=.15m;
     public decimal InformationValueBranchWeight{get;init;}=.15m;
     public decimal InformationValueCandidateNeedWeight{get;init;}=.10m;
+    // Phase 1 (VNext): information-round criterion weights (DB-seeded; see migration 0164). Defaults
+    // preserve the original hardcoded raw-score formula exactly.
+    public decimal CriterionUncertaintyWeight{get;init;}=.20m;
+    public decimal CriterionRankingImpactWeight{get;init;}=.25m;
+    public decimal CriterionDiscriminationWeight{get;init;}=.25m;
+    public decimal CriterionEvidenceAvailabilityWeight{get;init;}=.15m;
+    public decimal CriterionNoveltyWeight{get;init;}=.10m;
+    public decimal CriterionRedundancyPenalty{get;init;}=.05m;
+    // Phase 2a Challenge-the-Winner (DB-seeded; see migration 0165). Default OFF: current behavior
+    // is bit-identical until explicitly enabled. Watch mode only — outcome is audit data.
+    public bool EnableChallengeRound{get;init;}=false;
+    public decimal ChallengeMarginThreshold{get;init;}=.10m;
     // Deterministic values for LLM categorical judgments (VERY_LOW..VERY_HIGH).
     public decimal VeryLowInformationValue{get;init;}=.20m;
     public decimal LowInformationValue{get;init;}=.40m;
