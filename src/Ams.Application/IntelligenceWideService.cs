@@ -550,7 +550,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         // One batched estimate for all eligible (ACTIVE/SECONDARY) branches.
                         var eligible=survivorsFinal.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).ToArray();
                         if(eligible.Length<2)break;
-                        var proposal=await EstimateInformationValueAsync(request,eligible,entropyBefore,queryContract,cancellationToken);
+                        // Phase 1 (VNext) contested-pair context: tell the estimator WHERE the unresolved
+                        // bottleneck is (deterministic leader vs runner-up over the frozen candidate basis).
+                        // Prompt-context only — scoring, selection, and narrowing are untouched.
+                        var contestedPair=DescribeContestedPair(roundCandidateBasis,evidence,externalKnowledgeAll);
+                        var proposal=await EstimateInformationValueAsync(request,eligible,entropyBefore,queryContract,contestedPair,cancellationToken);
                         llmCalls++;
                         if(proposal is null||proposal.Targets.Count==0)break;
                         var branchesByCode=eligible.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
@@ -569,13 +573,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                             if(!branchesByCode.TryGetValue(target.BranchCode,out var branch))continue;
                             if(!ValidateCategories(target))continue;
                             // Deterministic conversion of categorical judgments; redundancy penalizes.
+                            // Criterion weights are DB-calibrated (see migration 0164); defaults match the original constants.
                             var raw=Math.Clamp(
-                                .20m*CategoryValue(configuration,target.Uncertainty)
-                                +.25m*CategoryValue(configuration,target.RankingImpact)
-                                +.25m*CategoryValue(configuration,target.CandidateDiscrimination)
-                                +.15m*CategoryValue(configuration,target.EvidenceAvailability)
-                                +.10m*CategoryValue(configuration,target.Novelty)
-                                -.05m*CategoryValue(configuration,target.Redundancy),0,1);
+                                configuration.CriterionUncertaintyWeight*CategoryValue(configuration,target.Uncertainty)
+                                +configuration.CriterionRankingImpactWeight*CategoryValue(configuration,target.RankingImpact)
+                                +configuration.CriterionDiscriminationWeight*CategoryValue(configuration,target.CandidateDiscrimination)
+                                +configuration.CriterionEvidenceAvailabilityWeight*CategoryValue(configuration,target.EvidenceAvailability)
+                                +configuration.CriterionNoveltyWeight*CategoryValue(configuration,target.Novelty)
+                                -configuration.CriterionRedundancyPenalty*CategoryValue(configuration,target.Redundancy),0,1);
                             // Adjust with facts POLOXI already knows: evidence gap, branch importance, candidate closeness.
                             var evidenceGap=Math.Clamp(1m-branch.EvidenceSupport,0,1);
                             var branchImportance=Math.Clamp(branch.PoloxiConfidence/maxConfidence,0,1);
@@ -922,6 +927,24 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // fixes the "80% decision coverage / 20% confidence" incoherence.
                 aggregateConfidence=decisionConfidence.Value;
             }
+            // Phase 2a Challenge-the-Winner (WATCH MODE): when enabled and the leader-vs-runner-up
+            // composite margin is thin, one adversarial LLM assessment argues AGAINST the leader and
+            // records its verdict for audit. Default OFF. NEVER changes the winner, ranking,
+            // confidence, clarification behavior, or answer — the outcome is diagnostic data only.
+            WideChallengeOutcomeDto? challengeOutcome=null;
+            if(configuration.EnableChallengeRound&&topCandidates.Length>1)
+            {
+                var challengeMargin=Math.Clamp((topCandidates[0].CompositeScore-topCandidates[1].CompositeScore)/Math.Max(topCandidates[0].CompositeScore,.0001m),0,1);
+                if(challengeMargin<configuration.ChallengeMarginThreshold)
+                {
+                    challengeOutcome=await ChallengeWinnerAsync(request,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
+                    if(challengeOutcome is not null)
+                    {
+                        try{await wideRepository.UpdateWideExecutionChallengeOutcomeAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(challengeOutcome,JsonOptions),cancellationToken);}
+                        catch{/* audit only; never blocks the answer */}
+                    }
+                }
+            }
             // V2.8 Clarification Gate, upgraded to V2.8.4 Clarification Intelligence.
             // Intent Gap classifier: unresolved uncertainty is an EVIDENCE gap (POLOXI doesn't know the
             // world — retrieve) or an INTENT gap (POLOXI knows the possibilities but not which one the
@@ -1097,7 +1120,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
             Candidates=candidates,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
-            WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,
+            WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
             ClarificationQuestion=clarificationQuestion,ClarificationTarget=clarificationTarget,ClarificationOptions=clarificationOptions,
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
@@ -1960,6 +1983,51 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private sealed record WideCandidateEnumerationProposal(IReadOnlyList<string>? Candidates);
 
+    // Phase 2a Challenge-the-Winner (WATCH MODE): one adversarial LLM assessment that argues AGAINST
+    // the current leader using only the already-retrieved evidence — no new retrieval calls. Fail-soft:
+    // any provider/parse failure returns null and the run proceeds exactly as before.
+    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAsync(WideSearchRequest request,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var leaderScores=string.Join("; ",leader.BranchScores.Select(score=>$"{score.BranchDisplayName}: {score.EvidenceScore:0.00}"));
+            var runnerUpScores=string.Join("; ",runnerUp.BranchScores.Select(score=>$"{score.BranchDisplayName}: {score.EvidenceScore:0.00}"));
+            var evidenceContext=string.Join('\n',externalKnowledge.Take(12).Select((snippet,index)=>$"[{index+1}] {snippet.Title}: {snippet.Snippet}"));
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
+                "You are the POLOXI devil's advocate. The candidate competition selected a leader by a thin margin. Argue the strongest honest case AGAINST the leader and FOR the runner-up using ONLY the supplied evidence — never invent facts. Then give a verdict: UPHELD when no credible case exists against the leader, WEAKENED when credible concerns exist but do not overturn it, OVERTURN_SUGGESTED only when the evidence genuinely favors the runner-up. Keep the rationale under 120 words and cite evidence numbers in brackets.",
+                $"Question: {request.Query}\nLeader: {leader.DisplayName} (composite {leader.CompositeScore:0.00}; dimensions: {leaderScores})\nRunner-up: {runnerUp.DisplayName} (composite {runnerUp.CompositeScore:0.00}; dimensions: {runnerUpScores})\nMargin: {margin:0.00}\nEvidence:\n{evidenceContext}",
+                ChallengeVerdictSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CHALLENGE_ROUND",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideChallengeVerdictProposal>(result.Content,JsonOptions);
+            if(proposal is null||string.IsNullOrWhiteSpace(proposal.VerdictCode))return null;
+            var verdict=proposal.VerdictCode.Trim().ToUpperInvariant() switch
+            {
+                WideChallengeVerdicts.Weakened=>WideChallengeVerdicts.Weakened,
+                WideChallengeVerdicts.OverturnSuggested=>WideChallengeVerdicts.OverturnSuggested,
+                _=>WideChallengeVerdicts.Upheld
+            };
+            return new(leader.DisplayName,runnerUp.DisplayName,margin,verdict,proposal.Rationale?.Trim()??string.Empty,
+                verdict==WideChallengeVerdicts.OverturnSuggested?runnerUp.DisplayName:null);
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private sealed record WideChallengeVerdictProposal(string? VerdictCode,string? Rationale);
+
+    private const string ChallengeVerdictSchema="""
+{
+  "type": "object",
+  "properties": {
+    "verdictCode": { "type": "string", "enum": ["UPHELD", "WEAKENED", "OVERTURN_SUGGESTED"] },
+    "rationale": { "type": "string" }
+  },
+  "required": ["verdictCode", "rationale"],
+  "additionalProperties": false
+}
+""";
+
     private const string CandidateEnumerationSchema="""
 {
   "type": "object",
@@ -2012,7 +2080,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     // One BATCHED call estimates information value for all eligible branches, including falsifiable
     // candidate ranking-change predictions POLOXI can later verify. Fail-soft: returns null on any failure.
-    private async Task<WideInformationValueProposal?> EstimateInformationValueAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> eligible,WideEntropyResult entropy,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    private async Task<WideInformationValueProposal?> EstimateInformationValueAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> eligible,WideEntropyResult entropy,WideQueryContract? queryContract,string? contestedPair,CancellationToken cancellationToken)
     {
         try
         {
@@ -2020,7 +2088,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var contractContext=queryContract is null?"(none)":$"entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 "You are the POLOXI Information Value estimator. For EVERY listed branch, assess how valuable investigating it next is likely to be. This is a PREDICTION of usefulness, never a measurement. For each branch return: uncertainty (how unresolved this dimension is), rankingImpact (how likely new evidence changes the final answer ranking), candidateDiscrimination (how well evidence here separates currently close candidates), evidenceAvailability (how likely useful public evidence exists), novelty (how different from evidence already retrieved), redundancy (overlap with evidence already retrieved). Allowed values for all six: VERY_LOW, LOW, MEDIUM, HIGH, VERY_HIGH — no other values. evidenceTarget: one concrete sentence describing exactly what evidence to retrieve for this branch. rationale: one sentence why. predictedRankingChanges: which current candidates are most likely to move up or down if this branch is investigated — candidate (exact name), direction (UP or DOWN), magnitude (NONE, LOW, MEDIUM, or HIGH). Make these predictions falsifiable and specific; return an empty array when no candidate movement is expected. Return every branch exactly once.",
-                $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nBranches:\n{branchContext}",
+                $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nUnresolved bottleneck: {contestedPair??"(no contested pair yet — candidate signals are not established)"}\nBranches:\n{branchContext}",
                 InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             return JsonSerializer.Deserialize<WideInformationValueProposal>(result.Content,JsonOptions);
         }
@@ -2028,6 +2096,18 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         {
             return null;
         }
+    }
+
+    // Phase 1 (VNext): deterministic contested-pair description — the current leader vs runner-up over
+    // the frozen candidate basis and their margin. Reuses the existing mention-weighted candidate
+    // signals; prompt-context only, no effect on any scoring or narrowing path.
+    private static string? DescribeContestedPair(IReadOnlyCollection<string> candidateNames,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        if(candidateNames.Count<2)return null;
+        var top=ComputeCandidateSignals(candidateNames,evidence,knowledge).OrderByDescending(item=>item.Value).Take(2).ToArray();
+        if(top.Length<2||top[0].Value<=0m)return null;
+        var margin=top[0].Value-top[1].Value;
+        return $"the current leader is \"{top[0].Key}\" (signal {top[0].Value:F2}) vs runner-up \"{top[1].Key}\" (signal {top[1].Value:F2}), separated by {margin:F2} — evidence that best separates these two is the most valuable.";
     }
     // never invented by the LLM. Enterprise evidence dominates; matched external snippets contribute
     // with their provider relevance score; unsupported branches score 0.
