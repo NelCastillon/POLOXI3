@@ -312,6 +312,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 :(configuration.AbsoluteDepthCeiling,configuration.MaximumInformationRounds,false);
             if(queryContract?.AnswerKind is{Length:>0}answerKindCode)
                 try{await wideRepository.UpdateWideExecutionAnswerKindAsync(request.TenantId,request.UserId,executionId,answerKindCode,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
+            // Batch-inference overlap: the candidate-seed enumeration depends only on the query and the
+            // FINALIZED query contract (both fixed at this point), so its LLM call is started here and
+            // awaited where seeds are consumed (before the information rounds). Same guard, same prompt
+            // inputs, same fail-soft semantics as the previous inline call — only the timing overlaps
+            // Stage 1 intent, hierarchy narrowing, and grounding. Same accepted pattern as llmRawTask.
+            var candidateSeedTask=configuration.EnableInformationValue?EnumerateCandidateSeedsAsync(request,queryContract,cancellationToken):null;
 
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
             var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
@@ -507,9 +513,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // are never lowered. A short verification retrieval per seed batch gives real seeds the
             // chance to accumulate the host support the gates require. Fail-soft: enumeration or
             // verification failure degrades to the harvested universe.
-            if(configuration.EnableInformationValue)
+            if(configuration.EnableInformationValue&&candidateSeedTask is not null)
             {
-                var seeds=await EnumerateCandidateSeedsAsync(request,queryContract,cancellationToken);
+                var seeds=await candidateSeedTask;
                 var queryTopicSeedTokens=BuildQueryTopicTokens(request.Query);
                 var validSeeds=seeds.Where(seed=>IsValidCandidateName(seed)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
                 if(validSeeds.Length>0)
@@ -931,19 +937,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // composite margin is thin, one adversarial LLM assessment argues AGAINST the leader and
             // records its verdict for audit. Default OFF. NEVER changes the winner, ranking,
             // confidence, clarification behavior, or answer — the outcome is diagnostic data only.
+            // Batch-inference overlap: the verdict feeds nothing downstream except the response DTO and
+            // its audit row, so the call is started here and awaited just before the response is built,
+            // overlapping the deterministic clarification/answer-locking work instead of blocking it.
             WideChallengeOutcomeDto? challengeOutcome=null;
+            Task<WideChallengeOutcomeDto?>? challengeTask=null;
             if(configuration.EnableChallengeRound&&topCandidates.Length>1)
             {
                 var challengeMargin=Math.Clamp((topCandidates[0].CompositeScore-topCandidates[1].CompositeScore)/Math.Max(topCandidates[0].CompositeScore,.0001m),0,1);
                 if(challengeMargin<configuration.ChallengeMarginThreshold)
-                {
-                    challengeOutcome=await ChallengeWinnerAsync(request,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
-                    if(challengeOutcome is not null)
-                    {
-                        try{await wideRepository.UpdateWideExecutionChallengeOutcomeAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(challengeOutcome,JsonOptions),cancellationToken);}
-                        catch{/* audit only; never blocks the answer */}
-                    }
-                }
+                    challengeTask=ChallengeWinnerAndPersistAsync(request,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
             }
             // V2.8 Clarification Gate, upgraded to V2.8.4 Clarification Intelligence.
             // Intent Gap classifier: unresolved uncertainty is an EVIDENCE gap (POLOXI doesn't know the
@@ -1115,6 +1118,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var leakageNote=leakedNames.Length==0?string.Empty:$"\n\nAlso considered but not selected for the final ranking: {string.Join(", ",leakedNames)}.";
                 finalAnswerText=$"Final ranking (deterministic): {lockedRanking}\n\n{finalAnswerText}{leakageNote}";
             }
+            // Join the overlapped challenge verdict (fail-soft: null on provider failure) so the
+            // response DTO and audit row are identical to the previous sequential behavior.
+            if(challengeTask is not null)challengeOutcome=await challengeTask;
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
             return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
@@ -1986,6 +1992,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Phase 2a Challenge-the-Winner (WATCH MODE): one adversarial LLM assessment that argues AGAINST
     // the current leader using only the already-retrieved evidence — no new retrieval calls. Fail-soft:
     // any provider/parse failure returns null and the run proceeds exactly as before.
+    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAndPersistAsync(WideSearchRequest request,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
+    {
+        var challengeOutcome=await ChallengeWinnerAsync(request,executionId,leader,runnerUp,margin,externalKnowledge,cancellationToken);
+        if(challengeOutcome is not null)
+        {
+            try{await wideRepository.UpdateWideExecutionChallengeOutcomeAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(challengeOutcome,JsonOptions),cancellationToken);}
+            catch{/* audit only; never blocks the answer */}
+        }
+        return challengeOutcome;
+    }
+
     private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAsync(WideSearchRequest request,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
     {
         try
