@@ -138,7 +138,8 @@ builder.Services.AddHttpClient<ApiClient>(client =>
     client.BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://localhost:7051/");
     // Long-running intelligence searches (POLOXI Wide progressive disambiguation) can exceed the
     // 100-second HttpClient default; the pipeline governs its own budgets via AI.FeaturePolicy.
-    client.Timeout = TimeSpan.FromSeconds(300);
+    // Widened candidate discovery/recovery passes can push executions past 300s, so allow 600s.
+    client.Timeout = TimeSpan.FromSeconds(600);
 }).AddHttpMessageHandler<ActingUserHeaderHandler>();
 
 var app = builder.Build();

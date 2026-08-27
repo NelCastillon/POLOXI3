@@ -88,7 +88,11 @@ COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.SingleAnswerMaxInformationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0) SingleAnswerMaxInformationRounds,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ClarificationReweightBoost' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) ClarificationReweightBoost,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableChallengeRound' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableChallengeRound,
-COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ChallengeMarginThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ChallengeMarginThreshold;
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ChallengeMarginThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ChallengeMarginThreshold,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableGuardrailPenalty' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableGuardrailPenalty,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailVetoThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) GuardrailVetoThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailAcceptableThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.65) GuardrailAcceptableThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailPenaltyExponent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) GuardrailPenaltyExponent;
 -- V3.3 POLOXI.AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -164,7 +168,11 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             AnswerKinds=answerKinds,
             ClarificationReweightBoost=Math.Clamp(row.ClarificationReweightBoost,0,1),
             EnableChallengeRound=string.Equals(row.EnableChallengeRound,"true",StringComparison.OrdinalIgnoreCase),
-            ChallengeMarginThreshold=Math.Clamp(row.ChallengeMarginThreshold,0,1)
+            ChallengeMarginThreshold=Math.Clamp(row.ChallengeMarginThreshold,0,1),
+            EnableGuardrailPenalty=string.Equals(row.EnableGuardrailPenalty,"true",StringComparison.OrdinalIgnoreCase),
+            GuardrailVetoThreshold=Math.Clamp(row.GuardrailVetoThreshold,0,1),
+            GuardrailAcceptableThreshold=Math.Clamp(row.GuardrailAcceptableThreshold,0,1),
+            GuardrailPenaltyExponent=Math.Clamp(row.GuardrailPenaltyExponent,.01m,5m)
         };
     }
 
@@ -300,7 +308,7 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         decimal InformationValueLlmWeight,decimal InformationValueEvidenceGapWeight,decimal InformationValueBranchWeight,decimal InformationValueCandidateNeedWeight,decimal CriterionUncertaintyWeight,decimal CriterionRankingImpactWeight,decimal CriterionDiscriminationWeight,decimal CriterionEvidenceAvailabilityWeight,decimal CriterionNoveltyWeight,decimal CriterionRedundancyPenalty,
         decimal VeryLowInformationValue,decimal LowInformationValue,decimal MediumInformationValue,decimal HighInformationValue,decimal VeryHighInformationValue,int EvidencePriorityMinimumDepth,decimal EvidencePriorityCoverageFloor,int MinimumCandidateDimensionSupport,string EnableClarificationGate,decimal ClarificationConfidenceThreshold,decimal ClarificationWinnerStabilityThreshold,decimal ClarificationMarginThreshold,int MaximumClarificationRounds,decimal MinimumClarificationGain,
         string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
-        string EnableAnswerKindRouting,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold);
+        string EnableAnswerKindRouting,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 

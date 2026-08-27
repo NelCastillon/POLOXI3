@@ -1,5 +1,4 @@
 # Copilot Instructions
-
 ## Project Guidelines
 - **Number one priority for all pages:** build and verify in `Table/API/UI` order. Confirm the database table/schema first, then align API/backend contracts and persistence, then implement or update the UI.
 - Use the naming convention `ApiClients.CrmConfiguration*.cs` for CRM Configuration ApiClient sealed partial class files.
@@ -127,3 +126,8 @@
 
 ## Troubleshooting Guidelines
 - When troubleshooting, provide direct instructions tied to the exact current log/state; avoid mixing alternative paths or unnecessary background details.
+
+## POLOXI Wide Intelligence Pipeline
+- In the POLOXI Wide intelligence pipeline (IntelligenceWideService), any new rules or fixes must never contradict or feed back into the computation of merit factors (composite scores, evidence coverage/confidence, EEA exclusive hosts, FD fragment domination, SB kind demotion, support counts). New logic must operate strictly downstream of factor computation — ranking, filtering, and disclosure only.
+- **V3.10.1 Merit-Tier Final Ranking (mandatory stage in the POLOXI core end-to-end flow):** every POLOXI ranking path must apply this algorithm after factor computation and before returning results: (1) constraint violators and support-excluded candidates are removed from the final ranking entirely — they never occupy Top N slots or appear as 0% rows; (2) admitted candidates order by disclosed merit tier first (STRONG > MODERATE > LIMITED), then composite score, so SB kind demotion affects rank, not only disclosure; (3) tier/admission disclosures must never contradict — excluded candidates report `EXCLUDED` for both `SupportTierCode` and `AdmissionModeCode`, and dictionary-miss defaults must never overstate support (default to `EXCLUDED`, never `STRONG`/`NORMAL`). All exclusions are per-execution verdicts about evidence in context, never persistent blocklists — an entity excluded in one run must compete fresh in every new run.
+- For POLOXI changes, preserve benchmark comparability: distinguish formula changes from factor-input attribution changes, explicitly report when a recall fix can change benchmark scores/rankings, and validate against the benchmark before accepting it.

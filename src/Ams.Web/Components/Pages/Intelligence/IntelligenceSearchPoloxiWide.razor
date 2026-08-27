@@ -112,7 +112,7 @@
                             }
                         </div>
                         <span class="poloxi-confidence-pill poloxi-confidence-pill--@answerContext.ConfidenceLabel.ToLowerInvariant()" title="@ConfidenceTooltip">
-                            <i class="bi bi-shield-check"></i> @answerContext.ConfidenceLabel confidence · @GroundingBadge
+                            <i class="bi bi-shield-check"></i> @answerContext.ConfidenceLabel evidence confidence · @GroundingBadge
                         </span>
                     </div>
                     <p class="poloxi-answer-narrative">@answerContext.ConfidenceNarrative</p>
@@ -792,7 +792,7 @@
             <article><i class="bi bi-database-check poloxi-kpi-icon"></i><span>Evidence</span><strong>@(_response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount)</strong><small>@_response.ExternalEvidenceCount external &middot; @_response.EnterpriseEvidenceCount enterprise</small></article>
             <article title="Hierarchy coverage: share of ALL surviving branches supported by any evidence. Deep leaf branches without evidence lower this without necessarily weakening the answer."><i class="bi bi-bounding-box-circles poloxi-kpi-icon"></i><span>Evidence coverage</span><strong>@_response.EvidenceCoverage.ToString("P0")</strong><small>hierarchy branches supported</small></article>
             <article title="Decision coverage: share of the dimensions that actually drive the final Candidate &times; Branch ranking that are supported by evidence &mdash; the most meaningful grounding measure for the answer itself."><i class="bi bi-crosshair poloxi-kpi-icon"></i><span>Decision coverage</span><strong>@_response.DecisionEvidenceCoverage.ToString("P0")</strong><small>deciding dimensions supported</small></article>
-            <article title="Confidence in the final ranking decision itself: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage."><i class="bi bi-shield-check poloxi-kpi-icon"></i><span>Confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>decision confidence</small></article>
+            <article title="Decision evidence confidence: winner quality, winner-vs-runner-up separation, evidence confidence behind the winner, ranking stability, and decision-dimension coverage. This is separate from ranking certainty."><i class="bi bi-shield-check poloxi-kpi-icon"></i><span>Decision evidence confidence</span><strong>@_response.FinalConfidence.ToString("P0")</strong><small>evidence-backed decision confidence</small></article>
             <article title="Challenge-the-Winner (watch mode): when the leader-vs-runner-up margin is thin, one adversarial LLM assessment argues against the leader and records its verdict for audit. Diagnostic only — it never changes the winner, ranking, or answer."><i class="bi bi-lightning-charge poloxi-kpi-icon"></i><span>Winner challenge</span><strong>@(_response.ChallengeOutcome is null ? "NOT FIRED" : _response.ChallengeOutcome.VerdictCode.Replace('_', ' '))</strong><small>@(_response.ChallengeOutcome is null ? "margin above threshold or disabled" : $"{_response.ChallengeOutcome.ChallengedCandidate} vs {_response.ChallengeOutcome.ChallengerCandidate} · margin {_response.ChallengeOutcome.Margin:P0}")</small></article>
             @if (_response.WinnerStability is { } winnerStability)
             {
@@ -867,7 +867,16 @@
                     <span class="poloxi-step-badge">@(_response.InformationRounds.Count > 0 ? 6 : 5)</span>
                     <div>
                         <strong>Decision quality</strong>
-                        <p>The final decision carries @_response.FinalConfidence.ToString("P0") confidence@(_response.WinnerStability is { } summaryStability ? $" with {summaryStability:P0} winner stability across rounds (top-3 {(_response.TopKStability?.ToString("P0") ?? "—")})" : "") and finished as <em>@_response.StatusCode</em> (@_response.TerminationReasonCode.Replace('_', ' ')) after @_response.LlmCallCount LLM calls in @TimeSpan.FromMilliseconds(_response.DurationMilliseconds).TotalSeconds.ToString("0.#")s. High stability means additional evidence had stopped changing the answer — the convergence signal POLOXI requires before committing to a ranking.</p>
+                        @{
+                            var stabilityExplanation = _response.WinnerStability switch
+                            {
+                                null => "Ranking stability was not measured for this execution.",
+                                <= .05m => "The hierarchy settled, but the candidate ranking did not stabilize; the current winner remains highly sensitive to additional evidence or weighting changes.",
+                                < .60m => "The candidate ranking has limited stability, so treat the winner as the current evidence-weighted leader rather than a fully settled recommendation.",
+                                _ => "High ranking stability means additional evidence had largely stopped changing the answer — the convergence signal POLOXI expects before treating a ranking as settled."
+                            };
+                        }
+                        <p>The final decision carries @_response.FinalConfidence.ToString("P0") decision evidence confidence@(_response.WinnerStability is { } summaryStability ? $" with {summaryStability:P0} winner stability across rounds (top-3 {(_response.TopKStability?.ToString("P0") ?? "—")})" : "") and finished as <em>@_response.StatusCode</em> (@_response.TerminationReasonCode.Replace('_', ' ')) after @_response.LlmCallCount LLM calls in @TimeSpan.FromMilliseconds(_response.DurationMilliseconds).TotalSeconds.ToString("0.#")s. @stabilityExplanation</p>
                     </div>
                 </li>
                 <li class="poloxi-summary-conclusion">
@@ -875,13 +884,17 @@
                     <div>
                         <strong>Conclusion — POLOXI vs. the raw LLM answer</strong>
                         <p>
-                            @if (LlmRawItems.Count > 0)
+                            @if (LlmRawItems.Count > 0 && FinalRankedCandidates.Count > 0)
                             {
                                 var rawTop = LlmRawItems[0].Name;
                                 var rawTopPoloxiRank = FindPoloxiRank(rawTop);
                                 var rawExcluded = LlmRawItems.Count(item => FindPoloxiRank(item.Name) is null);
                                 var rawMoved = LlmRawItems.Select((item, index) => (item, index)).Count(x => FindPoloxiRank(x.item.Name) is int rank && rank != x.index + 1);
                                 <text>The raw single-shot answer from the same model (the LLM Raw column) put “@rawTop” first@(rawTopPoloxiRank switch { 1 => " — and POLOXI's evidence competition agreed", int rank => $" — but POLOXI's evidence competition demoted it to #{rank}", null => " — a candidate POLOXI's evidence competition excluded from the final ranking entirely" }). Of the model's @LlmRawItems.Count raw picks, @rawMoved landed at a different position and @rawExcluded did not survive evidence review at all. </text>
+                            }
+                            else if (LlmRawItems.Count > 0)
+                            {
+                                <text>The raw single-shot answer from the same model (the LLM Raw column) put “@LlmRawItems[0].Name” first, but no candidate competition ran for this execution, so POLOXI's answer was composed directly from the surviving grounded interpretation paths rather than an evidence-scored ranking — the raw pick was neither confirmed nor refuted by a competition. </text>
                             }
                             else
                             {
@@ -892,7 +905,7 @@
                             {
                                 <text>Measured uncertainty fell from @_response.InitialNormalizedEntropy.ToString("P0") to @_response.FinalNormalizedEntropy.ToString("P0") — a plain LLM answer reports no such number and offers no convergence proof. </text>
                             }
-                            The result is an answer with @_response.FinalConfidence.ToString("P0") auditable decision confidence and a full provenance trail, versus a single-shot response whose reliability cannot be inspected at all.
+                            The result is an answer with @_response.FinalConfidence.ToString("P0") auditable decision evidence confidence and a full provenance trail, versus a single-shot response whose reliability cannot be inspected at all.
                         </p>
                     </div>
                 </li>
@@ -931,13 +944,13 @@
                                     <strong class="poloxi-decision-value">—</strong>
                                 }
                             </section>
-                            <section class="poloxi-decision-block" title="Decision confidence = 1 − final measured uncertainty (Shannon entropy). How certain POLOXI is that the ranking is sufficiently resolved. Low values are honest: they mean the field is genuinely contested, not that the ranking is wrong.">
-                                <span class="poloxi-decision-label"><i class="bi bi-bullseye" aria-hidden="true"></i> Decision confidence</span>
+                            <section class="poloxi-decision-block" title="Ranking certainty = 1 − final measured uncertainty (Shannon entropy). How certain POLOXI is that the ranking is sufficiently resolved. Low values are honest: they mean the field is genuinely contested, not that the ranking is wrong.">
+                                <span class="poloxi-decision-label"><i class="bi bi-bullseye" aria-hidden="true"></i> Ranking certainty</span>
                                 @{
-                                    var decisionConfidence = 1m - _response.FinalNormalizedEntropy;
-                                    var confidenceBand = decisionConfidence >= .7m ? "HIGH" : decisionConfidence >= .4m ? "MODERATE" : "LOW";
+                                    var rankingCertainty = 1m - _response.FinalNormalizedEntropy;
+                                    var confidenceBand = rankingCertainty >= .7m ? "HIGH" : rankingCertainty >= .4m ? "MODERATE" : "LOW";
                                 }
-                                <strong class="poloxi-decision-value">@confidenceBand <span>@decisionConfidence.ToString("P0")</span></strong>
+                                <strong class="poloxi-decision-value">@confidenceBand <span>@rankingCertainty.ToString("P0")</span></strong>
                                 <small>Remaining ranking uncertainty @_response.FinalNormalizedEntropy.ToString("P0")</small>
                             </section>
                             <section class="poloxi-decision-block" title="Measured ambiguity at the start of the funnel vs. after interpretation, evidence evaluation, candidate competition, and convergence. The bar shows how much ambiguity was resolved. It does not represent confidence in an individual candidate.">
@@ -1059,7 +1072,7 @@
     private WideSearchResponse? _response;
 
     private bool ShowAnswerView => _showAnswerView && _response?.AnswerContext is not null && _response.StatusCode != "USER_CLARIFICATION_REQUIRED";
-    private string ConfidenceTooltip => _response is null ? "" : $"Decision confidence {_response.FinalConfidence:P0} · winner stability {(_response.WinnerStability?.ToString("P0") ?? "—")} · top-3 {(_response.TopKStability?.ToString("P0") ?? "—")} · uncertainty {_response.InitialNormalizedEntropy:P0} → {_response.FinalNormalizedEntropy:P0} · {_response.TotalActualInformationGain:0.###} bits gained";
+    private string ConfidenceTooltip => _response is null ? "" : $"Decision evidence confidence {_response.FinalConfidence:P0} · winner stability {(_response.WinnerStability?.ToString("P0") ?? "—")} · top-3 {(_response.TopKStability?.ToString("P0") ?? "—")} · uncertainty {_response.InitialNormalizedEntropy:P0} → {_response.FinalNormalizedEntropy:P0} · {_response.TotalActualInformationGain:0.###} bits gained";
     private static string AnswerModeKicker(WideAnswerContext context) => context.ResponseMode switch
     {
         WideResponseModes.AnswerWithRefinement => "Ranked result — several candidates scored closely",
@@ -1098,6 +1111,7 @@
     // silently mirror the POLOXI ranking. No coverage scaling, evidence confidence, or competition.
     private IReadOnlyList<WideCandidateDto> BaselineRankedCandidates => _response is null ? []
         : _response.Candidates
+            .Where(c => !c.IsConstraintViolation && c.InterpretiveSupportCount > 0)
             .OrderByDescending(c => c.InterpretiveSupportCount)
             .ThenByDescending(c => c.BranchScores.Count > 0 ? c.BranchScores.Average(s => s.EvidenceScore) : 0m)
             .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)

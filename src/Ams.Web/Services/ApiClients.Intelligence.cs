@@ -42,7 +42,22 @@ public sealed partial class ApiClient
     public async Task<PoloxiSearchResponse?> IntelligentSearchUsingPoloxiAsync(PoloxiSearchRequest request,CancellationToken token=default){var response=await _httpClient.PostAsJsonAsync("api/intelligence/search/poloxi",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<PoloxiSearchResponse>(cancellationToken:token);}
     public async Task<PoloxiSearchResponse?> IntelligentSearchUsingPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken token=default){var response=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/poloxi_wide",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<PoloxiSearchResponse>(cancellationToken:token);}
 
-    public async Task<WideSearchResponse?> IntelligentSearchWideDynamicAsync(WideSearchRequest request,CancellationToken token=default){var response=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<WideSearchResponse>(cancellationToken:token);}
+    // Async start+poll transport: the API starts the wide pipeline on a background task and this client
+    // polls status every 2 seconds, so no single HTTP request has to outlive the pipeline (each poll
+    // completes in milliseconds regardless of how long POLOXI runs). Transport only; results identical.
+    public async Task<WideSearchResponse?> IntelligentSearchWideDynamicAsync(WideSearchRequest request,CancellationToken token=default)
+    {
+        var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic/start",request,token);
+        startResponse.EnsureSuccessStatusCode();
+        var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
+        while(true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2),token);
+            var status=await _httpClient.GetFromJsonAsync<WideSearchOperationStatusResponse>($"api/intelligence_wide/search/dynamic/status/{start.OperationId}",token)??throw new InvalidOperationException("The wide search operation is no longer available.");
+            if(status.StatusCode=="COMPLETED")return status.Response;
+            if(status.StatusCode=="FAILED")throw new InvalidOperationException(status.ErrorMessage??"The wide search failed.");
+        }
+    }
     public async Task<IReadOnlyCollection<WideModelOptionDto>> GetIntelligenceWideModelsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideModelOptionDto>>("api/intelligence_wide/models",token)??[];
     public async Task<QuickSearchFastPathResponse?> QuickSearchFastPathAsync(QuickSearchRequest request,CancellationToken token=default){var response=await _httpClient.PostAsJsonAsync("api/intelligence/quick-search/fast",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<QuickSearchFastPathResponse>(cancellationToken:token);}
     public async Task<QuickSearchResponse?> QuickSearchIntelligentFallbackAsync(QuickSearchRequest request,CancellationToken token=default){var response=await _httpClient.PostAsJsonAsync("api/intelligence/quick-search/intelligent-fallback",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<QuickSearchResponse>(cancellationToken:token);}

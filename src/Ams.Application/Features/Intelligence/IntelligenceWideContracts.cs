@@ -140,6 +140,13 @@ public static class WideEntropyBases
     public const string Candidate="CANDIDATE";
 }
 
+// Async start+poll transport for long-running wide searches: the API starts the pipeline on a
+// background task and the client polls for completion, so no HTTP request outlives the pipeline.
+// Transport-only — POLOXI itself runs unchanged.
+public sealed record WideSearchOperationStartResponse(Guid OperationId);
+
+public sealed record WideSearchOperationStatusResponse(Guid OperationId,string StatusCode,WideSearchResponse? Response,string? ErrorMessage);
+
 public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
 {
     // Real-world references produced by the LLM from the top interpretive narrowing paths.
@@ -478,6 +485,13 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // is bit-identical until explicitly enabled. Watch mode only — outcome is audit data.
     public bool EnableChallengeRound{get;init;}=false;
     public decimal ChallengeMarginThreshold{get;init;}=.10m;
+    // V3.11 Guardrail-Constrained Weighted Utility: ordinary preference scores remain compensatory,
+    // but guardrail criteria apply a deterministic veto-inspired penalty when performance is below
+    // an acceptable floor. The LLM may describe criteria; POLOXI owns these thresholds and math.
+    public bool EnableGuardrailPenalty{get;init;}=true;
+    public decimal GuardrailVetoThreshold{get;init;}=.20m;
+    public decimal GuardrailAcceptableThreshold{get;init;}=.65m;
+    public decimal GuardrailPenaltyExponent{get;init;}=.50m;
     // Deterministic values for LLM categorical judgments (VERY_LOW..VERY_HIGH).
     public decimal VeryLowInformationValue{get;init;}=.20m;
     public decimal LowInformationValue{get;init;}=.40m;
@@ -577,7 +591,14 @@ public sealed record WideQueryContractProposal(string? EntityType,string? Geogra
 
 public sealed record WideCandidateScoringProposal(IReadOnlyCollection<WideCandidateScore> Candidates);
 
-public sealed record WideCandidateScore(string Name,string? Detail,bool ViolatesConstraint,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchEvidence> BranchScores);
+public sealed record WideCandidateScore(string Name,string? Detail,bool ViolatesConstraint,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchEvidence> BranchScores)
+{
+    // V3.10 SB - Structural Boolean riding the existing scoring call: is this a concrete entity of
+    // the kind the query asks for (a specific city/company/product), not a criterion, category, or
+    // description? Untrusted LLM signal - it demotes admission tier but never hard-excludes alone.
+    // Defaults true so older/partial responses keep pre-V3.10 behavior.
+    public bool IsEntityOfRequestedKind{get;init;}=true;
+}
 
 public sealed record WideCandidateBranchEvidence(string BranchDisplayName,decimal EvidenceScore);
 

@@ -517,6 +517,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 var seeds=await candidateSeedTask;
                 var queryTopicSeedTokens=BuildQueryTopicTokens(request.Query);
+                // Candidate eligibility must be stable for the same proposed name and query. Retrieved
+                // corpus capitalization may vary between runs, so it cannot authoritatively reject a
+                // seed; every accepted seed still has to earn support at the evidence admission gates.
                 var validSeeds=seeds.Where(seed=>IsValidCandidateName(seed)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
                 if(validSeeds.Length>0)
                 {
@@ -824,6 +827,20 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // the re-classified kind is untrustworthy on answer-polluted text.
             var isContentEnumeration=SkipsCandidateCompetition(configuration,queryContract)
                 &&(string.IsNullOrWhiteSpace(request.ClarificationAnswer)||NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0});
+            // V3.7 mid-run reclassification checkpoint: Stage 0 can misclassify a choose-one selection
+            // as a non-competition kind, but the interpretive results are ground truth — when multiple
+            // DISTINCT NAMED candidates emerged across branches, the task demonstrably IS an entity
+            // competition and skipping it would deliver an unaudited pick. Deterministic, zero-LLM:
+            // count distinct interpretive item names; two or more re-enable the competition. Genuine
+            // content-enumeration output (question texts, tips) stays skipped because its "items" are
+            // produced content under a kind whose lookup row disables competition AND that carried
+            // no ranking concept; a rankingConcept on the contract is direct competition evidence.
+            if(isContentEnumeration&&!string.IsNullOrWhiteSpace(queryContract?.RankingConcept))
+            {
+                var distinctNamedCandidates=interpretiveResults.SelectMany(result=>result.Items.Select(item=>item.Name.Trim()))
+                    .Where(name=>name.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                if(distinctNamedCandidates>=2)isContentEnumeration=false;
+            }
             if(!isContentEnumeration&&interpretiveResults.Length>0&&llmCalls<configuration.MaximumTotalLlmCalls)
             {
                 candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,cancellationToken);
@@ -934,9 +951,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 aggregateConfidence=decisionConfidence.Value;
             }
             // Phase 2a Challenge-the-Winner (WATCH MODE): when enabled and the leader-vs-runner-up
-            // composite margin is thin, one adversarial LLM assessment argues AGAINST the leader and
-            // records its verdict for audit. Default OFF. NEVER changes the winner, ranking,
-            // confidence, clarification behavior, or answer — the outcome is diagnostic data only.
+            // composite margin is thin, evidence coverage is weak, or the ranking failed to stabilize,
+            // one adversarial LLM assessment argues AGAINST the leader and records its verdict for audit.
+            // Default OFF. NEVER changes the winner, ranking, confidence, clarification behavior, or
+            // answer — the outcome is diagnostic data only.
             // Batch-inference overlap: the verdict feeds nothing downstream except the response DTO and
             // its audit row, so the call is started here and awaited just before the response is built,
             // overlapping the deterministic clarification/answer-locking work instead of blocking it.
@@ -945,7 +963,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(configuration.EnableChallengeRound&&topCandidates.Length>1)
             {
                 var challengeMargin=Math.Clamp((topCandidates[0].CompositeScore-topCandidates[1].CompositeScore)/Math.Max(topCandidates[0].CompositeScore,.0001m),0,1);
-                if(challengeMargin<configuration.ChallengeMarginThreshold)
+                var lowEvidenceCoverage=decisionEvidenceCoverage<.50m;
+                var unstableWinner=winnerStability is <=.05m;
+                if(challengeMargin<configuration.ChallengeMarginThreshold||lowEvidenceCoverage||unstableWinner)
                     challengeTask=ChallengeWinnerAndPersistAsync(request,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
             }
             // V2.8 Clarification Gate, upgraded to V2.8.4 Clarification Intelligence.
@@ -1097,26 +1117,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // must never contradict it. The locked ordered ranking is prepended to the final answer text
             // so the Full Answer and the ranking cards can never disagree, regardless of LLM output.
             var finalAnswerText=string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer;
-            if(finalAnswerText is not null&&topCandidates.Length>0&&answerStatus!="USER_CLARIFICATION_REQUIRED")
+            if(topCandidates.Length>0&&answerStatus!="USER_CLARIFICATION_REQUIRED")
             {
-                var lockedRanking=string.Join(" ",topCandidates.Take(Math.Max(queryContract?.RequestedCount??0,10)).Select((candidate,index)=>$"{index+1}. {candidate.DisplayName} ({candidate.CompositeScore:P0})."));
-                // V2.9.5 candidate-leakage guard: the prose is composed BEFORE the competition, so it
-                // can mention interpretive/discovered candidates that did not make the final ranking
-                // as though they were winners (FinalAnswerCandidates ⊄ FinalRankedCandidates). The
-                // guard is deterministic and zero-LLM: any competed-but-unranked candidate name found
-                // in the prose is explicitly disclosed as considered-but-not-selected, so the narrative
-                // can never silently promote an unranked candidate.
-                var rankedNames=candidates.Where(candidate=>!candidate.IsConstraintViolation).Select(candidate=>candidate.DisplayName).ToArray();
-                var leakedNames=candidates.Where(candidate=>candidate.IsConstraintViolation).Select(candidate=>candidate.DisplayName)
-                    .Concat(interpretiveResults.SelectMany(result=>result.Items.Select(item=>item.Name)))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Where(name=>IsValidCandidateName(name)
-                        &&!rankedNames.Any(ranked=>ranked.Contains(name,StringComparison.OrdinalIgnoreCase)||name.Contains(ranked,StringComparison.OrdinalIgnoreCase))
-                        &&finalAnswerText.Contains(name,StringComparison.OrdinalIgnoreCase))
-                    .Take(6)
-                    .ToArray();
-                var leakageNote=leakedNames.Length==0?string.Empty:$"\n\nAlso considered but not selected for the final ranking: {string.Join(", ",leakedNames)}.";
-                finalAnswerText=$"Final ranking (deterministic): {lockedRanking}\n\n{finalAnswerText}{leakageNote}";
+                finalAnswerText=BuildWinnerBoundFinalAnswer(topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
+                finalAnswerText=ValidateWinnerBoundFinalAnswer(finalAnswerText,topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
             }
             // Join the overlapped challenge verdict (fail-soft: null on provider failure) so the
             // response DTO and audit row are identical to the previous sequential behavior.
@@ -1369,6 +1373,69 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(name.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)){name=name[prefix.Length..].Trim();break;}
         }
         return name.Length==0?displayName.Trim():char.ToUpperInvariant(name[0])+name[1..];
+    }
+
+    private static string BuildWinnerBoundFinalAnswer(WideCandidateDto[] topCandidates,WideQueryContract? queryContract,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal? winnerStability,decimal? topKStability,decimal decisionEvidenceCoverage)
+    {
+        var winner=topCandidates[0];
+        var requestedCount=Math.Clamp(queryContract?.RequestedCount??topCandidates.Length,1,topCandidates.Length);
+        var lockedRanking=string.Join(" ",topCandidates.Take(requestedCount).Select((candidate,index)=>$"{index+1}. {candidate.DisplayName} ({candidate.CompositeScore:P0})."));
+        var runnerUp=topCandidates.Length>1?topCandidates[1]:null;
+        var margin=runnerUp is null?1m:Math.Clamp(winner.CompositeScore-runnerUp.CompositeScore,0,1);
+        var leadingScores=winner.BranchScores.OrderByDescending(score=>score.EvidenceScore).Take(3).Select(score=>$"{HumanizeDimensionName(score.BranchDisplayName)} ({score.EvidenceScore:P0})").ToArray();
+        var weakerScores=winner.BranchScores.OrderBy(score=>score.EvidenceScore).Take(2).Select(score=>$"{HumanizeDimensionName(score.BranchDisplayName)} ({score.EvidenceScore:P0})").ToArray();
+        var stabilitySentence=winnerStability switch
+        {
+            null=>"Ranking stability could not be measured for this run.",
+            <=.05m=>"The hierarchy settled, but the candidate ranking did not stabilize; the current leader remains highly sensitive to additional evidence or weighting changes.",
+            <.60m=>"The candidate ranking has limited stability, so the winner should be treated as a current evidence-weighted leader rather than a settled recommendation.",
+            _=>"The candidate ranking was stable across measurement rounds, which supports the final ordering."
+        };
+        var confidenceText=decisionConfidence is null?"not separately computed":decisionConfidence.Value.ToString("P0");
+        var rankingCertainty=Math.Clamp(1m-finalEntropy.NormalizedEntropy,0,1);
+        var builder=new StringBuilder();
+        builder.Append("Final ranking (deterministic): ").Append(lockedRanking).AppendLine().AppendLine();
+        builder.Append(winner.DisplayName).Append(" is the immutable POLOXI winner for this execution because the deterministic Candidate × Branch competition scored it highest at ").Append(winner.CompositeScore.ToString("P0")).Append('.');
+        if(runnerUp is not null)builder.Append(' ').Append(runnerUp.DisplayName).Append(" was next at ").Append(runnerUp.CompositeScore.ToString("P0")).Append(", a margin of ").Append(margin.ToString("P1")).Append('.');
+        builder.AppendLine().AppendLine();
+        builder.Append("Why ").Append(winner.DisplayName).Append(" won: ");
+        builder.Append(leadingScores.Length>0?$"its strongest deciding dimensions were {string.Join(", ",leadingScores)}.":"it had the strongest composite score across the surviving interpretation paths.");
+        if(weakerScores.Length>0)builder.Append(" Its weaker trade-off areas were ").Append(string.Join(", ",weakerScores)).Append('.');
+        if(!string.IsNullOrWhiteSpace(winner.Detail))builder.Append(' ').Append(TrimDescription(winner.Detail));
+        builder.AppendLine().AppendLine();
+        builder.Append(stabilitySentence).Append(' ')
+            .Append("Decision evidence confidence is ").Append(confidenceText)
+            .Append(", ranking certainty is ").Append(rankingCertainty.ToString("P0"))
+            .Append(", remaining ranking uncertainty is ").Append(finalEntropy.NormalizedEntropy.ToString("P0"))
+            .Append(", and decision-dimension coverage is ").Append(decisionEvidenceCoverage.ToString("P0")).Append('.');
+        if(topCandidates.Length>1)
+        {
+            var alternatives=string.Join("; ",topCandidates.Skip(1).Take(4).Select(candidate=>$"{candidate.DisplayName} ({candidate.CompositeScore:P0})"));
+            builder.AppendLine().AppendLine().Append("Other ranked candidates remained competitive but did not win under the locked scoring: ").Append(alternatives).Append('.');
+        }
+        if(topKStability is not null)builder.Append(" Top-3 stability measured ").Append(topKStability.Value.ToString("P0")).Append('.');
+        return builder.ToString();
+    }
+
+    private static string ValidateWinnerBoundFinalAnswer(string answerText,WideCandidateDto[] topCandidates,WideQueryContract? queryContract,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal? winnerStability,decimal? topKStability,decimal decisionEvidenceCoverage)
+    {
+        if(topCandidates.Length==0||string.IsNullOrWhiteSpace(answerText))return answerText;
+        var winner=topCandidates[0].DisplayName;
+        if(!answerText.Contains(winner,StringComparison.OrdinalIgnoreCase))
+            return BuildWinnerBoundFinalAnswer(topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
+        foreach(var nonWinner in topCandidates.Skip(1))
+        {
+            if(ContainsNonWinnerRecommendation(answerText,nonWinner.DisplayName))
+                return BuildWinnerBoundFinalAnswer(topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
+        }
+        return answerText;
+    }
+
+    private static bool ContainsNonWinnerRecommendation(string text,string candidateName)
+    {
+        if(string.IsNullOrWhiteSpace(candidateName)||!text.Contains(candidateName,StringComparison.OrdinalIgnoreCase))return false;
+        var escaped=System.Text.RegularExpressions.Regex.Escape(candidateName);
+        return System.Text.RegularExpressions.Regex.IsMatch(text,$@"\b(select|choose|pick|recommend|recommended|conclude|concludes|winner|best|ranks?\s+#?1|ranked\s+first)\b[^.\n]{{0,160}}{escaped}|{escaped}[^.\n]{{0,160}}\b(is\s+the\s+winner|is\s+best|ranks?\s+#?1|ranked\s+first|should\s+be\s+selected|should\s+be\s+chosen|best\s+fits|best\s+aligns)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     }
 
     private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap,IReadOnlyCollection<WideCandidateInsight>? candidateInsights=null,WideOutputContractResultDto? outputContract=null)
@@ -1681,12 +1748,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         try
         {
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
-                "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. answerKind: classify what the requested ANSWER ITEMS are — ENTITY_RANKING when the user asks to rank/compare/list NAMED, INDEPENDENTLY VERIFIABLE ENTITIES (cities, companies, products, schools, people); CONTENT_ENUMERATION when the requested items are PIECES OF CONTENT to be produced or compiled (exam questions, interview questions, tips, steps, examples, quotes, topics, ideas) — 'top 100 questions that come out in an exam' is CONTENT_ENUMERATION because each item is a question text, not a named entity; SINGLE_ANSWER when one direct answer is requested. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. Name references: 'called X' or 'named X' means the entity is COMMONLY KNOWN AS X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; phrase such constraints as 'commonly known as X', NEVER as 'name is exactly X'. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
+                "Extract a query contract from the user's question. Separate what the query FIXES from what is genuinely ambiguous. answerKind: classify what the requested ANSWER ITEMS are — ENTITY_RANKING when the user asks to rank/compare/list/choose/select/pick NAMED, INDEPENDENTLY VERIFIABLE ENTITIES (cities, companies, products, schools, people); 'which company should I choose' or 'select exactly one company' is ENTITY_RANKING with requestedCount 1 because the answer must win a comparison among named entities, never SINGLE_ANSWER; CONTENT_ENUMERATION when the requested items are PIECES OF CONTENT to be produced or compiled (exam questions, interview questions, tips, steps, examples, quotes, topics, ideas) — 'top 100 questions that come out in an exam' is CONTENT_ENUMERATION because each item is a question text, not a named entity; SINGLE_ANSWER only for a factual or definitional question with one direct answer and no competition among named entities. entityType: the kind of thing being asked about (for example City, Policy, Product) or null. geographicConstraint: an explicit geographic scope stated in the query (for example 'Southern California') or null. requestedCount: an explicit result count (for example 10 from 'top 10', or 1 from 'exactly one') or null. rankingConcept: the evaluative word being ranked on (for example 'best') or null. hardConstraints: every explicit non-negotiable filter stated in the query (geography, time period, category, price bounds); these are FIXED user intent, never interpretations. Name references: 'called X' or 'named X' means the entity is COMMONLY KNOWN AS X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; phrase such constraints as 'commonly known as X', NEVER as 'name is exactly X'. outputRequirements: explicit output shape requirements (top N, ranked list, comparison). ambiguousConcepts: ONLY the genuinely ambiguous evaluative or vague concepts that need interpretation (for example 'best', 'in trouble'); never include hard constraints here. Return empty arrays when nothing applies.",
                 $"Question: {request.Query}",
                 QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
-            return new(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]){AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind)};
+            var contract=new WideQueryContract(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]){AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind)};
+            return ApplySelectionUpgradeGuard(configuration,contract,request.Query);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {
@@ -1776,6 +1844,25 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private static WideAnswerKindDefinition? FindAnswerKind(WideConfiguration configuration,string? answerKindCode)=>
         string.IsNullOrWhiteSpace(answerKindCode)?null:configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode.Equals(answerKindCode.Trim(),StringComparison.OrdinalIgnoreCase));
 
+    // V3.7 selection-upgrade guard: "choose/select/pick exactly one named entity" is a ranking with
+    // requestedCount=1, NOT a single factual answer. Any model (mini or premium) reliably misreads
+    // "select exactly one" as SINGLE_ANSWER, which turns off the Candidate Competition and funnels the
+    // run to an ungrounded interpretive pick. When the contract itself proves entity competition (an
+    // entityType plus a rankingConcept or an explicit selection verb in the query), deterministically
+    // upgrade to ENTITY_RANKING. Never fires for factual/definitional questions (no entityType) and
+    // never downgrades a kind — it only ever ADDS rigor.
+    private static readonly System.Text.RegularExpressions.Regex SelectionVerbPattern=new(@"\b(choose|select|pick)\b|\bwhich\s+one\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static WideQueryContract ApplySelectionUpgradeGuard(WideConfiguration configuration,WideQueryContract contract,string query)
+    {
+        if(!string.Equals(contract.AnswerKind,AnswerKindSingleAnswer,StringComparison.OrdinalIgnoreCase))return contract;
+        if(string.IsNullOrWhiteSpace(contract.EntityType))return contract;
+        var hasSelectionIntent=!string.IsNullOrWhiteSpace(contract.RankingConcept)||SelectionVerbPattern.IsMatch(query);
+        if(!hasSelectionIntent)return contract;
+        // Only upgrade to a kind the tenant actually recognizes (DB lookup first, compiled fallback).
+        if(NormalizeAnswerKind(configuration,AnswerKindEntityRanking)is not{Length:>0}rankingKind)return contract;
+        return contract with{AnswerKind=rankingKind,RequestedCount=contract.RequestedCount??1};
+    }
+
     // V3.3: whether the deterministic Candidate Competition is a category error for this kind is now
     // a lookup-table column (RunsCandidateCompetition); the CONTENT_ENUMERATION constant remains only
     // as the compiled fallback when the table is empty.
@@ -1810,8 +1897,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         // V3.1: a content-enumeration query is NEVER a "which candidate wins" problem — its
         // "candidates" would be topic vocabulary fragments, not competing entities.
+        // V3.7: a choose-exactly-one selection (RequestedCount == 1 with a ranking concept or
+        // ENTITY_RANKING kind) is still a candidate competition — one winner must beat the field.
         var isRankingQuery=!SkipsCandidateCompetition(configuration,queryContract)
-            &&queryContract is not null&&(!string.IsNullOrWhiteSpace(queryContract.RankingConcept)||queryContract.RequestedCount is >1);
+            &&queryContract is not null&&(!string.IsNullOrWhiteSpace(queryContract.RankingConcept)||queryContract.RequestedCount is >=1);
         if(isRankingQuery&&candidateNames.Count>=2)return ComputeCandidateEntropy(candidateNames,evidence,knowledge);
         var alternativeCount=branches.Count(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary
             &&branch.SemanticTypeCode==WideBranchSemanticTypes.Alternative);
@@ -1886,6 +1975,44 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return ranks;
     }
 
+    // V3.10.4 shared match-key derivation for evidence attribution. Keys per candidate:
+    //   1. the full name verbatim,
+    //   2. the qualifier-stripped primary (text before a comma/parenthesis/dash - V2.6.1),
+    //   3. the connective-tail core (text before " and " / " & ") - LLM names carry descriptive
+    //      tails ("Danny K's Billiards and Sports Bar") that snippets shorten ("Danny K's
+    //      Billiards"); a verbatim-only match starved such candidates of evidence hosts and the
+    //      corpus-evidence floor then excluded genuinely attested venues.
+    // Guards: every derived key must be >=4 chars and >=2 tokens (single-token cores are never
+    // used as keys - too many trivial substring hits), and must differ from keys already taken.
+    // Both CountDistinctSourceHosts and CountExclusiveSourceHosts use this SAME derivation so
+    // mention counting and exclusive attribution stay consistent. Deterministic, zero LLM.
+    private static string[] CandidateMatchKeys(string candidate)
+    {
+        var keys=new List<string>{candidate};
+        void AddKey(string? key)
+        {
+            key=key?.Trim();
+            if(string.IsNullOrEmpty(key)||key.Length<4)return;
+            if(key.Split(' ',StringSplitOptions.RemoveEmptyEntries).Length<2&&!string.Equals(key,candidate,StringComparison.OrdinalIgnoreCase))
+            {
+                // Single-token cores only allowed via the V2.6.1 primary rule when long enough.
+                if(key.Length<4)return;
+            }
+            if(!keys.Contains(key,StringComparer.OrdinalIgnoreCase))keys.Add(key);
+        }
+        AddKey(candidate.Split(',','(','\u2013','\u2014')[0]);
+        foreach(var separator in new[]{" and "," & "})
+        {
+            var tailIndex=candidate.IndexOf(separator,StringComparison.OrdinalIgnoreCase);
+            if(tailIndex>0)
+            {
+                var core=candidate[..tailIndex].Trim();
+                if(core.Split(' ',StringSplitOptions.RemoveEmptyEntries).Length>=2)AddKey(core);
+            }
+        }
+        return [..keys];
+    }
+
     // V2.5 Independent Evidence Diversity: number of DISTINCT source hosts whose title or snippet
     // mentions the candidate. Deterministic and zero-LLM. One article claiming a candidate excels
     // across many dimensions is weaker support than independent sources agreeing.
@@ -1894,11 +2021,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // candidate, so evidence confidence collapsed to the single-source floor (a de-facto 70%
     // default). Match on the primary name (text before a comma/parenthesis/dash qualifier) too,
     // provided it is long enough to avoid trivial substring hits.
+    // V3.10.4: key derivation extracted to CandidateMatchKeys (adds the connective-tail core).
     private static int CountDistinctSourceHosts(string candidate,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
-        var primary=candidate.Split(',','(','\u2013','\u2014')[0].Trim();
-        var keys=primary.Length>=4&&!string.Equals(primary,candidate,StringComparison.OrdinalIgnoreCase)
-            ?new[]{candidate,primary}:[candidate];
+        var keys=CandidateMatchKeys(candidate);
         var hosts=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(var snippet in knowledge)
         {
@@ -1913,15 +2039,75 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return hosts.Count;
     }
 
-    // V2.4 Early Candidate Harvest: deterministic, zero-LLM extraction of candidate names from external
-    // result sets. A candidate is a capitalized proper-noun phrase (1-3 words) that appears in at least
-    // two DISTINCT snippets (cross-source repetition filters out one-off article words). Common leading
-    // sentence words and generic terms are excluded via a small stopword set.
-    private static readonly HashSet<string> HarvestStopwords=new(StringComparer.OrdinalIgnoreCase)
+    // V3.10 EEA - Exclusive Evidence Attribution: for each candidate, count the distinct evidence
+    // hosts whose snippets mention THAT candidate and NO other pool candidate. Shared "listicle"
+    // hosts naming everyone attest nothing about any single entity; hosts that discuss exactly one
+    // candidate are genuine entity-specific evidence. Deterministic string matching over the
+    // already-retrieved snippets - O(candidates x snippets), zero LLM. Matching mirrors
+    // CountDistinctSourceHosts via the shared CandidateMatchKeys derivation so both signals
+    // attribute the same mentions consistently.
+    private static Dictionary<string,int> CountExclusiveSourceHosts(IReadOnlyCollection<string> candidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
-        "The","A","An","This","That","These","Those","It","Its","In","On","At","Of","For","From","With","And","Or","But","As","By","To","Is","Are","Was","Were","Be","Best","Top","New","Most","More","How","What","Why","When","Where","Which","Who","US","USA","United","States","America","American","City","Cities","State","County","Guide","List","Ranking","Rankings","Report","Study","Index","Overview","According","Based","Living","Life","Cost","Quality","Family","Families","Home","Homes","Housing","Job","Jobs","School","Schools","Education","Safety","Healthcare","January","February","March","April","May","June","July","August","September","October","November","December"
-    };
+        var keysByCandidate=candidates.ToDictionary(candidate=>candidate,CandidateMatchKeys,StringComparer.OrdinalIgnoreCase);
+        var exclusiveHosts=candidates.ToDictionary(candidate=>candidate,_=>new HashSet<string>(StringComparer.OrdinalIgnoreCase),StringComparer.OrdinalIgnoreCase);
+        foreach(var snippet in knowledge)
+        {
+            var text=$"{snippet.Title} {snippet.Snippet}";
+            if(string.IsNullOrWhiteSpace(text))continue;
+            string? sole=null;
+            var multiple=false;
+            foreach(var(candidate,keys)in keysByCandidate)
+            {
+                if(!keys.Any(key=>text.Contains(key,StringComparison.OrdinalIgnoreCase)))continue;
+                if(sole is not null&&!string.Equals(sole,candidate,StringComparison.OrdinalIgnoreCase)){multiple=true;break;}
+                sole=candidate;
+            }
+            if(multiple||sole is null)continue;
+            var host=Uri.TryCreate(snippet.Url,UriKind.Absolute,out var uri)?uri.Host:snippet.Url??string.Empty;
+            if(!string.IsNullOrWhiteSpace(host))exclusiveHosts[sole].Add(host);
+        }
+        return exclusiveHosts.ToDictionary(entry=>entry.Key,entry=>entry.Value.Count,StringComparer.OrdinalIgnoreCase);
+    }
 
+    // V3.10 FD - Fragment Domination: a candidate whose canonical tokens form a STRICT SUBSET of
+    // another pool candidate's tokens ("Research" vs "Research Triangle Park", "Income" vs "Realty
+    // Income") is a name fragment, not an independent entity - UNLESS it has exclusive evidence of
+    // its own (hosts discussing it and nothing else), which proves independent existence. Returns
+    // the dominating candidate's name per dominated fragment. O(n^2) over the small candidate pool,
+    // deterministic, zero LLM, no vocabulary.
+    // V3.10.3: domination compares against the other candidate's QUALIFIER-INCLUSIVE full-name
+    // tokens (FullNameTokens), not only its canonical core. A bare geographic/qualifier echo
+    // ("Los Angeles" harvested from "Q's Billiard Club (Los Angeles)") was invisible to the
+    // canonical check because CanonicalTokens strips parenthetical qualifiers. Full-name tokens
+    // are a superset of canonical tokens, so every previously detected fragment is still detected;
+    // the exclusive-evidence escape hatch is unchanged, so a genuinely independent entity with
+    // its own exclusive hosts is never dominated.
+    private static Dictionary<string,string> FindDominatedFragments(IReadOnlyCollection<string> candidates,IReadOnlyDictionary<string,int> exclusiveHostCounts)
+    {
+        var tokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+            candidate=>CanonicalTokens(candidate).Select(token=>token.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+        var fullTokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+            candidate=>FullNameTokens(candidate).Select(token=>token.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+        var dominated=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        foreach(var(candidate,tokens)in tokensByCandidate)
+        {
+            if(tokens.Count==0||exclusiveHostCounts.GetValueOrDefault(candidate)>0)continue;
+            foreach(var(other,otherTokens)in fullTokensByCandidate)
+            {
+                if(string.Equals(candidate,other,StringComparison.OrdinalIgnoreCase))continue;
+                if(otherTokens.Count>tokens.Count&&tokens.All(otherTokens.Contains)){dominated[candidate]=other;break;}
+            }
+        }
+        return dominated;
+    }
+
+    // V2.4 Early Candidate Harvest: deterministic, zero-LLM extraction of candidate names from external
+    // result sets. A candidate is a capitalized proper-noun phrase that appears in at least two DISTINCT
+    // snippets. Venue/list pages often include names with apostrophes, ampersands, and business suffixes
+    // ("Q's Billiard Club", "Danny K's Billiards & Sports Bar"); keep those concrete names so the
+    // mini interpretive pass cannot starve the competition with category placeholders.
     private static IReadOnlyCollection<string> HarvestCandidateNames(IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
         if(knowledge.Count<2)return [];
@@ -1939,7 +2125,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // Cross-source repetition: a real candidate is named by at least two distinct snippets.
         return occurrences.Where(entry=>entry.Value.Count>=2)
             .OrderByDescending(entry=>entry.Value.Count)
-            .Take(24)
+            .Take(100)
             .Select(entry=>entry.Key)
             .ToArray();
     }
@@ -1948,22 +2134,36 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         var tokens=text.Split([' ','\t','\n','\r'],StringSplitOptions.RemoveEmptyEntries);
         var current=new List<string>();
+        // A SINGLE capitalized word that only starts a sentence carries no proper-noun
+        // signal ("Every table is...", "Relax with friends...", "All ages welcome...") - the same
+        // signal. Single-word phrases that began at a sentence start are discarded; a real single-word entity is also mentioned mid-text
+        // in the corpus and is harvested from there. Multi-word runs ("On Cue Billiards is...")
+        // keep their sentence-start occurrences - common words never chain into Title Case runs.
+        var currentStartsSentence=false;
+        var atSentenceStart=true;
         foreach(var raw in tokens)
         {
             var word=raw.Trim('.',',',';',':','!','?','(',')','[',']','"','\'','’','“','”','—','-','·');
-            var isProper=word.Length>1&&char.IsUpper(word[0])&&word.Skip(1).All(c=>char.IsLetter(c)&&char.IsLower(c));
-            if(isProper&&!HarvestStopwords.Contains(word))
+            var isConnector=word is "&" or "and";
+            var isProper=word.Length>1&&char.IsUpper(word[0])&&word.Skip(1).All(c=>char.IsLetter(c)||c=='\''||c=='’'||char.IsDigit(c)||c=='&');
+            if(isProper||(isConnector&&current.Count>0))
             {
+                if(current.Count==0)currentStartsSentence=atSentenceStart;
                 current.Add(word);
-                if(current.Count==3){yield return string.Join(' ',current);current.Clear();}
+                if(current.Count==6)
+                {
+                    yield return string.Join(' ',current);
+                    current.Clear();
+                }
             }
             else
             {
-                if(current.Count>0)yield return string.Join(' ',current);
+                if(current.Count>1||(current.Count==1&&!currentStartsSentence))yield return string.Join(' ',current);
                 current.Clear();
             }
+            atSentenceStart=raw.EndsWith('.')||raw.EndsWith('!')||raw.EndsWith('?');
         }
-        if(current.Count>0)yield return string.Join(' ',current);
+        if(current.Count>1||(current.Count==1&&!currentStartsSentence))yield return string.Join(' ',current);
     }
 
     // V3.5 enumeration seeding: one cheap LLM call naming concrete candidates. Enumeration is the one
@@ -2225,55 +2425,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             .Where(word=>word.Length>0&&char.IsLetter(word[0])&&!SubsetConnectiveTokens.Contains(word))
             .ToArray();
         if(significantWords.Length>0&&!significantWords.All(word=>char.IsUpper(word[0])))return false;
-        // V3.4.5 Methodology-Vocabulary Rejection: mini-tier models Title-Case criterion/approach
-        // labels ("Weighted Scoring Approach", "Prioritizing Key Factors", "Using Composite Indices",
-        // "Housing Affordability"), defeating the proper-noun density check above. These labels are
-        // built ENTIRELY from abstract analysis vocabulary; real entities always contain at least one
-        // token outside that vocabulary ("Austin", "Pfizer", "Silliman"). A name is rejected only when
-        // EVERY significant word is methodology vocabulary or the name starts with an instructional
-        // gerund - single abstract words inside real names ("Priority Health", "Scoring, MT") survive.
-        if(significantWords.Length>0)
-        {
-            if(MethodologyGerundStarters.Contains(significantWords[0]))return false;
-            // V3.4.6: hyphenated compounds ("Cost-Weighted", "Multi-Criteria", "Access-Weighted") are
-            // split into their parts so "Market Access-Weighted Approach" cannot evade the all-vocabulary
-            // rejection just because the compound token itself is not in the vocabulary set.
-            if(significantWords
-                .SelectMany(word=>word.Split('-','–',StringSplitOptions.RemoveEmptyEntries))
-                .All(part=>MethodologyVocabulary.Contains(part.TrimEnd('s'))||MethodologyVocabulary.Contains(part)))return false;
-        }
         return true;
     }
-
-    // V3.4.5: abstract analysis/criterion vocabulary - names composed ONLY of these words describe a
-    // method or judging dimension, never a concrete entity. Checked singular/plural tolerant.
-    private static readonly HashSet<string> MethodologyVocabulary=new(StringComparer.OrdinalIgnoreCase)
-    {
-        "approach","method","methodology","strategy","strategies","framework","analysis","assessment",
-        "evaluation","comparison","criteria","criterion","factor","priority","prioritization","weighted",
-        "weighting","scoring","score","ranking","rating","index","indices","composite","metric","measure",
-        "measurement","tradeoff","trade-off","balanced","overall","holistic","multi-factor","multifactor",
-        "consideration","key","primary","top","best","optimal","ideal","affordability","suitability",
-        "livability","quality","safety","opportunity","opportunities","employment","housing","education",
-        "healthcare","weather","climate","crime","traffic","commute","economic","prospect","growth",
-        "cost","costs","value","budget","income","schools","school","public",
-        "model","level","low","high","strong","rate","congestion","standardized","test","graduation",
-        "violent","property","median","average","availability",
-        // V3.4.6: dimension nouns seen Title-Cased inside hyphenated methodology labels
-        // ("Talent-Weighted Approach", "Market Access-Weighted Approach", "Quality of Life-Weighted
-        // Approach", "Balanced Multi-Criteria Approach").
-        "multi","talent","access","market","life","lifestyle","recruitment","retention","connectivity",
-        "infrastructure","tax","taxes","investor","investors","capital","runway","ownership","airport",
-        "university","universities","customer","customers","salary","salaries","operating","startup",
-        "ecosystem","proximity","driven","based","focused","oriented","centric","first"
-    };
-
-    // V3.4.5: instructional gerunds that begin methodology labels, never entity names.
-    private static readonly HashSet<string> MethodologyGerundStarters=new(StringComparer.OrdinalIgnoreCase)
-    {
-        "using","prioritizing","considering","weighing","balancing","comparing","evaluating","applying",
-        "combining","assessing","analyzing","ranking","scoring","selecting","choosing","identifying"
-    };
 
     // V3.4.1: tokens of the query itself (base query plus any clarification-constraint text), used to
     // detect topic-echo pseudo-candidates. Singular/plural tolerant via a trailing-'s' stem.
@@ -2294,6 +2447,95 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var tokens=CanonicalTokens(name);
         return tokens.Length>0&&tokens.All(token=>token.Length<=2||queryTopicTokens.Contains(StemToken(token)));
     }
+
+    // Stable methodology/criterion role detection. Unlike corpus-frequency genericity, this result
+    // depends only on the candidate and the POLOXI query/branch contract for this execution. A label
+    // whose identifying tokens are fully explained by one criterion branch is that criterion restated
+    // as a candidate, not an independently named entity. Partial overlap is never enough, so proper
+    // names that contain a criterion word remain eligible and must pass the normal evidence gates.
+    private static bool IsMethodologyOrCriterionEcho(string name,IReadOnlyCollection<WideBranchRecord> branches)
+    {
+        var candidateTokens=CanonicalTokens(name)
+            .Where(token=>token.Length>2)
+            .Select(StemToken)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if(candidateTokens.Count<2)return false;
+        foreach(var branch in branches)
+        {
+            var branchTokens=BuildQueryTopicTokens($"{branch.DisplayName} {branch.Interpretation}");
+            var explained=candidateTokens.Count(branchTokens.Contains);
+            if(explained>=2&&candidateTokens.Count-explained<=1)return true;
+        }
+        return false;
+    }
+
+    private static bool IsUnsupportedMethodologyOrCriterionLabel(string name,IReadOnlyCollection<WideBranchRecord> branches,int exclusiveHosts)
+        =>exclusiveHosts==0&&IsMethodologyOrCriterionEcho(name,branches);
+
+    private enum CompetitionRole
+    {
+        ScoreableCriterion,
+        HardConstraint,
+        NonScoring
+    }
+
+    private static CompetitionRole ClassifyCompetitionRole(WideBranchRecord branch,WideQueryContract? queryContract)
+    {
+        if(IsHardConstraintBranch(branch,queryContract))return CompetitionRole.HardConstraint;
+        if(IsNonScoringReasoningBranch(branch))return CompetitionRole.NonScoring;
+        return CompetitionRole.ScoreableCriterion;
+    }
+
+    private static bool IsHardConstraintBranch(WideBranchRecord branch,WideQueryContract? queryContract)
+    {
+        var text=$"{branch.DisplayName} {branch.Interpretation}";
+        if(ContainsAny(text,["hard constraint","constraint","eligibility","eligible only","must be","required to","only include"]))return true;
+        if(queryContract?.HardConstraints is not{Count:>0})return false;
+        var branchTokens=BuildQueryTopicTokens(text);
+        foreach(var constraint in queryContract.HardConstraints)
+        {
+            var constraintTokens=BuildQueryTopicTokens(constraint).Where(token=>token.Length>3).ToArray();
+            if(constraintTokens.Length<2)continue;
+            var overlap=constraintTokens.Count(branchTokens.Contains);
+            if(overlap>=Math.Min(3,constraintTokens.Length)&&overlap>=Math.Ceiling(constraintTokens.Length*.75m))return true;
+        }
+        return false;
+    }
+
+    private static bool IsNonScoringReasoningBranch(WideBranchRecord branch)
+    {
+        var text=$"{branch.DisplayName} {branch.Interpretation}";
+        if(ContainsAny(text,["challenge the leader","challenge current leader","challenge leading candidate","challenge winner","stress-test the leader","stress test the leader","methodology to","method to","process instruction","evidence policy","required evidence quality","evidence quality","output requirement","answer format","citation requirement","cite sources","what does the user mean","clarify the meaning","interpret the request","determine appropriate time horizon","decide whether","investigate whether","retrieve evidence","gather evidence","information round"]))return true;
+        return false;
+    }
+
+    private static bool IsGuardrailBranch(WideBranchRecord branch)
+    {
+        var text=$"{branch.DisplayName} {branch.Interpretation}";
+        return ContainsAny(text,["reasonable","affordable","affordability","housing cost","cost of living","budget","price","safe","safety","crime","risk","reliable","reliability","commute","accessible","accessibility","minimum","acceptable","avoid","low cost","within budget","not too expensive"]);
+    }
+
+    private static decimal ComputeGuardrailPenalty(IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyDictionary<Guid,decimal> scores,WideConfiguration configuration)
+    {
+        var veto=Math.Clamp(configuration.GuardrailVetoThreshold,0,1);
+        var threshold=Math.Clamp(configuration.GuardrailAcceptableThreshold,0,1);
+        if(threshold<=veto)threshold=Math.Min(1m,veto+.01m);
+        var exponent=Math.Clamp(configuration.GuardrailPenaltyExponent,.01m,5m);
+        var penalty=1m;
+        foreach(var branch in branches.Where(IsGuardrailBranch))
+        {
+            if(!scores.TryGetValue(branch.WideBranchId,out var score))continue;
+            score=Math.Clamp(score,0,1);
+            if(score>=threshold)continue;
+            if(score<=veto)return 0m;
+            var normalized=(score-veto)/(threshold-veto);
+            penalty*=Math.Clamp((decimal)Math.Pow((double)normalized,(double)exponent),0,1);
+        }
+        return Math.Clamp(penalty,0,1);
+    }
+
+    private static bool ContainsAny(string text,IReadOnlyCollection<string> phrases)
+        =>phrases.Any(phrase=>text.Contains(phrase,StringComparison.OrdinalIgnoreCase));
 
     // V2.7.1 Candidate Identity Resolution: collapse alias variants of the SAME entity ("Mercury",
     // "Mercury Technologies Inc.", "Mercury (finance)") into one canonical candidate BEFORE the
@@ -2403,23 +2645,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var queryTopicTokens=BuildQueryTopicTokens(request.Query);
         try
         {
-            // V2.5: the final Candidate × Branch matrix must include EVERY primary (root-level,
-            // non-pruned) DIMENSION branch POLOXI itself discovered — a top-level criterion like
-            // "overall quality of life" must not silently drop out because deeper branches
-            // out-scored it. Root dimensions are unioned with the top-confidence survivors.
-            // V3.4.2: the union no longer requires SemanticTypeCode==DIMENSION. The LLM frequently
-            // types every root interpretation as ALTERNATIVE, which made this safeguard a no-op:
-            // when an information round boosted one branch's evidence, the reweight demoted the
-            // other roots to DORMANT, the matrix collapsed to a single dimension, and the ranking
-            // was decided by one criterion (e.g. "Cultural Experience" winning a stay query).
-            // Root-level interpretation branches are the deciding criteria BY CONSTRUCTION - all
-            // non-pruned roots now always compete, weighted by their PoloxiConfidence as before.
+            // V3 semantic firewall: keep POLOXI's existing broad narrowing behavior, but protect only
+            // the numerical Candidate × Branch matrix. Root/surviving branches still guide narrowing,
+            // evidence, uncertainty, and explanation; only obvious process/constraint artifacts are
+            // prevented from becoming bogus candidate scores (for example "Challenge the leader = 100%").
             var topSurvivors=survivors.Where(branch=>branch.BranchStateCode is WideBranchStates.Active or WideBranchStates.Secondary).OrderByDescending(branch=>branch.PoloxiConfidence).Take(8);
             var rootDimensions=survivors.Where(branch=>branch.LevelNumber==1
                 &&branch.BranchStateCode!=WideBranchStates.Pruned)
                 .OrderByDescending(branch=>branch.PoloxiConfidence)
                 .Take(6);
-            var branches=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
+            var competitionCandidates=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
+            var branches=competitionCandidates.Where(branch=>ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion).ToArray();
             if(branches.Length==0)return [];
             // V3.5 Hierarchical Roll-Up: the progressive-narrowing children of each scoring dimension
             // carry concrete meaning ("Safe Environment" -> "Low Violent Crime Rate", "Police Response
@@ -2446,10 +2682,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .GroupBy(entry=>entry.Name,StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group=>group.Key,group=>group.Count(),StringComparer.OrdinalIgnoreCase);
             var requiredSupport=interpretiveResults.Count<=1?1:Math.Min(configuration.MinimumCandidateDimensionSupport,interpretiveResults.Count);
-            // V2.5 cardinality: an explicit requested count ("top 10") widens both the scored candidate
-            // harvest and the final ranking size so the answer can actually satisfy the query contract.
+            // V2.5 cardinality: an explicit requested count ("top 10") controls the delivered ranking.
+            // Discovery is deliberately wider so the average interpretive candidate list is only one
+            // signal, not the ceiling for the final competition.
             var requestedCount=queryContract?.RequestedCount??0;
-            var targetCount=Math.Max(configuration.MaximumCandidates,requestedCount);
+            var finalCount=Math.Max(configuration.MaximumCandidates,requestedCount);
+            var discoveryCount=Math.Min(100,Math.Max(finalCount*4,25));
             // V2.7 Candidate Discovery: the competition scores the FULL candidate universe, not just the
             // candidates the interpretive lists happened to name. Evidence-harvested candidates (strong
             // entities named by retrieved sources — e.g. a #1 city in a live ranking) are merged into the
@@ -2469,10 +2707,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .Select(name=>(Name:name,Hosts:CountDistinctSourceHosts(name,externalKnowledge)))
                 .Where(item=>item.Hosts>=minimumDiscoverySourceHosts)
                 .OrderByDescending(item=>item.Hosts)
-                .Take(targetCount)
+                .Take(discoveryCount)
                 .Select(item=>(item.Name,Detail:(string?)$"Discovered from retrieved evidence ({item.Hosts} independent sources)."))
                 .ToArray();
-            var candidateNames=CanonicalizeCandidates(interpretiveCandidates.Concat(evidenceCandidates).ToArray(),externalKnowledge,dimensionSupport).Take(targetCount*2).ToArray();
+            var provisionalCandidateNames=CanonicalizeCandidates(interpretiveCandidates.Concat(evidenceCandidates).ToArray(),externalKnowledge,dimensionSupport).Take(discoveryCount).ToArray();
+            if(provisionalCandidateNames.Length==0)return [];
+            var provisionalPoolNames=provisionalCandidateNames.Select(candidate=>candidate.Name).ToArray();
+            var provisionalExclusiveHosts=CountExclusiveSourceHosts(provisionalPoolNames,externalKnowledge);
+            var candidateNames=provisionalCandidateNames
+                .Where(candidate=>!IsUnsupportedMethodologyOrCriterionLabel(candidate.Name,branches,provisionalExclusiveHosts.GetValueOrDefault(candidate.Name))
+                    &&CountDistinctSourceHosts(candidate.Name,externalKnowledge)>0)
+                .ToArray();
             // V2.8.2 Support Lineage Repair: dimensionSupport is keyed by RAW interpretive item names
             // ("Mercury (fintech platform)"). Canonicalization (V2.7.2) no longer merges ambiguous
             // aliases and attribute-hypotheses (V2.8.1) never enter the candidate list, so their
@@ -2497,6 +2742,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 .GroupBy(entry=>entry.Name,StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group=>group.Key,group=>group.Count(),StringComparer.OrdinalIgnoreCase);
             if(candidateNames.Length==0)return [];
+            // V3.10 EEA + FD: exclusive-host attribution and fragment domination are computed once
+            // over the FINAL candidate pool (post-canonicalization) so every merit decision below
+            // uses the same run-relative, deterministic signals. Zero LLM calls.
+            var poolNames=candidateNames.Select(candidate=>candidate.Name).ToArray();
+            var exclusiveHostCounts=CountExclusiveSourceHosts(poolNames,externalKnowledge);
+            var dominatedFragments=FindDominatedFragments(poolNames,exclusiveHostCounts);
             var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
             // V3.5: child sub-criteria are appended as S-labelled lines referencing their parent so the
             // model scores every candidate on the narrowed specifics too. They do NOT enter the
@@ -2510,7 +2761,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
             var constraints=queryContract is null||queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints);
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                "Score each supplied candidate against each supplied interpretation branch. For every candidate return: name (echo exactly), detail (echo or improve, one sentence), violatesConstraint=true with constraintViolationReason when the candidate does NOT satisfy ALL hard constraints (for example a city outside the required geography); otherwise false with null reason. A name constraint like 'called X' or 'commonly known as X' is satisfied when the entity is commonly known as X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; never mark such candidates as violations for not being exactly named X. branchScores: one entry per supplied branch AND per supplied sub-criterion line with branchDisplayName echoed exactly (without the B/S label) and evidenceScore between 0 and 1 expressing how strongly that candidate performs on that interpretation dimension based on your knowledge. Scores must be differentiated per candidate and branch; never assign identical scores across the board.",
+                "Score each supplied candidate only against each supplied scoring criterion. POLOXI already applied a scoring firewall, so do not create or infer scores for constraints, process instructions, methodology steps, evidence policies, output requirements, or reasoning tasks. For every candidate return: name (echo exactly), detail (echo or improve, one sentence), violatesConstraint=true with constraintViolationReason when the candidate does NOT satisfy ALL hard constraints (for example a city outside the required geography); otherwise false with null reason. A name constraint like 'called X' or 'commonly known as X' is satisfied when the entity is commonly known as X — brand names, common names, and legal names with corporate suffixes (X Technologies Inc., X Systems) all satisfy it; never mark such candidates as violations for not being exactly named X. isEntityOfRequestedKind=true when the candidate is a concrete real-world entity of the kind the question asks for (a specific named city, company, product, institution); false when it is a criterion, category, methodology, attribute, or description masquerading as a name. branchScores: one entry per supplied criterion AND per supplied sub-criterion line with branchDisplayName echoed exactly (without the B/S label) and evidenceScore between 0 and 1 expressing how strongly that candidate performs on that criterion based on your knowledge. Scores must be differentiated per candidate and criterion; never assign identical scores across the board.",
                 $"Question: {request.Query}\nHard constraints: {constraints}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
                 CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
@@ -2548,7 +2799,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Detail" — the echoed name may carry the label or detail. Resolve back to the SUPPLIED
             // canonical name so dimension-support admission and evidence lookups key on the same
             // identity the pipeline built, not on the model's echo formatting.
-            string ResolveCandidateName(string echoed)
+            string? ResolveCandidateName(string echoed)
             {
                 var cleaned=echoed.Trim();
                 var labelMatch=System.Text.RegularExpressions.Regex.Match(cleaned,@"^C\d+\.\s*");
@@ -2557,7 +2808,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var colon=cleaned.IndexOf(':');
                 var withoutDetail=colon>0?cleaned[..colon].Trim():cleaned;
                 var supplied=candidateNames.FirstOrDefault(item=>string.Equals(item.Name,withoutDetail,StringComparison.OrdinalIgnoreCase));
-                return supplied.Name??cleaned;
+                return supplied.Name;
             }
             // V3.6 pass 1: resolve each candidate's direct + child scores and rolled-up effective
             // dimension scores. Composites are computed in pass 2, AFTER cross-candidate contrast
@@ -2567,6 +2818,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 var candidateId=Guid.NewGuid();
                 var resolvedName=ResolveCandidateName(candidate.Name);
+                if(resolvedName is null)return null;
                 // V3.5: split resolved scores into parent-dimension scores and child sub-criterion scores.
                 var directScores=new Dictionary<Guid,decimal>();
                 var childScoresByParent=new Dictionary<Guid,List<(WideBranchRecord Child,decimal Score)>>();
@@ -2607,7 +2859,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     effectiveByBranch[branch.WideBranchId]=effective;
                 }
                 return new{Candidate=candidate,CandidateId=candidateId,ResolvedName=resolvedName,Effective=effectiveByBranch,ChildRows=childRows,Disclosure=childDisclosure};
-            }).ToList();
+            }).Where(item=>item is not null).Select(item=>item!).ToList();
             // V3.6 Fix B — per-dimension contrast normalization: rolled-up dimension scores regress
             // toward the mean (averaging many sub-scores compresses spread), which made POLOXI's final
             // ranking collapse toward the unweighted mention baseline. For each dimension scored by 2+
@@ -2645,6 +2897,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var parentScoreCount=scores.Count(entry=>scoringBranchIds.Contains(entry.WideBranchId));
                 var coverage=branches.Length==0?0m:Math.Clamp((decimal)parentScoreCount/branches.Length,0,1);
                 composite*=coverage;
+                if(configuration.EnableGuardrailPenalty)
+                    composite*=ComputeGuardrailPenalty(branches,item.Effective,configuration);
                 // V2.6 separation of concerns: the coverage-scaled dimension composite IS the candidate's
                 // QUALITY ("how good is it?"). Evidence weakness must not rewrite quality — the V2.5
                 // independent-source diversity now feeds EVIDENCE CONFIDENCE ("how well can we support
@@ -2656,40 +2910,79 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // Constraint Engine: violators score 0 and carry the reason; they remain visible as PRUNED.
                 var violates=candidate.ViolatesConstraint;
                 var violationReason=candidate.ConstraintViolationReason?.Trim();
-                // V2.3 candidate admission, upgraded to V2.9.4 TIERED admission: the requested result
-                // count is honored whenever enough plausible, evidence-backed candidates exist. Weaker-
-                // but-valid candidates are admitted with a disclosed lower support tier instead of being
-                // silently dropped. The rule is "never hide weaker evidence just to satisfy Top N" — not
-                // "never admit it". Zero-support names are still excluded; nothing is ever invented.
+                // V2.3 candidate admission, upgraded to V2.9.4 TIERED admission and V3.10 MERIT-BASED
+                // admission: the requested result count is honored whenever enough plausible,
+                // evidence-backed candidates exist; weaker-but-valid candidates are admitted with a
+                // disclosed lower support tier instead of being silently dropped. V3.10 replaces the
+                // raw mention-count arithmetic with merit signals:
+                //   EEA - exclusive hosts (sources discussing ONLY this candidate) are worth more
+                //         than shared listicle mentions and can restore a tier on their own;
+                //   FD  - a token-subset fragment of another candidate with zero exclusive evidence
+                //         is a name fragment, excluded with the dominating name disclosed;
+                //   SB  - the scoring model's isEntityOfRequestedKind=false demotes the tier one
+                //         level (untrusted signal - it never hard-excludes alone; strong evidence
+                //         still admits). Zero-support names remain excluded; nothing is invented.
                 var support=dimensionSupport.GetValueOrDefault(resolvedName);
                 var interpretiveCount=interpretiveSupport.GetValueOrDefault(resolvedName);
-                var combinedSupport=interpretiveCount+distinctHosts;
+                var exclusiveHosts=exclusiveHostCounts.GetValueOrDefault(resolvedName);
+                var combinedSupport=interpretiveCount+distinctHosts+exclusiveHosts;
                 var admissionMode=support>=requiredSupport?"NORMAL":"RECOVERY";
-                var supportTier=support>=requiredSupport?"STRONG"
-                    :combinedSupport>=requiredSupport?"MODERATE"
+                // V3.10.2 Corpus-Evidence Floor: interpretive (LLM) mentions alone can NEVER admit a
+                // candidate. A name no retrieved evidence host mentions (distinctHosts==0 and
+                // exclusiveHosts==0) has zero corpus support - its interpretive appearances are model
+                // opinion, not evidence. Deterministic, run-relative, and strictly an admission gate:
+                // no factor computation above is altered.
+                var supportTier=distinctHosts==0&&exclusiveHosts==0?null
+                    :support>=requiredSupport||exclusiveHosts>=2?"STRONG"
+                    :combinedSupport>=requiredSupport||exclusiveHosts>=1?"MODERATE"
                     :combinedSupport>=1?"LIMITED"
                     :null;
+                // Entity-role gate: a criterion/category/methodology proposal cannot be admitted by
+                // shared listicle mentions. Exclusive evidence discussing this exact candidate can
+                // override the untrusted model classification, preventing the model from hard-rejecting
+                // a genuinely attested entity while keeping methodology labels out of the ranking.
+                if(supportTier is not null&&!candidate.IsEntityOfRequestedKind&&exclusiveHosts==0)
+                    supportTier=null;
                 var supportExcluded=false;
-                if(!violates&&supportTier is null)
+                if(!violates&&dominatedFragments.TryGetValue(resolvedName,out var dominator))
+                {
+                    supportExcluded=true;
+                    supportTier=null;
+                    violates=true;
+                    violationReason=$"Name fragment of '{dominator}': no evidence host discusses it independently.";
+                }
+                else if(!violates&&supportTier is null)
                 {
                     supportExcluded=true;
                     violates=true;
-                    violationReason=$"No credible support: appears in {interpretiveCount} of {interpretiveResults.Count} interpretation dimensions and {distinctHosts} independent evidence hosts.";
+                    violationReason=candidate.IsEntityOfRequestedKind
+                        ?$"No credible support: appears in {interpretiveCount} of {interpretiveResults.Count} interpretation dimensions, {distinctHosts} evidence hosts, {exclusiveHosts} exclusively."
+                        :$"Not an entity of the requested kind and no credible support ({distinctHosts} evidence hosts, {exclusiveHosts} exclusive).";
                 }
                 entries.Add((new(candidateId,executionId,request.TenantId,Truncate(resolvedName,300)!,Truncate(candidate.Detail?.Trim(),1000),violates?0m:Math.Clamp(composite,0,1),0,violates,Truncate(violationReason,400),scores),supportExcluded,Math.Clamp(composite,0,1)));
                 evidenceConfidences[resolvedName]=evidenceConfidence;
                 rollUpDisclosures[resolvedName]=childDisclosure;
                 admissionInfo[resolvedName]=(supportTier is null?"EXCLUDED":admissionMode,interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
-                supportTiers[resolvedName]=supportTier??"LIMITED";
+                supportTiers[resolvedName]=supportTier??"EXCLUDED";
             }
             // V2.9.4 rule: POLOXI honors the requested Top N whenever enough plausible, evidence-backed
             // candidates exist — weaker-but-valid candidates compete with a disclosed lower support
             // tier. Only zero-support names and constraint violators are excluded; POLOXI never invents
             // candidates and never hides evidence weakness to fill a count.
-            var records=entries.Select(entry=>entry.Record).ToList();
-            var ranked=records.OrderBy(record=>record.IsConstraintViolation).ThenByDescending(record=>record.CompositeScore).Take(targetCount).Select((record,index)=>record with{RankNumber=index+1}).ToArray();
+            // V3.10.1: excluded names and constraint violators NEVER occupy Top N slots — they are
+            // dropped from the final ranking entirely instead of filling the requested count with 0%
+            // rows. Admitted candidates rank by their disclosed merit tier FIRST (the ladder already
+            // computed above: STRONG over MODERATE over LIMITED), then composite — so an SB tier
+            // demotion (wrong-kind entity) actually costs rank, not only disclosure text.
+            static int TierRank(string? tier)=>tier switch{"STRONG"=>3,"MODERATE"=>2,"LIMITED"=>1,_=>0};
+            var ranked=entries
+                .Where(entry=>!entry.Record.IsConstraintViolation)
+                .OrderByDescending(entry=>TierRank(supportTiers.GetValueOrDefault(entry.Record.DisplayName)))
+                .ThenByDescending(entry=>entry.Record.CompositeScore)
+                .Take(finalCount)
+                .Select((entry,index)=>entry.Record with{RankNumber=index+1}).ToArray();
             await wideRepository.SaveWideCandidatesAsync(ranked,request.UserId,cancellationToken);
-            return ranked.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("NORMAL",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"STRONG")};}).ToArray();
+            return ranked.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("EXCLUDED",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"EXCLUDED")};}).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {
@@ -2837,6 +3130,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
           "detail": { "type": ["string", "null"] },
           "violatesConstraint": { "type": "boolean" },
           "constraintViolationReason": { "type": ["string", "null"] },
+          "isEntityOfRequestedKind": { "type": "boolean" },
           "branchScores": {
             "type": "array",
             "maxItems": 10,
@@ -2851,7 +3145,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
           }
         },
-        "required": ["name", "detail", "violatesConstraint", "constraintViolationReason", "branchScores"],
+        "required": ["name", "detail", "violatesConstraint", "constraintViolationReason", "isEntityOfRequestedKind", "branchScores"],
         "additionalProperties": false
       }
     }

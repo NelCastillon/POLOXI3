@@ -345,6 +345,34 @@ public sealed class IntelligencePlatformContractTests
     }
 
     [Fact]
+    public void PoloxiWideCandidateValidation_RejectsCriterionEchoWithoutCorpusVocabulary()
+    {
+        var serviceType=typeof(IntelligenceWideService);
+        var isValid=serviceType.GetMethod("IsValidCandidateName",BindingFlags.NonPublic|BindingFlags.Static)!;
+        var isCriterionEcho=serviceType.GetMethod("IsMethodologyOrCriterionEcho",BindingFlags.NonPublic|BindingFlags.Static)!;
+        var isUnsupportedLabel=serviceType.GetMethod("IsUnsupportedMethodologyOrCriterionLabel",BindingFlags.NonPublic|BindingFlags.Static)!;
+        var branch=new WideBranchRecord(Guid.NewGuid(),Guid.NewGuid(),null,Guid.NewGuid(),1,"SCORING","Weighted Scoring","Compare candidates using weighted scoring factors.",null,null,"VALID",1,.8m,false,null,false,null,1);
+
+        Assert.True((bool)isValid.Invoke(null,["Weighted Scoring Approach"])!);
+        Assert.True((bool)isCriterionEcho.Invoke(null,["Weighted Scoring Approach",new[]{branch}])!);
+        Assert.True((bool)isUnsupportedLabel.Invoke(null,["Weighted Scoring Approach",new[]{branch},0])!);
+        Assert.False((bool)isUnsupportedLabel.Invoke(null,["Weighted Scoring Approach",new[]{branch},1])!);
+        Assert.True((bool)isValid.Invoke(null,["Danny K's Billiards"])!);
+        Assert.False((bool)isCriterionEcho.Invoke(null,["Danny K's Billiards",new[]{branch}])!);
+    }
+
+    [Fact]
+    public void PoloxiWideCandidateValidation_DoesNotUseRetrievedCorpusGenericity()
+    {
+        var root=Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..",".."));
+        var service=File.ReadAllText(Path.Combine(root,"src","Ams.Application","IntelligenceWideService.cs"));
+
+        Assert.DoesNotContain("BuildRunGenericTokens",service,StringComparison.Ordinal);
+        Assert.Contains("IsMethodologyOrCriterionEcho",service,StringComparison.Ordinal);
+        Assert.Contains("!candidate.IsEntityOfRequestedKind&&exclusiveHosts==0",service,StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ApiClient_UsesTenantFreeRoutesAndPreservesDecisionConcurrency()
     {
         var requests=new List<CapturedRequest>();var handler=new StubHandler(requests,Json(HttpStatusCode.OK,"{\"items\":[],\"totalCount\":0,\"pageNumber\":1,\"pageSize\":50}"),new(HttpStatusCode.NoContent),Json(HttpStatusCode.OK,"{\"items\":[],\"totalCount\":0,\"pageNumber\":1,\"pageSize\":50}"),new(HttpStatusCode.NoContent));var client=new ApiClient(new HttpClient(handler){BaseAddress=new("https://ams.test/")});var id=Guid.NewGuid();var rowVersion=new byte[]{1,2,3,4,5,6,7,8};

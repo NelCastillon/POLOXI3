@@ -82,6 +82,8 @@ builder.Services.AddSingleton<TokenCredential>(_ =>
         : new ManagedIdentityCredential());
 builder.Services.AddKnowledgeInfrastructure(builder.Configuration);
 builder.Services.AddScoped<ISemanticQueryExpander,KnowledgeSemanticQueryExpander>();
+// Async start+poll transport for long-running POLOXI Wide searches (transport only; pipeline unchanged).
+builder.Services.AddSingleton<Ams.Api.Services.WideSearchOperationStore>();
 builder.Services.AddApiServices();
 
 var app = builder.Build();
