@@ -50,6 +50,7 @@
                     <p>@(_usePoloxiEngine ? "Proposing a problem-specific hierarchy, progressively narrowing interpretation paths, eliminating weak candidates, and composing an answer from LLM knowledge." : "POLOXI Engine is off — composing a direct LLM answer without progressive narrowing.")</p>
                     <div class="poloxi-loading-track"><span></span></div>
                 </div>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Stop this search — the running pipeline is cancelled server-side too." @onclick="CancelSearch"><i class="bi bi-x-circle"></i> Cancel</button>
             </section>
         }
         else if (_error is not null)
@@ -1240,9 +1241,15 @@
         _clarificationAnswer = "";
         _loading = true;
         _error = null;
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode });
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode }, _searchCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // User-initiated cancel — not an error; keep any previous result on screen.
         }
         catch (Exception ex)
         {
@@ -1273,10 +1280,16 @@
         var parentExecutionId = _response.WideExecutionId;
         _loading = true;
         _error = null;
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
         try
         {
-            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode });
+            _response = await Api.IntelligentSearchWideDynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode }, _searchCancellation.Token);
             _clarificationAnswer = "";
+        }
+        catch (OperationCanceledException)
+        {
+            // User-initiated cancel — not an error; keep the clarification context on screen.
         }
         catch (Exception ex)
         {
@@ -1287,6 +1300,11 @@
             _loading = false;
         }
     }
+
+    // Cancels the in-flight wide search: stops the client poll loop and (best-effort) the server-side pipeline.
+    private void CancelSearch() => _searchCancellation?.Cancel();
+
+    private CancellationTokenSource? _searchCancellation;
 
     private async Task ClarificationKeyDown(KeyboardEventArgs args)
     {

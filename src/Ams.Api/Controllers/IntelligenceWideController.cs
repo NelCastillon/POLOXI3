@@ -36,6 +36,11 @@ public sealed class IntelligenceWideController(IIntelligenceWideService service,
     [Authorize(Policy=IntelligencePolicies.Search)]
     public IActionResult SearchDynamicStatus(Guid operationId)=>operationStore.GetStatus(TenantId,operationId)is{}status?Ok(status):NotFound();
 
+    // User-initiated cancellation of a running wide search operation (tenant-scoped, idempotent).
+    [HttpPost("search/dynamic/cancel/{operationId:guid}")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public IActionResult CancelSearchDynamic(Guid operationId)=>operationStore.Cancel(TenantId,operationId)?Ok():NotFound();
+
     // Database-backed model options for the wide-search Model dropdown (active CHAT deployments).
     [HttpGet("models")]
     [Authorize(Policy=IntelligencePolicies.Search)]

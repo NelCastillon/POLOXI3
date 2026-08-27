@@ -45,17 +45,28 @@ public sealed partial class ApiClient
     // Async start+poll transport: the API starts the wide pipeline on a background task and this client
     // polls status every 2 seconds, so no single HTTP request has to outlive the pipeline (each poll
     // completes in milliseconds regardless of how long POLOXI runs). Transport only; results identical.
+    // Cancelling the caller's token cancels the server-side operation too (best-effort), then rethrows.
     public async Task<WideSearchResponse?> IntelligentSearchWideDynamicAsync(WideSearchRequest request,CancellationToken token=default)
     {
         var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic/start",request,token);
         startResponse.EnsureSuccessStatusCode();
         var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
-        while(true)
+        try
         {
-            await Task.Delay(TimeSpan.FromSeconds(2),token);
-            var status=await _httpClient.GetFromJsonAsync<WideSearchOperationStatusResponse>($"api/intelligence_wide/search/dynamic/status/{start.OperationId}",token)??throw new InvalidOperationException("The wide search operation is no longer available.");
-            if(status.StatusCode=="COMPLETED")return status.Response;
-            if(status.StatusCode=="FAILED")throw new InvalidOperationException(status.ErrorMessage??"The wide search failed.");
+            while(true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2),token);
+                var status=await _httpClient.GetFromJsonAsync<WideSearchOperationStatusResponse>($"api/intelligence_wide/search/dynamic/status/{start.OperationId}",token)??throw new InvalidOperationException("The wide search operation is no longer available.");
+                if(status.StatusCode=="COMPLETED")return status.Response;
+                if(status.StatusCode=="CANCELLED")throw new OperationCanceledException("The wide search was cancelled.");
+                if(status.StatusCode=="FAILED")throw new InvalidOperationException(status.ErrorMessage??"The wide search failed.");
+            }
+        }
+        catch(OperationCanceledException)when(token.IsCancellationRequested)
+        {
+            // Best-effort server-side stop so the abandoned pipeline does not keep burning budget.
+            try{using var stop=await _httpClient.PostAsync($"api/intelligence_wide/search/dynamic/cancel/{start.OperationId}",null,CancellationToken.None);}catch{/* cancellation is best-effort */}
+            throw;
         }
     }
     public async Task<IReadOnlyCollection<WideModelOptionDto>> GetIntelligenceWideModelsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideModelOptionDto>>("api/intelligence_wide/models",token)??[];

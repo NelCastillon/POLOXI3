@@ -1,6 +1,7 @@
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Features.Intelligence;
 using Dapper;
+using System.Text.Json;
 
 namespace Ams.Infrastructure.Persistence.Repositories;
 
@@ -92,7 +93,11 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableGuardrailPenalty' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableGuardrailPenalty,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailVetoThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) GuardrailVetoThreshold,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailAcceptableThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.65) GuardrailAcceptableThreshold,
-COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailPenaltyExponent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) GuardrailPenaltyExponent;
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailPenaltyExponent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) GuardrailPenaltyExponent,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableMarginalValueStopping' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableMarginalValueStopping,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalValueMinimumDepth' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MarginalValueMinimumDepth,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalCoverageDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) MarginalCoverageDeltaFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalConfidenceDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.03) MarginalConfidenceDeltaFloor;
 -- V3.3 POLOXI.AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -172,7 +177,11 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             EnableGuardrailPenalty=string.Equals(row.EnableGuardrailPenalty,"true",StringComparison.OrdinalIgnoreCase),
             GuardrailVetoThreshold=Math.Clamp(row.GuardrailVetoThreshold,0,1),
             GuardrailAcceptableThreshold=Math.Clamp(row.GuardrailAcceptableThreshold,0,1),
-            GuardrailPenaltyExponent=Math.Clamp(row.GuardrailPenaltyExponent,.01m,5m)
+            GuardrailPenaltyExponent=Math.Clamp(row.GuardrailPenaltyExponent,.01m,5m),
+            EnableMarginalValueStopping=string.Equals(row.EnableMarginalValueStopping,"true",StringComparison.OrdinalIgnoreCase),
+            MarginalValueMinimumDepth=Math.Clamp(row.MarginalValueMinimumDepth,2,100),
+            MarginalCoverageDeltaFloor=Math.Clamp(row.MarginalCoverageDeltaFloor,0,1),
+            MarginalConfidenceDeltaFloor=Math.Clamp(row.MarginalConfidenceDeltaFloor,0,1)
         };
     }
 
@@ -192,12 +201,12 @@ SELECT @WideExecutionId;
     {
         if(branches.Count==0)return;
         const string sql="""
-INSERT POLOXI.WideBranch(WideBranchId,WideExecutionId,ParentWideBranchId,TenantId,LevelNumber,BranchCode,DisplayName,Interpretation,CapabilityCode,SearchText,GroundingStatusCode,EvidenceCount,Confidence,ContinueNarrowing,StopReason,IsEliminated,EliminationReason,SortOrder,BranchStateCode,SemanticTypeCode,InterpretationPrior,EvidenceSupport,PoloxiConfidence,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideBranchId,@WideExecutionId,@ParentWideBranchId,@TenantId,@LevelNumber,@BranchCode,@DisplayName,@Interpretation,@CapabilityCode,@SearchText,@GroundingStatusCode,@EvidenceCount,@Confidence,@ContinueNarrowing,@StopReason,@IsEliminated,@EliminationReason,@SortOrder,@BranchStateCode,@SemanticTypeCode,@InterpretationPrior,@EvidenceSupport,@PoloxiConfidence,SYSUTCDATETIME(),@UserId,0);
+INSERT POLOXI.WideBranch(WideBranchId,WideExecutionId,ParentWideBranchId,TenantId,LevelNumber,BranchCode,DisplayName,Interpretation,CapabilityCode,SearchText,GroundingStatusCode,EvidenceCount,Confidence,ContinueNarrowing,StopReason,IsEliminated,EliminationReason,SortOrder,BranchStateCode,SemanticTypeCode,BranchRoleCode,InterpretationPrior,EvidenceSupport,PoloxiConfidence,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchId,@WideExecutionId,@ParentWideBranchId,@TenantId,@LevelNumber,@BranchCode,@DisplayName,@Interpretation,@CapabilityCode,@SearchText,@GroundingStatusCode,@EvidenceCount,@Confidence,@ContinueNarrowing,@StopReason,@IsEliminated,@EliminationReason,@SortOrder,@BranchStateCode,@SemanticTypeCode,@BranchRoleCode,@InterpretationPrior,@EvidenceSupport,@PoloxiConfidence,SYSUTCDATETIME(),@UserId,0);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         foreach(var branch in branches)
-            await connection.ExecuteAsync(new CommandDefinition(sql,new{branch.WideBranchId,branch.WideExecutionId,branch.ParentWideBranchId,branch.TenantId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder,branch.BranchStateCode,branch.SemanticTypeCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.PoloxiConfidence,UserId=userId},cancellationToken:cancellationToken));
+            await connection.ExecuteAsync(new CommandDefinition(sql,new{branch.WideBranchId,branch.WideExecutionId,branch.ParentWideBranchId,branch.TenantId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder,branch.BranchStateCode,branch.SemanticTypeCode,branch.BranchRoleCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.PoloxiConfidence,UserId=userId},cancellationToken:cancellationToken));
     }
 
     public async Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default)
@@ -255,21 +264,44 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
     public async Task SaveWideCandidatesAsync(IReadOnlyCollection<WideCandidateRecord> candidates,Guid userId,CancellationToken cancellationToken=default)
     {
         if(candidates.Count==0)return;
-        const string candidateSql="""
+        const string sql="""
 INSERT POLOXI.WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideCandidateId,@WideExecutionId,@TenantId,@DisplayName,@Detail,@CompositeScore,@RankNumber,@IsConstraintViolation,@ConstraintViolationReason,SYSUTCDATETIME(),@UserId,0);
-""";
-        const string scoreSql="""
+SELECT WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,SYSUTCDATETIME(),UserId,0
+FROM OPENJSON(@CandidateRowsJson)
+WITH
+(
+    WideCandidateId UNIQUEIDENTIFIER '$.WideCandidateId',
+    WideExecutionId UNIQUEIDENTIFIER '$.WideExecutionId',
+    TenantId UNIQUEIDENTIFIER '$.TenantId',
+    DisplayName NVARCHAR(300) '$.DisplayName',
+    Detail NVARCHAR(1000) '$.Detail',
+    CompositeScore DECIMAL(9,4) '$.CompositeScore',
+    RankNumber INT '$.RankNumber',
+    IsConstraintViolation BIT '$.IsConstraintViolation',
+    ConstraintViolationReason NVARCHAR(400) '$.ConstraintViolationReason',
+    UserId UNIQUEIDENTIFIER '$.UserId'
+);
+
 INSERT POLOXI.WideCandidateBranchScore(WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,CreatedDateUtc,CreatedByUserId,IsDeleted)
-VALUES(@WideCandidateBranchScoreId,@WideCandidateId,@WideBranchId,@TenantId,@BranchDisplayName,@EvidenceScore,SYSUTCDATETIME(),@UserId,0);
+SELECT WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,SYSUTCDATETIME(),UserId,0
+FROM OPENJSON(@ScoreRowsJson)
+WITH
+(
+    WideCandidateBranchScoreId UNIQUEIDENTIFIER '$.WideCandidateBranchScoreId',
+    WideCandidateId UNIQUEIDENTIFIER '$.WideCandidateId',
+    WideBranchId UNIQUEIDENTIFIER '$.WideBranchId',
+    TenantId UNIQUEIDENTIFIER '$.TenantId',
+    BranchDisplayName NVARCHAR(300) '$.BranchDisplayName',
+    EvidenceScore DECIMAL(9,4) '$.EvidenceScore',
+    UserId UNIQUEIDENTIFIER '$.UserId'
+);
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        foreach(var candidate in candidates)
-        {
-            await connection.ExecuteAsync(new CommandDefinition(candidateSql,new{candidate.WideCandidateId,candidate.WideExecutionId,candidate.TenantId,candidate.DisplayName,candidate.Detail,candidate.CompositeScore,candidate.RankNumber,candidate.IsConstraintViolation,candidate.ConstraintViolationReason,UserId=userId},cancellationToken:cancellationToken));
-            foreach(var score in candidate.BranchScores)
-                await connection.ExecuteAsync(new CommandDefinition(scoreSql,new{score.WideCandidateBranchScoreId,score.WideCandidateId,score.WideBranchId,score.TenantId,score.BranchDisplayName,score.EvidenceScore,UserId=userId},cancellationToken:cancellationToken));
-        }
+        using var transaction=connection.BeginTransaction();
+        var candidateRows=candidates.Select(candidate=>new{candidate.WideCandidateId,candidate.WideExecutionId,candidate.TenantId,candidate.DisplayName,candidate.Detail,candidate.CompositeScore,candidate.RankNumber,candidate.IsConstraintViolation,candidate.ConstraintViolationReason,UserId=userId}).ToArray();
+        var scoreRows=candidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>new{score.WideCandidateBranchScoreId,score.WideCandidateId,score.WideBranchId,score.TenantId,score.BranchDisplayName,score.EvidenceScore,UserId=userId})).ToArray();
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{CandidateRowsJson=JsonSerializer.Serialize(candidateRows),ScoreRowsJson=JsonSerializer.Serialize(scoreRows)},transaction,cancellationToken:cancellationToken));
+        transaction.Commit();
     }
 
     public async Task UpdateWideExecutionContractAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string? queryContractJson,decimal evidenceCoverage,int externalEvidenceCount,int enterpriseEvidenceCount,int candidateCount,CancellationToken cancellationToken=default)
@@ -308,7 +340,7 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
         decimal InformationValueLlmWeight,decimal InformationValueEvidenceGapWeight,decimal InformationValueBranchWeight,decimal InformationValueCandidateNeedWeight,decimal CriterionUncertaintyWeight,decimal CriterionRankingImpactWeight,decimal CriterionDiscriminationWeight,decimal CriterionEvidenceAvailabilityWeight,decimal CriterionNoveltyWeight,decimal CriterionRedundancyPenalty,
         decimal VeryLowInformationValue,decimal LowInformationValue,decimal MediumInformationValue,decimal HighInformationValue,decimal VeryHighInformationValue,int EvidencePriorityMinimumDepth,decimal EvidencePriorityCoverageFloor,int MinimumCandidateDimensionSupport,string EnableClarificationGate,decimal ClarificationConfidenceThreshold,decimal ClarificationWinnerStabilityThreshold,decimal ClarificationMarginThreshold,int MaximumClarificationRounds,decimal MinimumClarificationGain,
         string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
-        string EnableAnswerKindRouting,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent);
+        string EnableAnswerKindRouting,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 

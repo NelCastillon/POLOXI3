@@ -130,6 +130,21 @@ public static class WideBranchSemanticTypes
     public const string Dimension="DIMENSION";
 }
 
+// V3.12 explicit branch semantic ROLE, assigned by the hierarchy LLM at proposal time (the same
+// LLM-proposes/POLOXI-enforces pattern as SemanticTypeCode). Deterministic scoring math acts on
+// the role; keyword heuristics remain only as a fallback when the role is absent/unknown.
+//   HARD_CONSTRAINT → failure can invalidate a candidate (never scored as a preference)
+//   GUARDRAIL       → weak performance penalizes the composite (veto-style, non-compensatory)
+//   PREFERENCE      → higher score improves the candidate (ordinary compensatory criterion)
+//   CONTEXT         → does not directly score candidates (process/reasoning/meta branches)
+public static class WideBranchRoles
+{
+    public const string HardConstraint="HARD_CONSTRAINT";
+    public const string Guardrail="GUARDRAIL";
+    public const string Preference="PREFERENCE";
+    public const string Context="CONTEXT";
+}
+
 // V2.3 entropy basis: which belief distribution uncertainty was measured over.
 // BRANCH = competing ALTERNATIVE interpretation branches; CANDIDATE = the deterministic
 // candidate-signal distribution (used when the hierarchy is dimension-dominated, so Information
@@ -147,8 +162,15 @@ public sealed record WideSearchOperationStartResponse(Guid OperationId);
 
 public sealed record WideSearchOperationStatusResponse(Guid OperationId,string StatusCode,WideSearchResponse? Response,string? ErrorMessage);
 
+// V3.12 P0 stage telemetry: per-LLM-stage wall time and token counts, collected in-memory during
+// the run and disclosed on the response so latency regressions are visible without querying
+// AI.Execution by hand. Diagnostic only — never feeds any scoring or routing decision.
+public sealed record WideStageTimingDto(string StageCode,long DurationMilliseconds,int InputTokenCount,int OutputTokenCount,string? ModelCode);
+
 public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
 {
+    // V3.12 P0: per-stage LLM latency/token disclosure (diagnostic only).
+    public IReadOnlyCollection<WideStageTimingDto> StageTimings{get;init;}=[];
     // Real-world references produced by the LLM from the top interpretive narrowing paths.
     // Displayed in Authorized Evidence with links to the actual external sites; never enterprise-verified.
     public IReadOnlyCollection<WideExternalReferenceDto> ExternalReferences{get;init;}=[];
@@ -492,6 +514,15 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal GuardrailVetoThreshold{get;init;}=.20m;
     public decimal GuardrailAcceptableThreshold{get;init;}=.65m;
     public decimal GuardrailPenaltyExponent{get;init;}=.50m;
+    // V3.12 Marginal-Value Hierarchy Stopping: continue expanding only while a new level is still
+    // adding measurable value. Deterministic deltas over data POLOXI already computes — when BOTH
+    // the evidence-coverage delta AND the aggregate-confidence delta of the latest level fall below
+    // these floors (at depth ≥ MarginalValueMinimumDepth), expansion stops with MARGINAL_VALUE_STOP
+    // instead of paying another expensive hierarchy LLM call for decorative branches.
+    public bool EnableMarginalValueStopping{get;init;}=true;
+    public int MarginalValueMinimumDepth{get;init;}=3;
+    public decimal MarginalCoverageDeltaFloor{get;init;}=.05m;
+    public decimal MarginalConfidenceDeltaFloor{get;init;}=.03m;
     // Deterministic values for LLM categorical judgments (VERY_LOW..VERY_HIGH).
     public decimal VeryLowInformationValue{get;init;}=.20m;
     public decimal LowInformationValue{get;init;}=.40m;
@@ -554,6 +585,9 @@ public sealed record WideProposedBranch(string BranchCode,string DisplayName,str
 {
     // V2.3: ALTERNATIVE or DIMENSION; anything else defaults to ALTERNATIVE for backward compatibility.
     public string? SemanticType{get;init;}
+    // V3.12: HARD_CONSTRAINT | GUARDRAIL | PREFERENCE | CONTEXT; anything else defaults to
+    // PREFERENCE so pre-role behavior (keyword fallbacks) is preserved.
+    public string? BranchRole{get;init;}
 }
 
 public sealed record WideIntentProposal(string ConceptCode,string DisplayName,decimal AmbiguityScore,IReadOnlyCollection<WideProposedBranch> Branches);
@@ -613,6 +647,9 @@ public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Gui
 {
     public string BranchStateCode{get;init;}=WideBranchStates.Active;
     public string SemanticTypeCode{get;init;}=WideBranchSemanticTypes.Alternative;
+    // V3.12 explicit semantic role assigned at proposal time; PREFERENCE is the safe default that
+    // preserves pre-role behavior (ordinary compensatory scoring + keyword fallbacks).
+    public string BranchRoleCode{get;init;}=WideBranchRoles.Preference;
     public decimal InterpretationPrior{get;init;}
     public decimal EvidenceSupport{get;init;}
     public decimal PoloxiConfidence{get;init;}

@@ -35,10 +35,16 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
         EnsureConfigured(request.Context);var timer=Stopwatch.StartNew();using var timeout=CreateTimeout(request.Context,cancellationToken);object? responseFormat=null;
         if(!string.IsNullOrWhiteSpace(request.OutputSchemaJson)){var schema=JsonNode.Parse(request.OutputSchemaJson)!;NormalizeStrictSchema(schema);responseFormat=new{type="json_schema",json_schema=new{name=NormalizeName(request.FeatureCode),strict=true,schema}};}
         // Newer model families (gpt-5*, o-series reasoning models) reject the legacy max_tokens parameter and non-default
-        // temperature with HTTP 400 unsupported_parameter. The body is built as a mutable JSON object so a rejected
-        // parameter can be swapped (max_tokens -> max_completion_tokens) or dropped (temperature) and the call retried
-        // once per adjustment, keeping every configured deployment usable without per-model configuration.
-        var body=new JsonObject{["messages"]=new JsonArray(new JsonObject{["role"]="system",["content"]=request.SystemPrompt},new JsonObject{["role"]="user",["content"]=request.UserPrompt}),["temperature"]=request.Temperature,["max_tokens"]=request.MaximumOutputTokens};
+        // temperature with HTTP 400 unsupported_parameter. Known reasoning models get the correct parameters UP FRONT
+        // (no wasted 400 round trip); unknown models that reject a parameter are remembered per model code for the
+        // process lifetime, so the negotiation 400 happens at most once per model instead of on every call.
+        var modelKey=request.Context.ModelCode??string.Empty;
+        var profile=LearnedModelProfiles.GetValueOrDefault(modelKey);
+        var useCompletionTokens=profile.UseCompletionTokens||IsReasoningModel(request.Context.ModelCode);
+        var dropTemperature=profile.DropTemperature||IsReasoningModel(request.Context.ModelCode);
+        var body=new JsonObject{["messages"]=new JsonArray(new JsonObject{["role"]="system",["content"]=request.SystemPrompt},new JsonObject{["role"]="user",["content"]=request.UserPrompt})};
+        if(!dropTemperature)body["temperature"]=request.Temperature;
+        if(useCompletionTokens)body["max_completion_tokens"]=request.MaximumOutputTokens;else body["max_tokens"]=request.MaximumOutputTokens;
         if(responseFormat is not null)body["response_format"]=JsonSerializer.SerializeToNode(responseFormat);
         string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;
         for(var attempt=0;;attempt++)
@@ -57,8 +63,8 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
             }
             if((int)statusCode==400&&attempt<3&&TryGetUnsupportedParameter(json,out var unsupported))
             {
-                if(unsupported=="max_tokens"&&body.ContainsKey("max_tokens")){body.Remove("max_tokens");body["max_completion_tokens"]=request.MaximumOutputTokens;continue;}
-                if(unsupported is "temperature" or "max_completion_tokens"&&body.Remove(unsupported))continue;
+                if(unsupported=="max_tokens"&&body.ContainsKey("max_tokens")){body.Remove("max_tokens");body["max_completion_tokens"]=request.MaximumOutputTokens;LearnedModelProfiles.AddOrUpdate(modelKey,(true,false),(_,existing)=>(true,existing.DropTemperature));continue;}
+                if(unsupported is "temperature" or "max_completion_tokens"&&body.Remove(unsupported)){if(unsupported=="temperature")LearnedModelProfiles.AddOrUpdate(modelKey,(false,true),(_,existing)=>(existing.UseCompletionTokens,true));continue;}
             }
             throw new HttpRequestException($"Azure OpenAI generation failed with HTTP {(int)statusCode}: {json}",null,statusCode);
         }
@@ -83,6 +89,11 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
     // Scoped to reasoning-family model codes only (gpt-5*, o1*, o3*, o4*); standard models like
     // gpt-4.1-mini keep their configured budget untouched because they don't spend hidden reasoning tokens.
     private static bool IsReasoningModel(string? modelCode)=>modelCode is not null&&(modelCode.StartsWith("gpt-5",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o1",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o3",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o4",StringComparison.OrdinalIgnoreCase));
+
+    // Learned per-model parameter adjustments (process lifetime). A model that rejects max_tokens or a
+    // non-default temperature pays the negotiation 400 ONCE; every later call builds the body correctly
+    // up front. Known reasoning families never pay it at all (seeded by IsReasoningModel).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,(bool UseCompletionTokens,bool DropTemperature)> LearnedModelProfiles=new(StringComparer.OrdinalIgnoreCase);
 
     // True when the successful completion envelope reports finish_reason=length (output truncated by token budget).
     private static bool IsTruncated(string json)

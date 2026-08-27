@@ -20,15 +20,20 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
         var operation=new Operation(request.TenantId);
         _operations[operationId]=operation;
         // Background execution: own scope (the wide service is scoped) and no request-linked token —
-        // the caller's HTTP request completes immediately and must not cancel the pipeline.
+        // the caller's HTTP request completes immediately and must not cancel the pipeline. The
+        // operation's own token supports explicit user-initiated cancellation via Cancel().
         _=Task.Run(async()=>
         {
             try
             {
                 using var scope=scopeFactory.CreateScope();
                 var service=scope.ServiceProvider.GetRequiredService<IIntelligenceWideService>();
-                var response=await service.SearchDynamicAsync(request,CancellationToken.None);
+                var response=await service.SearchDynamicAsync(request,operation.Token);
                 operation.Complete(response);
+            }
+            catch(OperationCanceledException)when(operation.Token.IsCancellationRequested)
+            {
+                operation.MarkCancelled();
             }
             catch(Exception ex)
             {
@@ -37,6 +42,14 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
             }
         });
         return operationId;
+    }
+
+    // Explicit user-initiated cancellation (tenant-scoped). Idempotent; returns false when unknown.
+    public bool Cancel(Guid tenantId,Guid operationId)
+    {
+        if(!_operations.TryGetValue(operationId,out var operation)||operation.TenantId!=tenantId)return false;
+        operation.RequestCancel();
+        return true;
     }
 
     public WideSearchOperationStatusResponse? GetStatus(Guid tenantId,Guid operationId)
@@ -59,14 +72,18 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
     private sealed class Operation(Guid tenantId)
     {
         private readonly object _gate=new();
+        private readonly CancellationTokenSource _cancellation=new();
         private WideSearchResponse? _response;
         private string? _error;
         private string _statusCode="RUNNING";
         public Guid TenantId{get;}=tenantId;
         public DateTime CreatedUtc{get;}=DateTime.UtcNow;
+        public CancellationToken Token=>_cancellation.Token;
 
         public void Complete(WideSearchResponse response){lock(_gate){_response=response;_statusCode="COMPLETED";}}
         public void Fail(string error){lock(_gate){_error=error;_statusCode="FAILED";}}
+        public void MarkCancelled(){lock(_gate){_statusCode="CANCELLED";}}
+        public void RequestCancel(){try{_cancellation.Cancel();}catch(ObjectDisposedException){/* already finished */}}
         public WideSearchOperationStatusResponse Snapshot(){lock(_gate){return new(Guid.Empty,_statusCode,_response,_error);}}
     }
 }
