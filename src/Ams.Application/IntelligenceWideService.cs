@@ -2412,23 +2412,51 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // its own exclusive hosts is never dominated.
     private static Dictionary<string,string> FindDominatedFragments(IReadOnlyCollection<string> candidates,IReadOnlyDictionary<string,int> exclusiveHostCounts)
     {
-        var tokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+        var tokenSetsByCandidate=candidates.ToDictionary(candidate=>candidate,
             candidate=>CanonicalTokens(candidate).Select(token=>token.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
-        var fullTokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+        var tokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+            candidate=>CanonicalTokens(candidate).Select(token=>token.ToLowerInvariant()).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+        var fullTokenSetsByCandidate=candidates.ToDictionary(candidate=>candidate,
             candidate=>FullNameTokens(candidate).Select(token=>token.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase),
             StringComparer.OrdinalIgnoreCase);
+        var fullTokensByCandidate=candidates.ToDictionary(candidate=>candidate,
+            candidate=>FullNameTokens(candidate).Select(token=>token.ToLowerInvariant()).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
         var dominated=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var(candidate,tokens)in tokensByCandidate)
+        foreach(var(candidate,tokens)in tokenSetsByCandidate)
         {
             if(tokens.Count==0||exclusiveHostCounts.GetValueOrDefault(candidate)>0)continue;
-            foreach(var(other,otherTokens)in fullTokensByCandidate)
+            foreach(var(other,otherTokens)in fullTokenSetsByCandidate)
             {
                 if(string.Equals(candidate,other,StringComparison.OrdinalIgnoreCase))continue;
-                if(otherTokens.Count>tokens.Count&&tokens.All(otherTokens.Contains)){dominated[candidate]=other;break;}
+                if(otherTokens.Count>tokens.Count&&tokens.All(otherTokens.Contains)
+                    &&(tokens.Count==1||IsContiguousTokenSubsequence(tokensByCandidate[candidate],fullTokensByCandidate[other])))
+                {
+                    dominated[candidate]=other;
+                    break;
+                }
             }
         }
         return dominated;
+    }
+
+    private static bool IsContiguousTokenSubsequence(string[] shorter,string[] longer)
+    {
+        if(shorter.Length==0||shorter.Length>longer.Length)return false;
+        for(var start=0;start<=longer.Length-shorter.Length;start++)
+        {
+            var matches=true;
+            for(var index=0;index<shorter.Length;index++)
+            {
+                if(string.Equals(shorter[index],longer[start+index],StringComparison.OrdinalIgnoreCase))continue;
+                matches=false;
+                break;
+            }
+            if(matches)return true;
+        }
+        return false;
     }
 
     // V2.4 Early Candidate Harvest: deterministic, zero-LLM extraction of candidate names from external
@@ -2682,14 +2710,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // Category/plural/placeholder words only — never plain adjectives ("High Point, NC" is a real
         // city). A phrase containing any of these is a category description, not a concrete entity.
         "other","others","cities","places","towns","suburbs","areas","regions","locations","options",
-        "various","several","many","some","etc","numerous","additional","remaining","alternative","alternatives"
+        "various","several","many","some","etc","numerous","additional","remaining","alternative","alternatives",
+        "venues","halls","reviews","ratings"
     };
 
     private static readonly HashSet<string> CandidateArtifactWords=new(StringComparer.OrdinalIgnoreCase)
     {
         "a","an","the","and","or","not","pro","con","what","why","how","when","where","who","instructions","instruction",
-        "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about",
-        "good","from","these","spot","spots","venue","venues","food","image","ready","click","create","review","reviews","compare","classic","american","friday","saturday","billiards","table","tables","pool table"
+        "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about"
     };
 
     private static readonly HashSet<string> ActionCandidateVerbs=new(StringComparer.OrdinalIgnoreCase)
@@ -2786,6 +2814,51 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(candidateKind is CandidateKindActionableSolution or CandidateKindDiagnosticStep or CandidateKindProcedureStep)
             return IsActionCandidate(name);
         return IsValidCandidateName(name);
+    }
+
+    private static bool HasNamedEntityAdmissionSupport(string name,WideQueryContract? queryContract,int interpretiveSupport,int distinctHosts,int exclusiveHosts,int requiredSupport)
+    {
+        if(queryContract?.CandidateKind is CandidateKindActionableSolution or CandidateKindDiagnosticStep or CandidateKindProcedureStep)return true;
+        if(IsVenueRankingContract(queryContract)&&(IsGeographicScopeCandidate(name)||IsGenericContentTitleCandidate(name)||IsAcronymConnectorPhrase(name)))return false;
+        var significantTokens=CanonicalTokens(name)
+            .Select(token=>token.Trim(',',':',';','.','(',')'))
+            .Where(token=>token.Length>0&&!SubsetConnectiveTokens.Contains(token))
+            .ToArray();
+        if(significantTokens.Length!=1)return true;
+        if(IsCandidateArtifact(significantTokens[0]))return false;
+        var required=Math.Max(requiredSupport,1);
+        return interpretiveSupport>=required||exclusiveHosts>=2||(exclusiveHosts>=1&&distinctHosts>=required+1);
+    }
+
+    private static bool IsVenueRankingContract(WideQueryContract? queryContract)
+    {
+        var text=string.Join(' ',new[]{queryContract?.EntityType,queryContract?.TargetObject,queryContract?.RankingConcept,queryContract?.OutputShape}.Where(value=>!string.IsNullOrWhiteSpace(value))!);
+        return text.Contains("venue",StringComparison.OrdinalIgnoreCase)
+            ||text.Contains("pool hall",StringComparison.OrdinalIgnoreCase)
+            ||text.Contains("billiard",StringComparison.OrdinalIgnoreCase)
+            ||text.Contains("play pool",StringComparison.OrdinalIgnoreCase)
+            ||text.Contains("places to play",StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsGeographicScopeCandidate(string name)
+    {
+        var core=NormalizeCandidateDisplayName(name).Split('(')[0].Trim();
+        var tokens=core.Split(' ',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+        if(tokens.Length==0)return false;
+        if(tokens.Any(token=>token.Equals("County",StringComparison.OrdinalIgnoreCase)||token.Equals("California",StringComparison.OrdinalIgnoreCase)||token.Equals("SoCal",StringComparison.OrdinalIgnoreCase)||token.Equals("NorCal",StringComparison.OrdinalIgnoreCase)))return true;
+        return tokens.Length==2&&tokens[0] is "San" or "Santa" or "Los" or "Las";
+    }
+
+    private static bool IsGenericContentTitleCandidate(string name)
+    {
+        var tokens=CanonicalTokens(name).Select(token=>token.Trim(',',':',';','.','(',')')).Where(token=>token.Length>0).ToArray();
+        return tokens.Length>0&&tokens[0].Equals("Best",StringComparison.OrdinalIgnoreCase)&&tokens.Any(token=>CandidateInvalidWords.Contains(token));
+    }
+
+    private static bool IsAcronymConnectorPhrase(string name)
+    {
+        var tokens=CanonicalTokens(name).Select(token=>token.Trim(',',':',';','.','(',')')).Where(token=>token.Length>0&&!SubsetConnectiveTokens.Contains(token)).ToArray();
+        return tokens.Length>=2&&tokens.All(token=>token.Length is >=2 and <=5&&token.All(char.IsUpper));
     }
 
     private static bool IsActionCandidate(string name)
@@ -3349,6 +3422,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // a genuinely attested entity while keeping methodology labels out of the ranking.
                 if(supportTier is not null&&!candidate.IsEntityOfRequestedKind&&exclusiveHosts==0)
                     supportTier=null;
+                if(supportTier is not null&&!HasNamedEntityAdmissionSupport(resolvedName,queryContract,interpretiveCount,distinctHosts,exclusiveHosts,requiredSupport))
+                    supportTier=null;
                 var supportExcluded=false;
                 if(!violates&&dominatedFragments.TryGetValue(resolvedName,out var dominator))
                 {
@@ -3399,7 +3474,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     :hasCrossInterpretiveSupport?"MODERATE"
                     :combinedSupport>=1?"LIMITED"
                     :null;
-                if(neededForContract>0&&supportTier is not null&&!dominatedFragments.ContainsKey(name)&&IsValidCandidateForContract(name,queryContract))
+                if(neededForContract>0&&supportTier is not null&&!dominatedFragments.ContainsKey(name)&&IsValidCandidateForContract(name,queryContract)&&HasNamedEntityAdmissionSupport(name,queryContract,interpretiveCount,distinctHosts,exclusiveHosts,requiredSupport))
                 {
                     // Deterministic completion is intentionally conservative: it is only used for pool
                     // candidates that missed the LLM matrix response, and it cannot beat candidates that
