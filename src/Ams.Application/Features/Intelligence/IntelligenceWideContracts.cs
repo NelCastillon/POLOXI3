@@ -372,11 +372,18 @@ public sealed record WideClarificationOptionDto(string Key,string Label,string? 
 // V2.1 Query Contract: separates hard constraints from ambiguous concepts so POLOXI only branches ambiguity.
 public sealed record WideQueryContract(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements)
 {
-    // V3.1 answer-kind routing: ENTITY_RANKING (requested items are named, verifiable entities — the
-    // Candidate Competition applies), CONTENT_ENUMERATION (requested items are pieces of content such
-    // as questions, tips, steps, examples — not rankable entities; route to the interpretive answer
-    // path), or SINGLE_ANSWER. Null degrades to the pre-V3.1 heuristics.
+    // V3.1 answer-kind routing: broad output mode. Null degrades to the pre-V3.1 heuristics.
     public string? AnswerKind{get;init;}
+    // V3.13 candidate contract: what kind of item is allowed to compete. This prevents entity-ranking
+    // validation from accepting artifacts when the user asked for a fix, diagnosis, plan, or procedure.
+    public string? CandidateKind{get;init;}
+    // V3.13 ambiguity-first contract: when the main object/action has materially different domain senses
+    // and the query does not resolve them, POLOXI asks before ranking or enumerating.
+    public bool RequiresClarification{get;init;}
+    public string? ClarificationQuestion{get;init;}
+    public string? ClarificationTarget{get;init;}
+    public IReadOnlyCollection<string> ClarificationOptions{get;init;}=[];
+    public bool IsSafetySensitive{get;init;}
 }
 
 // V2.1 candidate competition: a candidate with its composite score and per-branch evidence scores.
@@ -621,6 +628,12 @@ public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,
 public sealed record WideQueryContractProposal(string? EntityType,string? GeographicConstraint,int? RequestedCount,string? RankingConcept,IReadOnlyCollection<string> HardConstraints,IReadOnlyCollection<string> AmbiguousConcepts,IReadOnlyCollection<string> OutputRequirements)
 {
     public string? AnswerKind{get;init;}
+    public string? CandidateKind{get;init;}
+    public bool RequiresClarification{get;init;}
+    public string? ClarificationQuestion{get;init;}
+    public string? ClarificationTarget{get;init;}
+    public IReadOnlyCollection<string> ClarificationOptions{get;init;}=[];
+    public bool IsSafetySensitive{get;init;}
 }
 
 public sealed record WideCandidateScoringProposal(IReadOnlyCollection<WideCandidateScore> Candidates);

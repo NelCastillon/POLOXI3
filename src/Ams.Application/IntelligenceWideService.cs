@@ -297,6 +297,32 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // to the task that actually asked the question.
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}inheritedKind)
                 queryContract=queryContract is null?new(null,null,null,null,[],[],[]){AnswerKind=inheritedKind}:queryContract with{AnswerKind=inheritedKind};
+            queryContract=RefineQueryContractForAmbiguity(configuration,queryContract,request.Query);
+            if(queryContract?.RequiresClarification==true&&string.IsNullOrWhiteSpace(request.ClarificationAnswer))
+            {
+                if(queryContract.AnswerKind is{Length:>0}clarificationKind)
+                    try{await wideRepository.UpdateWideExecutionAnswerKindAsync(request.TenantId,request.UserId,executionId,clarificationKind,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
+                try{await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(queryContract,JsonOptions),0m,0,0,0,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
+                var question=queryContract.ClarificationQuestion??"I need one clarification before answering: which meaning do you intend?";
+                var optionItems=queryContract.ClarificationOptions.Select((option,index)=>new WideClarificationOptionDto($"OPTION_{index+1}",option,option)).ToList();
+                optionItems.Add(new("OTHER","Something else",null));
+                var safetyPrefix=queryContract.IsSafetySensitive?"If this involves a safety-critical physical structure, restrict access and contact a qualified professional or local authority before attempting repairs. ":string.Empty;
+                var clarificationAnswerText=$"{safetyPrefix}{question}";
+                timer.Stop();
+                await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"USER_CLARIFICATION_REQUIRED","AMBIGUOUS_OBJECT_CLARIFICATION_REQUIRED",0,llmCalls,0m,"INTERPRETIVE",clarificationAnswerText,timer.ElapsedMilliseconds,cancellationToken);
+                return new(executionId,request.Query,"USER_CLARIFICATION_REQUIRED","AMBIGUOUS_OBJECT_CLARIFICATION_REQUIRED",0,llmCalls,0m,"INTERPRETIVE",clarificationAnswerText,[],[],[],timer.ElapsedMilliseconds)
+                {
+                    QueryContract=queryContract,
+                    AnswerKindCode=queryContract.AnswerKind,
+                    ClarificationQuestion=question,
+                    ClarificationTarget=queryContract.ClarificationTarget,
+                    ClarificationOptions=queryContract.ClarificationOptions,
+                    ClarificationOptionItems=optionItems,
+                    ProviderCodeUsed=null,
+                    ModelCodeUsed=null,
+                    LlmRawItems=await llmRawTask
+                };
+            }
             // V3.2 Answer-Kind-Aware Workflow Routing: the Stage 0 AnswerKind classification tunes
             // (never forks) the pipeline budgets. CONTENT_ENUMERATION and SINGLE_ANSWER queries do not
             // benefit from deep entity discrimination, so their depth ceiling and information-round
@@ -520,7 +546,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // Candidate eligibility must be stable for the same proposed name and query. Retrieved
                 // corpus capitalization may vary between runs, so it cannot authoritatively reject a
                 // seed; every accepted seed still has to earn support at the evidence admission gates.
-                var validSeeds=seeds.Where(seed=>IsValidCandidateName(seed)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
+                var validSeeds=seeds.Where(seed=>IsValidCandidateForContract(seed,queryContract)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
                 if(validSeeds.Length>0)
                 {
                     candidateUniverse.UnionWith(validSeeds);
@@ -1753,7 +1779,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
-            var contract=new WideQueryContract(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[]){AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind)};
+            var contract=new WideQueryContract(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[])
+            {
+                AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind),
+                CandidateKind=NormalizeCandidateKind(proposal.CandidateKind),
+                RequiresClarification=proposal.RequiresClarification,
+                ClarificationQuestion=NormalizeNullable(proposal.ClarificationQuestion),
+                ClarificationTarget=NormalizeNullable(proposal.ClarificationTarget),
+                ClarificationOptions=proposal.ClarificationOptions?.Where(option=>!string.IsNullOrWhiteSpace(option)).Select(option=>option.Trim()).Take(6).ToArray()??[],
+                IsSafetySensitive=proposal.IsSafetySensitive
+            };
             return ApplySelectionUpgradeGuard(configuration,contract,request.Query);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -1821,6 +1856,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private const string AnswerKindEntityRanking="ENTITY_RANKING";
     private const string AnswerKindContentEnumeration="CONTENT_ENUMERATION";
     private const string AnswerKindSingleAnswer="SINGLE_ANSWER";
+    private const string AnswerKindTechnicalRecommendation="TECHNICAL_RECOMMENDATION";
+    private const string AnswerKindDiagnosticProcedure="DIAGNOSTIC_PROCEDURE";
+    private const string AnswerKindClarificationRequired="CLARIFICATION_REQUIRED";
+    private const string CandidateKindNamedEntity="NAMED_ENTITY";
+    private const string CandidateKindActionableSolution="ACTIONABLE_SOLUTION";
+    private const string CandidateKindDiagnosticStep="DIAGNOSTIC_STEP";
+    private const string CandidateKindProcedureStep="PROCEDURE_STEP";
 
     // V3.3: answer kinds are recognized against the POLOXI.AnswerKind lookup table (DB is the source
     // of truth) so new kinds (COMPARISON, YES_NO, ...) can be added without recompiling. When the
@@ -1830,16 +1872,37 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         var normalized=value?.Trim().ToUpperInvariant();
         if(string.IsNullOrEmpty(normalized))return null;
-        if(configuration.AnswerKinds.Count>0)
-            return configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode==normalized)?.AnswerKindCode;
-        return normalized switch
+        var builtIn=normalized switch
         {
             AnswerKindEntityRanking=>AnswerKindEntityRanking,
             AnswerKindContentEnumeration=>AnswerKindContentEnumeration,
             AnswerKindSingleAnswer=>AnswerKindSingleAnswer,
+            AnswerKindTechnicalRecommendation=>AnswerKindTechnicalRecommendation,
+            AnswerKindDiagnosticProcedure=>AnswerKindDiagnosticProcedure,
+            AnswerKindClarificationRequired=>AnswerKindClarificationRequired,
+            _=>null
+        };
+        if(builtIn is not null)return builtIn;
+        if(configuration.AnswerKinds.Count>0)
+            return configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode==normalized)?.AnswerKindCode;
+        return null;
+    }
+
+    private static string? NormalizeCandidateKind(string? value)
+    {
+        var normalized=value?.Trim().ToUpperInvariant();
+        if(string.IsNullOrEmpty(normalized))return null;
+        return normalized switch
+        {
+            CandidateKindNamedEntity=>CandidateKindNamedEntity,
+            CandidateKindActionableSolution=>CandidateKindActionableSolution,
+            CandidateKindDiagnosticStep=>CandidateKindDiagnosticStep,
+            CandidateKindProcedureStep=>CandidateKindProcedureStep,
             _=>null
         };
     }
+
+    private static string? NormalizeNullable(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
 
     private static WideAnswerKindDefinition? FindAnswerKind(WideConfiguration configuration,string? answerKindCode)=>
         string.IsNullOrWhiteSpace(answerKindCode)?null:configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode.Equals(answerKindCode.Trim(),StringComparison.OrdinalIgnoreCase));
@@ -1852,6 +1915,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // upgrade to ENTITY_RANKING. Never fires for factual/definitional questions (no entityType) and
     // never downgrades a kind — it only ever ADDS rigor.
     private static readonly System.Text.RegularExpressions.Regex SelectionVerbPattern=new(@"\b(choose|select|pick)\b|\bwhich\s+one\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex RepairIntentPattern=new(@"\b(how\s+do\s+i\s+)?(fix|repair|troubleshoot|resolve|diagnose|optimi[sz]e|reduce|prevent)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex EnumerationIntentPattern=new(@"\b(list|enumerate|types?|examples?|categories|top\s+\d+|top\s+ten|options)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex AmbiguousBridgePattern=new(@"\bbridge\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex BridgeDomainQualifierPattern=new(@"\b(road|highway|structural|civil|network|ethernet|software|integration|api|dental|tooth|card|game)\s+bridge\b|\bbridge\s+(network|interface|adapter|api|integration|dental|tooth|repair|structure|deck|span)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
     private static WideQueryContract ApplySelectionUpgradeGuard(WideConfiguration configuration,WideQueryContract contract,string query)
     {
         if(!string.Equals(contract.AnswerKind,AnswerKindSingleAnswer,StringComparison.OrdinalIgnoreCase))return contract;
@@ -1863,13 +1930,38 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return contract with{AnswerKind=rankingKind,RequestedCount=contract.RequestedCount??1};
     }
 
+    private static WideQueryContract? RefineQueryContractForAmbiguity(WideConfiguration configuration,WideQueryContract? contract,string query)
+    {
+        var refined=contract??new(null,null,null,null,[],[],[]);
+        var isRepairOrOptimization=RepairIntentPattern.IsMatch(query);
+        if(isRepairOrOptimization&&string.Equals(refined.AnswerKind,AnswerKindContentEnumeration,StringComparison.OrdinalIgnoreCase)&&!EnumerationIntentPattern.IsMatch(query))
+            refined=refined with{AnswerKind=NormalizeAnswerKind(configuration,AnswerKindDiagnosticProcedure)??AnswerKindDiagnosticProcedure};
+        if(isRepairOrOptimization&&string.IsNullOrWhiteSpace(refined.CandidateKind))
+            refined=refined with{CandidateKind=query.Contains("how",StringComparison.OrdinalIgnoreCase)?CandidateKindProcedureStep:CandidateKindActionableSolution};
+        if(AmbiguousBridgePattern.IsMatch(query)&&!BridgeDomainQualifierPattern.IsMatch(query)&&!refined.RequiresClarification)
+        {
+            refined=refined with
+            {
+                AnswerKind=NormalizeAnswerKind(configuration,AnswerKindClarificationRequired)??AnswerKindClarificationRequired,
+                CandidateKind=CandidateKindDiagnosticStep,
+                RequiresClarification=true,
+                ClarificationTarget="bridge meaning",
+                ClarificationQuestion="What kind of bridge do you mean?",
+                ClarificationOptions=["Physical road/structural bridge","Network bridge","Software/integration bridge","Dental bridge","Card/game bridge","Something else"],
+                IsSafetySensitive=true,
+                AmbiguousConcepts=refined.AmbiguousConcepts.Concat(["bridge"]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            };
+        }
+        return refined;
+    }
+
     // V3.3: whether the deterministic Candidate Competition is a category error for this kind is now
     // a lookup-table column (RunsCandidateCompetition); the CONTENT_ENUMERATION constant remains only
     // as the compiled fallback when the table is empty.
     private static bool SkipsCandidateCompetition(WideConfiguration configuration,WideQueryContract? queryContract)
     {
         if(FindAnswerKind(configuration,queryContract?.AnswerKind)is{}definition)return!definition.RunsCandidateCompetition;
-        return queryContract?.AnswerKind==AnswerKindContentEnumeration;
+        return queryContract?.AnswerKind is AnswerKindContentEnumeration or AnswerKindTechnicalRecommendation or AnswerKindDiagnosticProcedure or AnswerKindClarificationRequired;
     }
 
     // V3.2 answer-kind budgets, V3.3 data-driven: kind-specific budgets come from the lookup table's
@@ -2173,7 +2265,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         try
         {
-            var contractContext=queryContract is null?"(none)":$"entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
+            var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; candidateKind: {queryContract.CandidateKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateEnumeration,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
@@ -2357,6 +2449,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         "various","several","many","some","etc","numerous","additional","remaining","alternative","alternatives"
     };
 
+    private static readonly HashSet<string> CandidateArtifactWords=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "and","or","not","pro","con","what","why","how","when","where","who","instructions","instruction",
+        "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about"
+    };
+
+    private static readonly HashSet<string> ActionCandidateVerbs=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "add","adjust","analyze","batch","cache","change","decouple","detect","diagnose","disable","enable",
+        "implement","increase","inspect","isolate","measure","monitor","move","optimize","parallelize","profile",
+        "reduce","replace","schedule","split","tune","use","validate"
+    };
+
     // V2.8.1 Attribute-Hypothesis Rejection, narrowed in V2.8.3: only NON-IDENTIFYING qualifiers
     // (geography/scale/generic — "Mercury (US)", "Mercury (large company)") mark a pseudo-candidate.
     // INDUSTRY qualifiers are how interpretive lists disambiguate real same-named entities —
@@ -2426,6 +2531,35 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             .ToArray();
         if(significantWords.Length>0&&!significantWords.All(word=>char.IsUpper(word[0])))return false;
         return true;
+    }
+
+    private static bool IsCandidateArtifact(string name)
+    {
+        var trimmed=name.Trim();
+        if(CandidateArtifactWords.Contains(trimmed))return true;
+        var tokens=trimmed.Split([' ','-','/'],StringSplitOptions.RemoveEmptyEntries).Select(token=>token.Trim(',',':',';','.','(',')')).Where(token=>token.Length>0).ToArray();
+        return tokens.Length==1&&CandidateArtifactWords.Contains(tokens[0]);
+    }
+
+    private static bool IsValidCandidateForContract(string name,WideQueryContract? queryContract)
+    {
+        if(IsCandidateArtifact(name))return false;
+        var candidateKind=queryContract?.CandidateKind;
+        if(candidateKind is CandidateKindActionableSolution or CandidateKindDiagnosticStep or CandidateKindProcedureStep)
+            return IsActionCandidate(name);
+        return IsValidCandidateName(name);
+    }
+
+    private static bool IsActionCandidate(string name)
+    {
+        var trimmed=name.Trim();
+        if(trimmed.Length<4||trimmed.Length>120)return false;
+        var words=trimmed.Split(' ',StringSplitOptions.RemoveEmptyEntries);
+        if(words.Length<2||words.Length>9)return false;
+        var first=words[0].Trim(',',':',';','.','(',')').TrimEnd('s').ToLowerInvariant();
+        if(ActionCandidateVerbs.Contains(first))return true;
+        return words.Any(word=>ActionCandidateVerbs.Contains(word.Trim(',',':',';','.','(',')').TrimEnd('s')))
+            &&words.Any(word=>word.Contains("flush",StringComparison.OrdinalIgnoreCase)||word.Contains("buffer",StringComparison.OrdinalIgnoreCase)||word.Contains("stall",StringComparison.OrdinalIgnoreCase)||word.Contains("threshold",StringComparison.OrdinalIgnoreCase)||word.Contains("profil",StringComparison.OrdinalIgnoreCase)||word.Contains("queue",StringComparison.OrdinalIgnoreCase));
     }
 
     // V3.4.1: tokens of the query itself (base query plus any clarification-constraint text), used to
@@ -2700,12 +2834,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // identity equals any hierarchy branch name is a dimension label leaking into the pool, never
             // a competing entity.
             var branchIdentityKeys=survivors.Select(branch=>CandidateIdentityKey(branch.DisplayName)).Where(key=>key.Length>0).ToHashSet(StringComparer.Ordinal);
-            var interpretiveCandidates=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).Where(item=>IsValidCandidateName(item.Name)&&!IsQueryTopicEcho(item.Name,queryTopicTokens)&&!branchIdentityKeys.Contains(CandidateIdentityKey(item.Name))).GroupBy(item=>CandidateIdentityKey(item.Name),StringComparer.Ordinal).Select(group=>group.OrderByDescending(item=>item.Name.Length).First()).ToArray();
+            var interpretiveCandidates=interpretiveResults.SelectMany(result=>result.Items.Select(item=>(item.Name,item.Detail))).Where(item=>IsValidCandidateForContract(item.Name,queryContract)&&!IsQueryTopicEcho(item.Name,queryTopicTokens)&&!branchIdentityKeys.Contains(CandidateIdentityKey(item.Name))).GroupBy(item=>CandidateIdentityKey(item.Name),StringComparer.Ordinal).Select(group=>group.OrderByDescending(item=>item.Name.Length).First()).ToArray();
             var knownNames=interpretiveCandidates.Select(item=>item.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
             // Discovered candidates ranked by independent-source diversity so the strongest evidence-named
             // entities are merged first; annotated so their admission path is visible and explainable.
             var evidenceCandidates=discoveredCandidates
-                .Where(name=>IsValidCandidateName(name)&&!knownNames.Contains(name)&&!IsQueryTopicEcho(name,queryTopicTokens)&&!branchIdentityKeys.Contains(CandidateIdentityKey(name)))
+                .Where(name=>IsValidCandidateForContract(name,queryContract)&&!knownNames.Contains(name)&&!IsQueryTopicEcho(name,queryTopicTokens)&&!branchIdentityKeys.Contains(CandidateIdentityKey(name)))
                 .Select(name=>(Name:name,Hosts:CountDistinctSourceHosts(name,externalKnowledge)))
                 .Where(item=>item.Hosts>=minimumDiscoverySourceHosts)
                 .OrderByDescending(item=>item.Hosts)
@@ -2769,9 +2903,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
             var constraints=queryContract is null||queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints);
+            var candidateKind=queryContract?.CandidateKind??CandidateKindNamedEntity;
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
-                $"Question: {request.Query}\nHard constraints: {constraints}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
+                $"Question: {request.Query}\nHard constraints: {constraints}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
                 CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
             if(proposal?.Candidates is not{Count:>0})return [];
@@ -2985,18 +3120,57 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 admissionInfo[resolvedName]=(supportTier is null?"EXCLUDED":admissionMode,interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
                 supportTiers[resolvedName]=supportTier??"EXCLUDED";
             }
-            // Pool-coverage transparency: a pool candidate the scoring model never echoed (or whose
-            // echo could not be resolved back to a supplied name) previously vanished with no trace —
-            // the funnel showed fewer candidates than the pool with no disclosure of WHY. Every pool
-            // candidate now yields a row: unscored ones become rank-0 ruled-out entries carrying an
-            // explicit reason and their support provenance, so a "top 10" that delivers 1 is auditable.
+            // Pool-coverage transparency + explicit Top-N contract: a pool candidate the scoring model
+            // never echoed (or whose echo could not be resolved back to a supplied name) previously became
+            // a rank-0 ruled-out row automatically. That made "top 10" a best-effort hint even when the
+            // deterministic pool still contained credible, supported entities. When the user requested a
+            // count, use a conservative deterministic completion score for supported unscored candidates so
+            // the request is satisfied whenever enough valid candidates exist. Unsupported names still stay
+            // ruled out with an explicit reason; nothing is invented.
             var scoredNames=entries.Select(entry=>entry.Record.DisplayName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var validScoredCount=entries.Count(entry=>!entry.Record.IsConstraintViolation);
+            var neededForContract=Math.Max(0,finalCount-validScoredCount);
+            var candidateSignals=neededForContract>0?ComputeCandidateSignals(poolNames,[],externalKnowledge):new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
             foreach(var(name,_)in candidateNames)
             {
                 if(scoredNames.Contains(Truncate(name,300)!))continue;
-                entries.Add((new(Guid.NewGuid(),executionId,request.TenantId,Truncate(name,300)!,null,0m,0,true,"Not scored: the scoring model did not return a resolvable score for this candidate in the Candidate \u00D7 Branch matrix.",[]),true,0m));
+                var candidateId=Guid.NewGuid();
+                var distinctHosts=CountDistinctSourceHosts(name,externalKnowledge);
+                var exclusiveHosts=exclusiveHostCounts.GetValueOrDefault(name);
+                var interpretiveCount=interpretiveSupport.GetValueOrDefault(name);
+                var support=dimensionSupport.GetValueOrDefault(name);
+                var combinedSupport=interpretiveCount+distinctHosts+exclusiveHosts;
+                var hasCorpusSupport=distinctHosts>0||exclusiveHosts>0;
+                var hasCrossInterpretiveSupport=interpretiveCount>=requiredSupport;
+                var supportTier=!hasCorpusSupport&&!hasCrossInterpretiveSupport?null
+                    :hasCorpusSupport&&(support>=requiredSupport||exclusiveHosts>=2)?"STRONG"
+                    :combinedSupport>=requiredSupport||exclusiveHosts>=1?"MODERATE"
+                    :hasCrossInterpretiveSupport?"MODERATE"
+                    :combinedSupport>=1?"LIMITED"
+                    :null;
+                if(neededForContract>0&&supportTier is not null&&!dominatedFragments.ContainsKey(name)&&IsValidCandidateForContract(name,queryContract))
+                {
+                    // Deterministic completion is intentionally conservative: it is only used for pool
+                    // candidates that missed the LLM matrix response, and it cannot beat candidates that
+                    // received a real Candidate x Branch score unless the scored field is also weak. The
+                    // score comes from support breadth plus measured evidence signal, not model memory.
+                    var supportRatio=Math.Clamp((decimal)Math.Min(combinedSupport,Math.Max(requiredSupport,1))/Math.Max(requiredSupport,1),0m,1m);
+                    var signal=candidateSignals.GetValueOrDefault(name);
+                    var composite=Math.Clamp(.35m+.20m*supportRatio+.20m*signal,0m,.75m);
+                    var fallbackScores=branches.Select(branch=>new WideCandidateBranchScoreRecord(Guid.NewGuid(),candidateId,branch.WideBranchId,request.TenantId,branch.DisplayName,composite)).ToArray();
+                    entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,"Admitted by deterministic Top-N completion from retrieved evidence and interpretive support; the scoring model omitted this candidate from the matrix response.",composite,0,false,null,fallbackScores),false,composite));
+                    evidenceConfidences[name]=Math.Clamp((distinctHosts<=1?.55m:Math.Min(1m,.55m+.15m*(distinctHosts-1)))*supportRatio,0m,1m);
+                    admissionInfo[name]=("TOP_N_COMPLETION",interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
+                    supportTiers[name]=supportTier;
+                    neededForContract--;
+                    continue;
+                }
+                var reason=dominatedFragments.TryGetValue(name,out var dominator)
+                    ?$"Name fragment of '{dominator}': no evidence host discusses it independently."
+                    :"Not scored: the scoring model did not return a resolvable score for this candidate in the Candidate \u00D7 Branch matrix.";
+                entries.Add((new(candidateId,executionId,request.TenantId,Truncate(name,300)!,null,0m,0,true,reason,[]),true,0m));
                 supportTiers[name]="EXCLUDED";
-                admissionInfo[name]=("EXCLUDED",interpretiveSupport.GetValueOrDefault(name),CountDistinctSourceHosts(name,externalKnowledge),dimensionSupport.GetValueOrDefault(name));
+                admissionInfo[name]=("EXCLUDED",interpretiveCount,distinctHosts,Math.Max(support,combinedSupport));
             }
             // V2.9.4 rule: POLOXI honors the requested Top N whenever enough plausible, evidence-backed
             // candidates exist — weaker-but-valid candidates compete with a disclosed lower support
@@ -3099,7 +3273,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 {
   "type": "object",
   "properties": {
-    "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", null] },
+    "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", "TECHNICAL_RECOMMENDATION", "DIAGNOSTIC_PROCEDURE", "CLARIFICATION_REQUIRED", null] },
+    "candidateKind": { "type": ["string", "null"], "enum": ["NAMED_ENTITY", "ACTIONABLE_SOLUTION", "DIAGNOSTIC_STEP", "PROCEDURE_STEP", null] },
+    "requiresClarification": { "type": "boolean" },
+    "clarificationQuestion": { "type": ["string", "null"] },
+    "clarificationTarget": { "type": ["string", "null"] },
+    "clarificationOptions": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
+    "isSafetySensitive": { "type": "boolean" },
     "entityType": { "type": ["string", "null"] },
     "geographicConstraint": { "type": ["string", "null"] },
     "requestedCount": { "type": ["integer", "null"] },
@@ -3108,7 +3288,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     "ambiguousConcepts": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
     "outputRequirements": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
   },
-  "required": ["answerKind", "entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
+  "required": ["answerKind", "candidateKind", "requiresClarification", "clarificationQuestion", "clarificationTarget", "clarificationOptions", "isSafetySensitive", "entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
   "additionalProperties": false
 }
 """;
