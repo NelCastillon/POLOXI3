@@ -52,6 +52,7 @@
                 </div>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Stop this search — the running pipeline is cancelled server-side too." @onclick="CancelSearch"><i class="bi bi-x-circle"></i> Cancel</button>
             </section>
+                @GroupDetailsPanel
         }
         else if (_error is not null)
         {
@@ -117,6 +118,7 @@
                         </span>
                     </div>
                     <p class="poloxi-answer-narrative">@answerContext.ConfidenceNarrative</p>
+                    @AmbiguityGroupsPanel
                     @if (answerContext.ResponseMode == WideResponseModes.LimitedEvidence)
                     {
                         <div class="poloxi-evidence-warning"><i class="bi bi-exclamation-triangle"></i> Fewer deciding factors are evidence-backed than usual — verify before acting on this ranking.</div>
@@ -124,6 +126,13 @@
                     @if (answerContext.OutputContract is { IsSatisfied: false } contractResult)
                     {
                         <div class="poloxi-evidence-warning"><i class="bi bi-list-ol"></i> You asked for @contractResult.RequestedCount results, but only @contractResult.DeliveredCount candidates passed POLOXI's evidence and constraint checks@(contractResult.RecoveryAttempted ? " (a wider candidate recovery pass was attempted)" : "") — the ranking below is complete but shorter than requested.</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
+                    {
+                        <div class="poloxi-answer-section poloxi-reveal poloxi-full-answer-primary">
+                            <h3><i class="bi bi-card-text"></i> Full answer</h3>
+                            <p>@_response.FinalAnswer</p>
+                        </div>
                     }
                     @if (answerContext.CandidateSummaries.Count > 0)
                     {
@@ -261,14 +270,6 @@
                                 If @changeDriver.DimensionName.ToLowerInvariant() resolves against the current leader, @changeDriver.ChallengerDisplayName is the most likely new #1.
                             </p>
                         </div>
-                    }
-                    @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
-                    {
-                        <div class="poloxi-answer-section poloxi-reveal">
-                            <h3><i class="bi bi-card-text"></i> Full answer</h3>
-                            <p>@_response.FinalAnswer</p>
-                        </div>
-                        @KpiStrip
                     }
                     @if (_response.QueryContract is { } answerCardContract && (answerCardContract.HardConstraints.Count > 0 || answerCardContract.AmbiguousConcepts.Count > 0))
                     {
@@ -774,6 +775,116 @@
 </IntelligenceWorkspace>
 
 @code {
+    private RenderFragment AmbiguityGroupsPanel => __builder =>
+    {
+        @if (_response?.AmbiguityGroups.Count > 1)
+        {
+            <section class="poloxi-panel poloxi-panel--embedded poloxi-reveal">
+                <div class="poloxi-panel-header">
+                    <div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-diagram-2"></i></span><div><span>Ambiguity-first grouped execution</span><h2>Possible meanings and result groups</h2></div></div>
+                    <span class="poloxi-status">@_response.AmbiguityGroups.Count groups</span>
+                </div>
+                <div class="poloxi-ambiguity-groups">
+                    @foreach (var group in _response.AmbiguityGroups)
+                    {
+                        <article class="poloxi-ambiguity-group">
+                            <div class="poloxi-ambiguity-group-head">
+                                <div><span>@group.GroupCode</span><h3>@group.DisplayName</h3></div>
+                                <strong>@group.Confidence.ToString("P0")</strong>
+                            </div>
+                            <p>@group.Summary</p>
+                            <div class="poloxi-branch-level">
+                                @if (!string.IsNullOrWhiteSpace(group.AnswerKindCode))
+                                {
+                                    <span class="poloxi-branch-chip"><i class="bi bi-signpost-2"></i>@group.AnswerKindCode.Replace('_', ' ')</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(group.CandidateKindCode))
+                                {
+                                    <span class="poloxi-branch-chip"><i class="bi bi-ui-checks-grid"></i>@group.CandidateKindCode.Replace('_', ' ')</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(group.SafetyRiskCode) && group.SafetyRiskCode != "NONE")
+                                {
+                                    <span class="poloxi-branch-chip" title="Safety-sensitive interpretation group."><i class="bi bi-shield-exclamation"></i>@(group.SafetyRiskCode == "MEDIUM" ? "POSSIBLE SAFETY RISK" : group.SafetyRiskCode)</span>
+                                }
+                                <span class="poloxi-branch-chip"><i class="bi bi-diagram-3"></i>@group.Branches.Count branch@(group.Branches.Count == 1 ? "" : "es")</span>
+                                <span class="poloxi-branch-chip"><i class="bi bi-database-check"></i>@(group.Evidence.Count + group.ExternalKnowledge.Count) evidence</span>
+                            </div>
+                            @if (group.InterpretiveResults.Count > 0)
+                            {
+                                <div class="poloxi-group-results">
+                                    @foreach (var result in group.InterpretiveResults.Take(2))
+                                    {
+                                        <div class="poloxi-group-result-set">
+                                            <strong>@result.BranchDisplayName</strong>
+                                            <ol>
+                                                @foreach (var item in result.Items.Take(5))
+                                                {
+                                                    <li><span>@item.Name</span><small>@item.Detail</small></li>
+                                                }
+                                            </ol>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </article>
+                    }
+                </div>
+                @if (_response.QueryContract?.RequiresClarification == true && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
+                {
+                    <div class="poloxi-optional-clarification"><strong><i class="bi bi-chat-dots"></i> Optional narrowing:</strong><span>@_response.ClarificationQuestion</span></div>
+                }
+            </section>
+        }
+    };
+
+    private RenderFragment GroupDetailsPanel => __builder =>
+    {
+        @if (_response?.AmbiguityGroups.Count > 1)
+        {
+            <section class="poloxi-panel poloxi-reveal">
+                <div class="poloxi-panel-header">
+                    <div class="poloxi-panel-title"><span class="poloxi-panel-icon"><i class="bi bi-collection"></i></span><div><span>Grouped result details</span><h2>Result details by possible meaning</h2></div></div>
+                    <span class="poloxi-status">drill-down</span>
+                </div>
+                <div class="poloxi-group-detail-list">
+                    @foreach (var group in _response.AmbiguityGroups)
+                    {
+                        <details class="poloxi-group-detail">
+                            <summary><span>@group.DisplayName</span><strong>@group.Confidence.ToString("P0")</strong></summary>
+                            <div class="poloxi-group-detail-body">
+                                <p>@group.Interpretation</p>
+                                @if (group.InterpretiveResults.Count > 0)
+                                {
+                                    @foreach (var result in group.InterpretiveResults)
+                                    {
+                                        <div class="poloxi-group-result-set">
+                                            <strong>@result.BranchDisplayName</strong>
+                                            <ol>
+                                                @foreach (var item in result.Items.Take(8))
+                                                {
+                                                    <li><span>@item.Name</span><small>@item.Detail</small></li>
+                                                }
+                                            </ol>
+                                        </div>
+                                    }
+                                }
+                                @if (group.Branches.Count > 0)
+                                {
+                                    <div class="poloxi-branch-level">
+                                        @foreach (var branch in group.Branches.Take(10))
+                                        {
+                                            <span class="poloxi-branch-chip" title="@branch.Interpretation"><i class="bi bi-diagram-3"></i>L@branch.LevelNumber @branch.DisplayName<em>@BranchStateLabel(branch)</em></span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </details>
+                    }
+                </div>
+            </section>
+        }
+    };
+
     // Shared KPI strip: rendered below the Full answer section in Answer view, or standalone in Analysis view.
     private RenderFragment KpiStrip => __builder =>
     {

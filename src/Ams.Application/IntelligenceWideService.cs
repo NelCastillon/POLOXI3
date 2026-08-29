@@ -298,31 +298,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}inheritedKind)
                 queryContract=queryContract is null?new(null,null,null,null,[],[],[]){AnswerKind=inheritedKind}:queryContract with{AnswerKind=inheritedKind};
             queryContract=RefineQueryContractForAmbiguity(configuration,queryContract,request.Query);
-            if(queryContract?.RequiresClarification==true&&string.IsNullOrWhiteSpace(request.ClarificationAnswer))
-            {
-                if(queryContract.AnswerKind is{Length:>0}clarificationKind)
-                    try{await wideRepository.UpdateWideExecutionAnswerKindAsync(request.TenantId,request.UserId,executionId,clarificationKind,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
-                try{await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(queryContract,JsonOptions),0m,0,0,0,cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
-                var question=queryContract.ClarificationQuestion??"I need one clarification before answering: which meaning do you intend?";
-                var optionItems=queryContract.ClarificationOptions.Select((option,index)=>new WideClarificationOptionDto($"OPTION_{index+1}",option,option)).ToList();
-                optionItems.Add(new("OTHER","Something else",null));
-                var safetyPrefix=queryContract.IsSafetySensitive?"If this involves a safety-critical physical structure, restrict access and contact a qualified professional or local authority before attempting repairs. ":string.Empty;
-                var clarificationAnswerText=$"{safetyPrefix}{question}";
-                timer.Stop();
-                await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"USER_CLARIFICATION_REQUIRED","AMBIGUOUS_OBJECT_CLARIFICATION_REQUIRED",0,llmCalls,0m,"INTERPRETIVE",clarificationAnswerText,timer.ElapsedMilliseconds,cancellationToken);
-                return new(executionId,request.Query,"USER_CLARIFICATION_REQUIRED","AMBIGUOUS_OBJECT_CLARIFICATION_REQUIRED",0,llmCalls,0m,"INTERPRETIVE",clarificationAnswerText,[],[],[],timer.ElapsedMilliseconds)
-                {
-                    QueryContract=queryContract,
-                    AnswerKindCode=queryContract.AnswerKind,
-                    ClarificationQuestion=question,
-                    ClarificationTarget=queryContract.ClarificationTarget,
-                    ClarificationOptions=queryContract.ClarificationOptions,
-                    ClarificationOptionItems=optionItems,
-                    ProviderCodeUsed=null,
-                    ModelCodeUsed=null,
-                    LlmRawItems=await llmRawTask
-                };
-            }
+            var contractClarificationQuestion=queryContract?.RequiresClarification==true?queryContract.ClarificationQuestion:null;
+            var contractClarificationTarget=queryContract?.RequiresClarification==true?queryContract.ClarificationTarget:null;
+            IReadOnlyCollection<string> contractClarificationOptions=queryContract?.RequiresClarification==true?queryContract.ClarificationOptions:[];
+            IReadOnlyCollection<WideClarificationOptionDto> contractClarificationOptionItems=queryContract?.RequiresClarification==true
+                ?queryContract.ClarificationOptions.Select((option,index)=>new WideClarificationOptionDto($"OPTION_{index+1}",option,option)).Append(new("OTHER","Something else",null)).ToArray()
+                :[];
             // V3.2 Answer-Kind-Aware Workflow Routing: the Stage 0 AnswerKind classification tunes
             // (never forks) the pipeline budgets. CONTENT_ENUMERATION and SINGLE_ANSWER queries do not
             // benefit from deep entity discrimination, so their depth ceiling and information-round
@@ -441,7 +422,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // When forcing the minimum depth of 2, narrow all survivors even if none opted to continue.
                 var narrowingParents=survivors.Where(branch=>branch.ContinueNarrowing).ToArray();
                 if(narrowingParents.Length==0)narrowingParents=survivors.ToArray();
-                var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,cancellationToken);
+                var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
                 llmCalls++;
                 var parentsByCode=survivors.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
                 var nextLevel=MaterializeBranches(proposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration);
@@ -1132,29 +1113,30 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     terminationReason="USER_CLARIFICATION_REQUIRED";
                 }
             }
+            if(queryContract?.RequiresClarification==true&&answerStatus!="USER_CLARIFICATION_REQUIRED")
+            {
+                clarificationQuestion=contractClarificationQuestion;
+                clarificationTarget=contractClarificationTarget;
+                clarificationOptions=contractClarificationOptions;
+                clarificationOptionItems=contractClarificationOptionItems;
+            }
             await wideRepository.UpdateWideExecutionContractAsync(request.TenantId,request.UserId,executionId,queryContract is null?null:JsonSerializer.Serialize(queryContract,JsonOptions),evidenceCoverage,externalKnowledge.Count,relevantEvidence.Length,candidates.Count,cancellationToken);
             // V2.9 Answer Composer: derive the presentation contract deterministically from the final
             // Candidate × Branch outcome — zero-LLM, computed AFTER the gate so response mode reflects it.
-            var answerContext=ComposeAnswerContext(answerStatus,topCandidates,decisionConfidence,winnerStability,decisionEvidenceCoverage,isIntentGap,answer.CandidateInsights,outputContract);
+            var answerContext=ComposeAnswerContext(answerStatus,topCandidates,queryContract,decisionConfidence,winnerStability,decisionEvidenceCoverage,isIntentGap,answer.CandidateInsights,outputContract);
             // V2.2: persist execution-level entropy summary and information-round counters (fail-soft).
             try{await wideRepository.UpdateWideExecutionEntropyAsync(request.TenantId,request.UserId,new(executionId,initialEntropy.Entropy,finalEntropy.Entropy,initialEntropy.NormalizedEntropy,finalEntropy.NormalizedEntropy,totalActualInformationGain,informationRounds.Count,informationTargetCount,informationRetrievalCount){EntropyBasisCode=finalEntropy.EntropyBasisCode,DecisionConfidence=decisionConfidence,ClarificationTarget=clarificationTarget,ClarificationQuestion=clarificationQuestion,IntentEntropy=intentEntropy,PriorIntentEntropy=request.PriorIntentEntropy,ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound},cancellationToken);}catch{/* diagnostics only; never blocks the answer */}
-            // V2.9.2 Ranking Lock: the LLM interprets, POLOXI decides. When a deterministic Candidate ×
-            // Branch competition produced a ranking, that ranking is authoritative — the composed prose
-            // must never contradict it. The locked ordered ranking is prepended to the final answer text
-            // so the Full Answer and the ranking cards can never disagree, regardless of LLM output.
-            var finalAnswerText=string.IsNullOrWhiteSpace(answer.Answer)?null:answer.Answer;
-            if(topCandidates.Length>0&&answerStatus!="USER_CLARIFICATION_REQUIRED")
-            {
-                finalAnswerText=BuildWinnerBoundFinalAnswer(topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
-                finalAnswerText=ValidateWinnerBoundFinalAnswer(finalAnswerText,topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
-            }
+            var ambiguityGroups=BuildAmbiguityGroups(survivorsFinal,interpretiveResults,candidates,relevantEvidence,externalKnowledge,queryContract);
+            // V3.16 POLOXI Full Answer Composer: POLOXI owns the final structure. Grouped ambiguity
+            // answers outrank winner-bound prose; ranking locks apply only when ranking is the right task.
+            var finalAnswerText=BuildPoloxiFullAnswer(answer.Answer,queryContract,ambiguityGroups,topCandidates,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage,answerStatus);
             // Join the overlapped challenge verdict (fail-soft: null on provider failure) so the
             // response DTO and audit row are identical to the previous sequential behavior.
             if(challengeTask is not null)challengeOutcome=await challengeTask;
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
             return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
-            Candidates=candidates,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
+            Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
             ClarificationQuestion=clarificationQuestion,ClarificationTarget=clarificationTarget,ClarificationOptions=clarificationOptions,
@@ -1242,8 +1224,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var catalog=BuildCatalog(capabilities);
         // V2.1: when a query contract exists, the LLM branches ONLY the ambiguous concepts; hard
         // constraints and output requirements are fixed by the user and must never be reinterpreted.
-        var contractContext=queryContract is null?string.Empty:
-            $"\nQuery contract (FIXED, do not reinterpret): entity type: {queryContract.EntityType??"(unspecified)"}; hard constraints: {(queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints))}; output requirements: {(queryContract.OutputRequirements.Count==0?"(none)":string.Join("; ",queryContract.OutputRequirements))}\nAmbiguous concepts to disambiguate (branch ONLY these): {(queryContract.AmbiguousConcepts.Count==0?"(whole question)":string.Join("; ",queryContract.AmbiguousConcepts))}";
+        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideIntent,cancellationToken),
             $"Ambiguous question: {request.Query}{contractContext}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
@@ -1251,7 +1232,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
 
-    private async Task<WideLevelProposal> ProposeNextLevelAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,WideConfiguration configuration,int levelNumber,List<PoloxiEvidenceDto> evidence,CancellationToken cancellationToken)
+    private async Task<WideLevelProposal> ProposeNextLevelAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,WideConfiguration configuration,int levelNumber,List<PoloxiEvidenceDto> evidence,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         var catalog=BuildCatalog(capabilities);
         var parentSummary=string.Join('\n',parents.Select(parent=>
@@ -1261,9 +1242,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }));
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
-            $"Original question: {request.Query}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {configuration.MaximumBranchesPerLevel}\nSurviving parent branches with grounding outcomes:\n{parentSummary}\nApproved capability catalog (for optional grounding):\n{catalog}",
+            $"Original question: {request.Query}{(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {configuration.MaximumBranchesPerLevel}\nSurviving parent branches with grounding outcomes:\n{parentSummary}\nApproved capability catalog (for optional grounding):\n{catalog}",
             LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
+    }
+
+    private static string BuildQueryContractContext(WideQueryContract queryContract)
+    {
+        static string Join(IReadOnlyCollection<string> values)=>values.Count==0?"(none)":string.Join("; ",values);
+        return $"Query contract (FIXED, do not reinterpret): answer kind: {queryContract.AnswerKind??"(unspecified)"}; candidate kind: {queryContract.CandidateKind??"(unspecified)"}; intent: {queryContract.Intent??"(unspecified)"}; target object: {queryContract.TargetObject??queryContract.EntityType??"(unspecified)"}; entity type: {queryContract.EntityType??"(unspecified)"}; geography: {queryContract.GeographicConstraint??"(unspecified)"}; requested count: {(queryContract.RequestedCount?.ToString()??"(unspecified)")}; ranking concept: {queryContract.RankingConcept??"(unspecified)"}; output shape: {queryContract.OutputShape??"(unspecified)"}; safety risk: {queryContract.SafetyRiskCode??(queryContract.IsSafetySensitive?"MEDIUM":"NONE")}\nHard constraints: {Join(queryContract.HardConstraints)}\nRequired terms: {Join(queryContract.RequiredTerms)}\nExcluded terms: {Join(queryContract.ExcludedTerms)}\nOutput requirements: {Join(queryContract.OutputRequirements)}\nAmbiguous concepts to disambiguate (branch ONLY these unless evidence proves incompleteness): {Join(queryContract.AmbiguousConcepts)}\nAmbiguous terms: {Join(queryContract.AmbiguousTerms)}";
     }
 
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
@@ -1310,9 +1297,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private async Task<(WideAnswerProposal Proposal,string ProviderCode,string ModelCode)> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<PoloxiEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
-        // V2.1: hard constraints from the query contract are non-negotiable in the final answer.
-        var contractContext=queryContract is null||queryContract.HardConstraints.Count==0?string.Empty:
-            $"\nHARD CONSTRAINTS (every named item in the answer MUST satisfy these; exclude any item that does not): {string.Join("; ",queryContract.HardConstraints)}";
+        // V3.14: the fixed query contract is non-negotiable in the final answer.
+        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
         // Input budget: the tenant AI safety guard (Intelligence.Safety.MaximumInputCharacters) blocks
         // prompts over the configured limit. The answer system prompt is large and the survivor/evidence
         // sections grow with depth, so every variable section is clamped and, if the assembled user prompt
@@ -1443,6 +1429,58 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return builder.ToString();
     }
 
+    private static string BuildPoloxiFullAnswer(string? llmAnswer,WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,WideCandidateDto[] topCandidates,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal? winnerStability,decimal? topKStability,decimal decisionEvidenceCoverage,string answerStatus)
+    {
+        if(answerStatus=="USER_CLARIFICATION_REQUIRED")return string.IsNullOrWhiteSpace(llmAnswer)?"POLOXI needs one clarification before it can responsibly complete this answer.":llmAnswer;
+        var groups=ambiguityGroups.OrderByDescending(group=>group.Confidence).ToArray();
+        var hasMaterialGroups=groups.Length>1;
+        var hasSafetyRisk=groups.Any(group=>group.SafetyRiskCode is "POSSIBLE" or "MEDIUM" or "HIGH")||queryContract?.SafetyRiskCode is "POSSIBLE" or "MEDIUM" or "HIGH"||queryContract?.IsSafetySensitive==true;
+        if(hasMaterialGroups)return BuildGroupedAmbiguityFullAnswer(groups,queryContract,hasSafetyRisk,topCandidates,finalEntropy,decisionConfidence,decisionEvidenceCoverage);
+        if(topCandidates.Length>0)return ValidateWinnerBoundFinalAnswer(BuildWinnerBoundFinalAnswer(topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage),topCandidates,queryContract,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage);
+        if(queryContract?.AnswerKind is AnswerKindDiagnosticProcedure or AnswerKindTechnicalRecommendation)
+            return BuildProcedureFullAnswer(llmAnswer,queryContract,hasSafetyRisk);
+        return string.IsNullOrWhiteSpace(llmAnswer)?"POLOXI completed the analysis, but no final prose was returned by the answer composer.":llmAnswer;
+    }
+
+    private static string BuildGroupedAmbiguityFullAnswer(WideAmbiguityGroupDto[] groups,WideQueryContract? queryContract,bool hasSafetyRisk,WideCandidateDto[] topCandidates,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal decisionEvidenceCoverage)
+    {
+        var topGroup=groups[0];
+        var builder=new StringBuilder();
+        builder.Append("POLOXI found ").Append(groups.Length).Append(" plausible meaning").Append(groups.Length==1?string.Empty:"s").Append(" for this query and analyzed each meaning separately.").AppendLine().AppendLine();
+        if(hasSafetyRisk)
+            builder.Append("Safety note: one or more interpretations may involve real-world safety risk. Do not perform physical, medical, legal, structural, electrical, or other hazardous actions from this answer alone; use qualified professionals or authoritative guidance where applicable.").AppendLine().AppendLine();
+        builder.Append("Most supported interpretation: ").Append(topGroup.DisplayName).Append(" (").Append(topGroup.Confidence.ToString("P0")).Append("). ");
+        builder.Append(TrimDescription(topGroup.Summary??topGroup.Interpretation)).AppendLine().AppendLine();
+        builder.Append("Other plausible meanings considered:").AppendLine();
+        foreach(var group in groups.Skip(1).Take(6))
+            builder.Append("- ").Append(group.DisplayName).Append(" (").Append(group.Confidence.ToString("P0")).Append("): ").Append(TrimDescription(group.Summary??group.Interpretation)).AppendLine();
+        builder.AppendLine();
+        if(topCandidates.Length>0&&string.Equals(queryContract?.AnswerKind,AnswerKindEntityRanking,StringComparison.OrdinalIgnoreCase))
+        {
+            var requestedCount=Math.Clamp(queryContract?.RequestedCount??Math.Min(topCandidates.Length,5),1,topCandidates.Length);
+            builder.Append("Within the ranked-candidate portion of the analysis, the locked POLOXI ordering is: ")
+                .Append(string.Join(" ",topCandidates.Take(requestedCount).Select((candidate,index)=>$"{index+1}. {candidate.DisplayName} ({candidate.CompositeScore:P0})."))).AppendLine().AppendLine();
+        }
+        builder.Append("Confidence context: decision evidence confidence is ").Append((decisionConfidence??0m).ToString("P0"))
+            .Append(", remaining uncertainty is ").Append(finalEntropy.NormalizedEntropy.ToString("P0"))
+            .Append(", and decision-dimension coverage is ").Append(decisionEvidenceCoverage.ToString("P0")).Append('.');
+        if(queryContract?.RequiresClarification==true&&!string.IsNullOrWhiteSpace(queryContract.ClarificationQuestion))
+            builder.AppendLine().AppendLine().Append("Optional narrowing: ").Append(queryContract.ClarificationQuestion);
+        return builder.ToString();
+    }
+
+    private static string BuildProcedureFullAnswer(string? llmAnswer,WideQueryContract queryContract,bool hasSafetyRisk)
+    {
+        var builder=new StringBuilder();
+        if(hasSafetyRisk)
+            builder.Append("Safety note: this request may involve real-world risk. Use qualified professionals or authoritative documentation before taking action.").AppendLine().AppendLine();
+        builder.Append("POLOXI treated this as ").Append(queryContract.AnswerKind?.Replace('_',' ').ToLowerInvariant()??"a procedural answer");
+        if(!string.IsNullOrWhiteSpace(queryContract.TargetObject))builder.Append(" for ").Append(queryContract.TargetObject);
+        builder.Append('.').AppendLine().AppendLine();
+        builder.Append(string.IsNullOrWhiteSpace(llmAnswer)?"No additional procedural prose was returned by the answer composer.":llmAnswer);
+        return builder.ToString();
+    }
+
     private static string ValidateWinnerBoundFinalAnswer(string answerText,WideCandidateDto[] topCandidates,WideQueryContract? queryContract,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal? winnerStability,decimal? topKStability,decimal decisionEvidenceCoverage)
     {
         if(topCandidates.Length==0||string.IsNullOrWhiteSpace(answerText))return answerText;
@@ -1464,9 +1502,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return System.Text.RegularExpressions.Regex.IsMatch(text,$@"\b(select|choose|pick|recommend|recommended|conclude|concludes|winner|best|ranks?\s+#?1|ranked\s+first)\b[^.\n]{{0,160}}{escaped}|{escaped}[^.\n]{{0,160}}\b(is\s+the\s+winner|is\s+best|ranks?\s+#?1|ranked\s+first|should\s+be\s+selected|should\s+be\s+chosen|best\s+fits|best\s+aligns)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     }
 
-    private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap,IReadOnlyCollection<WideCandidateInsight>? candidateInsights=null,WideOutputContractResultDto? outputContract=null)
+    private static WideAnswerContext? ComposeAnswerContext(string answerStatus,WideCandidateDto[] topCandidates,WideQueryContract? queryContract,decimal? decisionConfidence,decimal? winnerStability,decimal decisionEvidenceCoverage,bool isIntentGap,IReadOnlyCollection<WideCandidateInsight>? candidateInsights=null,WideOutputContractResultDto? outputContract=null)
     {
-        if(topCandidates.Length==0)return null;
+        if(topCandidates.Length==0)return queryContract is null?null:new(WideResponseModes.Answer,"Moderate",BuildNonRankingConfidenceNarrative(queryContract))
+        {
+            AnswerKindCode=queryContract.AnswerKind,
+            CandidateKindCode=queryContract.CandidateKind,
+            OutputShape=queryContract.OutputShape,
+            TargetObject=queryContract.TargetObject??queryContract.EntityType,
+            PresentationGuidance=BuildPresentationGuidance(queryContract)
+        };
         // Response mode routes the UX: intent gap → candidate choice; weak grounding → evidence
         // warning; close ranking → ranking + optional preference; decisive winner → direct answer.
         var margin=topCandidates.Length<2?1m:Math.Clamp((topCandidates[0].CompositeScore-topCandidates[1].CompositeScore)/Math.Max(topCandidates[0].CompositeScore,.0001m),0,1);
@@ -1579,11 +1624,56 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         }
         return new(responseMode,confidenceLabel,confidenceNarrative)
         {
+            AnswerKindCode=queryContract?.AnswerKind,
+            CandidateKindCode=queryContract?.CandidateKind,
+            OutputShape=queryContract?.OutputShape,
+            TargetObject=queryContract?.TargetObject??queryContract?.EntityType,
+            PresentationGuidance=queryContract is null?[]:BuildPresentationGuidance(queryContract),
             WinnerDisplayName=responseMode==WideResponseModes.ClarificationRequired?null:winner.DisplayName,
             WinnerStrengths=strengths,WinnerWeaknesses=weaknesses,
             CandidateSummaries=summaries,CandidateContrasts=contrasts,ChangeableDimensions=changeable,
             OutputContract=outputContract,RankingChangeDriver=rankingChangeDriver,
         };
+    }
+
+    private static string BuildNonRankingConfidenceNarrative(WideQueryContract queryContract)=>queryContract.AnswerKind switch
+    {
+        AnswerKindClarificationRequired=>"The query has materially different meanings, so POLOXI needs clarification before evidence execution.",
+        AnswerKindDiagnosticProcedure=>"POLOXI produced a diagnostic or procedural answer rather than a candidate ranking.",
+        AnswerKindTechnicalRecommendation=>"POLOXI produced a technical recommendation using the fixed query contract instead of a named-entity competition.",
+        AnswerKindContentEnumeration=>"POLOXI enumerated content matching the fixed query contract rather than selecting a winner.",
+        _=>"POLOXI answered using the fixed query contract without a candidate competition."
+    };
+
+    private static IReadOnlyCollection<string> BuildPresentationGuidance(WideQueryContract queryContract)
+    {
+        var guidance=new List<string>();
+        if(!string.IsNullOrWhiteSpace(queryContract.OutputShape))guidance.Add($"Render as {queryContract.OutputShape}.");
+        switch(queryContract.AnswerKind)
+        {
+            case AnswerKindEntityRanking:
+                guidance.Add(queryContract.RequestedCount is >0?$"Show exactly up to {queryContract.RequestedCount} ranked, non-violating candidates when enough evidence-backed candidates exist.":"Show an evidence-weighted ranked list.");
+                break;
+            case AnswerKindDiagnosticProcedure:
+                guidance.Add("Show ordered diagnostic or troubleshooting steps, not competing entity cards.");
+                break;
+            case AnswerKindTechnicalRecommendation:
+                guidance.Add("Show recommended actions with rationale, prerequisites, risks, and trade-offs.");
+                break;
+            case AnswerKindContentEnumeration:
+                guidance.Add("Show a grouped enumeration and avoid declaring a single winner unless the user asked for one.");
+                break;
+            case AnswerKindClarificationRequired:
+                guidance.Add("Show the clarification question and options before deeper execution.");
+                break;
+            default:
+                guidance.Add("Render a direct answer while preserving stated constraints.");
+                break;
+        }
+        if(queryContract.RequiredTerms.Count>0)guidance.Add($"Preserve required terms: {string.Join("; ",queryContract.RequiredTerms)}.");
+        if(queryContract.ExcludedTerms.Count>0)guidance.Add($"Exclude terms: {string.Join("; ",queryContract.ExcludedTerms)}.");
+        if(queryContract.SafetyRiskCode is "MEDIUM" or "HIGH")guidance.Add("Include safety-aware caveats and avoid unsafe operational instructions.");
+        return guidance.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     // V2.8.6 post-competition identity dedup: two ranked candidates whose CORE tokens are identical
@@ -1736,6 +1826,55 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,PoloxiConfidence=branch.PoloxiConfidence,SemanticTypeCode=branch.SemanticTypeCode};
 
+    private static IReadOnlyCollection<WideAmbiguityGroupDto> BuildAmbiguityGroups(IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract)
+    {
+        var branchArray=branches.Where(branch=>!branch.IsEliminated).OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder).ToArray();
+        var roots=branchArray.Where(branch=>branch.LevelNumber==1).OrderByDescending(branch=>branch.PoloxiConfidence).ThenBy(branch=>branch.SortOrder).ToArray();
+        if(roots.Length==0)return [];
+        var byParent=branchArray.Where(branch=>branch.ParentWideBranchId is not null).ToLookup(branch=>branch.ParentWideBranchId!.Value);
+        var resultNames=interpretiveResults.ToLookup(result=>result.BranchDisplayName,StringComparer.OrdinalIgnoreCase);
+        var groups=new List<WideAmbiguityGroupDto>();
+        foreach(var root in roots)
+        {
+            var groupBranches=GetDescendants(root,byParent).Prepend(root).ToArray();
+            var groupBranchIds=groupBranches.Select(branch=>branch.WideBranchId).ToHashSet();
+            var groupBranchNames=groupBranches.Select(branch=>branch.DisplayName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var groupResults=interpretiveResults.Where(result=>groupBranchNames.Contains(result.BranchDisplayName)).ToArray();
+            if(groupResults.Length==0&&resultNames[root.DisplayName].Any())groupResults=resultNames[root.DisplayName].ToArray();
+            var groupCandidateNames=groupResults.SelectMany(result=>result.Items.Select(item=>item.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var groupCandidates=groupCandidateNames.Count==0?[]:candidates.Where(candidate=>groupCandidateNames.Contains(candidate.DisplayName)).ToArray();
+            var groupEvidence=evidence.Where(item=>groupBranchIds.Contains(item.HierarchyBranchId)).ToArray();
+            var groupKnowledge=externalKnowledge.Where(snippet=>groupBranchNames.Any(name=>$"{snippet.Query} {snippet.Title} {snippet.Snippet}".Contains(name,StringComparison.OrdinalIgnoreCase))).ToArray();
+            var summary=groupResults.FirstOrDefault()?.Interpretation??root.Interpretation;
+            groups.Add(new(root.WideBranchId,root.BranchCode,root.DisplayName,root.Interpretation,root.PoloxiConfidence,ResolveGroupSafetyRisk(queryContract,root),queryContract?.AnswerKind,queryContract?.CandidateKind)
+            {
+                Branches=groupBranches.Select(ToDto).ToArray(),
+                InterpretiveResults=groupResults,
+                Candidates=groupCandidates,
+                Evidence=groupEvidence,
+                ExternalKnowledge=groupKnowledge,
+                Summary=summary
+            });
+        }
+        return groups;
+    }
+
+    private static IEnumerable<WideBranchRecord> GetDescendants(WideBranchRecord parent,ILookup<Guid,WideBranchRecord> byParent)
+    {
+        foreach(var child in byParent[parent.WideBranchId].OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder))
+        {
+            yield return child;
+            foreach(var descendant in GetDescendants(child,byParent))yield return descendant;
+        }
+    }
+
+    private static string? ResolveGroupSafetyRisk(WideQueryContract? queryContract,WideBranchRecord root)
+    {
+        if(queryContract?.SafetyRiskCode is{Length:>0}risk&&risk!="NONE")return risk;
+        var text=$"{root.DisplayName} {root.Interpretation}";
+        return ContainsAny(text,["structural","civil","bridge repair","collapse","hazard","dental","medical","electrical","fire","gas"])?"POSSIBLE":queryContract?.SafetyRiskCode;
+    }
+
     // Accept only well-formed absolute https URLs so hallucinated or unsafe links never reach the UI.
     private static WideExternalReferenceDto[] MapExternalReferences(WideAnswerProposal answer)=>
         (answer.ExternalReferences??[]).Where(reference=>Uri.TryCreate(reference.Url,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps)
@@ -1783,12 +1922,20 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 AnswerKind=NormalizeAnswerKind(configuration,proposal.AnswerKind),
                 CandidateKind=NormalizeCandidateKind(proposal.CandidateKind),
+                Intent=NormalizeNullable(proposal.Intent),
+                TargetObject=NormalizeNullable(proposal.TargetObject),
+                RequiredTerms=NormalizeTermList(proposal.RequiredTerms),
+                ExcludedTerms=NormalizeTermList(proposal.ExcludedTerms),
+                AmbiguousTerms=NormalizeTermList(proposal.AmbiguousTerms),
+                SafetyRiskCode=NormalizeSafetyRiskCode(proposal.SafetyRiskCode,proposal.IsSafetySensitive),
+                OutputShape=NormalizeNullable(proposal.OutputShape),
                 RequiresClarification=proposal.RequiresClarification,
                 ClarificationQuestion=NormalizeNullable(proposal.ClarificationQuestion),
                 ClarificationTarget=NormalizeNullable(proposal.ClarificationTarget),
                 ClarificationOptions=proposal.ClarificationOptions?.Where(option=>!string.IsNullOrWhiteSpace(option)).Select(option=>option.Trim()).Take(6).ToArray()??[],
                 IsSafetySensitive=proposal.IsSafetySensitive
             };
+            contract=ApplyStructuralQueryContract(contract,request.Query,request.MaximumResults);
             return ApplySelectionUpgradeGuard(configuration,contract,request.Query);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -1903,6 +2050,92 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     }
 
     private static string? NormalizeNullable(string? value)=>string.IsNullOrWhiteSpace(value)?null:value.Trim();
+    private static IReadOnlyCollection<string> NormalizeTermList(IReadOnlyCollection<string>? terms,int maxItems=10)=>terms?.Select(NormalizeTerm)
+        .Where(term=>term.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).Take(maxItems).ToArray()??[];
+
+    private static string NormalizeTerm(string? value)
+    {
+        if(string.IsNullOrWhiteSpace(value))return string.Empty;
+        var term=value.Trim(' ','"','\'','`',':','-','–','—');
+        term=System.Text.RegularExpressions.Regex.Replace(term,@"\s+"," ").Trim();
+        term=System.Text.RegularExpressions.Regex.Replace(term,@"^(?:a|an|the)\s+",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant).Trim();
+        return term.Length>120?term[..120].Trim():term;
+    }
+
+    private static string? NormalizeSafetyRiskCode(string? safetyRiskCode,bool isSafetySensitive)
+    {
+        var normalized=NormalizeNullable(safetyRiskCode)?.ToUpperInvariant().Replace(' ','_');
+        if(normalized is "NONE" or "LOW" or "MEDIUM" or "HIGH")return normalized;
+        return isSafetySensitive?"MEDIUM":"NONE";
+    }
+
+    private static WideQueryContract ApplyStructuralQueryContract(WideQueryContract contract,string query,int maximumResults)
+    {
+        var requestedCount=contract.RequestedCount??ExtractRequestedCount(query);
+        requestedCount=requestedCount is null?null:Math.Clamp(requestedCount.Value,1,Math.Clamp(maximumResults,1,100));
+        var requiredTerms=MergeTerms(contract.RequiredTerms,ExtractTerms(RequiredTermPattern,query));
+        var excludedTerms=MergeTerms(contract.ExcludedTerms,ExtractTerms(ExcludedTermPattern,query));
+        var ambiguousTerms=MergeTerms(contract.AmbiguousTerms,contract.AmbiguousConcepts);
+        return contract with
+        {
+            RequestedCount=requestedCount,
+            RequiredTerms=requiredTerms,
+            ExcludedTerms=excludedTerms,
+            AmbiguousTerms=ambiguousTerms,
+            Intent=NormalizeNullable(contract.Intent)??InferIntent(query,contract),
+            TargetObject=NormalizeNullable(contract.TargetObject)??NormalizeNullable(contract.EntityType),
+            SafetyRiskCode=NormalizeSafetyRiskCode(contract.SafetyRiskCode,contract.IsSafetySensitive),
+            OutputShape=NormalizeNullable(contract.OutputShape)??InferOutputShape(query,requestedCount)
+        };
+    }
+
+    private static IReadOnlyCollection<string> MergeTerms(params IReadOnlyCollection<string>[] termSets)=>termSets.SelectMany(term=>term)
+        .Select(NormalizeTerm).Where(term=>term.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray();
+
+    private static IReadOnlyCollection<string> ExtractTerms(System.Text.RegularExpressions.Regex pattern,string query)
+    {
+        var terms=new List<string>();
+        foreach(System.Text.RegularExpressions.Match match in pattern.Matches(query))
+        {
+            var clause=match.Groups["term"].Value;
+            foreach(var part in System.Text.RegularExpressions.Regex.Split(clause,@"\s+(?:and|or)\s+|/|\\"))
+            {
+                var term=NormalizeTerm(System.Text.RegularExpressions.Regex.Replace(part,@"\b(?:but|while|unless|except)\b.*$",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+                if(term.Length>0)terms.Add(term);
+            }
+        }
+        return terms.Distinct(StringComparer.OrdinalIgnoreCase).Take(8).ToArray();
+    }
+
+    private static int? ExtractRequestedCount(string query)
+    {
+        var match=RequestedCountPattern.Match(query);
+        if(!match.Success)return null;
+        var value=match.Groups["count"].Value;
+        if(int.TryParse(value,out var count))return count;
+        return value.ToLowerInvariant() switch
+        {
+            "one"=>1,"two"=>2,"three"=>3,"four"=>4,"five"=>5,"six"=>6,"seven"=>7,"eight"=>8,"nine"=>9,"ten"=>10,
+            "eleven"=>11,"twelve"=>12,"fifteen"=>15,"twenty"=>20,
+            _=>null
+        };
+    }
+
+    private static string? InferIntent(string query,WideQueryContract contract)
+    {
+        if(RepairIntentPattern.IsMatch(query))return "diagnose_or_fix";
+        if(!string.IsNullOrWhiteSpace(contract.RankingConcept)||SelectionVerbPattern.IsMatch(query)||RequestedCountPattern.IsMatch(query))return "rank_or_select";
+        if(EnumerationIntentPattern.IsMatch(query))return "enumerate";
+        return null;
+    }
+
+    private static string InferOutputShape(string query,int? requestedCount)
+    {
+        if(RepairIntentPattern.IsMatch(query))return "steps";
+        if(requestedCount is >1||EnumerationIntentPattern.IsMatch(query))return "ranked_list";
+        if(query.Contains("compare",StringComparison.OrdinalIgnoreCase)||query.Contains("versus",StringComparison.OrdinalIgnoreCase)||query.Contains(" vs ",StringComparison.OrdinalIgnoreCase))return "comparison";
+        return "answer";
+    }
 
     private static WideAnswerKindDefinition? FindAnswerKind(WideConfiguration configuration,string? answerKindCode)=>
         string.IsNullOrWhiteSpace(answerKindCode)?null:configuration.AnswerKinds.FirstOrDefault(kind=>kind.AnswerKindCode.Equals(answerKindCode.Trim(),StringComparison.OrdinalIgnoreCase));
@@ -1917,6 +2150,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private static readonly System.Text.RegularExpressions.Regex SelectionVerbPattern=new(@"\b(choose|select|pick)\b|\bwhich\s+one\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex RepairIntentPattern=new(@"\b(how\s+do\s+i\s+)?(fix|repair|troubleshoot|resolve|diagnose|optimi[sz]e|reduce|prevent)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex EnumerationIntentPattern=new(@"\b(list|enumerate|types?|examples?|categories|top\s+\d+|top\s+ten|options)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex RequestedCountPattern=new(@"\b(?:top|best|first)\s+(?<count>\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\b|\b(?<count>\d{1,3})\s+(?:best|options|choices|recommendations|results|items|candidates)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex RequiredTermPattern=new(@"\b(?:must|should|needs?\s+to|has\s+to|required\s+to)\s+(?:include|contain|have|support|use|be|with)\s+(?<term>[^,.;?]+)",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex ExcludedTermPattern=new(@"\b(?:exclude|excluding|without|avoid|except|no|not)\s+(?<term>[^,.;?]+)",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private static readonly System.Text.RegularExpressions.Regex AmbiguousBridgePattern=new(@"\bbridge\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex BridgeDomainQualifierPattern=new(@"\b(road|highway|structural|civil|network|ethernet|software|integration|api|dental|tooth|card|game)\s+bridge\b|\bbridge\s+(network|interface|adapter|api|integration|dental|tooth|repair|structure|deck|span)\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.Compiled);
     private static WideQueryContract ApplySelectionUpgradeGuard(WideConfiguration configuration,WideQueryContract contract,string query)
@@ -2451,7 +2687,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static readonly HashSet<string> CandidateArtifactWords=new(StringComparer.OrdinalIgnoreCase)
     {
-        "and","or","not","pro","con","what","why","how","when","where","who","instructions","instruction",
+        "a","an","the","and","or","not","pro","con","what","why","how","when","where","who","instructions","instruction",
         "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about"
     };
 
@@ -2514,6 +2750,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var words=trimmed.Split(' ',StringSplitOptions.RemoveEmptyEntries);
         if(words.Length>5)return false;
         if(words.Any(word=>CandidateInvalidWords.Contains(word.TrimEnd(','))))return false;
+        if(words.All(word=>SubsetConnectiveTokens.Contains(word.Trim(',',':',';','.','(',')'))))return false;
         // V2.8.1: reject attribute-qualified hypotheses — dimensions masquerading as entities.
         if(IsAttributeHypothesis(trimmed))return false;
         // Must look like a proper noun: first alphabetic character uppercase.
@@ -2688,10 +2925,22 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static string[] CanonicalTokens(string name)
     {
-        var core=name.Split('(')[0].Split(',')[0].Trim();
+        var core=NormalizeCandidateDisplayName(name).Split('(')[0].Split(',')[0].Trim();
         return core.Split(' ',StringSplitOptions.RemoveEmptyEntries)
             .Where(token=>!CanonicalNoiseSuffixes.Contains(token,StringComparer.OrdinalIgnoreCase))
             .ToArray();
+    }
+
+    private static string NormalizeCandidateDisplayName(string name)
+    {
+        var trimmed=System.Text.RegularExpressions.Regex.Replace(name.Trim(),@"\s+"," ").Trim(' ',',',';',':','.','-','–','—');
+        while(trimmed.Length>0)
+        {
+            var cleaned=System.Text.RegularExpressions.Regex.Replace(trimmed,@"[\s,;:./\-–—]+(?:and|or|a|an)$",string.Empty,System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant).Trim(' ',',',';',':','.','-','–','—');
+            if(cleaned.Length==trimmed.Length)return trimmed;
+            trimmed=cleaned;
+        }
+        return trimmed;
     }
 
     private static bool IsTokenPrefix(string[] shorter,string[] longer)
@@ -2717,6 +2966,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static IReadOnlyList<(string Name,string? Detail)> CanonicalizeCandidates(IReadOnlyList<(string Name,string? Detail)> candidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,Dictionary<string,int> dimensionSupport)
     {
+        candidates=candidates.Select(candidate=>(NormalizeCandidateDisplayName(candidate.Name),candidate.Detail)).Where(candidate=>candidate.Item1.Length>0).ToArray();
         if(candidates.Count<2)return candidates;
         // Most specific (most tokens) first so aliases merge INTO the specific canonical form.
         var ordered=candidates.Select(candidate=>(candidate.Name,candidate.Detail,Tokens:CanonicalTokens(candidate.Name))).OrderByDescending(item=>item.Tokens.Length).ToList();
@@ -2902,11 +3152,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 branchList=$"{branchList}\n{childList}";
             }
             var candidateList=string.Join('\n',candidateNames.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
-            var constraints=queryContract is null||queryContract.HardConstraints.Count==0?"(none)":string.Join("; ",queryContract.HardConstraints);
+            var contractContext=queryContract is null?"(none)":BuildQueryContractContext(queryContract);
             var candidateKind=queryContract?.CandidateKind??CandidateKindNamedEntity;
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
-                $"Question: {request.Query}\nHard constraints: {constraints}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
+                $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
                 CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
             if(proposal?.Candidates is not{Count:>0})return [];
@@ -3275,6 +3525,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
   "properties": {
     "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", "TECHNICAL_RECOMMENDATION", "DIAGNOSTIC_PROCEDURE", "CLARIFICATION_REQUIRED", null] },
     "candidateKind": { "type": ["string", "null"], "enum": ["NAMED_ENTITY", "ACTIONABLE_SOLUTION", "DIAGNOSTIC_STEP", "PROCEDURE_STEP", null] },
+    "intent": { "type": ["string", "null"] },
+    "targetObject": { "type": ["string", "null"] },
+    "requiredTerms": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "excludedTerms": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "ambiguousTerms": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "safetyRiskCode": { "type": ["string", "null"], "enum": ["NONE", "LOW", "MEDIUM", "HIGH", null] },
+    "outputShape": { "type": ["string", "null"] },
     "requiresClarification": { "type": "boolean" },
     "clarificationQuestion": { "type": ["string", "null"] },
     "clarificationTarget": { "type": ["string", "null"] },
@@ -3288,7 +3545,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     "ambiguousConcepts": { "type": "array", "maxItems": 6, "items": { "type": "string" } },
     "outputRequirements": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
   },
-  "required": ["answerKind", "candidateKind", "requiresClarification", "clarificationQuestion", "clarificationTarget", "clarificationOptions", "isSafetySensitive", "entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
+  "required": ["answerKind", "candidateKind", "intent", "targetObject", "requiredTerms", "excludedTerms", "ambiguousTerms", "safetyRiskCode", "outputShape", "requiresClarification", "clarificationQuestion", "clarificationTarget", "clarificationOptions", "isSafetySensitive", "entityType", "geographicConstraint", "requestedCount", "rankingConcept", "hardConstraints", "ambiguousConcepts", "outputRequirements"],
   "additionalProperties": false
 }
 """;

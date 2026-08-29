@@ -195,6 +195,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public IReadOnlyCollection<WideInterpretiveResultItemDto> LlmRawItems{get;init;}=[];
     // V2.1: cross-branch candidate competition results (composite ranking honoring hard constraints).
     public IReadOnlyCollection<WideCandidateDto> Candidates{get;init;}=[];
+    // V3.15 Grouped ambiguity execution: L1 interpretation groups with their own branch/result/evidence
+    // projection. This preserves the full POLOXI run while preventing unrelated meanings from being
+    // visually merged into one result universe.
+    public IReadOnlyCollection<WideAmbiguityGroupDto> AmbiguityGroups{get;init;}=[];
     // V2.1: share of surviving branches supported by at least one evidence item (external or enterprise).
     public decimal EvidenceCoverage{get;init;}
     // V2.5 Decision Evidence Coverage: share of the branches that actually drive the final
@@ -265,6 +269,16 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public WideChallengeOutcomeDto? ChallengeOutcome{get;init;}
 }
 
+public sealed record WideAmbiguityGroupDto(Guid RootWideBranchId,string GroupCode,string DisplayName,string Interpretation,decimal Confidence,string? SafetyRiskCode,string? AnswerKindCode,string? CandidateKindCode)
+{
+    public IReadOnlyCollection<WideBranchDto> Branches{get;init;}=[];
+    public IReadOnlyCollection<WideInterpretiveResultDto> InterpretiveResults{get;init;}=[];
+    public IReadOnlyCollection<WideCandidateDto> Candidates{get;init;}=[];
+    public IReadOnlyCollection<PoloxiEvidenceDto> Evidence{get;init;}=[];
+    public IReadOnlyCollection<WideExternalKnowledgeSnippet> ExternalKnowledge{get;init;}=[];
+    public string? Summary{get;init;}
+}
+
 // Phase 2a Challenge-the-Winner (WATCH MODE): the adversarial assessment outcome. VerdictCode is one
 // of WideChallengeVerdicts; Margin is the leader-vs-runner-up composite margin that triggered the
 // round. Audit-only: persisted on the execution and returned for display, never acted on.
@@ -291,6 +305,12 @@ public static class WideResponseModes
 // the presentation layer never reranks, invents evidence, or resolves uncertainty POLOXI did not.
 public sealed record WideAnswerContext(string ResponseMode,string ConfidenceLabel,string ConfidenceNarrative)
 {
+    // V3.14 renderer contract: the UI/API can choose the correct presentation without re-inferring intent.
+    public string? AnswerKindCode{get;init;}
+    public string? CandidateKindCode{get;init;}
+    public string? OutputShape{get;init;}
+    public string? TargetObject{get;init;}
+    public IReadOnlyCollection<string> PresentationGuidance{get;init;}=[];
     // The winning candidate's name (deterministic final ranking #1). Null in clarification mode.
     public string? WinnerDisplayName{get;init;}
     // Winner's strongest decision dimensions with scores, best first (why it won).
@@ -377,6 +397,14 @@ public sealed record WideQueryContract(string? EntityType,string? GeographicCons
     // V3.13 candidate contract: what kind of item is allowed to compete. This prevents entity-ranking
     // validation from accepting artifacts when the user asked for a fix, diagnosis, plan, or procedure.
     public string? CandidateKind{get;init;}
+    // V3.14 contract-first layer fields. These define the playing field before MECE decomposition runs.
+    public string? Intent{get;init;}
+    public string? TargetObject{get;init;}
+    public IReadOnlyCollection<string> RequiredTerms{get;init;}=[];
+    public IReadOnlyCollection<string> ExcludedTerms{get;init;}=[];
+    public IReadOnlyCollection<string> AmbiguousTerms{get;init;}=[];
+    public string? SafetyRiskCode{get;init;}
+    public string? OutputShape{get;init;}
     // V3.13 ambiguity-first contract: when the main object/action has materially different domain senses
     // and the query does not resolve them, POLOXI asks before ranking or enumerating.
     public bool RequiresClarification{get;init;}
@@ -629,6 +657,13 @@ public sealed record WideQueryContractProposal(string? EntityType,string? Geogra
 {
     public string? AnswerKind{get;init;}
     public string? CandidateKind{get;init;}
+    public string? Intent{get;init;}
+    public string? TargetObject{get;init;}
+    public IReadOnlyCollection<string> RequiredTerms{get;init;}=[];
+    public IReadOnlyCollection<string> ExcludedTerms{get;init;}=[];
+    public IReadOnlyCollection<string> AmbiguousTerms{get;init;}=[];
+    public string? SafetyRiskCode{get;init;}
+    public string? OutputShape{get;init;}
     public bool RequiresClarification{get;init;}
     public string? ClarificationQuestion{get;init;}
     public string? ClarificationTarget{get;init;}
