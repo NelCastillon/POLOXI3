@@ -2688,7 +2688,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private static readonly HashSet<string> CandidateArtifactWords=new(StringComparer.OrdinalIgnoreCase)
     {
         "a","an","the","and","or","not","pro","con","what","why","how","when","where","who","instructions","instruction",
-        "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about"
+        "processor","processors","cpu","gpu","arm","fpga","cuda","august","june","view","see","get","share","about",
+        "good","from","these","spot","spots","venue","venues","food","image","ready","click","create","review","reviews","compare","classic","american","friday","saturday","billiards","table","tables","pool table"
     };
 
     private static readonly HashSet<string> ActionCandidateVerbs=new(StringComparer.OrdinalIgnoreCase)
