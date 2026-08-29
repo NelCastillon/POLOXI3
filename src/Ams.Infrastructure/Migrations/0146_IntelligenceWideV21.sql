@@ -92,8 +92,8 @@ BEGIN
 	VALUES
 		(N'Intelligence.SearchWide.SecondaryBranchThreshold',N'0.35',N'Decimal',N'Interpretation prior below this makes a branch SECONDARY (smaller retrieval budget) instead of eliminated.'),
 		(N'Intelligence.SearchWide.DormantBranchThreshold',N'0.20',N'Decimal',N'Interpretation prior below this makes a branch DORMANT (not searched deeper, reactivatable) instead of eliminated.'),
-		(N'Intelligence.SearchWide.PriorWeight',N'0.30',N'Decimal',N'Weight of the LLM interpretation prior when computing branch POLOXI confidence.'),
-		(N'Intelligence.SearchWide.EvidenceWeight',N'0.70',N'Decimal',N'Weight of evidence support when computing branch POLOXI confidence.'),
+		(N'Intelligence.SearchWide.PriorWeight',N'0.45',N'Decimal',N'Weight of the LLM interpretation prior when computing branch POLOXI confidence.'),
+		(N'Intelligence.SearchWide.EvidenceWeight',N'0.55',N'Decimal',N'Weight of evidence support when computing branch POLOXI confidence.'),
 		(N'Intelligence.SearchWide.MaximumCandidates',N'10',N'Integer',N'Maximum candidates ranked in the candidate-by-branch competition matrix.'),
 		(N'Intelligence.SearchWide.EnableQueryContract',N'true',N'Boolean',N'Extract a query contract (hard constraints, ambiguous concepts, output requirements) before hierarchy generation.');
 

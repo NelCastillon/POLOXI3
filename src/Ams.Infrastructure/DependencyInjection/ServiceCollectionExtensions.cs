@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
         services.AddMemoryCache();
         services.AddScoped<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddTransient<DatabaseMigrator>();
+        services.AddTransient<IntelligencePromptSeeder>();
         services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
         services.AddScoped<IAddressLocationRepository, AddressLocationRepository>();
         services.AddScoped<IAddressLocationService, AddressLocationService>();
@@ -623,6 +624,7 @@ public static class ServiceCollectionExtensions
             ?? throw new InvalidOperationException("The intelligence repository must support recommendation generation."));
         services.AddScoped<IIntelligenceService, IntelligenceService>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
+        services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
         services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
         services.AddScoped<IRulesPlatformService, RulesPlatformService>();

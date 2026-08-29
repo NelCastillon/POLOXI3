@@ -455,8 +455,8 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // V2.1 thresholds and weights (DB-seeded; see migration 0146).
     public decimal SecondaryBranchThreshold{get;init;}=.35m;
     public decimal DormantBranchThreshold{get;init;}=.20m;
-    public decimal PriorWeight{get;init;}=.30m;
-    public decimal EvidenceWeight{get;init;}=.70m;
+    public decimal PriorWeight{get;init;}=.45m;
+    public decimal EvidenceWeight{get;init;}=.55m;
     // V3.4 evidence-support calibration (DB-seeded; see migration 0163). Defaults preserve the
     // original hardcoded curve: enterprise = min(ceiling, base + increment*(count-1));
     // external = maxScore * min(1, base + increment*matchedCount).

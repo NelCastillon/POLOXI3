@@ -57,6 +57,10 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> SavePrompt(string promptCode,string versionLabel,[FromBody]SaveIntelligencePromptDefinitionRequest request,CancellationToken cancellationToken){await service.SavePromptDefinitionAsync(request with{TenantId=TenantId,PromptCode=promptCode,VersionLabel=versionLabel,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
 
+    [HttpDelete("prompts/{promptCode}/{versionLabel}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeletePrompt(string promptCode,string versionLabel,CancellationToken cancellationToken){await service.DeletePromptDefinitionAsync(TenantId,promptCode,versionLabel,ActorUserId,cancellationToken);return NoContent();}
+
     [HttpPost("evaluations/labels")]
     [Authorize(Policy=IntelligencePolicies.Evaluate)]
     public async Task<IActionResult> SubmitEvaluationLabel([FromBody]SubmitEvaluationSampleLabelRequest request,CancellationToken cancellationToken){await service.SubmitEvaluationSampleLabelAsync(request with{TenantId=TenantId,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
@@ -101,9 +105,25 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> Providers(CancellationToken cancellationToken)=>Ok(await service.GetProvidersAsync(TenantId,cancellationToken));
 
+    [HttpPut("providers/{providerCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveProvider(string providerCode,[FromBody]SaveAiProviderRequest request,CancellationToken cancellationToken){await service.SaveProviderAsync(request with{TenantId=TenantId,ProviderCode=providerCode,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpDelete("providers/{providerCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteProvider(string providerCode,CancellationToken cancellationToken){await service.DeleteProviderAsync(TenantId,providerCode,ActorUserId,cancellationToken);return NoContent();}
+
     [HttpGet("models")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> Models(CancellationToken cancellationToken)=>Ok(await service.GetModelsAsync(TenantId,cancellationToken));
+
+    [HttpPut("models/{modelCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveModelDeployment(string modelCode,[FromBody]SaveAiModelDeploymentRequest request,CancellationToken cancellationToken){await service.SaveModelDeploymentAsync(request with{TenantId=TenantId,ModelCode=modelCode,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpDelete("models/{modelCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteModelDeployment(string modelCode,CancellationToken cancellationToken){await service.DeleteModelDeploymentAsync(TenantId,modelCode,ActorUserId,cancellationToken);return NoContent();}
 
     [HttpGet("feature-policies")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
@@ -112,6 +132,10 @@ public sealed class IntelligenceController(IIntelligenceService service):Control
     [HttpPut("feature-policies/{featureCode}")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> SaveFeaturePolicy(string featureCode,[FromBody]SaveAiFeaturePolicyRequest request,CancellationToken cancellationToken){await service.SaveFeaturePolicyAsync(request with{TenantId=TenantId,FeatureCode=featureCode,ActorUserId=ActorUserId},cancellationToken);return NoContent();}
+
+    [HttpDelete("feature-policies/{featureCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DeleteFeaturePolicy(string featureCode,CancellationToken cancellationToken){await service.DeleteFeaturePolicyAsync(TenantId,featureCode,ActorUserId,cancellationToken);return NoContent();}
 
     [HttpGet("executions")]
     [Authorize(Policy=IntelligencePolicies.AuditRead)]

@@ -35,6 +35,7 @@
 - **Enterprise-facing pages should be polished and support both light and dark application themes.** Keep headers compact and ensure all text has strong contrast in the light theme.
 - In light theme, secondary buttons placed on pale or gradient headers must use dark text and a visibly contrasting border/background rather than white text.
 - Do not suggest performance or code changes unless supported by measurements or high-confidence evidence; avoid speculative recommendations because unnecessary runs waste money and time.
+- **POLOXI Wide pipeline results must never be inferior to the raw single-shot LLM answer:** when candidates from the raw/interpretive answer lack evidence attribution, the pipeline must attempt targeted evidence retrieval for those candidate names (earning support) rather than silently delivering a shorter/worse ranking; evidence admission gates are never lowered.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.

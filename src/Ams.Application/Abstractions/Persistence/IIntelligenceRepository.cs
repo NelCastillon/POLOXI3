@@ -9,6 +9,11 @@ public interface IIntelligenceRepository
     Task<IReadOnlyCollection<AiModelDeploymentDto>> GetModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<AiFeaturePolicyDto>> GetFeaturePoliciesAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task SaveFeaturePolicyAsync(SaveAiFeaturePolicyRequest request,CancellationToken cancellationToken=default);
+    Task SaveProviderAsync(SaveAiProviderRequest request,CancellationToken cancellationToken=default);
+    Task SaveModelDeploymentAsync(SaveAiModelDeploymentRequest request,CancellationToken cancellationToken=default);
+    Task DeleteProviderAsync(Guid tenantId,string providerCode,Guid actorUserId,CancellationToken cancellationToken=default);
+    Task DeleteModelDeploymentAsync(Guid tenantId,string modelCode,Guid actorUserId,CancellationToken cancellationToken=default);
+    Task DeleteFeaturePolicyAsync(Guid tenantId,string featureCode,Guid actorUserId,CancellationToken cancellationToken=default);
     Task<PagedResult<AiExecutionSummaryDto>> SearchExecutionsAsync(SearchAiExecutionsQuery query,CancellationToken cancellationToken=default);
     Task<AiExecutionDetailDto?> GetExecutionAsync(Guid tenantId,Guid executionId,CancellationToken cancellationToken=default);
     Task SubmitExecutionFeedbackAsync(SubmitAiExecutionFeedbackRequest request,CancellationToken cancellationToken=default);
@@ -45,6 +50,7 @@ public interface IIntelligenceRepository
     Task<IReadOnlyCollection<IntelligenceSafetyEventDto>> GetSafetyEventsAsync(Guid tenantId,int pageSize,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<IntelligencePromptDefinitionDto>> GetPromptDefinitionsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task SavePromptDefinitionAsync(SaveIntelligencePromptDefinitionRequest request,CancellationToken cancellationToken=default);
+    Task DeletePromptDefinitionAsync(Guid tenantId,string promptCode,string versionLabel,Guid actorUserId,CancellationToken cancellationToken=default);
     Task SubmitEvaluationSampleLabelAsync(SubmitEvaluationSampleLabelRequest request,CancellationToken cancellationToken=default);
     Task<PagedResult<IntelligenceFindingDto>> SearchFindingsAsync(SearchIntelligenceFindingsQuery query,CancellationToken cancellationToken=default);
     Task<IntelligenceFindingDetailDto?> GetFindingAsync(Guid tenantId,Guid findingId,CancellationToken cancellationToken=default);

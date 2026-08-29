@@ -96,6 +96,9 @@ using (var scope = app.Services.CreateScope())
 
     var knowledgeMigrator = scope.ServiceProvider.GetRequiredService<KnowledgeDatabaseMigrator>();
     await knowledgeMigrator.MigrateAsync();
+
+    var promptSeeder = scope.ServiceProvider.GetRequiredService<IntelligencePromptSeeder>();
+    await promptSeeder.SeedAsync();
 }
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();

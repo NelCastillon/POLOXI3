@@ -3,26 +3,480 @@
 @using Ams.Application.Features.Intelligence
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
 
-<IntelligenceWorkspace><div class="intel-page">
-<header class="intel-header"><div><span>Control plane</span><h1>AI Configuration Center</h1><p>Effective provider capabilities, model deployments, routing, limits, and human-review controls from the database.</p></div><button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button></header>
-@if(_loading){<div class="intel-state">Loading AI configuration...</div>}else if(_error is not null){<div class="intel-error">@_error</div>}else{
-<section class="intel-kpis"><article><span>Providers</span><strong>@_providers.Count(x=>x.IsActive)</strong></article><article><span>Models</span><strong>@_models.Count(x=>x.IsActive)</strong></article><article><span>Feature policies</span><strong>@_policies.Count</strong></article><article><span>Prompt versions</span><strong>@_prompts.Count</strong></article></section>
-<section class="intel-panel"><h2>Provider registry</h2>@if(_providers.Count==0){<div class="intel-state">No provider records are configured.</div>}@foreach(var provider in _providers){<div class="intel-row"><div><strong>@provider.DisplayName</strong><small>@provider.ProviderCode · @provider.ProviderTypeCode</small></div><div><span>@(provider.SupportsChat?"Chat ":"")@(provider.SupportsEmbeddings?"Embeddings ":"")@(provider.SupportsVision?"Vision":"")</span><AppStatusBadge Status="@(provider.IsActive?"ACTIVE":"INACTIVE")" /></div></div>}</section>
-<section class="intel-panel"><h2>Model deployments</h2>@if(_models.Count==0){<div class="intel-state">No model deployments exist. Add deployment records before enabling feature policies.</div>}@foreach(var model in _models){<div class="intel-row"><div><strong>@model.DeploymentName</strong><small>@model.ProviderCode · @model.ModelFamily · @model.CapabilityCode</small></div><div><span>@model.ContextWindowTokens.ToString("N0") context · @model.MaximumOutputTokens.ToString("N0") output</span><AppStatusBadge Status="@(model.IsActive?"ACTIVE":"INACTIVE")" /></div></div>}</section>
-<section class="intel-panel"><h2>Feature policies</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPolicy">Add feature policy</button>@if(_policies.Count==0){<div class="intel-state">No tenant feature policies are configured. AI features remain unavailable until explicitly enabled.</div>}@foreach(var policy in _policies){<div class="intel-row"><div><strong>@policy.FeatureCode</strong><small>@policy.ModuleCode · temperature @policy.Temperature · timeout @policy.TimeoutSeconds seconds</small><span>@policy.MaximumInputTokens.ToString("N0") input / @policy.MaximumOutputTokens.ToString("N0") output tokens · minimum confidence @policy.MinimumConfidence.ToString("P0")</span></div><div><AppStatusBadge Status="@(policy.IsEnabled?"ENABLED":"DISABLED")" /><button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>Edit(policy)">Edit</button></div></div>}</section>
-<section class="intel-panel"><div class="intel-toolbar"><h2>Prompt registry</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPrompt">Add prompt version</button></div>@if(_prompts.Count==0){<div class="intel-state">No prompt definitions are configured.</div>}@foreach(var prompt in _prompts){<div class="intel-row"><div><strong>@prompt.DisplayName</strong><small>@prompt.PromptCode · @prompt.VersionLabel · @prompt.CapabilityCode</small><span>@(prompt.TenantId.HasValue?"Tenant":"Platform") prompt definition</span></div><div><AppStatusBadge Status="@prompt.StatusCode" />@if(prompt.TenantId.HasValue&&prompt.StatusCode=="DRAFT"){<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditPrompt(prompt)">Edit</button>}<button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>NewPromptVersion(prompt)">New version</button></div></div>}</section>
-@if(_editing){<section class="intel-panel"><h2>@(_form.RowVersion is null?"Add feature policy":"Edit feature policy")</h2><div class="intel-grid"><div class="intel-field"><label>Feature code</label><input @bind="_form.FeatureCode" disabled="@(_form.RowVersion is not null)" /></div><div class="intel-field"><label>Module</label><input @bind="_form.ModuleCode" /></div><div class="intel-field"><label>Primary model</label><select @bind="_form.PrimaryModelDeploymentId"><option value="">Not selected</option>@foreach(var model in _models.Where(x=>x.IsActive)){<option value="@model.ModelDeploymentId">@model.DeploymentName</option>}</select></div><div class="intel-field"><label>Fallback model</label><select @bind="_form.FallbackModelDeploymentId"><option value="">Not selected</option>@foreach(var model in _models.Where(x=>x.IsActive)){<option value="@model.ModelDeploymentId">@model.DeploymentName</option>}</select></div><div class="intel-field"><label>Temperature</label><input type="number" step="0.05" min="0" max="2" @bind="_form.Temperature" /></div><div class="intel-field"><label>Timeout seconds</label><input type="number" @bind="_form.TimeoutSeconds" /></div><div class="intel-field"><label>Maximum input tokens</label><input type="number" @bind="_form.MaximumInputTokens" /></div><div class="intel-field"><label>Maximum output tokens</label><input type="number" @bind="_form.MaximumOutputTokens" /></div><div class="intel-field"><label>Daily cost limit</label><input type="number" step="0.01" @bind="_form.DailyCostLimit" /></div><div class="intel-field"><label>Monthly cost limit</label><input type="number" step="0.01" @bind="_form.MonthlyCostLimit" /></div><div class="intel-field"><label>Minimum confidence</label><input type="number" min="0" max="1" step="0.01" @bind="_form.MinimumConfidence" /></div><div class="intel-field"><label><input type="checkbox" @bind="_form.RequiresHumanReview" /> Human review required</label><label><input type="checkbox" @bind="_form.IsEnabled" /> Enabled</label></div></div><div class="intel-toolbar"><button class="um-btn um-btn-primary" @onclick="SaveAsync" disabled="@_saving">Save policy</button><button class="um-btn um-btn-ghost" @onclick="()=>_editing=false">Cancel</button></div></section>}
-@if(_editingPrompt){<div class="um-modal-backdrop"><div class="um-modal"><div class="um-modal-header"><i class="bi bi-braces-asterisk"></i><span>@(_promptForm.RowVersion is null?"Add prompt version":"Edit prompt draft")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingPrompt=false"><i class="bi bi-x-lg"></i></button></div><EditForm Model="_promptForm" OnValidSubmit="SavePromptAsync"><DataAnnotationsValidator /><div class="um-modal-body"><div class="um-form-grid"><div class="intel-field"><label>Capability</label><InputSelect @bind-Value="_promptForm.IntelligenceCapabilityId"><option value="">Select capability</option>@foreach(var capability in _capabilities){<option value="@capability.IntelligenceCapabilityId">@capability.DisplayName</option>}</InputSelect></div><div class="intel-field"><label>Prompt code</label><InputText @bind-Value="_promptForm.PromptCode" disabled="@(_promptForm.RowVersion is not null)" /></div><div class="intel-field"><label>Version</label><InputText @bind-Value="_promptForm.VersionLabel" disabled="@(_promptForm.RowVersion is not null)" /></div><div class="intel-field"><label>Display name</label><InputText @bind-Value="_promptForm.DisplayName" /></div><div class="intel-field"><label>Status</label><InputSelect @bind-Value="_promptForm.StatusCode"><option value="DRAFT">Draft</option><option value="APPROVED">Approved</option><option value="RETIRED">Retired</option></InputSelect></div><div class="intel-field"><label>Effective from (UTC)</label><InputDate @bind-Value="_promptForm.EffectiveFromUtc" /></div><div class="intel-field"><label>Effective to (UTC)</label><InputDate @bind-Value="_promptForm.EffectiveToUtc" /></div><div class="intel-field" style="grid-column:1/-1"><label>System instructions</label><InputTextArea @bind-Value="_promptForm.SystemInstructions" /></div><div class="intel-field" style="grid-column:1/-1"><label>Input schema JSON</label><InputTextArea @bind-Value="_promptForm.InputSchemaJson" /></div><div class="intel-field" style="grid-column:1/-1"><label>Output schema JSON</label><InputTextArea @bind-Value="_promptForm.OutputSchemaJson" /></div></div></div><div class="um-modal-footer"><button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingPrompt=false">Cancel</button><button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save prompt</button></div></EditForm></div></div>}
-}</div></IntelligenceWorkspace>
+<IntelligenceWorkspace>
+<div class="intel-page">
+<header class="intel-header">
+    <div><span>Control plane</span><h1>AI Configuration Center</h1><p>Effective provider capabilities, model deployments, routing, limits, and human-review controls from the database.</p></div>
+    <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+</header>
+@if(_loading){<div class="intel-state">Loading AI configuration...</div>}
+else
+{
+    @if(_error is not null){<div class="intel-error">@_error</div>}
+    <section class="intel-kpis">
+        <article class="intel-kpi-link @(_focusSection=="providers"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to provider registry" @onclick="@(()=>FocusSectionAsync("providers"))"><span>Providers</span><strong>@_providers.Count(x=>x.IsActive)</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="models"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to model deployments" @onclick="@(()=>FocusSectionAsync("models"))"><span>Models</span><strong>@_models.Count(x=>x.IsActive)</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="policies"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to feature policies" @onclick="@(()=>FocusSectionAsync("policies"))"><span>Feature policies</span><strong>@_policies.Count</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="prompts"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to prompt registry" @onclick="@(()=>FocusSectionAsync("prompts"))"><span>Prompt versions</span><strong>@_prompts.Count</strong></article>
+    </section>
+
+    <section id="intel-section-providers" class="intel-panel @(_focusSection=="providers"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Provider registry</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewProvider">Add provider</button></div>
+        @if(_providers.Count==0){<div class="intel-state">No provider records are configured.</div>}
+        @foreach(var provider in _providers)
+        {
+            <div class="intel-row">
+                <div><strong>@provider.DisplayName</strong><small>@provider.ProviderCode · @provider.ProviderTypeCode</small></div>
+                <div>
+                    <span>@(provider.SupportsChat?"Chat ":"")@(provider.SupportsEmbeddings?"Embeddings ":"")@(provider.SupportsVision?"Vision":"")</span>
+                    <AppStatusBadge Status="@(provider.IsActive?"ACTIVE":"INACTIVE")" />
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditProvider(provider)">Edit</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="()=>DeleteProviderAsync(provider)" disabled="@_saving">Delete</button>
+                </div>
+            </div>
+        }
+    </section>
+
+    <section id="intel-section-models" class="intel-panel @(_focusSection=="models"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Model deployments</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewModel">Add model deployment</button></div>
+        @if(_models.Count==0){<div class="intel-state">No model deployments exist. Add deployment records before enabling feature policies.</div>}
+        @foreach(var model in _models)
+        {
+            <div class="intel-row">
+                <div><strong>@model.DeploymentName</strong><small>@model.ProviderCode · @model.ModelFamily · @model.CapabilityCode</small></div>
+                <div>
+                    <span>@model.ContextWindowTokens.ToString("N0") context · @model.MaximumOutputTokens.ToString("N0") output</span>
+                    <AppStatusBadge Status="@(model.IsActive?"ACTIVE":"INACTIVE")" />
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditModel(model)">Edit</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="()=>DeleteModelAsync(model)" disabled="@_saving">Delete</button>
+                </div>
+            </div>
+        }
+    </section>
+
+    <section id="intel-section-policies" class="intel-panel @(_focusSection=="policies"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Feature policies</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPolicy">Add feature policy</button></div>
+        @if(_policies.Count==0){<div class="intel-state">No tenant feature policies are configured. AI features remain unavailable until explicitly enabled.</div>}
+        @foreach(var policy in _policies)
+        {
+            <div class="intel-row">
+                <div><strong>@policy.FeatureCode</strong><small>@policy.ModuleCode · temperature @policy.Temperature · timeout @policy.TimeoutSeconds seconds</small><span>@policy.MaximumInputTokens.ToString("N0") input / @policy.MaximumOutputTokens.ToString("N0") output tokens · minimum confidence @policy.MinimumConfidence.ToString("P0")</span></div>
+                <div>
+                    <AppStatusBadge Status="@(policy.IsEnabled?"ENABLED":"DISABLED")" />
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditPolicy(policy)">Edit</button>
+                    <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="()=>DeletePolicyAsync(policy)" disabled="@_saving">Delete</button>
+                </div>
+            </div>
+        }
+    </section>
+
+    <section id="intel-section-prompts" class="intel-panel @(_focusSection=="prompts"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Prompt registry</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPrompt">Add prompt version</button></div>
+        <div class="intel-state">Prompts are grouped by module and listed in the order the engine executes them.</div>
+        @if(_prompts.Count==0){<div class="intel-state">No prompt definitions are configured.</div>}
+        @foreach(var group in _prompts.GroupBy(p=>PromptMeta(p.PromptCode).Category).OrderBy(g=>g.Min(p=>PromptMeta(p.PromptCode).Order)))
+        {
+            <h3 class="intel-prompt-group">@group.Key</h3>
+            @foreach(var prompt in group.OrderBy(p=>PromptMeta(p.PromptCode).Order).ThenBy(p=>p.PromptCode).ThenBy(p=>p.VersionLabel))
+            {
+                <div class="intel-row">
+                    <div><strong>@prompt.DisplayName</strong><small>@prompt.PromptCode · @prompt.VersionLabel · @prompt.CapabilityCode</small><span>@(prompt.TenantId.HasValue?"Tenant":"Platform") prompt definition · @PromptMeta(prompt.PromptCode).Description</span></div>
+                    <div>
+                        <AppStatusBadge Status="@prompt.StatusCode" />
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditPrompt(prompt)">Edit</button>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>NewPromptVersion(prompt)">New version</button>
+                        <button class="um-btn um-btn-ghost um-btn-sm text-danger" @onclick="()=>DeletePromptAsync(prompt)" disabled="@_saving">Delete</button>
+                    </div>
+                </div>
+            }
+        }
+    </section>
+}
+
+@if(_editingProvider)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-plugin"></i><span>@(_providerForm.RowVersion is null?"Add provider":"Edit provider")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingProvider=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_providerForm" OnValidSubmit="SaveProviderAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field"><label>Provider code</label><InputText @bind-Value="_providerForm.ProviderCode" disabled="@(_providerForm.RowVersion is not null)" /></div>
+                    <div class="intel-field"><label>Display name</label><InputText @bind-Value="_providerForm.DisplayName" /></div>
+                    <div class="intel-field"><label>Provider type</label><InputText @bind-Value="_providerForm.ProviderTypeCode" /></div>
+                    <div class="intel-field"><label>Priority</label><InputNumber @bind-Value="_providerForm.Priority" /></div>
+                    <div class="intel-field">
+                        <label><InputCheckbox @bind-Value="_providerForm.SupportsChat" /> Chat</label>
+                        <label><InputCheckbox @bind-Value="_providerForm.SupportsEmbeddings" /> Embeddings</label>
+                        <label><InputCheckbox @bind-Value="_providerForm.SupportsVision" /> Vision</label>
+                        <label><InputCheckbox @bind-Value="_providerForm.SupportsStructuredOutput" /> Structured output</label>
+                        <label><InputCheckbox @bind-Value="_providerForm.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingProvider=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save provider</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+
+@if(_editingModel)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-cpu"></i><span>@(_modelForm.RowVersion is null?"Add model deployment":"Edit model deployment")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingModel=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_modelForm" OnValidSubmit="SaveModelAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field"><label>Provider</label><InputSelect @bind-Value="_modelForm.ProviderId"><option value="">Select provider</option>@foreach(var provider in _providers){<option value="@provider.ProviderId">@provider.DisplayName</option>}</InputSelect></div>
+                    <div class="intel-field"><label>Model code</label><InputText @bind-Value="_modelForm.ModelCode" disabled="@(_modelForm.RowVersion is not null)" /></div>
+                    <div class="intel-field"><label>Deployment name</label><InputText @bind-Value="_modelForm.DeploymentName" /></div>
+                    <div class="intel-field"><label>Model family</label><InputText @bind-Value="_modelForm.ModelFamily" /></div>
+                    <div class="intel-field"><label>Capability</label><InputSelect @bind-Value="_modelForm.CapabilityCode"><option value="CHAT">Chat</option><option value="EMBEDDING">Embedding</option><option value="VISION">Vision</option></InputSelect></div>
+                    <div class="intel-field"><label>Currency</label><InputText @bind-Value="_modelForm.CurrencyCode" /></div>
+                    <div class="intel-field"><label>Context window tokens</label><InputNumber @bind-Value="_modelForm.ContextWindowTokens" /></div>
+                    <div class="intel-field"><label>Maximum output tokens</label><InputNumber @bind-Value="_modelForm.MaximumOutputTokens" /></div>
+                    <div class="intel-field"><label>Input cost / 1M tokens</label><InputNumber @bind-Value="_modelForm.InputCostPerMillionTokens" /></div>
+                    <div class="intel-field"><label>Output cost / 1M tokens</label><InputNumber @bind-Value="_modelForm.OutputCostPerMillionTokens" /></div>
+                    <div class="intel-field"><label>Priority</label><InputNumber @bind-Value="_modelForm.Priority" /></div>
+                    <div class="intel-field">
+                        <label><InputCheckbox @bind-Value="_modelForm.IsFallback" /> Fallback</label>
+                        <label><InputCheckbox @bind-Value="_modelForm.IsActive" /> Active</label>
+                    </div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingModel=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save model</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+
+@if(_editing)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-sliders"></i><span>@(_form.RowVersion is null?"Add feature policy":"Edit feature policy")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editing=false"><i class="bi bi-x-lg"></i></button></div>
+        <div class="um-modal-body">
+            <div class="um-form-grid">
+                <div class="intel-field"><label>Feature code</label><input @bind="_form.FeatureCode" disabled="@(_form.RowVersion is not null)" /></div>
+                <div class="intel-field"><label>Module</label><input @bind="_form.ModuleCode" /></div>
+                <div class="intel-field"><label>Primary model</label><select @bind="_form.PrimaryModelDeploymentId"><option value="">Not selected</option>@foreach(var model in _models.Where(x=>x.IsActive)){<option value="@model.ModelDeploymentId">@model.DeploymentName</option>}</select></div>
+                <div class="intel-field"><label>Fallback model</label><select @bind="_form.FallbackModelDeploymentId"><option value="">Not selected</option>@foreach(var model in _models.Where(x=>x.IsActive)){<option value="@model.ModelDeploymentId">@model.DeploymentName</option>}</select></div>
+                <div class="intel-field"><label>Temperature</label><input type="number" step="0.05" min="0" max="2" @bind="_form.Temperature" /></div>
+                <div class="intel-field"><label>Timeout seconds</label><input type="number" @bind="_form.TimeoutSeconds" /></div>
+                <div class="intel-field"><label>Maximum input tokens</label><input type="number" @bind="_form.MaximumInputTokens" /></div>
+                <div class="intel-field"><label>Maximum output tokens</label><input type="number" @bind="_form.MaximumOutputTokens" /></div>
+                <div class="intel-field"><label>Daily cost limit</label><input type="number" step="0.01" @bind="_form.DailyCostLimit" /></div>
+                <div class="intel-field"><label>Monthly cost limit</label><input type="number" step="0.01" @bind="_form.MonthlyCostLimit" /></div>
+                <div class="intel-field"><label>Minimum confidence</label><input type="number" min="0" max="1" step="0.01" @bind="_form.MinimumConfidence" /></div>
+                <div class="intel-field">
+                    <label><input type="checkbox" @bind="_form.RequiresHumanReview" /> Human review required</label>
+                    <label><input type="checkbox" @bind="_form.IsEnabled" /> Enabled</label>
+                </div>
+            </div>
+        </div>
+        <div class="um-modal-footer">
+            @if(_error is not null){<span class="intel-error">@_error</span>}
+            <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editing=false">Cancel</button>
+            <button class="um-btn um-btn-primary" @onclick="SavePolicyAsync" disabled="@_saving">Save policy</button>
+        </div>
+    </div></div>
+}
+
+@if(_editingPrompt)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-braces-asterisk"></i><span>@(_promptForm.RowVersion is null?"Add prompt version":"Edit prompt draft")</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingPrompt=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_promptForm" OnValidSubmit="SavePromptAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field"><label>Capability</label><InputSelect @bind-Value="_promptForm.IntelligenceCapabilityId"><option value="">Select capability</option>@foreach(var capability in _capabilities){<option value="@capability.IntelligenceCapabilityId">@capability.DisplayName</option>}</InputSelect></div>
+                    <div class="intel-field"><label>Prompt code</label><InputText @bind-Value="_promptForm.PromptCode" disabled="@(_promptForm.RowVersion is not null)" /></div>
+                    <div class="intel-field"><label>Version</label><InputText @bind-Value="_promptForm.VersionLabel" disabled="@(_promptForm.RowVersion is not null)" /></div>
+                    <div class="intel-field"><label>Display name</label><InputText @bind-Value="_promptForm.DisplayName" /></div>
+                    <div class="intel-field"><label>Status</label><InputSelect @bind-Value="_promptForm.StatusCode"><option value="DRAFT">Draft</option><option value="APPROVED">Approved</option><option value="RETIRED">Retired</option></InputSelect></div>
+                    <div class="intel-field"><label>Effective from (UTC)</label><InputDate @bind-Value="_promptForm.EffectiveFromUtc" /></div>
+                    <div class="intel-field"><label>Effective to (UTC)</label><InputDate @bind-Value="_promptForm.EffectiveToUtc" /></div>
+                    <div class="intel-field" style="grid-column:1/-1"><label>System instructions</label><InputTextArea @bind-Value="_promptForm.SystemInstructions" /></div>
+                    <div class="intel-field" style="grid-column:1/-1"><label>Input schema JSON</label><InputTextArea @bind-Value="_promptForm.InputSchemaJson" /></div>
+                    <div class="intel-field" style="grid-column:1/-1"><label>Output schema JSON</label><InputTextArea @bind-Value="_promptForm.OutputSchemaJson" /></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingPrompt=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save prompt</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+@if(_confirm is not null)
+{
+    <div class="um-modal-backdrop"><div class="um-modal um-modal-confirm">
+        <div class="um-modal-header @(_confirm.IsDestructive?"um-confirm-danger":"um-confirm-primary")"><i class="bi @(_confirm.IsDestructive?"bi-exclamation-triangle-fill":"bi-question-circle-fill")"></i><span>@_confirm.Title</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>ResolveConfirm(false)"><i class="bi bi-x-lg"></i></button></div>
+        <div class="um-modal-body">
+            <p class="um-confirm-message">@_confirm.Message</p>
+            @if(_confirm.Detail is not null){<p class="um-confirm-detail">@_confirm.Detail</p>}
+        </div>
+        <div class="um-modal-footer">
+            <button type="button" class="um-btn um-btn-ghost" @onclick="()=>ResolveConfirm(false)">Cancel</button>
+            <button type="button" class="um-btn @(_confirm.IsDestructive?"um-btn-danger":"um-btn-primary")" @onclick="()=>ResolveConfirm(true)">@_confirm.ConfirmLabel</button>
+        </div>
+    </div></div>
+}
+</div>
+</IntelligenceWorkspace>
+
 @code{
-private readonly List<AiProviderDto> _providers=[];private readonly List<AiModelDeploymentDto> _models=[];private readonly List<AiFeaturePolicyDto> _policies=[];private readonly List<IntelligencePromptDefinitionDto> _prompts=[];private readonly List<IntelligenceCapabilityDto> _capabilities=[];private bool _loading=true,_editing,_editingPrompt,_saving;private string? _error;private PolicyForm _form=new();private PromptForm _promptForm=new();
+private readonly List<AiProviderDto> _providers=[];
+private readonly List<AiModelDeploymentDto> _models=[];
+private readonly List<AiFeaturePolicyDto> _policies=[];
+private readonly List<IntelligencePromptDefinitionDto> _prompts=[];
+private readonly List<IntelligenceCapabilityDto> _capabilities=[];
+private bool _loading=true,_editing,_editingPrompt,_editingProvider,_editingModel,_saving;
+private string? _error;
+private string? _focusSection;
+private PolicyForm _form=new();
+private PromptForm _promptForm=new();
+private ProviderForm _providerForm=new();
+private ModelForm _modelForm=new();
+private ConfirmRequest? _confirm;
+private TaskCompletionSource<bool>? _confirmSource;
+
 protected override async Task OnInitializedAsync(){Breadcrumbs.SetCrumbs(new("Home","/"),new("Intelligence","/intelligence"),new("Configuration","/intelligence/configuration"));await LoadAsync();}
-private async Task LoadAsync(){_loading=true;_error=null;try{var providers=Api.GetIntelligenceProvidersAsync();var models=Api.GetIntelligenceModelsAsync();var policies=Api.GetIntelligenceFeaturePoliciesAsync();var prompts=Api.GetIntelligencePromptDefinitionsAsync();var platform=Api.GetIntelligencePlatformAsync();await Task.WhenAll(providers,models,policies,prompts,platform);_providers.Clear();_providers.AddRange(await providers);_models.Clear();_models.AddRange(await models);_policies.Clear();_policies.AddRange(await policies);_prompts.Clear();_prompts.AddRange(await prompts);_capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);}catch(Exception ex){_error=ex.Message;}finally{_loading=false;}}
-private void NewPolicy(){_form=new();_editing=true;}private void Edit(AiFeaturePolicyDto item){_form=new(){FeatureCode=item.FeatureCode,ModuleCode=item.ModuleCode,PrimaryModelDeploymentId=item.PrimaryModelDeploymentId,FallbackModelDeploymentId=item.FallbackModelDeploymentId,Temperature=item.Temperature,MaximumInputTokens=item.MaximumInputTokens,MaximumOutputTokens=item.MaximumOutputTokens,TimeoutSeconds=item.TimeoutSeconds,DailyCostLimit=item.DailyCostLimit,MonthlyCostLimit=item.MonthlyCostLimit,MinimumConfidence=item.MinimumConfidence,RequiresHumanReview=item.RequiresHumanReview,IsEnabled=item.IsEnabled,RowVersion=item.RowVersion};_editing=true;}
-private async Task SaveAsync(){_saving=true;_error=null;try{var request=new SaveAiFeaturePolicyRequest(Guid.Empty,_form.FeatureCode,_form.ModuleCode,_form.PrimaryModelDeploymentId,_form.FallbackModelDeploymentId,_form.Temperature,_form.MaximumInputTokens,_form.MaximumOutputTokens,_form.TimeoutSeconds,_form.DailyCostLimit,_form.MonthlyCostLimit,_form.MinimumConfidence,_form.RequiresHumanReview,_form.IsEnabled,Guid.Empty,_form.RowVersion);await Api.SaveIntelligenceFeaturePolicyAsync(_form.FeatureCode,request);_editing=false;await LoadAsync();}catch(Exception ex){_error=ex.Message;}finally{_saving=false;}}
-private void NewPrompt(){_promptForm=new();_editingPrompt=true;}private void EditPrompt(IntelligencePromptDefinitionDto item){_promptForm=PromptForm.From(item);_editingPrompt=true;}private void NewPromptVersion(IntelligencePromptDefinitionDto item){_promptForm=PromptForm.From(item);_promptForm.VersionLabel="";_promptForm.StatusCode="DRAFT";_promptForm.RowVersion=null;_editingPrompt=true;}
-private async Task SavePromptAsync(){_saving=true;_error=null;try{var request=new SaveIntelligencePromptDefinitionRequest(Guid.Empty,_promptForm.IntelligenceCapabilityId,_promptForm.PromptCode,_promptForm.VersionLabel,_promptForm.DisplayName,_promptForm.SystemInstructions,_promptForm.InputSchemaJson,_promptForm.OutputSchemaJson,_promptForm.StatusCode,_promptForm.EffectiveFromUtc,_promptForm.EffectiveToUtc,Guid.Empty,_promptForm.RowVersion);await Api.SaveIntelligencePromptDefinitionAsync(_promptForm.PromptCode,_promptForm.VersionLabel,request);_editingPrompt=false;await LoadAsync();}catch(Exception ex){_error=$"Save failed: {ex.Message}";}finally{_saving=false;}}
-private sealed class PolicyForm{public string FeatureCode{get;set;}="";public string ModuleCode{get;set;}="";public Guid? PrimaryModelDeploymentId{get;set;}public Guid? FallbackModelDeploymentId{get;set;}public decimal Temperature{get;set;}public int MaximumInputTokens{get;set;}=32000;public int MaximumOutputTokens{get;set;}=4000;public int TimeoutSeconds{get;set;}=60;public decimal? DailyCostLimit{get;set;}public decimal? MonthlyCostLimit{get;set;}public decimal MinimumConfidence{get;set;}=.75m;public bool RequiresHumanReview{get;set;}=true;public bool IsEnabled{get;set;}public byte[]? RowVersion{get;set;}}
-private sealed class PromptForm{[Required]public Guid IntelligenceCapabilityId{get;set;}[Required,StringLength(120)]public string PromptCode{get;set;}="";[Required,StringLength(30)]public string VersionLabel{get;set;}="";[Required,StringLength(200)]public string DisplayName{get;set;}="";[Required]public string SystemInstructions{get;set;}="";[Required]public string InputSchemaJson{get;set;}="{}";[Required]public string OutputSchemaJson{get;set;}="{}";[Required,StringLength(30)]public string StatusCode{get;set;}="DRAFT";public DateTime? EffectiveFromUtc{get;set;}public DateTime? EffectiveToUtc{get;set;}public byte[]? RowVersion{get;set;}public static PromptForm From(IntelligencePromptDefinitionDto item)=>new(){IntelligenceCapabilityId=item.IntelligenceCapabilityId,PromptCode=item.PromptCode,VersionLabel=item.VersionLabel,DisplayName=item.DisplayName,SystemInstructions=item.SystemInstructions,InputSchemaJson=item.InputSchemaJson,OutputSchemaJson=item.OutputSchemaJson,StatusCode=item.StatusCode,EffectiveFromUtc=item.EffectiveFromUtc,EffectiveToUtc=item.EffectiveToUtc,RowVersion=item.RowVersion};}
+
+private async Task LoadAsync()
+{
+    _loading=true;_error=null;
+    try
+    {
+        var providers=Api.GetIntelligenceProvidersAsync();
+        var models=Api.GetIntelligenceModelsAsync();
+        var policies=Api.GetIntelligenceFeaturePoliciesAsync();
+        var prompts=Api.GetIntelligencePromptDefinitionsAsync();
+        var platform=Api.GetIntelligencePlatformAsync();
+        await Task.WhenAll(providers,models,policies,prompts,platform);
+        _providers.Clear();_providers.AddRange(await providers);
+        _models.Clear();_models.AddRange(await models);
+        _policies.Clear();_policies.AddRange(await policies);
+        _prompts.Clear();_prompts.AddRange(await prompts);
+        _capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_loading=false;}
+}
+
+private void NewProvider(){_error=null;_providerForm=new();_editingProvider=true;}
+private async Task FocusSectionAsync(string section)
+{
+    _focusSection=section;
+    await Js.InvokeVoidAsync("amsScrollToElement",$"intel-section-{section}");
+}
+private Task<bool> ConfirmDeleteAsync(string description)=>ShowConfirmAsync(new("Confirm deletion",$"You are about to permanently delete {description}.","This action cannot be undone. Dependent configuration may stop resolving until a replacement is created.","Delete",true));
+private Task<bool> ConfirmUpdateAsync(string description)=>ShowConfirmAsync(new("Confirm changes",$"Save changes to {description}?","The updated configuration takes effect immediately for all users of this tenant.","Save changes",false));
+private Task<bool> ShowConfirmAsync(ConfirmRequest request)
+{
+    _confirmSource?.TrySetResult(false);
+    _confirm=request;
+    _confirmSource=new(TaskCreationOptions.RunContinuationsAsynchronously);
+    StateHasChanged();
+    return _confirmSource.Task;
+}
+private void ResolveConfirm(bool result){_confirm=null;_confirmSource?.TrySetResult(result);_confirmSource=null;}
+private sealed record ConfirmRequest(string Title,string Message,string? Detail,string ConfirmLabel,bool IsDestructive);
+private async Task DeleteProviderAsync(AiProviderDto item)
+{
+    if(!await ConfirmDeleteAsync($"provider '{item.DisplayName}'"))return;
+    _saving=true;_error=null;
+    try{await Api.DeleteIntelligenceProviderAsync(item.ProviderCode);await LoadAsync();}
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private async Task DeleteModelAsync(AiModelDeploymentDto item)
+{
+    if(!await ConfirmDeleteAsync($"model deployment '{item.DeploymentName}'"))return;
+    _saving=true;_error=null;
+    try{await Api.DeleteIntelligenceModelDeploymentAsync(item.ModelCode);await LoadAsync();}
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private async Task DeletePolicyAsync(AiFeaturePolicyDto item)
+{
+    if(!await ConfirmDeleteAsync($"feature policy '{item.FeatureCode}'"))return;
+    _saving=true;_error=null;
+    try{await Api.DeleteIntelligenceFeaturePolicyAsync(item.FeatureCode);await LoadAsync();}
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private async Task DeletePromptAsync(IntelligencePromptDefinitionDto item)
+{
+    if(!await ConfirmDeleteAsync($"prompt '{item.PromptCode}' version '{item.VersionLabel}'"))return;
+    _saving=true;_error=null;
+    try{await Api.DeleteIntelligencePromptDefinitionAsync(item.PromptCode,item.VersionLabel);await LoadAsync();}
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private void EditProvider(AiProviderDto item){_error=null;_providerForm=ProviderForm.From(item);_editingProvider=true;}
+private async Task SaveProviderAsync()
+{
+    if(_providerForm.RowVersion is not null&&!await ConfirmUpdateAsync($"provider '{_providerForm.DisplayName}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveAiProviderRequest(Guid.Empty,_providerForm.ProviderCode,_providerForm.DisplayName,_providerForm.ProviderTypeCode,_providerForm.SupportsChat,_providerForm.SupportsEmbeddings,_providerForm.SupportsVision,_providerForm.SupportsStructuredOutput,_providerForm.Priority,_providerForm.IsActive,Guid.Empty,_providerForm.RowVersion);
+        await Api.SaveIntelligenceProviderAsync(_providerForm.ProviderCode,request);
+        _editingProvider=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+
+private void NewModel(){_error=null;_modelForm=new();_editingModel=true;}
+private void EditModel(AiModelDeploymentDto item){_error=null;_modelForm=ModelForm.From(item);_editingModel=true;}
+private async Task SaveModelAsync()
+{
+    if(_modelForm.RowVersion is not null&&!await ConfirmUpdateAsync($"model deployment '{_modelForm.DeploymentName}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveAiModelDeploymentRequest(Guid.Empty,_modelForm.ProviderId??Guid.Empty,_modelForm.ModelCode,_modelForm.DeploymentName,_modelForm.ModelFamily,_modelForm.CapabilityCode,_modelForm.ContextWindowTokens,_modelForm.MaximumOutputTokens,_modelForm.InputCostPerMillionTokens,_modelForm.OutputCostPerMillionTokens,_modelForm.CurrencyCode,_modelForm.Priority,_modelForm.IsFallback,_modelForm.IsActive,Guid.Empty,_modelForm.RowVersion);
+        await Api.SaveIntelligenceModelDeploymentAsync(_modelForm.ModelCode,request);
+        _editingModel=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+
+private void NewPolicy(){_error=null;_form=new();_editing=true;}
+private void EditPolicy(AiFeaturePolicyDto item){_error=null;_form=new(){FeatureCode=item.FeatureCode,ModuleCode=item.ModuleCode,PrimaryModelDeploymentId=item.PrimaryModelDeploymentId,FallbackModelDeploymentId=item.FallbackModelDeploymentId,Temperature=item.Temperature,MaximumInputTokens=item.MaximumInputTokens,MaximumOutputTokens=item.MaximumOutputTokens,TimeoutSeconds=item.TimeoutSeconds,DailyCostLimit=item.DailyCostLimit,MonthlyCostLimit=item.MonthlyCostLimit,MinimumConfidence=item.MinimumConfidence,RequiresHumanReview=item.RequiresHumanReview,IsEnabled=item.IsEnabled,RowVersion=item.RowVersion};_editing=true;}
+private async Task SavePolicyAsync()
+{
+    if(_form.RowVersion is not null&&!await ConfirmUpdateAsync($"feature policy '{_form.FeatureCode}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveAiFeaturePolicyRequest(Guid.Empty,_form.FeatureCode,_form.ModuleCode,_form.PrimaryModelDeploymentId,_form.FallbackModelDeploymentId,_form.Temperature,_form.MaximumInputTokens,_form.MaximumOutputTokens,_form.TimeoutSeconds,_form.DailyCostLimit,_form.MonthlyCostLimit,_form.MinimumConfidence,_form.RequiresHumanReview,_form.IsEnabled,Guid.Empty,_form.RowVersion);
+        await Api.SaveIntelligenceFeaturePolicyAsync(_form.FeatureCode,request);
+        _editing=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+
+private static (string Category,int Order,string Description) PromptMeta(string promptCode)=>promptCode switch
+{
+    "SEARCH_INTENT"=>("Unified Intelligence Search — IntelligenceService",1,"Step 1: interprets the user's query into an AMS entity/module search intent."),
+    "SEARCH_SUMMARY"=>("Unified Intelligence Search — IntelligenceService",2,"Step 2: summarizes the authorized search evidence with source citations."),
+    "POLOXI_HIERARCHY"=>("Intelligent Search Using POLOXI — IntelligenceService",10,"Step 1: proposes the progressive disambiguation hierarchy from the approved capability catalog."),
+    "POLOXI_EXPLANATION"=>("Intelligent Search Using POLOXI — IntelligenceService",11,"Step 2: explains the validated POLOXI evidence with citations after hierarchy grounding."),
+    "WIDE_QUERY_CONTRACT"=>("Intelligent Search Wide — IntelligenceWideService",20,"Step 1: extracts the query contract, separating fixed requirements from genuinely ambiguous parts."),
+    "WIDE_INTENT"=>("Intelligent Search Wide — IntelligenceWideService",21,"Step 2: proposes the top-level interpretation branches of an ambiguous question."),
+    "WIDE_HIERARCHY_STEP"=>("Intelligent Search Wide — IntelligenceWideService",22,"Step 3: narrows surviving branches into child branches using enterprise grounding feedback."),
+    "WIDE_POLOXI_HIERARCHY"=>("Intelligent Search Wide — IntelligenceWideService",23,"Step 4: proposes the enterprise POLOXI hierarchy for wide-mode grounding."),
+    "WIDE_CANDIDATE_ENUMERATION"=>("Intelligent Search Wide — IntelligenceWideService",24,"Step 5: enumerates concrete real-world candidate entities for ranking questions."),
+    "WIDE_INFORMATION_VALUE"=>("Intelligent Search Wide — IntelligenceWideService",25,"Step 6: predicts which branch is most valuable to investigate next (information value)."),
+    "WIDE_CANDIDATE_MATRIX"=>("Intelligent Search Wide — IntelligenceWideService",26,"Step 7: scores every candidate against every scoring criterion (constraint firewall applied)."),
+    "WIDE_CHALLENGE_ROUND"=>("Intelligent Search Wide — IntelligenceWideService",27,"Step 8: devil's-advocate challenge of a thin-margin leader versus the runner-up."),
+    "WIDE_POLOXI_EXPLANATION"=>("Intelligent Search Wide — IntelligenceWideService",28,"Step 9: explains the authorized POLOXI evidence gathered in wide mode."),
+    "WIDE_ANSWER"=>("Intelligent Search Wide — IntelligenceWideService",29,"Step 10: composes the final grounded answer, judging evidence relevance and citing sources."),
+    "WIDE_LLM_ONLY_ANSWER"=>("Intelligent Search Wide — LLM-only fallback",40,"Fallback: answers directly from model knowledge when enterprise grounding is disabled (INTERPRETIVE)."),
+    "WIDE_LLM_RAW_ANSWER"=>("Intelligent Search Wide — LLM-only fallback",41,"Fallback: raw LLM ranking answer used as an interpretive comparison result."),
+    _=>("Custom prompts",90,"Custom prompt definition; used by the module mapped to its capability code.")
+};
+
+private void NewPrompt(){_error=null;_promptForm=new();_editingPrompt=true;}
+private void EditPrompt(IntelligencePromptDefinitionDto item){_error=null;_promptForm=PromptForm.From(item);_editingPrompt=true;}
+private void NewPromptVersion(IntelligencePromptDefinitionDto item){_error=null;_promptForm=PromptForm.From(item);_promptForm.VersionLabel="";_promptForm.StatusCode="DRAFT";_promptForm.RowVersion=null;_editingPrompt=true;}
+private async Task SavePromptAsync()
+{
+    if(_promptForm.RowVersion is not null&&!await ConfirmUpdateAsync($"prompt '{_promptForm.PromptCode}' version '{_promptForm.VersionLabel}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveIntelligencePromptDefinitionRequest(Guid.Empty,_promptForm.IntelligenceCapabilityId??Guid.Empty,_promptForm.PromptCode,_promptForm.VersionLabel,_promptForm.DisplayName,_promptForm.SystemInstructions,_promptForm.InputSchemaJson,_promptForm.OutputSchemaJson,_promptForm.StatusCode,_promptForm.EffectiveFromUtc,_promptForm.EffectiveToUtc,Guid.Empty,_promptForm.RowVersion);
+        await Api.SaveIntelligencePromptDefinitionAsync(_promptForm.PromptCode,_promptForm.VersionLabel,request);
+        _editingPrompt=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+    finally{_saving=false;}
+}
+
+private sealed class ProviderForm
+{
+    [Required,StringLength(100)]public string ProviderCode{get;set;}="";
+    [Required,StringLength(200)]public string DisplayName{get;set;}="";
+    [Required,StringLength(50)]public string ProviderTypeCode{get;set;}="AZURE_OPENAI";
+    public bool SupportsChat{get;set;}=true;
+    public bool SupportsEmbeddings{get;set;}
+    public bool SupportsVision{get;set;}
+    public bool SupportsStructuredOutput{get;set;}=true;
+    public int Priority{get;set;}=100;
+    public bool IsActive{get;set;}=true;
+    public byte[]? RowVersion{get;set;}
+    public static ProviderForm From(AiProviderDto item)=>new(){ProviderCode=item.ProviderCode,DisplayName=item.DisplayName,ProviderTypeCode=item.ProviderTypeCode,SupportsChat=item.SupportsChat,SupportsEmbeddings=item.SupportsEmbeddings,SupportsVision=item.SupportsVision,SupportsStructuredOutput=item.SupportsStructuredOutput,Priority=item.Priority,IsActive=item.IsActive,RowVersion=item.RowVersion};
+}
+
+private sealed class ModelForm
+{
+    [Required]public Guid? ProviderId{get;set;}
+    [Required,StringLength(100)]public string ModelCode{get;set;}="";
+    [Required,StringLength(200)]public string DeploymentName{get;set;}="";
+    [Required,StringLength(100)]public string ModelFamily{get;set;}="";
+    [Required,StringLength(50)]public string CapabilityCode{get;set;}="CHAT";
+    [Range(1,100000000)]public int ContextWindowTokens{get;set;}=128000;
+    [Range(1,100000000)]public int MaximumOutputTokens{get;set;}=4000;
+    public decimal? InputCostPerMillionTokens{get;set;}
+    public decimal? OutputCostPerMillionTokens{get;set;}
+    [Required,StringLength(3,MinimumLength=3)]public string CurrencyCode{get;set;}="USD";
+    public int Priority{get;set;}=100;
+    public bool IsFallback{get;set;}
+    public bool IsActive{get;set;}=true;
+    public byte[]? RowVersion{get;set;}
+    public static ModelForm From(AiModelDeploymentDto item)=>new(){ProviderId=item.ProviderId,ModelCode=item.ModelCode,DeploymentName=item.DeploymentName,ModelFamily=item.ModelFamily,CapabilityCode=item.CapabilityCode,ContextWindowTokens=item.ContextWindowTokens,MaximumOutputTokens=item.MaximumOutputTokens,InputCostPerMillionTokens=item.InputCostPerMillionTokens,OutputCostPerMillionTokens=item.OutputCostPerMillionTokens,CurrencyCode=item.CurrencyCode,Priority=item.Priority,IsFallback=item.IsFallback,IsActive=item.IsActive,RowVersion=item.RowVersion};
+}
+
+private sealed class PolicyForm
+{
+    public string FeatureCode{get;set;}="";
+    public string ModuleCode{get;set;}="";
+    public Guid? PrimaryModelDeploymentId{get;set;}
+    public Guid? FallbackModelDeploymentId{get;set;}
+    public decimal Temperature{get;set;}
+    public int MaximumInputTokens{get;set;}=32000;
+    public int MaximumOutputTokens{get;set;}=4000;
+    public int TimeoutSeconds{get;set;}=60;
+    public decimal? DailyCostLimit{get;set;}
+    public decimal? MonthlyCostLimit{get;set;}
+    public decimal MinimumConfidence{get;set;}=.75m;
+    public bool RequiresHumanReview{get;set;}=true;
+    public bool IsEnabled{get;set;}
+    public byte[]? RowVersion{get;set;}
+}
+
+private sealed class PromptForm
+{
+    [Required]public Guid? IntelligenceCapabilityId{get;set;}
+    [Required,StringLength(120)]public string PromptCode{get;set;}="";
+    [Required,StringLength(30)]public string VersionLabel{get;set;}="";
+    [Required,StringLength(200)]public string DisplayName{get;set;}="";
+    [Required]public string SystemInstructions{get;set;}="";
+    [Required]public string InputSchemaJson{get;set;}="{}";
+    [Required]public string OutputSchemaJson{get;set;}="{}";
+    [Required,StringLength(30)]public string StatusCode{get;set;}="DRAFT";
+    public DateTime? EffectiveFromUtc{get;set;}
+    public DateTime? EffectiveToUtc{get;set;}
+    public byte[]? RowVersion{get;set;}
+    public static PromptForm From(IntelligencePromptDefinitionDto item)=>new(){IntelligenceCapabilityId=item.IntelligenceCapabilityId,PromptCode=item.PromptCode,VersionLabel=item.VersionLabel,DisplayName=item.DisplayName,SystemInstructions=item.SystemInstructions,InputSchemaJson=item.InputSchemaJson,OutputSchemaJson=item.OutputSchemaJson,StatusCode=item.StatusCode,EffectiveFromUtc=item.EffectiveFromUtc,EffectiveToUtc=item.EffectiveToUtc,RowVersion=item.RowVersion};
+}
 }

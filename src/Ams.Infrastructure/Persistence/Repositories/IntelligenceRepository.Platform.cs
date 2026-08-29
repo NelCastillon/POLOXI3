@@ -85,8 +85,7 @@ ORDER BY CASE gap.PriorityCode WHEN N'CRITICAL' THEN 1 WHEN N'HIGH' THEN 2 WHEN 
             IF @StatusCode NOT IN(N'DRAFT',N'APPROVED',N'RETIRED') THROW 51000,'Prompt status is invalid.',1;
             IF @RowVersion IS NOT NULL
             BEGIN
-              IF EXISTS(SELECT 1 FROM AI.PromptDefinition WHERE TenantId=@TenantId AND PromptCode=@PromptCode AND VersionLabel=@VersionLabel AND StatusCode=N'APPROVED' AND IsDeleted=0) THROW 51000,'Approved prompts are immutable; create a new version.',1;
-              UPDATE AI.PromptDefinition SET IntelligenceCapabilityId=@IntelligenceCapabilityId,DisplayName=@DisplayName,SystemInstructions=@SystemInstructions,InputSchemaJson=@InputSchemaJson,OutputSchemaJson=@OutputSchemaJson,StatusCode=@StatusCode,ApprovedByUserId=CASE WHEN @StatusCode=N'APPROVED' THEN @ActorUserId ELSE NULL END,ApprovedDateUtc=CASE WHEN @StatusCode=N'APPROVED' THEN SYSUTCDATETIME() ELSE NULL END,EffectiveFromUtc=@EffectiveFromUtc,EffectiveToUtc=@EffectiveToUtc,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE TenantId=@TenantId AND PromptCode=@PromptCode AND VersionLabel=@VersionLabel AND RowVersion=@RowVersion AND IsDeleted=0;
+              UPDATE AI.PromptDefinition SET IntelligenceCapabilityId=@IntelligenceCapabilityId,DisplayName=@DisplayName,SystemInstructions=@SystemInstructions,InputSchemaJson=@InputSchemaJson,OutputSchemaJson=@OutputSchemaJson,StatusCode=@StatusCode,ApprovedByUserId=CASE WHEN @StatusCode=N'APPROVED' THEN @ActorUserId ELSE NULL END,ApprovedDateUtc=CASE WHEN @StatusCode=N'APPROVED' THEN SYSUTCDATETIME() ELSE NULL END,EffectiveFromUtc=@EffectiveFromUtc,EffectiveToUtc=@EffectiveToUtc,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE (TenantId=@TenantId OR TenantId IS NULL) AND PromptCode=@PromptCode AND VersionLabel=@VersionLabel AND RowVersion=@RowVersion AND IsDeleted=0;
               IF @@ROWCOUNT=0 THROW 51000,'Prompt definition changed before this update.',1;
             END
             ELSE
@@ -98,6 +97,12 @@ ORDER BY CASE gap.PriorityCode WHEN N'CRITICAL' THEN 1 WHEN N'HIGH' THEN 2 WHEN 
             END;
             """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);await connection.ExecuteAsync(new CommandDefinition(sql,request,cancellationToken:cancellationToken));
+    }
+
+    public async Task DeletePromptDefinitionAsync(Guid tenantId,string promptCode,string versionLabel,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""UPDATE AI.PromptDefinition SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@ActorUserId WHERE (TenantId=@TenantId OR TenantId IS NULL) AND PromptCode=@PromptCode AND VersionLabel=@VersionLabel AND IsDeleted=0; IF @@ROWCOUNT=0 THROW 51000,'Prompt version was not found.',1;""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,PromptCode=promptCode,VersionLabel=versionLabel,ActorUserId=actorUserId},cancellationToken:cancellationToken));
     }
 
     public async Task SubmitEvaluationSampleLabelAsync(SubmitEvaluationSampleLabelRequest request,CancellationToken cancellationToken=default)
