@@ -625,6 +625,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntelligenceService, IntelligenceService>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
         services.AddScoped<IPromptCatalog, PromptCatalog>();
+        services.AddScoped<IAdaptiveRetriever, StandardPoloxiRetriever>();
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
         services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
         services.AddScoped<IRulesPlatformService, RulesPlatformService>();

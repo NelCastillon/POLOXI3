@@ -2,6 +2,7 @@
 
 ## Project Guidelines
 - **Number one priority for all pages:** build and verify in `Table/API/UI` order. Confirm the database table/schema first, then align API/backend contracts and persistence, then implement or update the UI.
+- Use **ARL** to mean **Adaptive Retrieval Logic** for the universal retrieval, recovery, ranking-completion, and deterministic fallback reliability layer. Do not use GRIND/GRIMD terminology for this layer.
 - Use the naming convention `ApiClients.CrmConfiguration*.cs` for CRM Configuration ApiClient sealed partial class files.
 - Use existing `enterprise.css` styles for UI; do not add workflow functionality unless explicitly requested. For UI fixes in this codebase, prefer native Blazor markup plus scoped Razor CSS so CSS isolation applies correctly. For app-wide Blazor visual/theme fixes, use the global CSS layer instead of CSS-isolation ::deep overrides in layout/component scoped CSS. When removing or altering stylesheet rules or other UI dependencies, scope those removals/changes to the specific page requested; do not modify or remove global styles or shared UI dependencies unless the user explicitly requests a global change.
 - Do not use third-party grid/dialog/toast CSS frameworks in this repository; use native Blazor components, custom AMS components, and existing `enterprise.css` patterns instead.
@@ -36,6 +37,7 @@
 - In light theme, secondary buttons placed on pale or gradient headers must use dark text and a visibly contrasting border/background rather than white text.
 - Do not suggest performance or code changes unless supported by measurements or high-confidence evidence; avoid speculative recommendations because unnecessary runs waste money and time.
 - **POLOXI Wide pipeline results must never be inferior to the raw single-shot LLM answer:** when candidates from the raw/interpretive answer lack evidence attribution, the pipeline must attempt targeted evidence retrieval for those candidate names (earning support) rather than silently delivering a shorter/worse ranking; evidence admission gates are never lowered.
+- When fixing POLOXI pipeline issues, prefer logical/general pipeline fixes over hardcoded case-specific UI masking, and avoid changes that eliminate or weaken the core ranking/narrowing logic for future prompts.
 
 ## CRMConfiguration Guidelines
 - CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.

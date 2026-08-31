@@ -81,6 +81,12 @@ public sealed record PoloxiBranchRecord(Guid HierarchyBranchId,Guid? ParentHiera
 public sealed record PoloxiEvidenceDto(Guid HierarchyBranchId,Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,string? NavigationRoute,decimal RelevanceScore,int RankNumber,IReadOnlyCollection<string> MatchedBranches);
 public sealed record PoloxiSearchResponse(Guid PoloxiExecutionId,Guid HierarchyId,string Query,string ConceptCode,string ConceptDisplayName,int HierarchyVersion,bool WasHierarchyReused,decimal Confidence,IReadOnlyCollection<PoloxiBranchRecord> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,string? GroundedExplanation,string ExplanationStatusCode,long DurationMilliseconds);
 public sealed record PoloxiExecutionStart(Guid TenantId,Guid HierarchyId,Guid UserId,string QueryText,string CorrelationId,bool WasHierarchyReused,int ValidBranchCount,int UnsupportedBranchCount,decimal Confidence);
+// GRIP-style adaptive retrieval contracts (wide path). OutcomeCode values map 1:1 to the
+// POLOXI.ExecutionBranchOutcome check constraint: SUPPORTED, RECOVERED_READMITTED,
+// RECOVERED_ALTERNATE_TERM, UNRESOLVED.
+public sealed record PoloxiEvidenceRequest(PoloxiSearchRequest Search,PoloxiBranchRecord Branch,PoloxiCapabilityDto Capability,int MaximumResults,int MaximumAttempts);
+public sealed record PoloxiEvidencePacket(IReadOnlyCollection<PoloxiEvidenceDto> Evidence,int AttemptCount,string? AlternateSearchText);
+public sealed record PoloxiBranchOutcomeRecord(Guid HierarchyBranchId,string OutcomeCode,int RawEvidenceCount,int KeptEvidenceCount,int RecoveredEvidenceCount,string? AlternateSearchText);
 
 public sealed record AiReviewQueueItemDto(Guid ReviewQueueItemId,string ReviewTypeCode,string SourceEntityTypeCode,Guid SourceEntityId,Guid? ExecutionId,string Title,string? Summary,string PriorityCode,string StatusCode,decimal? Confidence,Guid? AssignedToUserId,DateTime? DueDateUtc,DateTime CreatedDateUtc,byte[] RowVersion);
 public sealed record SearchAiReviewQueueQuery(Guid TenantId,string? SearchTerm,string? ReviewTypeCode,string? StatusCode,string? PriorityCode,Guid? AssignedToUserId,int PageNumber=1,int PageSize=50);

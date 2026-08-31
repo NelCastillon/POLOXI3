@@ -271,6 +271,9 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
 
 public sealed record WideAmbiguityGroupDto(Guid RootWideBranchId,string GroupCode,string DisplayName,string Interpretation,decimal Confidence,string? SafetyRiskCode,string? AnswerKindCode,string? CandidateKindCode)
 {
+    public decimal InterpretationPrior{get;init;}
+    public decimal EvidenceSupport{get;init;}
+    public decimal PoloxiConfidence{get;init;}
     public IReadOnlyCollection<WideBranchDto> Branches{get;init;}=[];
     public IReadOnlyCollection<WideInterpretiveResultDto> InterpretiveResults{get;init;}=[];
     public IReadOnlyCollection<WideCandidateDto> Candidates{get;init;}=[];
@@ -480,7 +483,7 @@ public sealed record WideInterpretiveResultDto(string BranchDisplayName,string I
     public int LevelNumber{get;init;}
 }
 
-public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail);
+public sealed record WideInterpretiveResultItemDto(int RankNumber,string Name,string Detail,decimal? Score=null);
 
 public sealed record WideActionSuggestionDto(string DisplayName,string NavigationRoute,string Rationale);
 
@@ -500,6 +503,10 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal EnterpriseSupportCeiling{get;init;}=.90m;
     public decimal ExternalSupportBase{get;init;}=.60m;
     public decimal ExternalSupportIncrement{get;init;}=.10m;
+    // V3.8 Bounded Consensus Fallback: enterprise evidence wins clear conflicts; external-only
+    // support is discounted unless corroborated by enterprise evidence.
+    public decimal EvidenceConsensusThreshold{get;init;}=.25m;
+    public decimal ExternalOnlySupportDiscount{get;init;}=.70m;
     public int MaximumCandidates{get;init;}=10;
     public bool EnableQueryContract{get;init;}=true;
     // Bounded parallelism (DB-seeded; see migration 0147). 1 disables parallel execution.
@@ -648,7 +655,7 @@ public sealed record WideInterpretiveResult(string BranchDisplayName,string Inte
     public string DataVolatility{get;init;}="STABLE";
 }
 
-public sealed record WideInterpretiveResultItem(int RankNumber,string Name,string Detail);
+public sealed record WideInterpretiveResultItem(int RankNumber,string Name,string Detail,decimal? Score=null);
 
 public sealed record WideAnswerAction(string DisplayName,string NavigationRoute,string Rationale);
 

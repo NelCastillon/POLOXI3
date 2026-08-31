@@ -9,6 +9,9 @@ public interface IIntelligenceWideRepository
     // Active CHAT model deployments selectable on the wide-search page (tenant-scoped or platform-wide).
     Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<Guid> StartWideExecutionAsync(WideExecutionStart start,CancellationToken cancellationToken=default);
+    // GRIP-style convergence observability for the wide POLOXI path: one outcome row per valid
+    // branch per execution (POLOXI.ExecutionBranchOutcome).
+    Task SavePoloxiBranchOutcomesAsync(Guid tenantId,Guid userId,Guid poloxiExecutionId,IReadOnlyCollection<PoloxiBranchOutcomeRecord> outcomes,CancellationToken cancellationToken=default);
     Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default);
     Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default);
     // Batch variant: persists a whole level's grounding outcomes in one round trip.
