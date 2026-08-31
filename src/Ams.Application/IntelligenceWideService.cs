@@ -659,6 +659,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                                 var noveltyFactor=Math.Clamp(1m/(1m+priorInvestigations),0,1);
                                 adjusted=Math.Clamp(adjusted*noveltyFactor*Math.Clamp(priorRoundEffectiveness,.10m,1m),0,1);
                             }
+                            // V3.6.1 calibration guard: after a measured weak round (actual gain below the
+                            // minimum) the LLM's info-value estimates are demonstrably uncalibrated for THIS
+                            // execution, so fresh-branch targets are also discounted by the measured prior
+                            // effectiveness (floored at .25 so a single unlucky round cannot zero the pipeline).
+                            // Only measured math changes the discount — never LLM self-reports.
+                            else if(weakRounds>0)
+                                adjusted=Math.Clamp(adjusted*Math.Clamp(priorRoundEffectiveness,.25m,1m),0,1);
                             scored.Add((branch,target,raw,adjusted));
                         }
                         if(scored.Count==0)break;
@@ -711,8 +718,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         // Targeted parallel retrieval: evidence target text focuses the query per branch.
                         var retrievalBranches=selected.Select(item=>string.IsNullOrWhiteSpace(item.Target.EvidenceTarget)?item.Branch:item.Branch with{SearchText=Truncate(item.Target.EvidenceTarget,400)}).ToArray();
                         var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,cancellationToken);
-                        informationRetrievalCount+=newKnowledge.Count;
-                        externalKnowledgeAll.AddRange(newKnowledge);
+                        // V3.6.1: rounds frequently re-surface URLs already in the pool (cache-first
+                        // retrieval); duplicates would double-count evidence signals and inflate the
+                        // disclosed evidence total, so only genuinely new URLs join the pool.
+                        var poolUrls=externalKnowledgeAll.Select(snippet=>snippet.Url).Where(url=>!string.IsNullOrWhiteSpace(url)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var freshKnowledge=newKnowledge.Where(snippet=>string.IsNullOrWhiteSpace(snippet.Url)||poolUrls.Add(snippet.Url)).ToArray();
+                        informationRetrievalCount+=freshKnowledge.Length;
+                        externalKnowledgeAll.AddRange(freshKnowledge);
                         // V2.4: newly retrieved snippets may name candidates not yet in the universe.
                         // V3.0 discovery admission gate (Invariant 3): when adaptive narrowing is enabled,
                         // a newly discovered name joins the universe ONLY with sufficient distinct-host
@@ -1291,7 +1303,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 }
                 finally{retrievalGate.Release();}
             }));
-            return results.SelectMany(item=>item??[]).ToArray();
+            // V3.6.1: two branches can resolve to the SAME retrieval query (display-name overlap),
+            // returning identical snippets that would double-count in every score sum. Exact
+            // duplicates (same URL for the same query) are collapsed; the same URL retrieved under
+            // DIFFERENT branch queries is preserved because snippet.Query drives branch attribution.
+            return results.SelectMany(item=>item??[])
+                .DistinctBy(snippet=>$"{snippet.Query}\u0001{snippet.Url}",StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {
@@ -1769,7 +1787,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // "Nacpan Beach, Palawan"), so the merge additionally requires an IDENTICAL detail payload —
     // the LLM describing two rows with the exact same text is deterministic evidence of an echo,
     // while genuinely distinct places always describe differently.
-    private static IReadOnlyCollection<WideCandidateDto> DeduplicateCandidatesByCanonicalTokens(IReadOnlyCollection<WideCandidateDto> candidates)
+    private static IReadOnlyCollection<WideCandidateDto> DeduplicateCandidatesByCanonicalTokens(IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
     {
         var survivors=new List<WideCandidateDto>();
         var seen=new Dictionary<string,int>(StringComparer.OrdinalIgnoreCase);
@@ -1799,7 +1817,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Guardrail: the shorter side must have >=2 significant tokens - single-token names
             // ("Manila", "Palawan") are legitimate standalone entities and are never subset-merged.
             // The better-ranked instance keeps the position; scores are never altered.
-            var subsetIndex=survivors.FindIndex(existing=>!existing.IsConstraintViolation&&!candidate.IsConstraintViolation&&IsSubsetAlias(existing.DisplayName,candidate.DisplayName));
+            // V3.6.1 guardrail: a subset name independently attested by the evidence (mentioned in a
+            // snippet with all occurrences of the longer form removed) is a DISTINCT sibling entity
+            // ("Rolling Hills" vs "Rolling Hills Estates") and is never subset-merged.
+            var subsetIndex=survivors.FindIndex(existing=>!existing.IsConstraintViolation&&!candidate.IsConstraintViolation
+                &&IsSubsetAlias(existing.DisplayName,candidate.DisplayName)
+                &&!SubsetNameIndependentlyAttested(existing.DisplayName,candidate.DisplayName,externalKnowledge));
             if(subsetIndex>=0)
             {
                 if(candidate.DisplayName.Length>survivors[subsetIndex].DisplayName.Length)
@@ -1858,6 +1881,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             .Where(token=>!SubsetConnectiveTokens.Contains(token))
             .Select(token=>token.ToLowerInvariant())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // V3.6.1: orders the pair by significant-token count and checks whether the shorter name is
+    // mentioned on its own in the external evidence — if so the two names are sibling entities and
+    // the subset-alias merge must not fire.
+    private static bool SubsetNameIndependentlyAttested(string first,string second,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    {
+        var(shorterName,longerName)=SignificantNameTokens(first).Count<=SignificantNameTokens(second).Count?(first,second):(second,first);
+        return HasExclusiveMention(shorterName,longerName,externalKnowledge);
+    }
 
     private static IReadOnlyCollection<WideCandidateDto> ReweightCandidatesByClarificationAnswer(IReadOnlyCollection<WideCandidateDto> candidates,string answer,decimal boost)
     {
@@ -2380,12 +2412,22 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var signals=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
         foreach(var candidate in candidates)
         {
-            var raw=evidence.Where(item=>Mentions(item.Title,candidate)||Mentions(item.Excerpt,candidate)).Sum(item=>item.RelevanceScore)
-                +knowledge.Where(item=>Mentions(item.Title,candidate)||Mentions(item.Snippet,candidate)).Sum(item=>item.Score);
+            // V3.6.1: a candidate contained in a LONGER sibling candidate's name ("Rolling Hills" in
+            // "Rolling Hills Estates") substring-matches every snippet naming only the sibling; such
+            // matches credit the wrong entity. Sibling names are stripped before the mention test so
+            // each candidate is scored only on text that names IT.
+            var longerSiblings=candidates.Where(other=>other.Length>candidate.Length&&other.Contains(candidate,StringComparison.OrdinalIgnoreCase)).ToArray();
+            var raw=evidence.Where(item=>Mentions(item.Title,candidate,longerSiblings)||Mentions(item.Excerpt,candidate,longerSiblings)).Sum(item=>item.RelevanceScore)
+                +knowledge.Where(item=>Mentions(item.Title,candidate,longerSiblings)||Mentions(item.Snippet,candidate,longerSiblings)).Sum(item=>item.Score);
             signals[candidate]=Math.Round(raw/(1m+raw),4);
         }
         return signals;
-        static bool Mentions(string? text,string candidate)=>text?.Contains(candidate,StringComparison.OrdinalIgnoreCase)==true;
+        static bool Mentions(string? text,string candidate,string[] longerSiblings)
+        {
+            if(text?.Contains(candidate,StringComparison.OrdinalIgnoreCase)!=true)return false;
+            foreach(var sibling in longerSiblings)text=text!.Replace(sibling,string.Empty,StringComparison.OrdinalIgnoreCase);
+            return text!.Contains(candidate,StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static decimal ComputeCandidateBranchSignal(string candidate,WideBranchRecord branch,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
@@ -2612,6 +2654,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private static Dictionary<string,int> CountExclusiveSourceHosts(IReadOnlyCollection<string> candidates,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
         var keysByCandidate=candidates.ToDictionary(candidate=>candidate,CandidateMatchKeys,StringComparer.OrdinalIgnoreCase);
+        // V3.6.1: a candidate whose name is contained in a LONGER sibling's name ("Rolling Hills" in
+        // "Rolling Hills Estates") substring-matches every snippet naming only the sibling, wrongly
+        // turning the sibling's genuinely exclusive snippets into "multiple-candidate" snippets.
+        // Strip longer sibling names from the text before testing the shorter candidate so a match
+        // requires a residual mention of the short form itself.
+        var longerSiblingsByCandidate=candidates.ToDictionary(
+            candidate=>candidate,
+            candidate=>candidates.Where(other=>other.Length>candidate.Length&&other.Contains(candidate,StringComparison.OrdinalIgnoreCase)).ToArray(),
+            StringComparer.OrdinalIgnoreCase);
         var exclusiveHosts=candidates.ToDictionary(candidate=>candidate,_=>new HashSet<string>(StringComparer.OrdinalIgnoreCase),StringComparer.OrdinalIgnoreCase);
         foreach(var snippet in knowledge)
         {
@@ -2621,7 +2672,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var multiple=false;
             foreach(var(candidate,keys)in keysByCandidate)
             {
-                if(!keys.Any(key=>text.Contains(key,StringComparison.OrdinalIgnoreCase)))continue;
+                var candidateText=text;
+                foreach(var sibling in longerSiblingsByCandidate[candidate])
+                    if(candidateText.Contains(sibling,StringComparison.OrdinalIgnoreCase))
+                        candidateText=candidateText.Replace(sibling,string.Empty,StringComparison.OrdinalIgnoreCase);
+                if(!keys.Any(key=>candidateText.Contains(key,StringComparison.OrdinalIgnoreCase)))continue;
                 if(sole is not null&&!string.Equals(sole,candidate,StringComparison.OrdinalIgnoreCase)){multiple=true;break;}
                 sole=candidate;
             }
@@ -3341,6 +3396,24 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return true;
     }
 
+    // V3.6.1 exclusive-mention test: a shorter name substring-matches every snippet that names a
+    // longer entity starting with it ("Rolling Hills" matches every "Rolling Hills Estates"
+    // snippet), so host overlap alone cannot prove identity for genuine prefix relations. The
+    // shorter form is only a distinct entity when at least one snippet still mentions it AFTER all
+    // occurrences of the longer form are removed — deterministic evidence that sources talk about
+    // the short name on its own ("Rolling Hills is the smallest city on the Peninsula").
+    private static bool HasExclusiveMention(string shorterName,string longerName,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        foreach(var snippet in knowledge)
+        {
+            var text=$"{snippet.Title} {snippet.Snippet}";
+            if(!text.Contains(shorterName,StringComparison.OrdinalIgnoreCase))continue;
+            var stripped=text.Replace(longerName,string.Empty,StringComparison.OrdinalIgnoreCase);
+            if(stripped.Contains(shorterName,StringComparison.OrdinalIgnoreCase))return true;
+        }
+        return false;
+    }
+
     private static HashSet<string> MentioningHosts(string name,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
         var hosts=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -3383,7 +3456,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 // Merge hypothesis — confirm with evidence identity: the specific form is attested by at
                 // least one host, and the alias shares at least one host with it.
                 var specificHosts=existing.Tokens.Length>=item.Tokens.Length?existing.Hosts:itemHosts;
-                if(identicalTokens||(specificHosts.Count>0&&(itemHosts.Overlaps(existing.Hosts)||itemHosts.Count==0)))
+                // V3.6.1: genuine prefix relations (non-identical tokens) additionally require that the
+                // shorter name has NO exclusive mentions — substring host overlap is otherwise guaranteed
+                // and would conflate distinct sibling entities ("Rolling Hills" vs "Rolling Hills Estates").
+                var(shorterName,longerName)=item.Tokens.Length<=existing.Tokens.Length?(item.Name,existing.Name):(existing.Name,item.Name);
+                var distinctEntityAttested=!identicalTokens&&HasExclusiveMention(shorterName,longerName,externalKnowledge);
+                if(identicalTokens||(!distinctEntityAttested&&specificHosts.Count>0&&(itemHosts.Overlaps(existing.Hosts)||itemHosts.Count==0)))
                 {
                     aliasTarget[item.Name]=existing.Name;
                     existing.Hosts.UnionWith(itemHosts);
@@ -3482,9 +3560,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return sum<=0?weights:weights.ToDictionary(entry=>entry.Key,entry=>entry.Value/sum);
     }
 
-    private static IReadOnlyCollection<WideCandidateDto> PostProcessRankingCandidates(IReadOnlyCollection<WideCandidateDto> candidates,WideSearchRequest request,WideConfiguration configuration)
+    private static IReadOnlyCollection<WideCandidateDto> PostProcessRankingCandidates(IReadOnlyCollection<WideCandidateDto> candidates,WideSearchRequest request,WideConfiguration configuration,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
     {
-        if(candidates.Count>1)candidates=DeduplicateCandidatesByCanonicalTokens(candidates);
+        if(candidates.Count>1)candidates=DeduplicateCandidatesByCanonicalTokens(candidates,externalKnowledge);
         if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&candidates.Count>1)
             candidates=ReweightCandidatesByClarificationAnswer(candidates,request.ClarificationAnswer,configuration.ClarificationReweightBoost);
         return candidates;
@@ -3499,7 +3577,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         {
             candidates=await CompeteCandidatesAsync(request,executionId,queryContract,survivors,interpretiveResults,discoveredCandidates,externalKnowledge,configuration,cancellationToken);
             if(candidates.Count>0)llmCalls++;
-            candidates=PostProcessRankingCandidates(candidates,request,configuration);
+            candidates=PostProcessRankingCandidates(candidates,request,configuration,externalKnowledge);
         }
 
         if(!rankingCompletionRequired||RankingContractSatisfied(candidates,requiredCount))return new(candidates,llmCalls,recoveryAttempted);
@@ -3511,7 +3589,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(recovered.Count>0)
             {
                 llmCalls++;
-                recovered=PostProcessRankingCandidates(recovered,request,configuration);
+                recovered=PostProcessRankingCandidates(recovered,request,configuration,externalKnowledge);
                 if(DeliveredCandidateCount(recovered)>DeliveredCandidateCount(candidates))candidates=recovered;
             }
         }
