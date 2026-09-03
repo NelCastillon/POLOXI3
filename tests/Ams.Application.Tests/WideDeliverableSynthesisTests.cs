@@ -81,6 +81,52 @@ public sealed class WideDeliverableSynthesisTests
         Assert.Contains("Maximum branches per parent: 12",prompt);
     }
 
+    [Theory]
+    [InlineData("context","CONTEXT")]
+    [InlineData("GUARDRAIL","GUARDRAIL")]
+    [InlineData("hard_constraint","HARD_CONSTRAINT")]
+    [InlineData(null,"PREFERENCE")]
+    [InlineData("unknown","PREFERENCE")]
+    public void NormalizeBranchRole_UsesSupportedRolesAndSafeFallback(string? value,string expected)
+    {
+        var method=PrivateMethod("NormalizeBranchRole");
+
+        var result=(string)method.Invoke(null,[value])!;
+
+        Assert.Equal(expected,result);
+    }
+
+    [Theory]
+    [InlineData("CONTEXT","NonScoring")]
+    [InlineData("HARD_CONSTRAINT","HardConstraint")]
+    [InlineData("PREFERENCE","ScoreableCriterion")]
+    [InlineData("GUARDRAIL","ScoreableCriterion")]
+    public void ClassifyCompetitionRole_HonorsExplicitRole(string role,string expected)
+    {
+        var method=PrivateMethod("ClassifyCompetitionRole");
+        var branch=Branch("Criterion","Ordinary evaluation criterion") with{BranchRoleCode=role};
+
+        var result=method.Invoke(null,[branch,null]);
+
+        Assert.Equal(expected,result!.ToString());
+    }
+
+    [Fact]
+    public void MergeMissingBranchScores_FillsOnlyMissingCells()
+    {
+        var method=PrivateMethod("MergeMissingBranchScores");
+        var quality=Branch("Quality","Quality criterion");
+        var affordability=Branch("Affordability","Affordability criterion");
+        var existing=new[]{new WideCandidateBranchEvidence("Quality",.8m)};
+        var incoming=new[]{new WideCandidateBranchEvidence("Quality",.2m),new WideCandidateBranchEvidence("Affordability",.7m)};
+
+        var merged=(IReadOnlyCollection<WideCandidateBranchEvidence>)method.Invoke(null,[existing,incoming,new[]{quality,affordability}])!;
+
+        Assert.Equal(2,merged.Count);
+        Assert.Equal(.8m,merged.Single(score=>score.BranchDisplayName=="Quality").EvidenceScore);
+        Assert.Equal(.7m,merged.Single(score=>score.BranchDisplayName=="Affordability").EvidenceScore);
+    }
+
     private static WideAmbiguityGroupDto Group(string code,string displayName,string interpretation)=>new(Guid.NewGuid(),code,displayName,interpretation,0.75m,null,"ENTITY_RANKING","NAMED_ENTITY")
     {
         Summary=interpretation
@@ -90,6 +136,8 @@ public sealed class WideDeliverableSynthesisTests
     {
         DeliverableSynthesisIndicators=indicators
     };
+
+    private static WideBranchRecord Branch(string displayName,string interpretation)=>new(Guid.NewGuid(),Guid.NewGuid(),null,Guid.NewGuid(),1,displayName.ToUpperInvariant(),displayName,interpretation,null,null,"PENDING",0,.8m,false,null,false,null,1);
 
     private static MethodInfo PrivateMethod(string name)=>typeof(IntelligenceWideService).GetMethod(name,BindingFlags.NonPublic|BindingFlags.Static)??throw new MissingMethodException(nameof(IntelligenceWideService),name);
 }

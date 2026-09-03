@@ -1535,8 +1535,31 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // V2.3: semantic type defaults to ALTERNATIVE (backward compatible) unless the LLM
             // explicitly classified the branch as a DIMENSION (jointly valid evaluation criterion).
             var semanticType=string.Equals(branch.SemanticType?.Trim(),WideBranchSemanticTypes.Dimension,StringComparison.OrdinalIgnoreCase)?WideBranchSemanticTypes.Dimension:WideBranchSemanticTypes.Alternative;
-            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120),Truncate(branch.DisplayName.Trim(),300),Truncate(branch.Interpretation.Trim(),1000),Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1){SemanticTypeCode=semanticType};
+            var branchRole=NormalizeBranchRole(branch.BranchRole);
+            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120),Truncate(branch.DisplayName.Trim(),300),Truncate(branch.Interpretation.Trim(),1000),Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1){SemanticTypeCode=semanticType,BranchRoleCode=branchRole};
         }).ToArray();
+
+    private static string NormalizeBranchRole(string? branchRole)=>branchRole?.Trim().ToUpperInvariant() switch
+    {
+        WideBranchRoles.HardConstraint=>WideBranchRoles.HardConstraint,
+        WideBranchRoles.Guardrail=>WideBranchRoles.Guardrail,
+        WideBranchRoles.Context=>WideBranchRoles.Context,
+        _=>WideBranchRoles.Preference
+    };
+
+    private static IReadOnlyCollection<WideCandidateBranchEvidence> MergeMissingBranchScores(IReadOnlyCollection<WideCandidateBranchEvidence> existing,IReadOnlyCollection<WideCandidateBranchEvidence> incoming,IReadOnlyCollection<WideBranchRecord> branches)
+    {
+        var branchLookup=branches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First().WideBranchId,StringComparer.OrdinalIgnoreCase);
+        var merged=existing.ToList();
+        var existingBranchIds=existing.Where(score=>branchLookup.ContainsKey(score.BranchDisplayName.Trim())).Select(score=>branchLookup[score.BranchDisplayName.Trim()]).ToHashSet();
+        foreach(var score in incoming)
+        {
+            if(!branchLookup.TryGetValue(score.BranchDisplayName.Trim(),out var branchId)||existingBranchIds.Contains(branchId))continue;
+            merged.Add(score);
+            existingBranchIds.Add(branchId);
+        }
+        return merged;
+    }
 
     private static string? Truncate(string? value,int maximumLength)=>value is null||value.Length<=maximumLength?value:value[..maximumLength];
 
@@ -2257,7 +2280,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return(Math.Clamp((decimal)winnerStable/pairs,0,1),Math.Clamp(topKOverlap/pairs,0,1));
     }
 
-    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,PoloxiConfidence=branch.PoloxiConfidence,SemanticTypeCode=branch.SemanticTypeCode};
+    private static WideBranchDto ToDto(WideBranchRecord branch)=>new(branch.WideBranchId,branch.ParentWideBranchId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder){BranchStateCode=branch.BranchStateCode,InterpretationPrior=branch.InterpretationPrior,EvidenceSupport=branch.EvidenceSupport,PoloxiConfidence=branch.PoloxiConfidence,SemanticTypeCode=branch.SemanticTypeCode,BranchRoleCode=branch.BranchRoleCode};
 
     private static IReadOnlyCollection<WideAmbiguityGroupDto> BuildAmbiguityGroups(IReadOnlyCollection<WideBranchRecord> branches,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<PoloxiEvidenceDto> evidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract)
     {
@@ -3629,6 +3652,9 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private static CompetitionRole ClassifyCompetitionRole(WideBranchRecord branch,WideQueryContract? queryContract)
     {
+        if(string.Equals(branch.BranchRoleCode,WideBranchRoles.HardConstraint,StringComparison.OrdinalIgnoreCase))return CompetitionRole.HardConstraint;
+        if(string.Equals(branch.BranchRoleCode,WideBranchRoles.Context,StringComparison.OrdinalIgnoreCase))return CompetitionRole.NonScoring;
+        if(string.Equals(branch.BranchRoleCode,WideBranchRoles.Guardrail,StringComparison.OrdinalIgnoreCase))return CompetitionRole.ScoreableCriterion;
         if(IsHardConstraintBranch(branch,queryContract))return CompetitionRole.HardConstraint;
         if(IsNonScoringReasoningBranch(branch))return CompetitionRole.NonScoring;
         return CompetitionRole.ScoreableCriterion;
@@ -4076,7 +4102,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var scoringBranchIds=branches.Select(branch=>branch.WideBranchId).ToHashSet();
             var childBranches=survivors
                 .Where(branch=>branch.ParentWideBranchId is not null&&scoringBranchIds.Contains(branch.ParentWideBranchId.Value)
-                    &&!branch.IsEliminated&&branch.PoloxiConfidence>=.15m&&!scoringBranchIds.Contains(branch.WideBranchId))
+                    &&!branch.IsEliminated&&branch.PoloxiConfidence>=.15m&&!scoringBranchIds.Contains(branch.WideBranchId)
+                    &&ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion)
                 .GroupBy(branch=>branch.ParentWideBranchId!.Value)
                 .SelectMany(group=>group.OrderByDescending(branch=>branch.PoloxiConfidence).Take(5))
                 .Take(20)
@@ -4182,6 +4209,20 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             var contractContext=queryContract is null?"(none)":BuildQueryContractContext(queryContract);
             var candidateKind=queryContract?.CandidateKind??CandidateKindNamedEntity;
+            var matrixBranches=branches.Concat(childBranches).ToArray();
+            var branchesByName=matrixBranches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
+            WideBranchRecord? ResolveBranch(string echoed)
+            {
+                var cleaned=echoed.Trim();
+                var labelMatch=System.Text.RegularExpressions.Regex.Match(cleaned,@"^[BS]\d+(\s*\([^)]*\))?\.\s*");
+                if(labelMatch.Success)cleaned=cleaned[labelMatch.Length..].Trim();
+                var colon=cleaned.IndexOf(':');
+                var withoutDetail=colon>0?cleaned[..colon].Trim():cleaned;
+                if(branchesByName.TryGetValue(cleaned,out var branch))return branch;
+                if(branchesByName.TryGetValue(withoutDetail,out branch))return branch;
+                var contains=matrixBranches.Where(candidate=>cleaned.Contains(candidate.DisplayName,StringComparison.OrdinalIgnoreCase)||candidate.DisplayName.Contains(withoutDetail,StringComparison.OrdinalIgnoreCase)).ToArray();
+                return contains.Length==1?contains[0]:null;
+            }
             // V3.11 Matrix Chunking + Re-Ask: a single Candidate × Branch call over a large pool
             // (40 candidates × 20+ branch lines) exceeds what mini-tier models reliably echo in one
             // structured response — most of the pool silently came back unscored and every omitted
@@ -4189,14 +4230,17 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // the SAME branches, prompt, and schema, and pool candidates still unresolved after the
             // chunked pass get exactly one targeted re-ask call. Each chunk is fail-soft so one bad
             // response degrades coverage instead of zeroing the whole competition.
-            async Task<List<WideCandidateScore>> ScoreCandidateChunkAsync((string Name,string? Detail)[] chunk)
+            async Task<List<WideCandidateScore>> ScoreCandidateChunkAsync((string Name,string? Detail)[] chunk,IReadOnlyCollection<WideBranchRecord>? requestedBranches=null)
             {
                 try
                 {
                     var candidateList=string.Join('\n',chunk.Select((candidate,index)=>$"C{index+1}. {candidate.Name}: {candidate.Detail}"));
+                    var requestedBranchList=requestedBranches is null
+                        ?branchList
+                        :string.Join('\n',requestedBranches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
                     var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                         await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
-                        $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{branchList}\nCandidates:\n{candidateList}",
+                        $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{requestedBranchList}\nCandidates:\n{candidateList}",
                         CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
                     var chunkProposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
                     return chunkProposal?.Candidates?.ToList()??[];
@@ -4229,18 +4273,30 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 var byIdentity=candidateNames.Where(item=>string.Equals(CandidateIdentityKey(item.Name),echoKey,StringComparison.Ordinal)).ToArray();
                 return byIdentity.Length==1?byIdentity[0].Name:null;
             }
-            var scoredCandidates=new List<WideCandidateScore>();
-            var resolvedPoolNames=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            // Merge dedupes on the RESOLVED pool identity so the re-ask pass can never double-score a
-            // candidate the chunked pass already covered; unresolvable echoes flow through unchanged
-            // (they are dropped later by the existing resolution logic, exactly as before).
+            var scoredByCandidate=new Dictionary<string,WideCandidateScore>(StringComparer.OrdinalIgnoreCase);
+            var scoredCandidateOrder=new List<string>();
+            // Merge on canonical Candidate × Branch identity. Repeated anchor rows and recovery rows
+            // may fill omitted cells, but the first accepted value for an existing cell is immutable.
             void MergeScores(IEnumerable<WideCandidateScore> scores)
             {
                 foreach(var score in scores)
                 {
                     var resolved=ResolveCandidateName(score.Name);
-                    if(resolved is not null&&!resolvedPoolNames.Add(resolved))continue;
-                    scoredCandidates.Add(score);
+                    if(resolved is null)continue;
+                    var normalizedScores=(score.BranchScores??[])
+                        .Select(branchScore=>(Score:branchScore,Branch:ResolveBranch(branchScore.BranchDisplayName)))
+                        .Where(item=>item.Branch is not null)
+                        .GroupBy(item=>item.Branch!.WideBranchId)
+                        .Select(group=>new WideCandidateBranchEvidence(group.First().Branch!.DisplayName,group.First().Score.EvidenceScore))
+                        .ToList();
+                    if(!scoredByCandidate.TryGetValue(resolved,out var existing))
+                    {
+                        scoredByCandidate[resolved]=score with{Name=resolved,BranchScores=normalizedScores};
+                        scoredCandidateOrder.Add(resolved);
+                        continue;
+                    }
+                    var merged=MergeMissingBranchScores(existing.BranchScores,normalizedScores,matrixBranches);
+                    scoredByCandidate[resolved]=existing with{BranchScores=merged};
                 }
             }
             // V3.11.1 Anchor Calibration: chunk-local scoring has NO shared basis — the model grades
@@ -4298,32 +4354,30 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 matrixChunks.Add(anchorCandidates.Concat(chunkBody).ToArray());
             if(matrixChunks.Count==0&&anchorCandidates.Length>0)matrixChunks.Add(anchorCandidates);
             foreach(var chunk in matrixChunks)MergeScores(CalibrateChunk(await ScoreCandidateChunkAsync(chunk)));
-            var unresolvedCandidates=candidateNames.Where(candidate=>!resolvedPoolNames.Contains(candidate.Name)).ToArray();
-            if(unresolvedCandidates.Length>0&&scoredCandidates.Count>0)MergeScores(CalibrateChunk(await ScoreCandidateChunkAsync(anchorCandidates.Concat(unresolvedCandidates.Where(candidate=>!anchorNames.Contains(candidate.Name))).ToArray())));
+            var requiredBranchIds=matrixBranches.Select(branch=>branch.WideBranchId).ToHashSet();
+            var incompleteCandidates=candidateNames.Where(candidate=>
+            {
+                if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return true;
+                var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
+                return !requiredBranchIds.IsSubsetOf(returnedBranchIds);
+            }).ToArray();
+            foreach(var recoveryChunk in incompleteCandidates.Chunk(12))
+            {
+                var missingBranches=recoveryChunk.SelectMany(candidate=>
+                {
+                    if(!scoredByCandidate.TryGetValue(candidate.Name,out var score))return matrixBranches;
+                    var returnedBranchIds=score.BranchScores.Select(branchScore=>ResolveBranch(branchScore.BranchDisplayName)?.WideBranchId).Where(branchId=>branchId is not null).Select(branchId=>branchId!.Value).ToHashSet();
+                    return matrixBranches.Where(branch=>!returnedBranchIds.Contains(branch.WideBranchId));
+                }).DistinctBy(branch=>branch.WideBranchId).ToArray();
+                if(missingBranches.Length>0)MergeScores(await ScoreCandidateChunkAsync(recoveryChunk,missingBranches));
+            }
+            var scoredCandidates=scoredCandidateOrder.Select(name=>scoredByCandidate[name]).ToList();
             var proposal=new WideCandidateScoringProposal(scoredCandidates);
             if(proposal.Candidates is not{Count:>0})return [];
             static decimal InterpretationWeight(WideBranchRecord branch)=>BranchAllocationWeight(branch);
             var rfnBranchWeights=CompileRfnGlobalBranchWeights(survivors.Concat(childBranches).ToArray(),branches.Concat(childBranches).ToArray());
             if(rfnBranchWeights.Count==0)return [];
-            var metricScores=CompileMetricNormalizedScores(candidateNames,branches.Concat(childBranches).ToArray(),externalKnowledge);
-            var branchesByName=branches.Concat(childBranches).GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
-            // V2.8.2 Branch Identity Resolution: the prompt labels branches "B1. Name: Interpretation",
-            // and models sometimes echo the label or append the interpretation. A strict dictionary miss
-            // silently dropped the score — zeroing coverage and Quality for EVERY candidate while the
-            // evidence was intact. Resolution now strips "B<n>." label prefixes and trailing ": ..."
-            // decorations, then falls back to unambiguous containment before giving up.
-            WideBranchRecord? ResolveBranch(string echoed)
-            {
-                var cleaned=echoed.Trim();
-                var labelMatch=System.Text.RegularExpressions.Regex.Match(cleaned,@"^[BS]\d+(\s*\([^)]*\))?\.\s*");
-                if(labelMatch.Success)cleaned=cleaned[labelMatch.Length..].Trim();
-                var colon=cleaned.IndexOf(':');
-                var withoutDetail=colon>0?cleaned[..colon].Trim():cleaned;
-                if(branchesByName.TryGetValue(cleaned,out var branch))return branch;
-                if(branchesByName.TryGetValue(withoutDetail,out branch))return branch;
-                var contains=branches.Concat(childBranches).Where(candidate=>cleaned.Contains(candidate.DisplayName,StringComparison.OrdinalIgnoreCase)||candidate.DisplayName.Contains(withoutDetail,StringComparison.OrdinalIgnoreCase)).ToArray();
-                return contains.Length==1?contains[0]:null;
-            }
+            var metricScores=CompileMetricNormalizedScores(candidateNames,matrixBranches,externalKnowledge);
             var entries=new List<(WideCandidateRecord Record,bool SupportExcluded,decimal RawComposite)>();
             var evidenceConfidences=new Dictionary<string,decimal>(StringComparer.OrdinalIgnoreCase);
             // V3.5: per-candidate roll-up disclosure (parent dimension -> direct score + child scores).
@@ -4626,11 +4680,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         "searchText": { "type": ["string", "null"] },
         "confidence": { "type": "number" },
         "semanticType": { "type": "string", "enum": ["ALTERNATIVE", "DIMENSION"] },
+        "branchRole": { "type": "string", "enum": ["HARD_CONSTRAINT", "GUARDRAIL", "PREFERENCE", "CONTEXT"] },
         "continueNarrowing": { "type": "boolean" },
         "stopReason": { "type": ["string", "null"] },
         "parentBranchCode": { "type": ["string", "null"] }
       },
-      "required": ["branchCode", "displayName", "interpretation", "capabilityCode", "searchText", "confidence", "semanticType", "continueNarrowing", "stopReason", "parentBranchCode"],
+      "required": ["branchCode", "displayName", "interpretation", "capabilityCode", "searchText", "confidence", "semanticType", "branchRole", "continueNarrowing", "stopReason", "parentBranchCode"],
       "additionalProperties": false
     }
 """;

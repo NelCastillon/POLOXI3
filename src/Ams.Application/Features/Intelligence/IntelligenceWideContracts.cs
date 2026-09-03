@@ -51,6 +51,7 @@ public sealed record WideBranchDto(Guid WideBranchId,Guid? ParentWideBranchId,in
     // V2.3 semantic type: ALTERNATIVE (mutually exclusive competing interpretation, entropy-eligible)
     // or DIMENSION (jointly valid criterion; excluded from winner-take-all entropy).
     public string SemanticTypeCode{get;init;}=WideBranchSemanticTypes.Alternative;
+    public string BranchRoleCode{get;init;}=WideBranchRoles.Preference;
     // Three-score model: what the LLM initially thought, what evidence supports, and what POLOXI concludes.
     public decimal InterpretationPrior{get;init;}
     public decimal EvidenceSupport{get;init;}

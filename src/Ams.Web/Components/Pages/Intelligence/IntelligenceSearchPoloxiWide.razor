@@ -322,7 +322,25 @@
                             {
                                 <article class="poloxi-branch @(branch.IsEliminated ? "poloxi-branch-unsupported" : "poloxi-branch-valid")">
                                     <span class="poloxi-branch-icon"><i class="bi @(branch.IsEliminated ? "bi-slash-circle" : branch.GroundingStatusCode == "GROUNDED" ? "bi-check2-circle" : "bi-lightbulb")"></i></span>
-                                    <div><strong>@BranchDisplayWithLevel(branch)</strong><p>@branch.Interpretation</p><small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small></div>
+                                    <div class="poloxi-branch-body">
+                                        <strong>@BranchDisplayWithLevel(branch)</strong>
+                                        <p>@branch.Interpretation</p>
+                                        <small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small>
+                                        @if (_response.QueryContract is { } hierarchyContract)
+                                        {
+                                            var associatedContractEntries = AssociatedContractEntries(branch, hierarchyContract);
+                                            @if (associatedContractEntries.Count > 0)
+                                            {
+                                                <div class="poloxi-branch-contract" aria-label="Query contract entries associated with this hierarchy branch">
+                                                    <span class="poloxi-branch-contract-title"><i class="bi bi-file-earmark-check"></i> Associated query contract</span>
+                                                    @foreach (var entry in associatedContractEntries)
+                                                    {
+                                                        <span title="@entry.Title"><i class="bi @entry.Icon"></i>@entry.Value<em>@entry.Label</em></span>
+                                                    }
+                                                </div>
+                                            }
+                                        }
+                                    </div>
                                     <div class="poloxi-branch-meta"><span>@BranchStateLabel(branch)</span>@if (branch.SemanticTypeCode == "DIMENSION")
                                         {
                                             <span class="um-badge um-badge-neutral" title="Jointly valid evaluation criterion — scored on importance/coverage, excluded from winner-take-all entropy.">Dimension</span>
@@ -1397,6 +1415,36 @@
     }
 
     private static readonly System.Text.RegularExpressions.Regex BranchLevelPrefixPattern = new(@"^L\d+\s*(?:·|-|:)?\s+", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> ContractAssociationStopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a","an","and","are","as","at","be","best","by","criteria","criterion","for","from","in","is","of","on","or","places","ranking","the","to","used","with"
+    };
+    private sealed record BranchContractEntry(string Value,string Label,string Icon,string Title);
+    private static IReadOnlyCollection<BranchContractEntry> AssociatedContractEntries(WideBranchDto branch,WideQueryContract contract)
+    {
+        var branchTokens=ContractAssociationTokens($"{branch.DisplayName} {branch.Interpretation}");
+        if(branchTokens.Count==0)return [];
+        var entries=new List<BranchContractEntry>();
+        Add(contract.TargetObject??contract.EntityType,"UNIT","bi-bullseye","Comparison unit fixed by the query contract.");
+        Add(contract.GeographicConstraint,"FIXED","bi-geo-alt","Geographic scope fixed by the query contract.");
+        foreach(var constraint in contract.HardConstraints)Add(constraint,"FIXED","bi-lock","Hard constraint fixed by the query contract.");
+        Add(contract.RankingConcept,"RANKING","bi-sliders","Evaluative concept this branch helps operationalize.");
+        foreach(var concept in contract.AmbiguousConcepts)Add(concept,"AMBIGUOUS","bi-question-circle","Ambiguous concept this branch helps disambiguate.");
+        return entries;
+
+        void Add(string? value,string label,string icon,string title)
+        {
+            if(string.IsNullOrWhiteSpace(value))return;
+            var entryTokens=ContractAssociationTokens(value);
+            if(entryTokens.Count==0||!entryTokens.Overlaps(branchTokens))return;
+            entries.Add(new(value.Trim(),label,icon,title));
+        }
+    }
+    private static HashSet<string> ContractAssociationTokens(string value)=>System.Text.RegularExpressions.Regex.Matches(value,@"[\p{L}\p{N}]+")
+        .Select(match=>match.Value.ToLowerInvariant())
+        .Where(token=>token.Length>2&&!ContractAssociationStopwords.Contains(token))
+        .Select(token=>token.Length>4&&token.EndsWith('s')?token[..^1]:token)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
     private static string LevelPrefix(int levelNumber) => levelNumber > 0 ? $"L{levelNumber}" : "LN";
     private static string StripExistingLevelPrefix(string displayName) => string.IsNullOrWhiteSpace(displayName) ? displayName : BranchLevelPrefixPattern.Replace(displayName.Trim(), string.Empty);
     private static string BranchDisplayWithLevel(WideBranchDto branch) => $"{LevelPrefix(branch.LevelNumber)} · {StripExistingLevelPrefix(branch.DisplayName)}";
