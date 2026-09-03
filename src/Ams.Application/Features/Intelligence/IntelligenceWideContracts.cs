@@ -267,7 +267,67 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // top two candidates finished close. NEVER changes the winner, ranking, confidence, or answer.
     // Null when the round is disabled (default), the margin is wide, or the assessment failed soft.
     public WideChallengeOutcomeDto? ChallengeOutcome{get;init;}
+    // POLOXI ABV (Actionable Business Value): advisory next-action layer computed AFTER convergence.
+    // The LLM proposes intent only; impact/urgency/owner/action resolve deterministically from a
+    // database-backed Domain Pack, each with provenance. Null when ABV was not run (LLM-only mode,
+    // clarification gate, non-converged interpretation, or fail-soft error) — never blocks the answer.
+    public WideAbvActionDto? AbvAction{get;init;}
+    // V3.17 Deliverable Synthesis: deterministic structured deliverable for RESOLUTION answers and
+    // no-candidate fallbacks. Converts grounded analysis into a human-ready verdict (determinacy,
+    // best-supported reason, blocking inputs, citations) instead of bare interpretive prose. Null
+    // when synthesis is disabled or the answer kind is served by another composer (ranking/grouped).
+    public WideResolutionDeliverableDto? ResolutionDeliverable{get;init;}
 }
+
+// V3.17 Deliverable Synthesis projection. Purely deterministic: assembled from the query contract,
+// grounded evidence, external knowledge, and uncertainty metrics already computed by the pipeline.
+// DeterminacyCode is one of RESOLVED (a concrete outcome is supported), PARTIAL (some inputs present
+// but the outcome cannot be fully computed), or BLOCKED (required inputs are missing). BlockingInputs
+// lists the missing or unresolved facts/rules that prevent a full resolution; Citations reference the
+// grounded evidence/external snippets that support the reason.
+public sealed record WideResolutionDeliverableDto(
+    string DeterminacyCode,
+    string Headline,
+    string? Outcome,
+    string Reason,
+    IReadOnlyCollection<string> BlockingInputs,
+    IReadOnlyCollection<WideResolutionCitationDto> Citations,
+    decimal Confidence,
+    decimal EvidenceCoverage,
+    decimal RemainingUncertainty);
+
+// A single supporting reference behind a resolution deliverable. SourceCode is ENTERPRISE (grounded
+// enterprise evidence) or EXTERNAL (live web snippet); NavigationRoute/Url is optional.
+public sealed record WideResolutionCitationDto(string SourceCode,string Title,string? Detail,string? Reference);
+
+// POLOXI ABV display projection. Every business value carries a provenance source code
+// (DERIVED / EVIDENCE / BUSINESS_POLICY / DOMAIN_CONFIG). Unsupported values (exposure, SLA, owner)
+// stay null by design rather than being fabricated. ExecutionAllowed is always false in phase 1
+// (review-only); HumanApprovalRequired is always true.
+public sealed record WideAbvActionDto(
+    string StatusCode,
+    string ActionabilityStatusCode,
+    bool ExecutionAllowed,
+    bool HumanApprovalRequired,
+    string? IntentCode,
+    string? IntentName,
+    string? IntentRationale,
+    string? IntentSourceCode,
+    string? ImpactTierCode,
+    string? MetricAtRisk,
+    decimal? EstimatedExposure,
+    string? ImpactSourceCode,
+    string? PriorityCode,
+    int? SlaHours,
+    string? UrgencyPolicyCode,
+    string? UrgencySourceCode,
+    string? OwnerRole,
+    string? OwnerSourceCode,
+    string? ActionCode,
+    string? NextStep,
+    string? ExecutionSourceCode,
+    string? PlaybookCode,
+    string? FailureMessage);
 
 public sealed record WideAmbiguityGroupDto(Guid RootWideBranchId,string GroupCode,string DisplayName,string Interpretation,decimal Confidence,string? SafetyRiskCode,string? AnswerKindCode,string? CandidateKindCode)
 {
@@ -597,6 +657,13 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // round caps per kind. A depth ceiling of 0 means "use the full default"; unknown/null kinds
     // always run the full pipeline (fail-safe toward thoroughness, never toward speed).
     public bool EnableAnswerKindRouting{get;init;}=true;
+    // V3.17 Deliverable Synthesis: when true (default), RESOLUTION answers and no-candidate fallbacks
+    // receive a deterministic structured deliverable (determinacy verdict, blocking inputs, best-supported
+    // reason, citations) instead of bare interpretive prose. Fail-soft: false restores the raw-prose fallback.
+    public bool EnableDeliverableSynthesis{get;init;}=true;
+    // DB-backed eligibility indicators for resolution-like grouped ambiguity branches. Empty means only
+    // structural answer-kind metadata can trigger grouped deliverable synthesis.
+    public IReadOnlyCollection<string> DeliverableSynthesisIndicators{get;init;}=[];
     public int ContentEnumerationDepthCeiling{get;init;}=2;
     public int ContentEnumerationMaxInformationRounds{get;init;}=1;
     public int SingleAnswerDepthCeiling{get;init;}=2;

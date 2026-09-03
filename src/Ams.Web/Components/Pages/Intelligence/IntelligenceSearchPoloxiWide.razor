@@ -663,6 +663,180 @@
 </IntelligenceWorkspace>
 
 @code {
+    // POLOXI ABV (Actionable Business Value): advisory next-action panel. The LLM proposes intent only;
+    // impact/urgency/owner/action resolve deterministically from a database-backed Domain Pack, each with
+    // provenance. Review-only in phase 1 (ExecutionAllowed=false, human approval required).
+    private RenderFragment AbvActionPanel => __builder =>
+    {
+        @if (_response?.AbvAction is { } abv)
+        {
+            <div class="poloxi-answer-section poloxi-reveal">
+                <h3><i class="bi bi-flag"></i> ABV (Action Business Plan)</h3>
+                @if (string.Equals(abv.StatusCode, "Resolved", StringComparison.OrdinalIgnoreCase))
+                {
+                    @* Executive summary: the full plan written out in prose so it reads as an actual business plan. *@
+                    <p class="poloxi-abv-narrative">@AbvNarrative(abv)</p>
+
+                    @* Numbered execution plan — the concrete step-by-step the owner should follow. *@
+                    <ol class="poloxi-abv-plan">
+                        <li>
+                            <strong>Confirm the decision.</strong>
+                            POLOXI reads this request as an intent to
+                            <em>@((abv.IntentName ?? abv.IntentCode ?? "act").ToLowerInvariant())</em>.
+                            @if (!string.IsNullOrWhiteSpace(abv.IntentRationale))
+                            {
+                                <span>Rationale: @abv.IntentRationale</span>
+                            }
+                        </li>
+                        <li>
+                            <strong>Weigh the exposure.</strong>
+                            This decision carries a <em>@(abv.ImpactTierCode ?? "n/a")</em> business impact@(abv.MetricAtRisk is not null ? $" against {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exp ? $", with an estimated exposure of {exp:C0}" : ", with no monetary exposure quantified from admitted evidence").
+                        </li>
+                        <li>
+                            <strong>Respect the clock.</strong>
+                            Treat this as <em>@(abv.PriorityCode ?? "standard")</em> priority@(abv.SlaHours is { } sla ? $" and resolve within the {sla}-hour SLA" : "")@(abv.UrgencyPolicyCode is not null ? $" (policy {abv.UrgencyPolicyCode})" : "").
+                        </li>
+                        <li>
+                            <strong>Assign ownership.</strong>
+                            Route this to the <em>@(abv.OwnerRole ?? "responsible owner")</em>@(abv.OwnerRole is null ? " (no owner mapping configured for this intent/impact)" : "") for action.
+                        </li>
+                        <li>
+                            <strong>Execute the next action.</strong>
+                            @(abv.NextStep ?? abv.ActionCode ?? "Proceed per standard operating procedure.")
+                            @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+                            {
+                                <span>Follow playbook <strong>@abv.PlaybookCode</strong>.</span>
+                            }
+                        </li>
+                        <li>
+                            <strong>Governance gate.</strong>
+                            @(abv.ExecutionAllowed ? "Automated execution is permitted for this action." : "Automated execution is not permitted — this action must be carried out manually.")
+                            @(abv.HumanApprovalRequired ? " A human approval is required before it proceeds." : " No additional approval step is configured.")
+                        </li>
+                    </ol>
+
+                    @* Structured detail grid with provenance for auditability. *@
+                    <div class="poloxi-abv-grid">
+                        @if (abv.IntentName is not null || abv.IntentCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-bullseye"></i> Intent</span>
+                                <span class="poloxi-abv-value">@(abv.IntentName ?? abv.IntentCode)@(abv.IntentCode is not null && abv.IntentName is not null ? $" ({abv.IntentCode})" : "")</span>
+                                @if (abv.IntentSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.IntentSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.ImpactTierCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-graph-up-arrow"></i> Impact</span>
+                                <span class="poloxi-abv-value">@abv.ImpactTierCode@(abv.MetricAtRisk is not null ? $" · {abv.MetricAtRisk}" : "")@(abv.EstimatedExposure is { } exposure ? $" · {exposure:C0}" : "")</span>
+                                @if (abv.ImpactSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.ImpactSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.PriorityCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-alarm"></i> Urgency</span>
+                                <span class="poloxi-abv-value">@abv.PriorityCode@(abv.SlaHours is { } slaHours ? $" · SLA {slaHours}h" : "")@(abv.UrgencyPolicyCode is not null ? $" · {abv.UrgencyPolicyCode}" : "")</span>
+                                @if (abv.UrgencySourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.UrgencySourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.OwnerRole is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-person-badge"></i> Owner</span>
+                                <span class="poloxi-abv-value">@abv.OwnerRole</span>
+                                @if (abv.OwnerSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.OwnerSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (abv.NextStep is not null || abv.ActionCode is not null)
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-arrow-right-circle"></i> Next action</span>
+                                <span class="poloxi-abv-value">@(abv.NextStep ?? abv.ActionCode)@(abv.ActionCode is not null && abv.NextStep is not null ? $" ({abv.ActionCode})" : "")</span>
+                                @if (abv.ExecutionSourceCode is not null)
+                                {
+                                    <span class="poloxi-abv-source" title="Provenance">@abv.ExecutionSourceCode</span>
+                                }
+                            </div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+                        {
+                            <div class="poloxi-abv-item">
+                                <span class="poloxi-abv-label"><i class="bi bi-journal-text"></i> Playbook</span>
+                                <span class="poloxi-abv-value">@abv.PlaybookCode</span>
+                            </div>
+                        }
+                        <div class="poloxi-abv-item">
+                            <span class="poloxi-abv-label"><i class="bi bi-shield-check"></i> Governance</span>
+                            <span class="poloxi-abv-value">@(abv.ExecutionAllowed ? "Auto-execute allowed" : "Manual execution")@(abv.HumanApprovalRequired ? " · Human approval required" : " · No approval gate")</span>
+                            <span class="poloxi-abv-source" title="Actionability">@abv.ActionabilityStatusCode</span>
+                        </div>
+                    </div>
+                    <p class="poloxi-abv-note"><i class="bi bi-shield-lock"></i> Review only — POLOXI proposes; a human approves. Every business value above resolves deterministically from Domain-Pack configuration with explicit provenance, and is never invented.</p>
+                }
+                else
+                {
+                    <p class="poloxi-abv-note"><i class="bi bi-info-circle"></i> No actionable business value was resolved for this answer (@abv.ActionabilityStatusCode)@(abv.FailureMessage is not null ? $": {abv.FailureMessage}" : ".")</p>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="poloxi-answer-section poloxi-reveal">
+                <h3><i class="bi bi-flag"></i> ABV (Action Business Plan)</h3>
+                <p class="poloxi-abv-note"><i class="bi bi-info-circle"></i> No actionable business value is available for this answer.</p>
+            </div>
+        }
+    };
+
+    // Composes the ABV into a single, readable executive-summary paragraph.
+    private static string AbvNarrative(WideAbvActionDto abv)
+    {
+        var sb = new System.Text.StringBuilder();
+        var intent = abv.IntentName ?? abv.IntentCode ?? "act on this decision";
+        sb.Append($"POLOXI recommends a business response to {intent.ToLowerInvariant()}. ");
+        if (abv.ImpactTierCode is not null)
+        {
+            sb.Append($"The decision is assessed as {abv.ImpactTierCode.ToLowerInvariant()} impact");
+            if (abv.MetricAtRisk is not null) sb.Append($" to {abv.MetricAtRisk}");
+            if (abv.EstimatedExposure is { } exp) sb.Append($", with an estimated exposure of {exp:C0}");
+            sb.Append(". ");
+        }
+        if (abv.PriorityCode is not null)
+        {
+            sb.Append($"It should be handled at {abv.PriorityCode.ToLowerInvariant()} priority");
+            if (abv.SlaHours is { } sla) sb.Append($" within a {sla}-hour SLA");
+            sb.Append(". ");
+        }
+        if (abv.OwnerRole is not null)
+            sb.Append($"Ownership sits with the {abv.OwnerRole}. ");
+        var next = abv.NextStep ?? abv.ActionCode;
+        if (!string.IsNullOrWhiteSpace(next))
+            sb.Append($"The recommended next action is: {next}. ");
+        if (!string.IsNullOrWhiteSpace(abv.PlaybookCode))
+            sb.Append($"Execute using playbook {abv.PlaybookCode}. ");
+        sb.Append(abv.ExecutionAllowed
+            ? "Automated execution is permitted"
+            : "This action must be executed manually");
+        sb.Append(abv.HumanApprovalRequired
+            ? ", but only after a human approves it."
+            : ", with no further approval gate configured.");
+        return sb.ToString();
+    }
+
     private RenderFragment AmbiguityGroupsPanel => __builder =>
     {
         @if (_response?.AmbiguityGroups.Count > 1)
@@ -721,11 +895,16 @@
                         </article>
                     }
                 </div>
+                @AbvActionPanel
                 @if (_response.QueryContract?.RequiresClarification == true && !string.IsNullOrWhiteSpace(_response.ClarificationQuestion))
                 {
                     <div class="poloxi-optional-clarification"><strong><i class="bi bi-chat-dots"></i> Optional narrowing:</strong><span>@_response.ClarificationQuestion</span></div>
                 }
             </section>
+        }
+        else if (_response is not null)
+        {
+            @AbvActionPanel
         }
     };
 

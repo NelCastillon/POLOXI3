@@ -13,8 +13,10 @@ namespace Ams.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever):IIntelligenceWideService
+public sealed class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine):IIntelligenceWideService
 {
+    private const int WideUserPromptBudget=12000;
+
     // Model selection: null/whitespace = Auto (feature-policy routing); otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)?null:request.ModelCode.Trim();
 
@@ -341,6 +343,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}inheritedKind)
                 queryContract=queryContract is null?new(null,null,null,null,[],[],[]){AnswerKind=inheritedKind}:queryContract with{AnswerKind=inheritedKind};
             queryContract=RefineQueryContractForAmbiguity(configuration,queryContract,request.Query);
+            // Clarification disabled globally: the Stage-0 answer-kind classifier can still route a broad
+            // query to CLARIFICATION_REQUIRED (which skips candidate competition and returns no ranking).
+            // When the gate is off we downgrade that classification so the full ranking pipeline runs and
+            // POLOXI returns the best available answer instead of asking. Same config switch, both paths.
+            if(!configuration.EnableClarificationGate)
+                queryContract=DowngradeClarificationContract(configuration,queryContract);
             var contractClarificationQuestion=queryContract?.RequiresClarification==true?queryContract.ClarificationQuestion:null;
             var contractClarificationTarget=queryContract?.RequiresClarification==true?queryContract.ClarificationTarget:null;
             IReadOnlyCollection<string> contractClarificationOptions=queryContract?.RequiresClarification==true?queryContract.ClarificationOptions:[];
@@ -1146,12 +1154,43 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // V3.16 POLOXI Full Answer Composer: POLOXI owns the final structure. Grouped ambiguity
             // answers outrank winner-bound prose; ranking locks apply only when ranking is the right task.
             var finalAnswerText=BuildPoloxiFullAnswer(answer.Answer,queryContract,ambiguityGroups,topCandidates,finalEntropy,decisionConfidence,winnerStability,topKStability,decisionEvidenceCoverage,answerStatus,allBranches);
+            // V3.17 Deliverable Synthesis: for compute/adjudicate (RESOLUTION) answers and no-candidate
+            // fallbacks, assemble a deterministic structured deliverable (determinacy verdict, best-supported
+            // reason, blocking inputs, citations) from state already computed by the pipeline - zero extra
+            // LLM calls. Fail-soft: any failure leaves the deliverable null and the prose answer unchanged.
+            WideResolutionDeliverableDto? resolutionDeliverable=null;
+            if(configuration.EnableDeliverableSynthesis&&answerStatus!="USER_CLARIFICATION_REQUIRED"&&ShouldSynthesizeDeliverable(configuration,queryContract,ambiguityGroups,topCandidates))
+            {
+                try
+                {
+                    resolutionDeliverable=BuildResolutionDeliverable(request,configuration,queryContract,ambiguityGroups,relevantEvidence,externalKnowledge,decisionConfidence,decisionEvidenceCoverage,finalEntropy);
+                    if(resolutionDeliverable is not null)finalAnswerText=BuildResolutionFullAnswer(resolutionDeliverable,finalAnswerText);
+                }
+                catch{/* synthesis is advisory; never blocks the answer */}
+            }
             // Join the overlapped challenge verdict (fail-soft: null on provider failure) so the
             // response DTO and audit row are identical to the previous sequential behavior.
             if(challengeTask is not null)challengeOutcome=await challengeTask;
+            // POLOXI ABV (advisory): only on responsibly-answered runs, never on the clarification gate.
+            // The InterpretationComposite is projected from THIS execution's already-computed state
+            // (query contract + candidate branch scores) — no second ambiguity pass, no duplicate LLM
+            // cost. ABV issues exactly one taxonomy-bounded intent call, so it is folded into llmCalls
+            // and the execution duration below. Fail-soft: any failure leaves AbvAction null.
+            WideAbvActionDto? abvAction=null;
+            {
+                // ABV runs on every responsibly-produced run, including clarification-required runs:
+                // the top-ranked meaning is treated as the provisional decision so an actual Action
+                // Business Plan is always surfaced for review. Fail-soft: any failure leaves it null.
+                var abvComposite=BuildAbvComposite(request,queryContract,candidates,ambiguityGroups,decisionConfidence);
+                if(abvComposite is not null)
+                {
+                    llmCalls++;
+                    abvAction=await ResolveAbvActionAsync(request,abvComposite,cancellationToken);
+                }
+            }
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
-            return new(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
+            var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
             Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
@@ -1159,7 +1198,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable};
+            return response;
         }
         catch
         {
@@ -1168,6 +1208,107 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             throw;
         }
     }
+
+    // POLOXI ABV (Actionable Business Value) advisory stage. Feeds a CONVERGED composite — projected
+    // from this execution's existing state, never a second ambiguity pass — into the ABV engine.
+    // Fail-soft: any failure (rejected intent, provider error) returns null so the delivered answer is
+    // never affected. The LLM proposes intent only; impact/urgency/owner/action resolve
+    // deterministically from the database-backed Domain Pack with provenance.
+    private async Task<WideAbvActionDto?> ResolveAbvActionAsync(WideSearchRequest request,InterpretationComposite composite,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var correlationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"abv:{Guid.NewGuid():N}":request.CorrelationId;
+            var outcome=await abvEngine.ResolveAsync(new(request.TenantId,request.UserId,null,composite,correlationId){ModelCode=ModelOverride(request)},cancellationToken);
+            return MapAbv(outcome);
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            // Advisory only: never surface ABV failures to the user-facing answer. Cancellation still propagates.
+            return null;
+        }
+    }
+
+    // Projects an InterpretationComposite from THIS wide execution's already-computed reasoning state
+    // instead of re-running the ambiguity engine (which would duplicate the entire discovery+validation
+    // LLM pass). Decision dimensions come from the deterministic Candidate × Branch competition scores;
+    // hard constraints and the objective come from the extracted query contract. Convergence mirrors the
+    // pipeline's own confidence: a decisive, evidence-grounded ranking is a converged interpretation.
+    private static InterpretationComposite? BuildAbvComposite(WideSearchRequest request,WideQueryContract? queryContract,IReadOnlyCollection<WideCandidateDto> candidates,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,decimal? decisionConfidence)
+    {
+        var ranked=candidates.Where(c=>!c.IsConstraintViolation).OrderBy(c=>c.RankNumber).ToArray();
+        // Decision dimensions: aggregate each branch's evidence score across the surviving candidates,
+        // normalized to 0..1 so ABV impact-tier derivation reads a comparable decision weight.
+        var branchWeights=ranked
+            .SelectMany(c=>c.BranchScores)
+            .GroupBy(b=>b.BranchDisplayName,StringComparer.OrdinalIgnoreCase)
+            .Select(g=>(Name:g.Key,Score:g.Average(b=>b.EvidenceScore)))
+            .Where(x=>!string.IsNullOrWhiteSpace(x.Name))
+            .ToArray();
+        var maxScore=branchWeights.Length==0?0m:branchWeights.Max(x=>x.Score);
+        var dimensions=branchWeights
+            .Select((x,index)=>new ResolvedDimension($"dim-{index}",x.Name,SemanticRole.DecisionCriterion,PreferenceDirection.HigherIsBetter,x.Name,null,maxScore<=0m?0m:Math.Clamp(x.Score/maxScore,0m,1m)))
+            .ToArray();
+        // Ambiguity-first fallback: on a grouped/clarification run there is no single ranked winner, so
+        // the winner-ranking candidate set is empty. Project the decision dimensions from the ambiguity
+        // GROUPS instead (each possible meaning is a decision criterion weighted by its POLOXI confidence)
+        // so ABV still surfaces an actual Action Business Plan for the leading interpretation.
+        if(dimensions.Length==0)
+        {
+            var groups=ambiguityGroups
+                .Where(g=>!string.IsNullOrWhiteSpace(g.DisplayName))
+                .OrderByDescending(g=>g.Confidence)
+                .ToArray();
+            if(groups.Length==0)return null;
+            var maxConfidence=groups.Max(g=>g.Confidence);
+            dimensions=groups
+                .Select((g,index)=>new ResolvedDimension($"dim-{index}",g.DisplayName,SemanticRole.DecisionCriterion,PreferenceDirection.HigherIsBetter,g.DisplayName,null,maxConfidence<=0m?0m:Math.Clamp(g.Confidence/maxConfidence,0m,1m)))
+                .ToArray();
+        }
+        if(dimensions.Length==0)return null;
+        var constraints=(queryContract?.HardConstraints??[])
+            .Select((text,index)=>new ResolvedConstraint($"con-{index}",text,null))
+            .ToArray();
+        // Always treat the top-ranked meaning as the provisional decision so ABV surfaces an actual
+        // Action Business Plan for review, even when the run is clarification-required or the ranking is
+        // close. Governance still keeps every business value deterministic and provenance-tagged.
+        var converged=true;
+        return new()
+        {
+            Objective=string.IsNullOrWhiteSpace(request.Query)?"Wide search decision":request.Query.Trim(),
+            Dimensions=dimensions,
+            HardConstraints=constraints,
+            Preferences=[],
+            Interactions=[],
+            Uncertainties=[],
+            IsConverged=converged
+        };
+    }
+
+    private static WideAbvActionDto MapAbv(AbvResolutionOutcome outcome)=>new(
+        StatusCode:outcome.Status.ToString(),
+        ActionabilityStatusCode:outcome.Actionability.Status.ToString(),
+        ExecutionAllowed:outcome.Actionability.ExecutionAllowed,
+        HumanApprovalRequired:outcome.Actionability.HumanApprovalRequired,
+        IntentCode:outcome.Intent?.IntentCode,
+        IntentName:outcome.Intent?.Name,
+        IntentRationale:outcome.Intent?.Rationale,
+        IntentSourceCode:outcome.Intent is null?null:outcome.Intent.Source.ToString(),
+        ImpactTierCode:outcome.Impact is null?null:outcome.Impact.Tier.ToString(),
+        MetricAtRisk:outcome.Impact?.MetricAtRisk,
+        EstimatedExposure:outcome.Impact?.EstimatedExposure,
+        ImpactSourceCode:outcome.Impact is null?null:outcome.Impact.Source.ToString(),
+        PriorityCode:outcome.Urgency is null?null:outcome.Urgency.Priority.ToString(),
+        SlaHours:outcome.Urgency?.SlaHours,
+        UrgencyPolicyCode:outcome.Urgency?.PolicyCode,
+        UrgencySourceCode:outcome.Urgency is null?null:outcome.Urgency.Source.ToString(),
+        OwnerRole:outcome.ExecutionPath?.OwnerRole,
+        OwnerSourceCode:outcome.ExecutionPath is null?null:outcome.ExecutionPath.Source.ToString(),
+        ActionCode:outcome.ExecutionPath?.ActionCode,
+        NextStep:outcome.ExecutionPath?.NextStep,
+        ExecutionSourceCode:outcome.ExecutionPath is null?null:outcome.ExecutionPath.Source.ToString(),
+        PlaybookCode:outcome.ExecutionPath?.PlaybookCode,
+        FailureMessage:outcome.FailureMessage);
 
     // 'POLOXI Engine' filter disabled: complete LLM-based result without POLOXI. One LLM call answers the
     // question directly; the answer is always INTERPRETIVE because nothing is validated against
@@ -1241,9 +1382,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // V2.1: when a query contract exists, the LLM branches ONLY the ambiguous concepts; hard
         // constraints and output requirements are fixed by the user and must never be reinterpreted.
         var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
+        var userPrompt=BuildIntentUserPrompt(request.Query,contractContext,catalog,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideIntent,cancellationToken),
-            $"Ambiguous question: {request.Query}{contractContext}\nMaximum branches: {configuration.MaximumBranchesPerLevel}\nApproved capability catalog (for optional grounding):\n{catalog}",
+            userPrompt,
             IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
@@ -1256,11 +1398,32 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var samples=evidence.Where(item=>item.HierarchyBranchId==parent.WideBranchId).Take(3).Select(item=>item.Title);
             return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
         }));
+        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
+        var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
                 await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
-            $"Original question: {request.Query}{(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {configuration.MaximumBranchesPerLevel}\nSurviving parent branches with grounding outcomes:\n{parentSummary}\nApproved capability catalog (for optional grounding):\n{catalog}",
+            userPrompt,
             LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
+    }
+
+    private static string BuildIntentUserPrompt(string query,string contractContext,string catalog,int maximumBranches)
+    {
+        var boundedContract=Truncate(contractContext,3500)??string.Empty;
+        var boundedCatalog=Truncate(catalog,1500)??string.Empty;
+        var envelope=$"{boundedContract}\nMaximum branches: {maximumBranches}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
+        var boundedQuery=Truncate(query,Math.Max(0,WideUserPromptBudget-"Ambiguous question: ".Length-envelope.Length))??string.Empty;
+        return $"Ambiguous question: {boundedQuery}{envelope}";
+    }
+
+    private static string BuildHierarchyUserPrompt(string query,string contractContext,string parentSummary,string catalog,int levelNumber,int maximumBranches)
+    {
+        var boundedQuery=Truncate(query,4500)??string.Empty;
+        var boundedContract=Truncate(contractContext,2500)??string.Empty;
+        var boundedParents=Truncate(parentSummary,3000)??string.Empty;
+        var boundedCatalog=Truncate(catalog,1000)??string.Empty;
+        var prompt=$"Original question: {boundedQuery}{boundedContract}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {maximumBranches}\nSurviving parent branches with grounding outcomes:\n{boundedParents}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
+        return Truncate(prompt,WideUserPromptBudget)!;
     }
 
     private static string BuildQueryContractContext(WideQueryContract queryContract)
@@ -1325,7 +1488,6 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // prompts over the configured limit. The answer system prompt is large and the survivor/evidence
         // sections grow with depth, so every variable section is clamped and, if the assembled user prompt
         // still exceeds the budget, the sections are progressively shrunk instead of failing the search.
-        const int userPromptBudget=12000;
         var orderedSurvivors=survivors.OrderBy(branch=>branch.LevelNumber).ThenBy(branch=>branch.SortOrder).ToArray();
         // All interpretive narrowing paths (Level 1 first, then highest confidence) drive real-world reference
         // and interpretive result-set generation; the branch sub-header (Interpretation) is fed to the LLM.
@@ -1343,8 +1505,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Clamp each live snippet so external grounding cannot blow the answer prompt past the
             // feature-policy input budget (Tavily content blocks can be several thousand characters).
             var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(snippetCount).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,snippetLength)}"));
-            userPrompt=$"Question: {request.Query}{contractContext}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
-            if(userPrompt.Length<=userPromptBudget)break;
+            userPrompt=$"Question: {Truncate(request.Query,4000)}{Truncate(contractContext,3000)}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
+            if(userPrompt.Length<=WideUserPromptBudget)break;
             // Shrink in evidence-preserving order: snippet length, snippet count, path list, then interpretive paths.
             if(snippetLength>400){snippetLength=400;continue;}
             if(snippetCount>4){snippetCount=4;continue;}
@@ -1583,6 +1745,161 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(!string.IsNullOrWhiteSpace(queryContract.TargetObject))builder.Append(" for ").Append(queryContract.TargetObject);
         builder.Append('.').AppendLine().AppendLine();
         builder.Append(string.IsNullOrWhiteSpace(llmAnswer)?"No additional procedural prose was returned by the answer composer.":llmAnswer);
+        return builder.ToString();
+    }
+
+    // V3.17 Deliverable Synthesis gate. Synthesis applies when the query is a compute/adjudicate
+    // RESOLUTION task, when the ambiguity groups themselves are resolution deliverables, OR when a
+    // non-ranking answer would otherwise fall back to bare interpretive prose (no ranked candidates
+    // and no material ambiguity groups). True named-entity rankings keep their existing composer.
+    private static bool ShouldSynthesizeDeliverable(WideConfiguration configuration,WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,WideCandidateDto[] topCandidates)
+    {
+        if(string.Equals(queryContract?.AnswerKind,AnswerKindResolution,StringComparison.OrdinalIgnoreCase))return true;
+        var hasMaterialGroups=ambiguityGroups.Count>1;
+        var isRanking=string.Equals(queryContract?.AnswerKind,AnswerKindEntityRanking,StringComparison.OrdinalIgnoreCase);
+        if(hasMaterialGroups&&ambiguityGroups.Any(group=>IsResolutionLikeAmbiguityGroup(configuration,group)))return true;
+        return !hasMaterialGroups&&topCandidates.Length==0&&!isRanking;
+    }
+
+    private static bool IsResolutionLikeAmbiguityGroup(WideConfiguration configuration,WideAmbiguityGroupDto group)
+    {
+        if(string.Equals(group.AnswerKindCode,AnswerKindResolution,StringComparison.OrdinalIgnoreCase))return true;
+        if(string.Equals(group.CandidateKindCode,CandidateKindActionableSolution,StringComparison.OrdinalIgnoreCase))return true;
+        if(FindAnswerKind(configuration,group.AnswerKindCode) is{RunsCandidateCompetition:false})return true;
+        if(configuration.DeliverableSynthesisIndicators.Count==0)return false;
+        var text=$"{group.GroupCode} {group.DisplayName} {group.Interpretation} {group.Summary}";
+        return configuration.DeliverableSynthesisIndicators.Any(indicator=>ContainsConfiguredIndicator(text,indicator));
+    }
+
+    private static bool ContainsConfiguredIndicator(string text,string indicator)
+    {
+        if(string.IsNullOrWhiteSpace(text)||string.IsNullOrWhiteSpace(indicator))return false;
+        var normalizedText=NormalizeIndicatorText(text);
+        var normalizedIndicator=NormalizeIndicatorText(indicator);
+        return normalizedIndicator.Length>0&&normalizedText.Contains(normalizedIndicator,StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeIndicatorText(string value)
+    {
+        var builder=new StringBuilder(value.Length);
+        foreach(var character in value)
+            builder.Append(char.IsLetterOrDigit(character)||character=='/'?char.ToLowerInvariant(character):' ');
+        return System.Text.RegularExpressions.Regex.Replace(builder.ToString(),@"\s+"," ").Trim();
+    }
+
+    // Deterministic assembly of the resolution deliverable from pipeline state (no LLM call). The
+    // determinacy verdict is driven by the query's declared output requirements vs. the grounded
+    // evidence coverage and remaining uncertainty; blocking inputs are the output requirements the
+    // run could not ground; citations reference the strongest enterprise and external evidence.
+    private static WideResolutionDeliverableDto? BuildResolutionDeliverable(WideSearchRequest request,WideConfiguration configuration,WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,decimal? decisionConfidence,decimal decisionEvidenceCoverage,WideEntropyResult finalEntropy)
+    {
+        var confidence=Math.Clamp(decisionConfidence??0m,0m,1m);
+        var coverage=Math.Clamp(decisionEvidenceCoverage,0m,1m);
+        var uncertainty=Math.Clamp(finalEntropy.NormalizedEntropy,0m,1m);
+        var hasEvidence=relevantEvidence.Length>0||externalKnowledge.Count>0;
+        var resolutionGroups=ambiguityGroups.Where(group=>IsResolutionLikeAmbiguityGroup(configuration,group)).OrderByDescending(group=>group.Confidence).ToArray();
+        var hasResolutionAmbiguity=resolutionGroups.Length>1;
+        // Output requirements the run declared but could not ground become the blocking-input checklist.
+        var outputRequirements=(queryContract?.OutputRequirements??[]).Where(item=>!string.IsNullOrWhiteSpace(item)).Select(item=>item.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var ambiguousInputs=(queryContract?.AmbiguousConcepts??[]).Concat(queryContract?.AmbiguousTerms??[]).Where(item=>!string.IsNullOrWhiteSpace(item)).Select(item=>item.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var blockingInputs=new List<string>();
+        if(!hasEvidence)blockingInputs.Add("No grounded facts or rules were retrieved for the supplied inputs; the outcome cannot be computed from the material provided.");
+        if(hasResolutionAmbiguity)blockingInputs.Add($"Resolve the requested deliverable meaning: {string.Join(" or ",resolutionGroups.Take(4).Select(group=>group.DisplayName))}.");
+        blockingInputs.AddRange(ambiguousInputs.Select(item=>$"Unresolved input: {item}"));
+        if(outputRequirements.Length>0&&coverage<0.5m)
+            blockingInputs.AddRange(outputRequirements.Select(item=>$"Insufficient grounding for required output: {item}"));
+        var target=BuildResolutionTarget(queryContract,resolutionGroups);
+        // Determinacy: RESOLVED needs grounded evidence, adequate coverage, and low residual uncertainty.
+        string determinacy;
+        if(hasEvidence&&coverage>=0.5m&&uncertainty<=0.5m&&blockingInputs.Count==0)determinacy="RESOLVED";
+        else if(hasEvidence&&(coverage>0m||confidence>0m))determinacy="PARTIAL";
+        else determinacy="BLOCKED";
+        var citations=BuildResolutionCitations(relevantEvidence,externalKnowledge);
+        var reason=BuildResolutionReason(determinacy,target,relevantEvidence,externalKnowledge,coverage,confidence,uncertainty);
+        var headline=determinacy switch
+        {
+            "RESOLVED"=>$"POLOXI resolved {target} from grounded evidence.",
+            "PARTIAL"=>hasResolutionAmbiguity?$"POLOXI partially resolved {target}; multiple deliverable meanings remain possible.":$"POLOXI partially resolved {target}; some required inputs are still unresolved.",
+            _=>$"POLOXI cannot resolve {target} yet — required inputs are missing."
+        };
+        var outcome=determinacy=="BLOCKED"?null:BuildResolutionOutcome(target,relevantEvidence,externalKnowledge);
+        return new(determinacy,headline,outcome,reason,blockingInputs,citations,confidence,coverage,uncertainty);
+    }
+
+    private static string BuildResolutionTarget(WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> resolutionGroups)
+    {
+        if(resolutionGroups.Count>1)
+        {
+            var leading=resolutionGroups.OrderByDescending(group=>group.Confidence).First();
+            return $"the requested resolution, led by {leading.DisplayName}";
+        }
+        if(resolutionGroups.Count==1)return resolutionGroups.First().DisplayName;
+        return string.IsNullOrWhiteSpace(queryContract?.TargetObject)?"the requested outcome":queryContract!.TargetObject!.Trim();
+    }
+
+    private static IReadOnlyCollection<WideResolutionCitationDto> BuildResolutionCitations(PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    {
+        var citations=new List<WideResolutionCitationDto>();
+        foreach(var item in relevantEvidence.OrderByDescending(e=>e.RelevanceScore).Take(5))
+            citations.Add(new("ENTERPRISE",item.Title,TrimDescription(item.Excerpt),item.NavigationRoute));
+        foreach(var item in externalKnowledge.OrderByDescending(e=>e.Score).Take(5))
+            citations.Add(new("EXTERNAL",item.Title,TrimDescription(item.Snippet),item.Url));
+        return citations;
+    }
+
+    private static string BuildResolutionReason(string determinacy,string target,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,decimal coverage,decimal confidence,decimal uncertainty)
+    {
+        var builder=new StringBuilder();
+        var enterpriseCount=relevantEvidence.Length;
+        var externalCount=externalKnowledge.Count;
+        if(determinacy=="BLOCKED")
+        {
+            builder.Append("The supplied facts and rules were not sufficient to compute ").Append(target)
+                .Append(". POLOXI grounded ").Append(enterpriseCount).Append(" enterprise and ").Append(externalCount)
+                .Append(" external evidence items, but the deciding inputs remain missing or unresolved. Provide the blocking inputs below to complete the determination.");
+            return builder.ToString();
+        }
+        var strongest=relevantEvidence.OrderByDescending(e=>e.RelevanceScore).FirstOrDefault();
+        builder.Append("Best-supported determination for ").Append(target).Append(": ");
+        if(strongest is not null)builder.Append("primarily supported by \"").Append(strongest.Title).Append("\"");
+        else if(externalKnowledge.Count>0)builder.Append("primarily supported by \"").Append(externalKnowledge.OrderByDescending(e=>e.Score).First().Title).Append("\"");
+        else builder.Append("supported by the grounded analysis");
+        builder.Append(" (decision-evidence coverage ").Append(coverage.ToString("P0")).Append(", decision confidence ").Append(confidence.ToString("P0")).Append(", residual uncertainty ").Append(uncertainty.ToString("P0")).Append(").");
+        if(determinacy=="PARTIAL")builder.Append(" This is a partial resolution: resolve the blocking inputs below to reach a fully determinate outcome.");
+        return builder.ToString();
+    }
+
+    private static string? BuildResolutionOutcome(string target,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    {
+        var strongest=relevantEvidence.OrderByDescending(e=>e.RelevanceScore).FirstOrDefault();
+        if(strongest is not null&&!string.IsNullOrWhiteSpace(strongest.Excerpt))return TrimDescription(strongest.Excerpt);
+        var external=externalKnowledge.OrderByDescending(e=>e.Score).FirstOrDefault();
+        if(external is not null&&!string.IsNullOrWhiteSpace(external.Snippet))return TrimDescription(external.Snippet);
+        return null;
+    }
+
+    // Fold the structured deliverable into the human-ready prose answer so the primary text response
+    // leads with the determination, reason, and any blocking inputs before the pipeline's own prose.
+    private static string BuildResolutionFullAnswer(WideResolutionDeliverableDto deliverable,string? existingAnswer)
+    {
+        var builder=new StringBuilder();
+        builder.Append("Deliverable Synthesis").AppendLine().AppendLine();
+        builder.Append(deliverable.Headline).AppendLine().AppendLine();
+        if(!string.IsNullOrWhiteSpace(deliverable.Outcome))builder.Append("Outcome: ").Append(deliverable.Outcome).AppendLine().AppendLine();
+        builder.Append(deliverable.Reason).AppendLine();
+        if(deliverable.BlockingInputs.Count>0)
+        {
+            builder.AppendLine().Append("Required to fully resolve:").AppendLine();
+            foreach(var item in deliverable.BlockingInputs)builder.Append("- ").Append(item).AppendLine();
+        }
+        if(deliverable.Citations.Count>0)
+        {
+            builder.AppendLine().Append("Supporting evidence:").AppendLine();
+            foreach(var citation in deliverable.Citations)
+                builder.Append("- [").Append(citation.SourceCode=="EXTERNAL"?"Web":"Enterprise").Append("] ").Append(citation.Title).AppendLine();
+        }
+        if(!string.IsNullOrWhiteSpace(existingAnswer)&&!string.Equals(existingAnswer,"POLOXI completed the analysis, but no final prose was returned by the answer composer.",StringComparison.Ordinal))
+            builder.AppendLine().Append("Analysis detail:").AppendLine().Append(existingAnswer);
         return builder.ToString();
     }
 
@@ -2133,6 +2450,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private const string AnswerKindTechnicalRecommendation="TECHNICAL_RECOMMENDATION";
     private const string AnswerKindDiagnosticProcedure="DIAGNOSTIC_PROCEDURE";
     private const string AnswerKindClarificationRequired="CLARIFICATION_REQUIRED";
+    // V3.17 RESOLUTION: compute/adjudicate/decide a specific outcome (a value, an amount, a reason, a
+    // determination) rather than rank named entities. When candidate competition legitimately finds
+    // nothing to rank, POLOXI must still deliver a structured determinacy verdict + blocking inputs +
+    // best-supported reason + citations, not bare interpretive prose.
+    private const string AnswerKindResolution="RESOLUTION";
     private const string CandidateKindNamedEntity="NAMED_ENTITY";
     private const string CandidateKindActionableSolution="ACTIONABLE_SOLUTION";
     private const string CandidateKindDiagnosticStep="DIAGNOSTIC_STEP";
@@ -2154,6 +2476,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             AnswerKindTechnicalRecommendation=>AnswerKindTechnicalRecommendation,
             AnswerKindDiagnosticProcedure=>AnswerKindDiagnosticProcedure,
             AnswerKindClarificationRequired=>AnswerKindClarificationRequired,
+            AnswerKindResolution=>AnswerKindResolution,
             _=>null
         };
         if(builtIn is not null)return builtIn;
@@ -2318,9 +2641,39 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return refined;
     }
 
-    // V3.3: whether the deterministic Candidate Competition is a category error for this kind is now
-    // a lookup-table column (RunsCandidateCompetition); the CONTENT_ENUMERATION constant remains only
-    // as the compiled fallback when the table is empty.
+    // Clarification-off downgrade: when EnableClarificationGate is false the pipeline must never stop to
+    // ask the user, so a CLARIFICATION_REQUIRED contract is converted into a normal answerable contract.
+    // AnswerKind is cleared to null (full pipeline, thoroughness over speed) unless the tenant recognizes
+    // ENTITY_RANKING, in which case a ranking task is preferred so the Candidate x Branch competition runs
+    // and a Top-N ranking is produced. Clarification prompt fields are stripped so no question surfaces.
+    private static WideQueryContract? DowngradeClarificationContract(WideConfiguration configuration,WideQueryContract? contract)
+    {
+        if(contract is null)return null;
+        var isClarificationKind=string.Equals(contract.AnswerKind,AnswerKindClarificationRequired,StringComparison.OrdinalIgnoreCase);
+        if(!contract.RequiresClarification&&!isClarificationKind)return contract;
+        var downgradedKind=isClarificationKind
+            ?NormalizeAnswerKind(configuration,AnswerKindEntityRanking)
+            :contract.AnswerKind;
+        // The clarification classifier also stamps CandidateKind=DIAGNOSTIC_STEP, which makes
+        // IsValidCandidateForContract admit only action-style names and reject named entities (cities,
+        // places, products). That would leave candidate competition with zero admissible candidates,
+        // so when the answer kind becomes a ranking we reset the candidate kind to NAMED_ENTITY.
+        var downgradedCandidateKind=isClarificationKind
+            &&contract.CandidateKind is CandidateKindDiagnosticStep or CandidateKindActionableSolution or CandidateKindProcedureStep
+            ?CandidateKindNamedEntity
+            :contract.CandidateKind;
+        return contract with
+        {
+            AnswerKind=downgradedKind,
+            CandidateKind=downgradedCandidateKind,
+            RequiresClarification=false,
+            ClarificationQuestion=null,
+            ClarificationTarget=null,
+            ClarificationOptions=[]
+        };
+    }
+
+
     private static bool SkipsCandidateCompetition(WideConfiguration configuration,WideQueryContract? queryContract)
     {
         if(FindAnswerKind(configuration,queryContract?.AnswerKind)is{}definition)return!definition.RunsCandidateCompetition;
@@ -4317,7 +4670,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 {
   "type": "object",
   "properties": {
-    "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", "TECHNICAL_RECOMMENDATION", "DIAGNOSTIC_PROCEDURE", "CLARIFICATION_REQUIRED", null] },
+    "answerKind": { "type": ["string", "null"], "enum": ["ENTITY_RANKING", "CONTENT_ENUMERATION", "SINGLE_ANSWER", "TECHNICAL_RECOMMENDATION", "DIAGNOSTIC_PROCEDURE", "CLARIFICATION_REQUIRED", "RESOLUTION", null] },
     "candidateKind": { "type": ["string", "null"], "enum": ["NAMED_ENTITY", "ACTIONABLE_SOLUTION", "DIAGNOSTIC_STEP", "PROCEDURE_STEP", null] },
     "intent": { "type": ["string", "null"] },
     "targetObject": { "type": ["string", "null"] },

@@ -413,6 +413,12 @@ public sealed partial class DatabaseMigrator
         new("0357_Intelligence_Wide_Reasoning_Model_Output_Budget", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0167_IntelligenceWideReasoningModelOutputBudget.sql")),
         new("0358_Intelligence_Wide_Interpretation_Weight_Balance", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0168_IntelligenceWideInterpretationWeightBalance.sql")),
         new("0359_Poloxi_Wide_Convergence_Outcome", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0169_PoloxiWideConvergenceOutcome.sql")),
+        new("0360_Poloxi_Adaptive_Ambiguity", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0170_PoloxiAdaptiveAmbiguity.sql")),
+        new("0361_Poloxi_Mini_Heavy_Discovery_Prompt", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0171_PoloxiMiniHeavyDiscoveryPrompt.sql")),
+        new("0362_Poloxi_Premium_Light_Discovery_Prompt", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0172_PoloxiPremiumLightDiscoveryPrompt.sql")),
+        new("0363_Poloxi_Abv_Action_Layer", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0173_PoloxiAbvActionLayer.sql")),
+        new("0364_Intelligence_Wide_Disable_Clarification_Gate", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0174_IntelligenceWideDisableClarificationGate.sql")),
+        new("0365_Intelligence_Wide_Deliverable_Synthesis", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0175_IntelligenceWideDeliverableSynthesis.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€

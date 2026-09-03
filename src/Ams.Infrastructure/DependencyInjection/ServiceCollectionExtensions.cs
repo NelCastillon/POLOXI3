@@ -627,6 +627,27 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IAdaptiveRetriever, StandardPoloxiRetriever>();
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
+        // POLOXI Model-Adaptive Ambiguity & Hierarchy subsystem: the model proposes; POLOXI validates,
+        // narrows, stitches, and converges. Capability profiles and prompts are database-backed.
+        services.AddScoped<Ams.Application.Abstractions.Persistence.IIntelligenceAmbiguityRepository>(provider => provider.GetRequiredService<IIntelligenceRepository>() as Ams.Application.Abstractions.Persistence.IIntelligenceAmbiguityRepository
+            ?? throw new InvalidOperationException("The intelligence repository must support ambiguity persistence."));
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IQueryComplexityAnalyzer, Ams.Application.Features.Intelligence.Ambiguity.QueryComplexityAnalyzer>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAmbiguityPromptSelector, Ams.Application.Features.Intelligence.Ambiguity.AmbiguityPromptSelector>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAmbiguityPromptStrategy, Ams.Application.Features.Intelligence.Ambiguity.HeavyAmbiguityPromptStrategy>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAmbiguityPromptStrategy, Ams.Application.Features.Intelligence.Ambiguity.MediumAmbiguityPromptStrategy>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAmbiguityPromptStrategy, Ams.Application.Features.Intelligence.Ambiguity.LightAmbiguityPromptStrategy>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IModelEscalationPolicy, Ams.Application.Features.Intelligence.Ambiguity.ModelEscalationPolicy>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IHierarchyValidator, Ams.Application.Features.Intelligence.Ambiguity.HierarchyValidator>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAmbiguityNarrowingEngine, Ams.Application.Features.Intelligence.Ambiguity.AmbiguityNarrowingEngine>();
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IInterpretationStitcher, Ams.Application.Features.Intelligence.Ambiguity.InterpretationStitcher>();
+        services.AddScoped<Ams.Application.Abstractions.Intelligence.IAmbiguityModelRouter, Ams.Application.Features.Intelligence.Ambiguity.AmbiguityModelRouter>();
+        services.AddScoped<Ams.Application.Abstractions.Intelligence.IAmbiguityResolutionEngine, Ams.Application.Features.Intelligence.Ambiguity.AmbiguityResolutionEngine>();
+        // POLOXI ABV (Actionable Business Value) Action Layer: runs after convergence. The model proposes
+        // intent only; impact/urgency/owner/action resolve deterministically from database-backed Domain Packs.
+        services.AddScoped<Ams.Application.Abstractions.Persistence.IIntelligenceAbvRepository>(provider => provider.GetRequiredService<IIntelligenceRepository>() as Ams.Application.Abstractions.Persistence.IIntelligenceAbvRepository
+            ?? throw new InvalidOperationException("The intelligence repository must support ABV persistence."));
+        services.AddSingleton<Ams.Application.Abstractions.Intelligence.IAbvGovernanceEngine, Ams.Application.Features.Intelligence.Abv.AbvGovernanceEngine>();
+        services.AddScoped<Ams.Application.Abstractions.Intelligence.IAbvResolutionEngine, Ams.Application.Features.Intelligence.Abv.AbvResolutionEngine>();
         services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
         services.AddScoped<IRulesPlatformService, RulesPlatformService>();
         services.AddScoped<IValidationPlatformService, ValidationPlatformService>();
