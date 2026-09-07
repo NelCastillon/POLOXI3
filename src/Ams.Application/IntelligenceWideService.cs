@@ -1163,7 +1163,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 try
                 {
-                    resolutionDeliverable=BuildResolutionDeliverable(request,configuration,queryContract,ambiguityGroups,relevantEvidence,externalKnowledge,decisionConfidence,decisionEvidenceCoverage,finalEntropy);
+                    resolutionDeliverable=BuildResolutionDeliverable(request,configuration,queryContract,ambiguityGroups,relevantEvidence,externalKnowledge,decisionConfidence,decisionEvidenceCoverage,finalEntropy,topCandidates);
                     if(resolutionDeliverable is not null)finalAnswerText=BuildResolutionFullAnswer(resolutionDeliverable,finalAnswerText);
                 }
                 catch{/* synthesis is advisory; never blocks the answer */}
@@ -1814,7 +1814,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // determinacy verdict is driven by the query's declared output requirements vs. the grounded
     // evidence coverage and remaining uncertainty; blocking inputs are the output requirements the
     // run could not ground; citations reference the strongest enterprise and external evidence.
-    private static WideResolutionDeliverableDto? BuildResolutionDeliverable(WideSearchRequest request,WideConfiguration configuration,WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,decimal? decisionConfidence,decimal decisionEvidenceCoverage,WideEntropyResult finalEntropy)
+    private static WideResolutionDeliverableDto? BuildResolutionDeliverable(WideSearchRequest request,WideConfiguration configuration,WideQueryContract? queryContract,IReadOnlyCollection<WideAmbiguityGroupDto> ambiguityGroups,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,decimal? decisionConfidence,decimal decisionEvidenceCoverage,WideEntropyResult finalEntropy,WideCandidateDto[] topCandidates)
     {
         var confidence=Math.Clamp(decisionConfidence??0m,0m,1m);
         var coverage=Math.Clamp(decisionEvidenceCoverage,0m,1m);
@@ -1845,7 +1845,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             "PARTIAL"=>hasResolutionAmbiguity?$"POLOXI partially resolved {target}; multiple deliverable meanings remain possible.":$"POLOXI partially resolved {target}; some required inputs are still unresolved.",
             _=>$"POLOXI cannot resolve {target} yet — required inputs are missing."
         };
-        var outcome=determinacy=="BLOCKED"?null:BuildResolutionOutcome(target,relevantEvidence,externalKnowledge);
+        var outcome=determinacy=="BLOCKED"?null:BuildResolutionOutcome(target,relevantEvidence,externalKnowledge,topCandidates);
         return new(determinacy,headline,outcome,reason,blockingInputs,citations,confidence,coverage,uncertainty);
     }
 
@@ -1892,8 +1892,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         return builder.ToString();
     }
 
-    private static string? BuildResolutionOutcome(string target,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    private static string? BuildResolutionOutcome(string target,PoloxiEvidenceDto[] relevantEvidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideCandidateDto[] topCandidates)
     {
+        // POLOXI enforces: when the Candidate x Branch competition produced a winner, the deliverable
+        // Outcome MUST be the authoritative ranking winner (topCandidates[0]). Evidence is disclosed as
+        // support in the Reason/Citations only - it must never independently name a different candidate,
+        // which previously happened on near-ties (winner vs strongest-evidence excerpt divergence).
+        var winner=topCandidates.OrderBy(c=>c.RankNumber).FirstOrDefault();
+        if(winner is not null&&!string.IsNullOrWhiteSpace(winner.DisplayName))
+            return string.IsNullOrWhiteSpace(winner.Detail)?winner.DisplayName.Trim():$"{winner.DisplayName.Trim()} - {winner.Detail!.Trim()}";
         var strongest=relevantEvidence.OrderByDescending(e=>e.RelevanceScore).FirstOrDefault();
         if(strongest is not null&&!string.IsNullOrWhiteSpace(strongest.Excerpt))return TrimDescription(strongest.Excerpt);
         var external=externalKnowledge.OrderByDescending(e=>e.Score).FirstOrDefault();
@@ -3076,7 +3083,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // are a superset of canonical tokens, so every previously detected fragment is still detected;
     // the exclusive-evidence escape hatch is unchanged, so a genuinely independent entity with
     // its own exclusive hosts is never dominated.
-    private static Dictionary<string,string> FindDominatedFragments(IReadOnlyCollection<string> candidates,IReadOnlyDictionary<string,int> exclusiveHostCounts)
+    private static Dictionary<string,string> FindDominatedFragments(IReadOnlyCollection<string> candidates,IReadOnlyDictionary<string,int> exclusiveHostCounts,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
     {
         var tokenSetsByCandidate=candidates.ToDictionary(candidate=>candidate,
             candidate=>CanonicalTokens(candidate).Select(token=>token.ToLowerInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase),
@@ -3090,13 +3097,29 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var fullTokensByCandidate=candidates.ToDictionary(candidate=>candidate,
             candidate=>FullNameTokens(candidate).Select(token=>token.ToLowerInvariant()).ToArray(),
             StringComparer.OrdinalIgnoreCase);
+        // V3.12 FD hardening: a candidate is a name fragment only when a LONGER, SINGLE-ENTITY sibling
+        // strictly contains it AND the candidate is never attested on its own in the corpus. Two prior
+        // defects over-pruned real entities on near-ties: (1) invalid conjunction/composite artifacts
+        // ("Manhattan Beach and Redondo Beach", "Hawthorne and Lawndale") were allowed to dominate the
+        // atomic entities they merely list, and (2) genuinely independent shorter entities ("Torrance"
+        // vs "Old Torrance", "Redondo Beach" vs "North Redondo Beach") were treated as truncations even
+        // though the corpus discusses them on their own. Both are corrected below.
         var dominated=new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         foreach(var(candidate,tokens)in tokenSetsByCandidate)
         {
             if(tokens.Count==0||exclusiveHostCounts.GetValueOrDefault(candidate)>0)continue;
+            // Real entities that appear in the corpus independent of any longer sibling name are never
+            // fragments, even when their tokens are a subset of a longer sibling's tokens.
+            var longerSiblings=candidates.Where(other=>!string.Equals(other,candidate,StringComparison.OrdinalIgnoreCase)
+                &&FullNameTokens(other).Length>FullNameTokens(candidate).Length
+                &&other.Contains(candidate,StringComparison.OrdinalIgnoreCase)).ToArray();
+            if(HasIndependentCorpusMention(candidate,longerSiblings,externalKnowledge))continue;
             foreach(var(other,otherTokens)in fullTokenSetsByCandidate)
             {
                 if(string.Equals(candidate,other,StringComparison.OrdinalIgnoreCase))continue;
+                // A conjunction/composite artifact lists multiple entities; it is itself invalid and must
+                // never dominate one of the atomic entities it enumerates.
+                if(IsCompositeCandidateName(other))continue;
                 if(otherTokens.Count>tokens.Count&&tokens.All(otherTokens.Contains)
                     &&(tokens.Count==1||IsContiguousTokenSubsequence(tokensByCandidate[candidate],fullTokensByCandidate[other])))
                 {
@@ -3106,6 +3129,34 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
         }
         return dominated;
+    }
+
+    // A candidate name that enumerates multiple entities via a connective ("and"/"&") or comma is a
+    // composite artifact, not a single named entity. It is separately excluded by the constraint engine
+    // and must never act as a fragment dominator over the atomic entities it lists.
+    private static bool IsCompositeCandidateName(string name)=>
+        name.Contains(" and ",StringComparison.OrdinalIgnoreCase)
+        ||name.Contains(" & ",StringComparison.OrdinalIgnoreCase)
+        ||name.Contains(',');
+
+    // True when the candidate's own name is attested by at least one corpus host in a context that is
+    // NOT explained by a longer sibling name. Longer sibling names are stripped from each snippet before
+    // testing, so "Torrance" must appear outside "Old Torrance" and "Redondo Beach" outside "North
+    // Redondo Beach" to count. Pure truncations ("Redondo", "Rolling Hills") that only ever appear as a
+    // substring of a longer name yield no residual mention and remain prunable.
+    private static bool HasIndependentCorpusMention(string candidate,IReadOnlyCollection<string> longerSiblings,IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
+    {
+        var keys=CandidateMatchKeys(candidate);
+        foreach(var snippet in knowledge)
+        {
+            var text=$"{snippet.Title} {snippet.Snippet}";
+            if(string.IsNullOrWhiteSpace(text))continue;
+            foreach(var sibling in longerSiblings)
+                if(text.Contains(sibling,StringComparison.OrdinalIgnoreCase))
+                    text=text.Replace(sibling,string.Empty,StringComparison.OrdinalIgnoreCase);
+            if(keys.Any(key=>text.Contains(key,StringComparison.OrdinalIgnoreCase)))return true;
+        }
+        return false;
     }
 
     private static bool IsContiguousTokenSubsequence(string[] shorter,string[] longer)
@@ -4196,7 +4247,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // uses the same run-relative, deterministic signals. Zero LLM calls.
             var poolNames=candidateNames.Select(candidate=>candidate.Name).ToArray();
             var exclusiveHostCounts=CountExclusiveSourceHosts(poolNames,externalKnowledge);
-            var dominatedFragments=FindDominatedFragments(poolNames,exclusiveHostCounts);
+            var dominatedFragments=FindDominatedFragments(poolNames,exclusiveHostCounts,externalKnowledge);
             var branchList=string.Join('\n',branches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
             // V3.5: child sub-criteria are appended as S-labelled lines referencing their parent so the
             // model scores every candidate on the narrowed specifics too. They do NOT enter the

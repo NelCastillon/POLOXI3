@@ -39,6 +39,7 @@
 - **POLOXI Wide pipeline results must never be inferior to the raw single-shot LLM answer:** when candidates from the raw/interpretive answer lack evidence attribution, the pipeline must attempt targeted evidence retrieval for those candidate names (earning support) rather than silently delivering a shorter/worse ranking; evidence admission gates are never lowered.
 - When fixing POLOXI pipeline issues, prefer logical/general pipeline fixes over hardcoded case-specific UI masking, and avoid changes that eliminate or weaken the core ranking/narrowing logic for future prompts.
 - For POLOXI Wide ranking, L1 disambiguation branches returned by the model should not automatically be treated as the best or authoritative candidate-scoring criteria; only branches that represent actual user decision criteria should influence Candidate × Branch competition.
+- When changing POLOXI prompts, evaluate the full prompt chain and any newly introduced prompts together, and only add or version a prompt when it improves end-to-end result quality without conflicting with other prompt stages.
 - For POLOXI design and implementation, prioritize semantic correctness of query contracts, branch roles, candidate identity, and scoring criteria because better semantics should produce better retrieval, scoring, and final results; do not treat additional latency or pipeline depth as a substitute for semantic quality.
 
 ## CRMConfiguration Guidelines

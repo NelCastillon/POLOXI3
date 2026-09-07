@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using Ams.Application;
 using Ams.Application.Abstractions.Persistence;
 using Ams.Application.Features.Intelligence;
 using Ams.Application.Services;
@@ -17,6 +18,25 @@ namespace Ams.Application.Tests;
 
 public sealed class IntelligencePlatformContractTests
 {
+    [Fact]
+    public void EntityRankingHierarchyPrompts_KeepCandidatesOutsideDecisionHierarchy()
+    {
+        var assembly=typeof(DatabaseMigrator).Assembly;
+        var resource=assembly.GetManifestResourceNames().Single(x=>x.EndsWith("0178_IntelligenceWideEntityRankingHierarchyPrompts.sql",StringComparison.Ordinal));
+        var sql=Read(assembly,resource);
+        var normalizedSql=sql.Replace("''","'",StringComparison.Ordinal);
+
+        Assert.Contains("For ENTITY_RANKING, establish the requested decision or comparison frame at Level 1",IntelligencePromptDefaults.WideIntent,StringComparison.Ordinal);
+        Assert.Contains("never emit named candidates as hierarchy branches",IntelligencePromptDefaults.WideIntent,StringComparison.Ordinal);
+        Assert.Contains("Do not represent jointly applicable evaluation criteria as competing interpretations or ambiguity groups",IntelligencePromptDefaults.WideIntent,StringComparison.Ordinal);
+        Assert.Contains("For an ENTITY_RANKING decision-frame parent",IntelligencePromptDefaults.WideHierarchyStep,StringComparison.Ordinal);
+        Assert.Contains("Do not convert jointly applicable criteria into ALTERNATIVE branches or ambiguity groups",IntelligencePromptDefaults.WideHierarchyStep,StringComparison.Ordinal);
+        Assert.Contains(IntelligencePromptDefaults.WideIntent,normalizedSql,StringComparison.Ordinal);
+        Assert.Contains(IntelligencePromptDefaults.WideHierarchyStep,normalizedSql,StringComparison.Ordinal);
+        Assert.Contains("VersionLabel,N'v3.19'",sql,StringComparison.Ordinal);
+        Assert.Contains("prompt.TenantId IS NULL",sql,StringComparison.Ordinal);
+    }
+
     [Fact]
     public void IntelligentSearchUsingPoloxi_DefinesGovernedDatabaseApiAndUiFlow()
     {

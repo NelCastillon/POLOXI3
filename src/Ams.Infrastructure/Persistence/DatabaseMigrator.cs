@@ -419,6 +419,7 @@ public sealed partial class DatabaseMigrator
         new("0363_Poloxi_Abv_Action_Layer", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0173_PoloxiAbvActionLayer.sql")),
         new("0364_Intelligence_Wide_Disable_Clarification_Gate", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0174_IntelligenceWideDisableClarificationGate.sql")),
         new("0365_Intelligence_Wide_Deliverable_Synthesis", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0175_IntelligenceWideDeliverableSynthesis.sql")),
+        new("0366_Intelligence_Wide_Entity_Ranking_Hierarchy_Prompts", LoadEmbeddedMigration("Ams.Infrastructure.Migrations.0178_IntelligenceWideEntityRankingHierarchyPrompts.sql")),
     ];
 
     // â”€â”€ 0001 â€” Add extended profile/security columns to IAM.[User] â”€â”€â”€â”€
