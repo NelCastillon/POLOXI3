@@ -212,6 +212,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public IReadOnlyCollection<WideInterpretiveResultDto> InterpretiveResults{get;init;}=[];
     // Fresh external snippets that grounded the answer (Stage 2.5); empty when live grounding is disabled.
     public IReadOnlyCollection<WideExternalKnowledgeSnippet> ExternalKnowledge{get;init;}=[];
+    // V3.20: AI-proposed legal authorities used only as retrieval leads (never evidence). Surfaced in a
+    // distinctly-labeled, non-evidence UI panel with per-item VERIFIED/UNVERIFIED status. Empty when the
+    // EnableLegalAuthorityProposal flag is off or the question is non-legal.
+    public IReadOnlyCollection<WideProposedAuthorityDto> ProposedLegalAuthorities{get;init;}=[];
     // V2.1: query contract extracted before hierarchy generation (constraints vs ambiguities vs output shape).
     public WideQueryContract? QueryContract{get;init;}
     // V3.2: the governing AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER)
@@ -330,7 +334,20 @@ public sealed record WideResolutionDeliverableDto(
     IReadOnlyCollection<WideResolutionCitationDto> Citations,
     decimal Confidence,
     decimal EvidenceCoverage,
-    decimal RemainingUncertainty);
+    decimal RemainingUncertainty)
+{
+    // V3.18 Resolution Deepening (R+1 Decisive Sub-Resolution). Populated ONLY when the bounded
+    // RESOLUTION-only deepening pass fires (EnableResolutionDeepening + strict-conjunction trigger):
+    // the outcome-determining discriminators the surviving proposition still bundles ("if X or Y or Z"),
+    // each scored through the existing Candidate x Branch path. Empty for every run that does not deepen,
+    // so current behavior is bit-identical while the feature is off or the trigger is not met.
+    public IReadOnlyCollection<WideResolutionConditionDto> DecisiveConditions{get;init;}=[];
+}
+
+// V3.18 A single outcome-determining discriminator extracted from a bundled resolution proposition.
+// Description is the decisive condition in plain terms; Support is its normalized evidence/reasoning
+// backing (0..1); SourceCode is EVIDENCE (grounded), INTERPRETIVE (model reasoning), or UNRESOLVED.
+public sealed record WideResolutionConditionDto(string ConditionCode,string Description,decimal Support,string SourceCode);
 
 // A single supporting reference behind a resolution deliverable. SourceCode is ENTERPRISE (grounded
 // enterprise evidence) or EXTERNAL (live web snippet); NavigationRoute/Url is optional.
@@ -590,6 +607,14 @@ public sealed record WideCandidateChildScoreDto(string BranchDisplayName,decimal
 
 public sealed record WideExternalReferenceDto(string Title,string Url,string Source,string Summary,string BranchDisplayName);
 
+// V3.20: an AI-proposed primary legal authority used ONLY as a retrieval lead. These are NEVER evidence.
+// Displayed in a distinctly-labeled, non-evidence UI panel so users can see what the model suggested and
+// which suggestions were subsequently confirmed by an admitted external source.
+//   Name/Kind/Relevance: the model's proposal (Kind = Case/Statute/Regulation).
+//   VerificationStatus: VERIFIED  = a retrieved external source passed the identity gate for this authority;
+//                       UNVERIFIED = the lead produced no admitted source (remains an unconfirmed suggestion).
+public sealed record WideProposedAuthorityDto(string Name,string Kind,string Relevance,string VerificationStatus);
+
 public sealed record WideInterpretiveResultDto(string BranchDisplayName,string Interpretation,decimal Confidence,IReadOnlyCollection<WideInterpretiveResultItemDto> Items)
 {
     // STABLE: durable knowledge. TIME_SENSITIVE: prices, rates, rankings, availability - figures may be outdated.
@@ -623,6 +648,17 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     public decimal EnterpriseSupportCeiling{get;init;}=.90m;
     public decimal ExternalSupportBase{get;init;}=.60m;
     public decimal ExternalSupportIncrement{get;init;}=.10m;
+    // V3.19 Graded legal evidence (DB-seeded; see migration 0186). The legal retrievers
+    // (CourtListener/GovInfo/eCFR/Cornell) do not return a provider relevance score, so a retrieved,
+    // identity-verified legal snippet would otherwise contribute 0 (Score*support == 0) and collapse
+    // evidence confidence to 0% even when authoritative sources were admitted. These knobs replace the
+    // missing provider score with a deterministic, graded relevance: a retrieval floor for an admitted
+    // legal snippet, blended by proposition support (retrieved-but-off-topic < on-point), and promoted
+    // for authoritative statutes/regulations over case law. Non-legal (web) snippets keep their real
+    // provider score and are unaffected. Defaults are calibrated to restore graded support, not binary.
+    public decimal LegalRetrievalRelevanceFloor{get;init;}=.60m;
+    public decimal LegalSupportFloor{get;init;}=.50m;
+    public decimal AuthoritativeSourceBonus{get;init;}=.15m;
     // V3.8 Bounded Consensus Fallback: enterprise evidence wins clear conflicts; external-only
     // support is discounted unless corroborated by enterprise evidence.
     public decimal EvidenceConsensusThreshold{get;init;}=.25m;
@@ -636,6 +672,12 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // estimator/entropy failure skips the information round and continues V2.1 narrowing.
     public bool EnableInformationValue{get;init;}=true;
     public decimal InformationValueTriggerEntropy{get;init;}=.45m;
+    // V3.20 Legal authority proposal (DB-seeded; see migration 0187). When enabled, a single fail-soft
+    // LLM call proposes candidate primary authorities for the legal question; those authorities are used
+    // only as RETRIEVAL LEADS for interpretive branches that name no citation and that the concept map
+    // does not resolve. Every proposed authority still passes the unchanged mandatory identity +
+    // proposition-support admission gates, so an unverifiable authority never becomes evidence.
+    public bool EnableLegalAuthorityProposal{get;init;}=true;
     // V2.8 Clarification Gate thresholds (DB-seeded; see migration 0152). ALL conditions must hold
     // for POLOXI to ask instead of answer — a single low metric never triggers a question.
     public bool EnableClarificationGate{get;init;}=true;
@@ -736,6 +778,19 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // V3.3: the ReweightCandidatesByClarificationAnswer boost factor (score * (1 + boost * overlap)),
     // moved from a compiled .35m constant to a DB-seeded dial.
     public decimal ClarificationReweightBoost{get;init;}=.35m;
+    // V3.18 Resolution Deepening (R+1 Decisive Sub-Resolution): a bounded, RESOLUTION-only second
+    // competition pass that fires ONLY after POLOXI has found the right ambiguity but the surviving
+    // resolution proposition still bundles multiple legally distinct, outcome-determining mechanisms
+    // (the "if X or Y or Z" shape). It decomposes the outcome-changing discriminators ("what would
+    // have to be true for A vs B to win?") and scores them through the existing Candidate x Branch
+    // path - it is NOT a new generic hierarchy level. Default OFF: current behavior is bit-identical
+    // until a benchmark earns promotion. When ON, it runs for EVERY substantive RESOLUTION and
+    // challenges the resolution, rather than waiting for the resolution to recognize its own weakness.
+    public bool EnableResolutionDeepening{get;init;}=false;
+    // Bounds on the decisive-condition decomposition: below the minimum there is nothing to deepen;
+    // above the maximum the extra branches are capped to protect latency and avoid branch explosion.
+    public int ResolutionDeepeningMinConditions{get;init;}=2;
+    public int ResolutionDeepeningMaxConditions{get;init;}=4;
 }
 
 // V3.3 answer-kind definition row from POLOXI.AnswerKind. DepthCeiling 0 and MaxInformationRounds
@@ -776,7 +831,11 @@ public sealed record WideLegalConceptAuthorityDto(
     string AuthorityKindCode,
     string VerificationTokens,
     string? SourceLabel,
-    string? DisplayName);
+    string? DisplayName,
+    // Comma-delimited domain-context tokens. When non-empty, at least one anchor must ALSO appear in the
+    // text before this concept resolves, so domain-specific doctrines (e.g. UCC sale-of-goods statutes)
+    // cannot fire on unrelated questions. Empty preserves the original keyword-only behavior.
+    string ContextAnchors = "");
 
 // A fresh real-world snippet retrieved at answer time.
 // NOTE: This is a non-positional record with BOTH a parameterless constructor AND a 6-argument

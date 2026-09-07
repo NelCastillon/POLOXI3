@@ -352,7 +352,13 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         foreach(var concept in conceptMap)
         {
             var keywords=(concept.ConceptKeywords??string.Empty).Split([' ','\t',','],StringSplitOptions.RemoveEmptyEntries);
-            if(keywords.Length==0||!keywords.All(keyword=>haystack.Contains(keyword.ToLowerInvariant())))continue;
+            if(keywords.Length==0||!keywords.All(keyword=>ContainsWord(haystack,keyword.ToLowerInvariant())))continue;
+            // Context-anchor gate: when a concept declares domain-context tokens, at least one must ALSO
+            // appear in the text before it resolves. This stops generic doctrine words (e.g. "cure",
+            // "waiver", "good faith") from matching commercial statutes on unrelated (family, medical,
+            // constitutional) questions. Empty anchors preserve the original keyword-only behavior.
+            var anchors=(concept.ContextAnchors??string.Empty).Split([',',';'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+            if(anchors.Length>0&&!anchors.Any(anchor=>ContainsWord(haystack,anchor.ToLowerInvariant())))continue;
             var citation=NormalizeQuery(concept.CitationText);
             if(citation.Length<3||!seen.Add(citation))continue;
             var tokens=(concept.VerificationTokens??string.Empty).Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(token=>token.Length>=1).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -363,6 +369,30 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(authorities.Count>=3)break;
         }
         return authorities;
+    }
+
+    // Word-boundary containment over a space-normalized, lowercased haystack. A keyword matches only when
+    // it appears as a whole word (or whole multi-word phrase), so "cure" no longer matches "secure" and a
+    // commercial doctrine cannot latch onto an unrelated substring. Multi-word keywords match if all their
+    // sub-tokens appear as whole words (order-independent), preserving the existing AND-phrase behavior.
+    private static bool ContainsWord(string haystack,string keyword)
+    {
+        if(string.IsNullOrWhiteSpace(keyword))return false;
+        foreach(var token in keyword.Split([' ','\t'],StringSplitOptions.RemoveEmptyEntries))
+        {
+            var index=0;
+            var found=false;
+            while((index=haystack.IndexOf(token,index,StringComparison.Ordinal))>=0)
+            {
+                var beforeOk=index==0||!char.IsLetterOrDigit(haystack[index-1]);
+                var after=index+token.Length;
+                var afterOk=after>=haystack.Length||!char.IsLetterOrDigit(haystack[after]);
+                if(beforeOk&&afterOk){found=true;break;}
+                index=after;
+            }
+            if(!found)return false;
+        }
+        return true;
     }
 
     private static IReadOnlyList<string> CaseVerificationTokens(string caseName)
@@ -593,6 +623,15 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // Stage 1 intent, hierarchy narrowing, and grounding. Same accepted pattern as llmRawTask.
             var candidateSeedTask=configuration.EnableInformationValue?EnumerateCandidateSeedsAsync(request,queryContract,cancellationToken):null;
 
+            // V3.20 Legal authority proposal overlap: like the candidate-seed enumeration, this depends only
+            // on the query and finalized contract, so its one fail-soft LLM call is started here and awaited
+            // just before external grounding. It proposes primary authorities to feed retrieval as LEADS for
+            // legal branches that name no citation; every proposed authority still passes the unchanged
+            // identity/support admission gates. Legal context + flag gated; null otherwise.
+            var legalAuthorityProposalTask=configuration.EnableLegalAuthorityProposal
+                &&string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)
+                ?ProposeLegalAuthoritiesAsync(request,queryContract,cancellationToken):null;
+
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
             var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
             llmCalls++;
@@ -717,7 +756,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // persisted evidence pool - the original run already grounded the base query, so the
             // continuation only needs the clarification-driven delta. Reused and fresh snippets are
             // URL-deduplicated (fresh wins) so the pool never double-counts a source.
-            var externalKnowledge=await GatherExternalKnowledgeAsync(request,executionId,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,cancellationToken);
+            // V3.20: await the overlapped legal authority proposal (fail-soft; empty when disabled or on
+            // failure) and pass the proposed authorities into grounding as retrieval LEADS. They only widen
+            // retrieval coverage for legal branches that name no citation; the admission gates are unchanged.
+            IReadOnlyList<ProposedLegalAuthority> proposedLegalAuthorities=legalAuthorityProposalTask is null?[]:await legalAuthorityProposalTask;
+            var proposedAuthorityLeads=proposedLegalAuthorities.Select(item=>item.Reference).ToArray();
+            var externalKnowledge=await GatherExternalKnowledgeAsync(request,executionId,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,cancellationToken);
             if(continuationState is not null)
             {
                 try
@@ -737,6 +781,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             {
                 var support=ComputeEvidenceSupport(branch,evidence,externalKnowledge,configuration);
                 var poloxiConfidence=Math.Clamp(configuration.PriorWeight*branch.Confidence+configuration.EvidenceWeight*support,0,1);
+                // V3.19 Reconnect UI/telemetry evidence count with the internal evidence model: the
+                // per-branch EvidenceCount was set only from enterprise grounding (0 for INTERPRETIVE
+                // branches), so admitted external sources were visible in the UI yet reported as
+                // "0 evidence". Fold in the ADMITTED external snippets for this branch (identity-verified,
+                // not merely retrieved) so EvidenceCount reflects credited evidence. Retrieved-but-rejected
+                // (UNVERIFIED) snippets are excluded, honoring "do not count every retrieved source".
+                var admittedExternal=CountAdmittedExternalEvidence(branch,externalKnowledge);
+                var evidenceCount=branch.EvidenceCount+admittedExternal;
                 // V2.1 REWEIGHT: evidence revises the branch state — a DORMANT branch with strong evidence
                 // support is reactivated, and a high-prior branch without support is demoted. PRUNED
                 // (constraint violation / evidence-void) is terminal and never reactivated here.
@@ -744,10 +796,28 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                     :poloxiConfidence>=configuration.SecondaryBranchThreshold?WideBranchStates.Active
                     :poloxiConfidence>=configuration.DormantBranchThreshold?WideBranchStates.Secondary
                     :WideBranchStates.Dormant;
-                return branch with{InterpretationPrior=branch.Confidence,EvidenceSupport=support,PoloxiConfidence=poloxiConfidence,BranchStateCode=state};
+                return branch with{InterpretationPrior=branch.Confidence,EvidenceSupport=support,EvidenceCount=evidenceCount,PoloxiConfidence=poloxiConfidence,BranchStateCode=state};
             }).ToArray();
             foreach(var branch in survivorsFinal)
                 allBranches[allBranches.FindIndex(item=>item.WideBranchId==branch.WideBranchId)]=branch;
+
+            // V3.19 STAGE 9 (evidence-support rollup): per-branch line that makes the whole
+            // retrieved -> matched -> accepted -> count -> support chain copy-pasteable from the log for
+            // benchmark reporting. accepted = admitted (identity-verified, non-UNVERIFIED) snippets
+            // attributed to the branch; maxRelevance = the strongest admitted snippet relevance;
+            // evidenceSupport = the deterministic value that feeds POLOXI confidence.
+            foreach(var branch in survivorsFinal)
+            {
+                var attributedAll=externalKnowledge.Count(snippet=>snippet.BranchId==branch.WideBranchId||(snippet.BranchId is null&&snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)));
+                var rejectedUnverified=externalKnowledge.Count(snippet=>(snippet.BranchId==branch.WideBranchId||(snippet.BranchId is null&&snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)))&&string.Equals(snippet.PropositionSupportStatus,PropositionStatusUnverified,StringComparison.Ordinal));
+                var admitted=CountAdmittedExternalEvidence(branch,externalKnowledge);
+                var maxRelevance=externalKnowledge
+                    .Where(snippet=>(snippet.BranchId==branch.WideBranchId||(snippet.BranchId is null&&snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)))&&!string.Equals(snippet.PropositionSupportStatus,PropositionStatusUnverified,StringComparison.Ordinal))
+                    .Select(snippet=>ComputeSnippetRelevance(snippet,configuration))
+                    .DefaultIfEmpty(0m)
+                    .Max();
+                logger.LogInformation("LEGAL-TRACE stage=9-support branchId={BranchId} branch=\"{Branch}\" attributed={Attributed} rejectedUnverified={Rejected} accepted={Accepted} evidenceCount={EvidenceCount} maxRelevance={MaxRelevance:F2} evidenceSupport={EvidenceSupport:F2} poloxiConfidence={PoloxiConfidence:F2}",branch.WideBranchId,branch.DisplayName,attributedAll,rejectedUnverified,admitted,branch.EvidenceCount,maxRelevance,branch.EvidenceSupport,branch.PoloxiConfidence);
+            }
 
             // ── V2.2 Information-Directed Exploration ─────────────────────────────────
             // "Don't explore everything. Explore what will teach you the most."
@@ -941,7 +1011,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         }
                         // Targeted parallel retrieval: evidence target text focuses the query per branch.
                         var retrievalBranches=selected.Select(item=>string.IsNullOrWhiteSpace(item.Target.EvidenceTarget)?item.Branch:item.Branch with{SearchText=Truncate(item.Target.EvidenceTarget,400)}).ToArray();
-                        var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,cancellationToken);
+                        var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,cancellationToken);
                         // V3.6.1: rounds frequently re-surface URLs already in the pool (cache-first
                         // retrieval); duplicates would double-count evidence signals and inflate the
                         // disclosed evidence total, so only genuinely new URLs join the pool.
@@ -1380,6 +1450,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 try
                 {
                     resolutionDeliverable=BuildResolutionDeliverable(request,configuration,queryContract,ambiguityGroups,relevantEvidence,externalKnowledge,decisionConfidence,decisionEvidenceCoverage,finalEntropy,topCandidates,interpretiveResults);
+                    // V3.18 Resolution Deepening (R+1 Decisive Sub-Resolution): a bounded, RESOLUTION-only
+                    // second pass. Fires ONLY on a strict conjunction (flag on, RESOLUTION answer, winner
+                    // barely separated, and the surviving proposition bundles multiple decisive conditions).
+                    // Fail-soft and non-destructive: it only annotates DecisiveConditions; it never changes
+                    // the winner, ranking, confidence, or existing deliverable outcome.
+                    if(resolutionDeliverable is not null&&configuration.EnableResolutionDeepening&&string.Equals(queryContract?.AnswerKind,AnswerKindResolution,StringComparison.OrdinalIgnoreCase))
+                    {
+                        var decisiveConditions=BuildResolutionDeepening(configuration,resolutionDeliverable,topCandidates,interpretiveResults,decisionEvidenceCoverage);
+                        if(decisiveConditions.Count>0)resolutionDeliverable=resolutionDeliverable with{DecisiveConditions=decisiveConditions};
+                    }
                     if(resolutionDeliverable is not null)finalAnswerText=BuildResolutionFullAnswer(resolutionDeliverable,finalAnswerText);
                 }
                 catch{/* synthesis is advisory; never blocks the answer */}
@@ -1416,7 +1496,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
-            var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,QueryContract=queryContract,
+            var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
             Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
             WinnerStability=winnerStability,TopKStability=topKStability,DecisionConfidence=decisionConfidence,ChallengeOutcome=challengeOutcome,
@@ -1846,7 +1926,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.
     // Retrievals run concurrently under a bounded gate; results merge in branch-priority order.
-    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,IReadOnlyList<LegalAuthorityReference> proposedLegalAuthorities,CancellationToken cancellationToken)
     {
         if(interpretiveBranches.Count==0)return [];
         try
@@ -1994,6 +2074,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                             authorities=resolved;
                             logger.LogInformation("LEGAL-TRACE stage=1-concept branchId={BranchId} branch=\"{Branch}\" resolvedFromConcept={Count} authorities=[{Authorities}]",branch.WideBranchId,branch.DisplayName,resolved.Count,string.Join(" | ",resolved.Select(a=>$"{a.Query} (kind={a.Kind}, tokens=[{string.Join(",",a.VerificationTokens)}])")));
                         }
+                    }
+                    // V3.20: last-resort authority leads. When a legal branch names no citation AND the concept
+                    // map resolved nothing, use the model-PROPOSED authorities as retrieval leads so the branch
+                    // is not left ungrounded. These are UNTRUSTED: they flow through the SAME identity/support
+                    // admission gate in RetrieveStampedAsync (verify: authority), so an unverifiable proposal
+                    // simply yields no admitted snippet and never inflates confidence.
+                    if(useLegalGrounding&&authorities.Count==0&&proposedLegalAuthorities.Count>0)
+                    {
+                        authorities=proposedLegalAuthorities;
+                        logger.LogInformation("LEGAL-TRACE stage=1-proposed branchId={BranchId} branch=\"{Branch}\" proposedLeads={Count} authorities=[{Authorities}]",branch.WideBranchId,branch.DisplayName,proposedLegalAuthorities.Count,string.Join(" | ",proposedLegalAuthorities.Select(a=>$"{a.Query} (kind={a.Kind}, tokens=[{string.Join(",",a.VerificationTokens)}])")));
                     }
                     if(useLegalGrounding)
                     {
@@ -2564,6 +2654,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         builder.Append(deliverable.Headline).AppendLine().AppendLine();
         if(!string.IsNullOrWhiteSpace(deliverable.Outcome))builder.Append("Outcome: ").Append(deliverable.Outcome).AppendLine().AppendLine();
         builder.Append(deliverable.Reason).AppendLine();
+        if(deliverable.DecisiveConditions.Count>0)
+        {
+            builder.AppendLine().Append("Decisive conditions (outcome-determining):").AppendLine();
+            foreach(var condition in deliverable.DecisiveConditions)
+                builder.Append("- ").Append(condition.Description).Append(" (support ").Append(condition.Support.ToString("P0")).Append(", ").Append(condition.SourceCode=="EVIDENCE"?"grounded":condition.SourceCode=="INTERPRETIVE"?"reasoning":"unresolved").Append(").").AppendLine();
+        }
         if(deliverable.BlockingInputs.Count>0)
         {
             builder.AppendLine().Append("Required to fully resolve:").AppendLine();
@@ -2578,6 +2674,49 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(!string.IsNullOrWhiteSpace(existingAnswer)&&!string.Equals(existingAnswer,"POLOXI completed the analysis, but no final prose was returned by the answer composer.",StringComparison.Ordinal))
             builder.AppendLine().Append("Analysis detail:").AppendLine().Append(existingAnswer);
         return builder.ToString();
+    }
+
+    // V3.18 Resolution Deepening (R+1 Decisive Sub-Resolution). Bounded, RESOLUTION-only, single-depth,
+    // deterministic (no extra LLM call). When enabled it runs for EVERY substantive RESOLUTION and
+    // *challenges* the resolution - it does not wait for the resolution to recognize its own weakness,
+    // which is exactly where a hidden failure would otherwise escape. It answers "what outcome-changing
+    // discriminators would have to be true for each surviving candidate to win?" using data the pipeline
+    // already computed (candidate branch scores and interpretive confidence), then feeds those into the
+    // existing Candidate x Branch competition. It NEVER changes the winner, ranking, or confidence - it
+    // only surfaces which discriminators decide the outcome. Empty result = nothing material to surface
+    // (e.g. a cleanly-separated resolution with no alternative discriminator); caller leaves state as-is.
+    private static IReadOnlyCollection<WideResolutionConditionDto> BuildResolutionDeepening(WideConfiguration configuration,WideResolutionDeliverableDto deliverable,WideCandidateDto[] topCandidates,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,decimal decisionEvidenceCoverage)
+    {
+        // Decompose the decisive discriminators the surviving proposition still bundles. Candidate branch
+        // dimensions are the outcome-changing conditions; interpretive branches back them. No trigger
+        // gate: the pass runs for every substantive RESOLUTION so it can expose distinctions the
+        // resolution collapsed. Simple cases naturally fall out below the minimum and cost nothing.
+        var conditions=new List<WideResolutionConditionDto>();
+        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var winner=topCandidates.Length>0?topCandidates[0]:null;
+        if(winner is not null)
+        {
+            foreach(var score in winner.BranchScores.OrderByDescending(s=>s.EvidenceScore))
+            {
+                if(string.IsNullOrWhiteSpace(score.BranchDisplayName)||!seen.Add(score.BranchDisplayName))continue;
+                var support=Math.Clamp(score.EvidenceScore,0m,1m);
+                var source=support>0m?"EVIDENCE":"UNRESOLVED";
+                conditions.Add(new($"COND_{conditions.Count+1}",score.BranchDisplayName.Trim(),support,source));
+            }
+        }
+        foreach(var interpretive in (interpretiveResults??[]).Where(r=>r is not null&&!string.IsNullOrWhiteSpace(r.BranchDisplayName)).OrderByDescending(r=>r.Confidence))
+        {
+            if(!seen.Add(interpretive.BranchDisplayName))continue;
+            conditions.Add(new($"COND_{conditions.Count+1}",interpretive.BranchDisplayName.Trim(),Math.Clamp(interpretive.Confidence,0m,1m),"INTERPRETIVE"));
+        }
+        // Below the minimum there is no material distinction to surface (the resolution really was
+        // single-mechanism); above the maximum, cap to protect latency and avoid branch explosion.
+        if(conditions.Count<configuration.ResolutionDeepeningMinConditions)return [];
+        return conditions
+            .OrderByDescending(condition=>condition.Support)
+            .Take(configuration.ResolutionDeepeningMaxConditions)
+            .Select((condition,index)=>condition with{ConditionCode=$"COND_{index+1}"})
+            .ToArray();
     }
 
     private static string ValidateWinnerBoundFinalAnswer(string answerText,WideCandidateDto[] topCandidates,WideQueryContract? queryContract,WideEntropyResult finalEntropy,decimal? decisionConfidence,decimal? winnerStability,decimal? topKStability,decimal decisionEvidenceCoverage,IReadOnlyCollection<WideBranchRecord>? hierarchy=null)
@@ -2992,6 +3131,21 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     private static WideExternalReferenceDto[] MapExternalReferences(WideAnswerProposal answer)=>
         (answer.ExternalReferences??[]).Where(reference=>Uri.TryCreate(reference.Url,UriKind.Absolute,out var uri)&&uri.Scheme==Uri.UriSchemeHttps)
             .Take(6).Select(reference=>new WideExternalReferenceDto(reference.Title.Trim(),reference.Url.Trim(),reference.Source.Trim(),reference.Summary.Trim(),reference.BranchDisplayName.Trim())).ToArray();
+
+    // V3.20: projects the AI-PROPOSED legal authorities into their labeled, non-evidence UI DTOs. An
+    // authority is marked VERIFIED only when an admitted external snippet (one that passed the mandatory
+    // identity gate) references it; otherwise it stays an UNVERIFIED suggestion. This never promotes a
+    // proposal to evidence — it only reports whether the lead was confirmed by retrieval.
+    private static WideProposedAuthorityDto[] MapProposedLegalAuthorities(IReadOnlyList<ProposedLegalAuthority> proposed,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)
+    {
+        if(proposed.Count==0)return [];
+        var admitted=externalKnowledge.Where(snippet=>snippet.AuthorityIdentityVerified).ToArray();
+        return proposed.Select(item=>
+        {
+            var verified=admitted.Any(snippet=>SnippetMatchesAuthorityIdentity(snippet,item.Reference));
+            return new WideProposedAuthorityDto(item.Name,item.Kind,item.Relevance,verified?"VERIFIED":"UNVERIFIED");
+        }).ToArray();
+    }
 
     private static decimal? NormalizeScore(decimal? score)=>score is null?null:Math.Clamp(score.Value,0,1);
 
@@ -3934,6 +4088,110 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private sealed record WideCandidateEnumerationProposal(IReadOnlyList<string>? Candidates);
 
+    // V3.20 Legal authority proposal: one fail-soft LLM call names the primary authorities most likely
+    // to govern the legal question so they can be fed back into retrieval as LEADS. This closes the gap
+    // where retrieval only ever saw citations already present in branch text or resolved by the DB concept
+    // map - a branch that names no citation and is not covered by the concept map otherwise retrieves
+    // nothing. The proposed authorities are UNTRUSTED: each is converted to a LegalAuthorityReference and
+    // routed through the SAME mandatory identity + proposition-support admission gates in RetrieveStampedAsync,
+    // so a hallucinated authority simply fails verification and never becomes evidence. Runs only in the
+    // legal context. Fail-soft: any provider/parse failure returns an empty list and the pipeline is unchanged.
+    private async Task<IReadOnlyList<ProposedLegalAuthority>> ProposeLegalAuthoritiesAsync(WideSearchRequest request,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
+                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideLegalAuthorityProposal,cancellationToken),
+                $"Question: {request.Query}\nQuery contract: {contractContext}",
+                LegalAuthorityProposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_AUTHORITY_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            var proposal=JsonSerializer.Deserialize<WideLegalAuthorityProposal>(result.Content,JsonOptions);
+            if(proposal?.Authorities is null)return [];
+            var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var authorities=new List<ProposedLegalAuthority>();
+            foreach(var proposed in proposal.Authorities)
+            {
+                var reference=BuildProposedAuthorityReference(proposed);
+                if(reference is not{}authority)continue;
+                if(!seen.Add(authority.Query))continue;
+                authorities.Add(new ProposedLegalAuthority(authority,NormalizeQuery(proposed.Name!),authority.Kind.ToString(),NormalizeQuery(proposed.Relevance??string.Empty)));
+                if(authorities.Count>=8)break;
+            }
+            return authorities;
+        }
+        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        {
+            return [];
+        }
+    }
+
+    // Converts a single LLM-proposed authority into a verifiable LegalAuthorityReference. The name is
+    // re-classified with the SAME deterministic regexes used for branch-cited authorities so it routes to
+    // the correct source and derives the SAME distinctive verification tokens the identity gate requires.
+    // A proposal that yields no distinctive tokens is dropped (it could never be verified), which prevents
+    // a vague doctrine name from ever entering retrieval as a spurious lead.
+    private static LegalAuthorityReference? BuildProposedAuthorityReference(WideLegalAuthorityProposalItem proposed)
+    {
+        if(string.IsNullOrWhiteSpace(proposed.Name))return null;
+        var name=NormalizeQuery(proposed.Name);
+        if(name.Length<3)return null;
+        var caseMatch=LegalCaseCitationRegex.Match(name);
+        if(caseMatch.Success)
+        {
+            var tokens=CaseVerificationTokens(caseMatch.Value);
+            return tokens.Count==0?null:new(NormalizeQuery(caseMatch.Value),LegalAuthorityKind.Case,tokens);
+        }
+        var statuteMatch=LegalStatuteCitationRegex.Match(name);
+        if(statuteMatch.Success)
+        {
+            var tokens=CitationVerificationTokens(statuteMatch.Value);
+            return tokens.Count==0?null:new(NormalizeQuery(statuteMatch.Value),LegalAuthorityKind.Statute,tokens);
+        }
+        var regulationMatch=LegalRegulationCitationRegex.Match(name);
+        if(regulationMatch.Success)
+        {
+            var tokens=CitationVerificationTokens(regulationMatch.Value);
+            return tokens.Count==0?null:new(NormalizeQuery(regulationMatch.Value),LegalAuthorityKind.Regulation,tokens);
+        }
+        // The declared kind is a fallback when the name is a citation the regexes don't capture verbatim
+        // (rare formatting). Only accept it when distinctive numeric/name tokens exist so the identity gate
+        // can still verify it; otherwise drop the lead.
+        var kind=Enum.TryParse<LegalAuthorityKind>(proposed.Kind,ignoreCase:true,out var parsed)?parsed:LegalAuthorityKind.Any;
+        var fallbackTokens=kind==LegalAuthorityKind.Case?CaseVerificationTokens(name):CitationVerificationTokens(name);
+        return fallbackTokens.Count==0?null:new(name,kind==LegalAuthorityKind.Any?LegalAuthorityKind.Statute:kind,fallbackTokens);
+    }
+
+    private sealed record WideLegalAuthorityProposalItem(string? Name,string? Kind,string? Relevance);
+    private sealed record WideLegalAuthorityProposal(IReadOnlyList<WideLegalAuthorityProposalItem>? Authorities);
+
+    // V3.20: pairs the verifiable retrieval lead (Reference) with the model's display metadata so the same
+    // proposal can BOTH drive retrieval AND be surfaced in the distinctly-labeled, non-evidence UI panel.
+    private readonly record struct ProposedLegalAuthority(LegalAuthorityReference Reference,string Name,string Kind,string Relevance);
+
+    private const string LegalAuthorityProposalSchema="""
+{
+  "type": "object",
+  "properties": {
+    "authorities": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "type": "string", "enum": ["CASE", "STATUTE", "REGULATION"] },
+          "relevance": { "type": "string" }
+        },
+        "required": ["name", "kind"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["authorities"],
+  "additionalProperties": false
+}
+""";
+
     // Phase 2a Challenge-the-Winner (WATCH MODE): one adversarial LLM assessment that argues AGAINST
     // the current leader using only the already-retrieved evidence — no new retrieval calls. Fail-soft:
     // any provider/parse failure returns null and the run proceeds exactly as before.
@@ -4102,16 +4360,60 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // rows and general-web snippets have no BranchId and fall back to the query-substring convention.
         var attributed=externalKnowledge.Where(snippet=>snippet.BranchId==branch.WideBranchId||(snippet.BranchId is null&&snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)));
         // Legal evidence gate: UNVERIFIED snippets (failed authority identity) never contribute. For
-        // verified legal snippets, weight the provider score by the deterministic proposition-support
-        // score so a source that merely names the authority contributes less than one that discusses the
-        // branch claim. Non-legal snippets (no PropositionSupportStatus) keep their raw score.
+        // verified legal snippets, weight the relevance by the deterministic proposition-support score so
+        // a source that merely names the authority contributes less than one that discusses the branch
+        // claim. Non-legal snippets (no PropositionSupportStatus) keep their raw provider score.
         var matchedSnippets=attributed
             .Where(snippet=>!string.Equals(snippet.PropositionSupportStatus,PropositionStatusUnverified,StringComparison.Ordinal))
-            .Select(snippet=>Math.Clamp(snippet.Score,0,1)*(snippet.PropositionSupportStatus is null?1m:snippet.PropositionSupportScore))
+            .Select(snippet=>ComputeSnippetRelevance(snippet,configuration))
             .ToArray();
         var externalSupport=matchedSnippets.Length==0?0m:Math.Clamp(matchedSnippets.Max(),0,1)*Math.Min(1m,configuration.ExternalSupportBase+configuration.ExternalSupportIncrement*matchedSnippets.Length);
         return ResolveBoundedConsensusEvidenceSupport(enterpriseSupport,externalSupport,configuration);
     }
+
+    // V3.19 Graded evidence relevance in [0,1] for a single admitted snippet. Distinguishes retrieved,
+    // relevant, supporting, and verified/authoritative evidence instead of treating support as binary.
+    // Non-legal (web) snippets have no PropositionSupportStatus and keep their real provider Score.
+    // Legal snippets carry Score==0 from the retrievers (CourtListener/GovInfo/eCFR/Cornell return no
+    // provider relevance score), so a graded deterministic relevance is synthesized here from three
+    // signals that all still passed the mandatory identity gate upstream:
+    //   1) a retrieval floor (the source was actually retrieved and identity-verified),
+    //   2) proposition support (how much the source text discusses the branch claim), and
+    //   3) an authoritative bonus for statutes/regulations over case law.
+    // Irrelevant-but-named sources land near the floor; on-point authorities approach 1. This never
+    // lowers the identity/support admission gates - it only weights an already-admitted snippet.
+    private static decimal ComputeSnippetRelevance(WideExternalKnowledgeSnippet snippet,WideConfiguration configuration)
+    {
+        // Non-legal snippet: preserve the original provider-score behavior exactly.
+        if(snippet.PropositionSupportStatus is null)
+            return Math.Clamp(snippet.Score,0,1);
+        // Legal snippet: blend the retrieval floor with proposition support, then promote authoritative
+        // sources. If a provider ever does supply a real score, honor it as an additional lower bound.
+        var floor=Math.Clamp(configuration.LegalRetrievalRelevanceFloor,0,1);
+        var supportFloor=Math.Clamp(configuration.LegalSupportFloor,0,1);
+        var support=Math.Clamp(snippet.PropositionSupportScore,0,1);
+        // Graded blend: base retrieval floor plus the remaining headroom scaled by proposition support,
+        // but never below a minimum admitted-legal floor so a verified authority always counts as evidence.
+        var relevance=Math.Max(supportFloor,floor+(1m-floor)*support);
+        if(IsAuthoritativeLegalSource(snippet.AuthorityKind))
+            relevance+=Math.Clamp(configuration.AuthoritativeSourceBonus,0,1);
+        return Math.Clamp(Math.Max(relevance,Math.Clamp(snippet.Score,0,1)),0,1);
+    }
+
+    // Authoritative primary law (statutes / regulations) outranks persuasive case-law snippets for
+    // grounding weight. AuthorityKind is stamped from the extracted/resolved authority during retrieval.
+    private static bool IsAuthoritativeLegalSource(string? authorityKind)=>
+        string.Equals(authorityKind,nameof(LegalAuthorityKind.Statute),StringComparison.OrdinalIgnoreCase)||
+        string.Equals(authorityKind,nameof(LegalAuthorityKind.Regulation),StringComparison.OrdinalIgnoreCase);
+
+    // V3.19 Count the ADMITTED external evidence attributed to a branch, using the SAME attribution and
+    // admission rules as ComputeEvidenceSupport: explicit BranchId (or legacy query-substring), excluding
+    // UNVERIFIED snippets that failed the identity gate. This is what reconnects the UI "External Sources"
+    // count to the credited internal evidence count without counting merely-retrieved sources.
+    private static int CountAdmittedExternalEvidence(WideBranchRecord branch,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge)=>
+        externalKnowledge.Count(snippet=>
+            (snippet.BranchId==branch.WideBranchId||(snippet.BranchId is null&&snippet.Query.Contains(branch.DisplayName,StringComparison.OrdinalIgnoreCase)))
+            &&!string.Equals(snippet.PropositionSupportStatus,PropositionStatusUnverified,StringComparison.Ordinal));
 
     private static decimal ResolveBoundedConsensusEvidenceSupport(decimal enterpriseSupport,decimal externalSupport,WideConfiguration configuration)
     {

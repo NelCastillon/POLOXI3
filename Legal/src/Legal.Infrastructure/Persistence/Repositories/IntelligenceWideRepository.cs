@@ -90,7 +90,7 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
     public async Task<IReadOnlyCollection<WideLegalConceptAuthorityDto>> GetLegalConceptAuthoritiesAsync(Guid tenantId,CancellationToken cancellationToken=default)
     {
         const string sql="""
-SELECT ConceptKeywords,CitationText,AuthorityKindCode,VerificationTokens,SourceLabel,DisplayName
+SELECT ConceptKeywords,CitationText,AuthorityKindCode,VerificationTokens,SourceLabel,DisplayName,ContextAnchors
 FROM POLOXI.Legal_LegalConceptAuthority
 WHERE IsActive=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
 ORDER BY SortOrder,ConceptKeywords;
@@ -191,6 +191,7 @@ COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.Configurat
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GroundingConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) GroundingConcurrency,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalRetrievalConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) ExternalRetrievalConcurrency,
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableInformationValue,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableLegalAuthorityProposal' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableLegalAuthorityProposal,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueTriggerEntropy' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.45) InformationValueTriggerEntropy,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumInformationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MaximumInformationRounds,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumInformationTargetsPerRound' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) MaximumInformationTargetsPerRound,
@@ -229,6 +230,9 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnterpriseSupportCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.90) EnterpriseSupportCeiling,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalSupportBase' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) ExternalSupportBase,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalSupportIncrement' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ExternalSupportIncrement,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalRetrievalRelevanceFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) LegalRetrievalRelevanceFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalSupportFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) LegalSupportFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.AuthoritativeSourceBonus' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) AuthoritativeSourceBonus,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidenceConsensusThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) EvidenceConsensusThreshold,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalOnlySupportDiscount' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.70) ExternalOnlySupportDiscount,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingReopenSupportDelta' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) NarrowingReopenSupportDelta,
@@ -253,7 +257,10 @@ COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultVa
 COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableMarginalValueStopping' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableMarginalValueStopping,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalValueMinimumDepth' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MarginalValueMinimumDepth,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalCoverageDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) MarginalCoverageDeltaFloor,
-COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalConfidenceDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.03) MarginalConfidenceDeltaFloor;
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalConfidenceDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.03) MarginalConfidenceDeltaFloor,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableResolutionDeepening' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableResolutionDeepening,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMinConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) ResolutionDeepeningMinConditions,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMaxConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) ResolutionDeepeningMaxConditions;
 -- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
 SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
 FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
@@ -278,6 +285,7 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             GroundingConcurrency=Math.Clamp(row.GroundingConcurrency,1,16),
             ExternalRetrievalConcurrency=Math.Clamp(row.ExternalRetrievalConcurrency,1,16),
             EnableInformationValue=string.Equals(row.EnableInformationValue,"true",StringComparison.OrdinalIgnoreCase),
+            EnableLegalAuthorityProposal=string.Equals(row.EnableLegalAuthorityProposal,"true",StringComparison.OrdinalIgnoreCase),
             InformationValueTriggerEntropy=Math.Clamp(row.InformationValueTriggerEntropy,0,1),
             MaximumInformationRounds=Math.Clamp(row.MaximumInformationRounds,0,10),
             MaximumInformationTargetsPerRound=Math.Clamp(row.MaximumInformationTargetsPerRound,1,8),
@@ -316,6 +324,9 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             EnterpriseSupportCeiling=Math.Clamp(row.EnterpriseSupportCeiling,0,1),
             ExternalSupportBase=Math.Clamp(row.ExternalSupportBase,0,1),
             ExternalSupportIncrement=Math.Clamp(row.ExternalSupportIncrement,0,1),
+            LegalRetrievalRelevanceFloor=Math.Clamp(row.LegalRetrievalRelevanceFloor,0,1),
+            LegalSupportFloor=Math.Clamp(row.LegalSupportFloor,0,1),
+            AuthoritativeSourceBonus=Math.Clamp(row.AuthoritativeSourceBonus,0,1),
             EvidenceConsensusThreshold=Math.Clamp(row.EvidenceConsensusThreshold,0,1),
             ExternalOnlySupportDiscount=Math.Clamp(row.ExternalOnlySupportDiscount,0,1),
             NarrowingReopenSupportDelta=Math.Clamp(row.NarrowingReopenSupportDelta,0,1),
@@ -341,7 +352,10 @@ WHERE Rn=1 ORDER BY AnswerKindCode;
             EnableMarginalValueStopping=string.Equals(row.EnableMarginalValueStopping,"true",StringComparison.OrdinalIgnoreCase),
             MarginalValueMinimumDepth=Math.Clamp(row.MarginalValueMinimumDepth,2,100),
             MarginalCoverageDeltaFloor=Math.Clamp(row.MarginalCoverageDeltaFloor,0,1),
-            MarginalConfidenceDeltaFloor=Math.Clamp(row.MarginalConfidenceDeltaFloor,0,1)
+            MarginalConfidenceDeltaFloor=Math.Clamp(row.MarginalConfidenceDeltaFloor,0,1),
+            EnableResolutionDeepening=string.Equals(row.EnableResolutionDeepening,"true",StringComparison.OrdinalIgnoreCase),
+            ResolutionDeepeningMinConditions=Math.Clamp(row.ResolutionDeepeningMinConditions,1,10),
+            ResolutionDeepeningMaxConditions=Math.Clamp(row.ResolutionDeepeningMaxConditions,1,10)
         };
     }
 
@@ -499,11 +513,14 @@ WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
     private static IReadOnlyCollection<string> ParseDelimitedSetting(string? value)=>
         string.IsNullOrWhiteSpace(value)?[]:value.Split(['|',',',';'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(item=>item.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    private sealed record WideConfigurationRow(decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls,decimal SecondaryBranchThreshold,decimal DormantBranchThreshold,decimal PriorWeight,decimal EvidenceWeight,int MaximumCandidates,string EnableQueryContract,int GroundingConcurrency,int ExternalRetrievalConcurrency,string EnableInformationValue,decimal InformationValueTriggerEntropy,int MaximumInformationRounds,int MaximumInformationTargetsPerRound,decimal MinimumInformationValue,decimal MinimumActualInformationGain,int InformationNoProgressRounds,
+    private sealed record WideConfigurationRow(
+        decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls,decimal SecondaryBranchThreshold,decimal DormantBranchThreshold,decimal PriorWeight,decimal EvidenceWeight,int MaximumCandidates,string EnableQueryContract,
+        int GroundingConcurrency,int ExternalRetrievalConcurrency,string EnableInformationValue,string EnableLegalAuthorityProposal,decimal InformationValueTriggerEntropy,int MaximumInformationRounds,int MaximumInformationTargetsPerRound,decimal MinimumInformationValue,decimal MinimumActualInformationGain,int InformationNoProgressRounds,
         decimal InformationValueLlmWeight,decimal InformationValueEvidenceGapWeight,decimal InformationValueBranchWeight,decimal InformationValueCandidateNeedWeight,decimal CriterionUncertaintyWeight,decimal CriterionRankingImpactWeight,decimal CriterionDiscriminationWeight,decimal CriterionEvidenceAvailabilityWeight,decimal CriterionNoveltyWeight,decimal CriterionRedundancyPenalty,
         decimal VeryLowInformationValue,decimal LowInformationValue,decimal MediumInformationValue,decimal HighInformationValue,decimal VeryHighInformationValue,int EvidencePriorityMinimumDepth,decimal EvidencePriorityCoverageFloor,int MinimumCandidateDimensionSupport,string EnableClarificationGate,decimal ClarificationConfidenceThreshold,decimal ClarificationWinnerStabilityThreshold,decimal ClarificationMarginThreshold,int MaximumClarificationRounds,decimal MinimumClarificationGain,
-        string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal EvidenceConsensusThreshold,decimal ExternalOnlySupportDiscount,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
-        string EnableAnswerKindRouting,string EnableDeliverableSynthesis,string DeliverableSynthesisIndicators,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor);
+        string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal LegalRetrievalRelevanceFloor,decimal LegalSupportFloor,decimal AuthoritativeSourceBonus,decimal EvidenceConsensusThreshold,decimal ExternalOnlySupportDiscount,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
+        string EnableAnswerKindRouting,string EnableDeliverableSynthesis,string DeliverableSynthesisIndicators,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,
+        string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions);
 
     private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
 
