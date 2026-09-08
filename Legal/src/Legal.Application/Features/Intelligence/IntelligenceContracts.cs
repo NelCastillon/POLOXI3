@@ -73,8 +73,21 @@ public sealed record PoloxiSearchRequest(Guid TenantId,Guid UserId,[Required,Str
     public IReadOnlyCollection<string> GrantedPermissions { get; init; } = [];
 }
 public sealed record PoloxiCapabilityDto(Guid CapabilityId,string CapabilityCode,string DisplayName,string Description,string EntityTypeCode,string ModuleCode,string ExecutionHandlerCode,IReadOnlyCollection<string> ApprovedTerms,bool SupportsRecency,decimal MinimumConfidence,int SortOrder);
-public sealed record PoloxiConfiguration(bool EnableHierarchyReuse,int HierarchyCacheHours,decimal MinimumBranchConfidence,int MaximumBranches,int MaximumResults);
+public sealed record PoloxiConfiguration(bool EnableHierarchyReuse,int HierarchyCacheHours,decimal MinimumBranchConfidence,int MaximumBranches,int MaximumResults,bool EnableSemanticProposal);
 public sealed record PoloxiProposedBranch(string BranchCode,string DisplayName,string Condition,string? CapabilityCode,string? SearchText,bool OrderByRecency,decimal Confidence,IReadOnlyCollection<PoloxiProposedBranch> Children);
+
+// POLOXI_SEMANTIC_PROPOSAL_1.0 deserialization contract (feature-flagged Wide path). These mirror the
+// rich semantic-proposal JSON emitted by the WIDE_SEMANTIC_PROPOSAL prompt. Only the members needed to
+// adapt the forest into the legacy PoloxiHierarchyProposal are modeled; the prompt may emit additional
+// members which are ignored during deserialization.
+public sealed record SemanticProposalResult(string? SchemaVersion,string? QueryUnderstanding,IReadOnlyCollection<SemanticRoot>? SemanticRoots,IReadOnlyCollection<SemanticCandidate>? Candidates,string? ProposalSummary);
+public sealed record SemanticRoot(string? RootId,string? RootKind,string? AmbiguityType,string? Label,string? SemanticQuestion,string? WhyOutcomeRelevant,IReadOnlyCollection<SemanticBranch>? Children);
+public sealed record SemanticBranch(string? BranchId,string? ParentId,int? Level,string? Label,string? SemanticQuestion,string? Interpretation,string? WhyMaterial,string? CapabilityCode,string? SearchText,bool OrderByRecency,IReadOnlyCollection<SemanticBranch>? Children);
+public sealed record SemanticCandidate(string? CandidateId,string? Resolution,string? CandidateType,string? RationaleSummary);
+// WIDE_SEMANTIC_GROUNDING deserialization contract: maps flattened semantic branches to an approved
+// capability + approved search term so the adapted branch tree can retrieve deterministic evidence.
+public sealed record SemanticGroundingResult(IReadOnlyCollection<SemanticGroundedBranch>? Branches);
+public sealed record SemanticGroundedBranch(string? BranchCode,string? CapabilityCode,string? SearchText,bool OrderByRecency);
 public sealed record PoloxiHierarchyProposal(string ConceptCode,string DisplayName,decimal Confidence,IReadOnlyCollection<PoloxiProposedBranch> Branches);
 public sealed record PoloxiHierarchyRecord(Guid HierarchyId,string QuerySignature,string ConceptCode,string DisplayName,string NormalizedQuery,int VersionNumber,string StatusCode,string? GeneratedByProviderCode,string? GeneratedByModelCode,decimal Confidence,int UsageCount,int SuccessfulUsageCount,DateTime? ExpiresDateUtc,IReadOnlyCollection<PoloxiBranchRecord> Branches);
 public sealed record PoloxiBranchRecord(Guid HierarchyBranchId,Guid? ParentHierarchyBranchId,string BranchCode,string DisplayName,string ProposedCondition,string? CapabilityCode,string ValidationStatusCode,string? ValidationMessage,string? SearchText,bool OrderByRecency,decimal Confidence,int SortOrder);

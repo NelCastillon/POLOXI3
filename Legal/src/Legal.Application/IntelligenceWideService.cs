@@ -150,6 +150,29 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
 
     private async Task<(PoloxiHierarchyProposal Proposal,string ProviderCode,string ModelCode)> GeneratePoloxiProposalAsync(PoloxiSearchRequest request,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,PoloxiConfiguration configuration,CancellationToken cancellationToken)
     {
+        // Feature-flagged parallel path. Legacy WIDE_POLOXI_HIERARCHY remains the default; the semantic
+        // engine is only used when Intelligence.Poloxi.EnableSemanticProposal is enabled. On any failure the
+        // semantic path deterministically falls back to legacy so runtime results never regress.
+        if(configuration.EnableSemanticProposal)
+        {
+            try
+            {
+                return await GenerateSemanticPoloxiProposalAsync(request,capabilities,configuration,cancellationToken);
+            }
+            catch(OperationCanceledException)
+            {
+                throw;
+            }
+            catch(Exception)
+            {
+                // Fall through to the legacy path; the semantic proposal must never make Wide worse than baseline.
+            }
+        }
+        return await GenerateLegacyPoloxiProposalAsync(request,capabilities,configuration,cancellationToken);
+    }
+
+    private async Task<(PoloxiHierarchyProposal Proposal,string ProviderCode,string ModelCode)> GenerateLegacyPoloxiProposalAsync(PoloxiSearchRequest request,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,PoloxiConfiguration configuration,CancellationToken cancellationToken)
+    {
         var schema="""
 {
   "type": "object",
@@ -191,6 +214,177 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY",await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WidePoloxiHierarchy,cancellationToken),$"Question: {request.Query}\nMaximum branches: {configuration.MaximumBranches}\nApproved capability catalog:\n{catalog}",schema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_HIERARCHY",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
         var proposal=JsonSerializer.Deserialize<PoloxiHierarchyProposal>(result.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new ValidationException("The POLOXI hierarchy response was empty.");
         return (proposal,result.ProviderCode,result.ModelCode);
+    }
+
+    // Semantic proposal path (feature-flagged). Stage 1 calls WIDE_SEMANTIC_PROPOSAL to produce a rich
+    // semantic forest + global candidate universe. Because that contract intentionally omits enterprise
+    // grounding, Stage 2 calls WIDE_SEMANTIC_GROUNDING to map each flattened branch to an approved
+    // capability + approved search term. The result is adapted into the legacy PoloxiHierarchyProposal so
+    // all downstream evidence retrieval, narrowing, ranking, and persistence are unchanged.
+    private async Task<(PoloxiHierarchyProposal Proposal,string ProviderCode,string ModelCode)> GenerateSemanticPoloxiProposalAsync(PoloxiSearchRequest request,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,PoloxiConfiguration configuration,CancellationToken cancellationToken)
+    {
+        const string proposalSchema="""
+{
+  "type": "object",
+  "$defs": {
+    "branch": {
+      "type": "object",
+      "properties": {
+        "branchId": { "type": "string" },
+        "parentId": { "type": ["string", "null"] },
+        "level": { "type": ["integer", "null"] },
+        "label": { "type": "string" },
+        "semanticQuestion": { "type": ["string", "null"] },
+        "interpretation": { "type": ["string", "null"] },
+        "whyMaterial": { "type": ["string", "null"] },
+        "capabilityCode": { "type": ["string", "null"] },
+        "searchText": { "type": ["string", "null"] },
+        "orderByRecency": { "type": "boolean" },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/branch" } }
+      },
+      "required": ["branchId", "parentId", "level", "label", "semanticQuestion", "interpretation", "whyMaterial", "capabilityCode", "searchText", "orderByRecency", "children"],
+      "additionalProperties": false
+    }
+  },
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "queryUnderstanding": { "type": ["string", "null"] },
+    "semanticRoots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rootId": { "type": "string" },
+          "rootKind": { "type": ["string", "null"] },
+          "ambiguityType": { "type": ["string", "null"] },
+          "label": { "type": "string" },
+          "semanticQuestion": { "type": ["string", "null"] },
+          "whyOutcomeRelevant": { "type": ["string", "null"] },
+          "children": { "type": "array", "items": { "$ref": "#/$defs/branch" } }
+        },
+        "required": ["rootId", "rootKind", "ambiguityType", "label", "semanticQuestion", "whyOutcomeRelevant", "children"],
+        "additionalProperties": false
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "candidateId": { "type": "string" },
+          "resolution": { "type": "string" },
+          "candidateType": { "type": ["string", "null"] },
+          "rationaleSummary": { "type": ["string", "null"] }
+        },
+        "required": ["candidateId", "resolution", "candidateType", "rationaleSummary"],
+        "additionalProperties": false
+      }
+    },
+    "proposalSummary": { "type": ["string", "null"] }
+  },
+  "required": ["schemaVersion", "queryUnderstanding", "semanticRoots", "candidates", "proposalSummary"],
+  "additionalProperties": false
+}
+""";
+        var catalog=string.Join('\n',capabilities.Select(capability=>$"{capability.CapabilityCode}: {capability.Description}; approved terms: {string.Join(", ",capability.ApprovedTerms)}; recency: {capability.SupportsRecency}"));
+        var proposalResult=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY",await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideSemanticProposal,cancellationToken),$"Question: {request.Query}\nMaximum branches: {configuration.MaximumBranches}\nApproved capability catalog:\n{catalog}",proposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_SEMANTIC_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
+        var semantic=JsonSerializer.Deserialize<SemanticProposalResult>(proposalResult.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new ValidationException("The POLOXI semantic proposal response was empty.");
+
+        // Flatten the semantic forest into legacy two-level branches (root -> immediate children), which is
+        // the shape ValidatePoloxiBranches and progressive narrowing operate on.
+        var flattened=FlattenSemanticProposal(semantic,configuration.MaximumBranches);
+        if(flattened.Count==0)throw new ValidationException("The POLOXI semantic proposal produced no branches.");
+
+        // Stage 2: ground the flattened branches against the approved capability catalog.
+        var grounding=await GroundSemanticBranchesAsync(request,capabilities,flattened,catalog,cancellationToken);
+        var proposal=AdaptSemanticProposal(semantic,flattened,grounding);
+        // Quality floor: the semantic path must never yield an evidence-free result that is inferior to the
+        // legacy path. If grounding produced no branch that a validated approved capability can ground,
+        // throw so GeneratePoloxiProposalAsync deterministically falls back to WIDE_POLOXI_HIERARCHY.
+        var groundedBranchCount=ValidatePoloxiBranches(proposal,capabilities,configuration).Count(branch=>branch.ValidationStatusCode.Equals("VALID",StringComparison.OrdinalIgnoreCase));
+        if(groundedBranchCount==0)throw new ValidationException("The POLOXI semantic proposal produced no grounded branches.");
+        return (proposal,proposalResult.ProviderCode,proposalResult.ModelCode);
+    }
+
+    private sealed record FlattenedSemanticBranch(string BranchCode,string DisplayName,string Condition,decimal Confidence,string? ParentBranchCode,string? CapabilityCode,string? SearchText,bool OrderByRecency);
+
+    private static IReadOnlyList<FlattenedSemanticBranch> FlattenSemanticProposal(SemanticProposalResult semantic,int maximumBranches)
+    {
+        var result=new List<FlattenedSemanticBranch>();
+        var used=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string MakeCode(string? candidate,string fallback)
+        {
+            var baseCode=NormalizeCode(string.IsNullOrWhiteSpace(candidate)?fallback:candidate!);
+            if(string.IsNullOrWhiteSpace(baseCode))baseCode=NormalizeCode(fallback);
+            var code=baseCode;
+            var suffix=1;
+            while(!used.Add(code)){code=$"{baseCode}_{suffix++}";}
+            return code;
+        }
+        foreach(var root in semantic.SemanticRoots??[])
+        {
+            if(result.Count>=maximumBranches)break;
+            var rootCode=MakeCode(root.RootId ?? root.Label,$"ROOT_{result.Count+1}");
+            result.Add(new(rootCode,(root.Label??rootCode).Trim(),(root.SemanticQuestion??root.WhyOutcomeRelevant??root.Label??rootCode).Trim(),0.7m,null));
+            foreach(var child in root.Children??[])
+            {
+                if(result.Count>=maximumBranches)break;
+                var childCode=MakeCode(child.BranchId ?? child.Label,$"{rootCode}_C{result.Count+1}");
+                result.Add(new(childCode,(child.Label??childCode).Trim(),(child.SemanticQuestion??child.Interpretation??child.WhyMaterial??child.Label??childCode).Trim(),0.65m,rootCode));
+            }
+        }
+        return result;
+    }
+
+    private async Task<IReadOnlyDictionary<string,SemanticGroundedBranch>> GroundSemanticBranchesAsync(PoloxiSearchRequest request,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,IReadOnlyList<FlattenedSemanticBranch> branches,string catalog,CancellationToken cancellationToken)
+    {
+        const string groundingSchema="""
+{
+  "type": "object",
+  "properties": {
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "branchCode": { "type": "string" },
+          "capabilityCode": { "type": ["string", "null"] },
+          "searchText": { "type": ["string", "null"] },
+          "orderByRecency": { "type": "boolean" }
+        },
+        "required": ["branchCode", "capabilityCode", "searchText", "orderByRecency"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["branches"],
+  "additionalProperties": false
+}
+""";
+        var branchList=string.Join('\n',branches.Select(branch=>$"{branch.BranchCode}: {branch.DisplayName} - {branch.Condition}"));
+        var groundingResult=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY",await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideSemanticGrounding,cancellationToken),$"Semantic branches to ground:\n{branchList}\n\nApproved capability catalog:\n{catalog}",groundingSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_SEMANTIC_GROUNDING",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
+        var grounding=JsonSerializer.Deserialize<SemanticGroundingResult>(groundingResult.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+        var map=new Dictionary<string,SemanticGroundedBranch>(StringComparer.OrdinalIgnoreCase);
+        foreach(var grounded in grounding?.Branches??[])
+        {
+            if(string.IsNullOrWhiteSpace(grounded.BranchCode))continue;
+            map[grounded.BranchCode.Trim()]=grounded;
+        }
+        return map;
+    }
+
+    private static PoloxiHierarchyProposal AdaptSemanticProposal(SemanticProposalResult semantic,IReadOnlyList<FlattenedSemanticBranch> flattened,IReadOnlyDictionary<string,SemanticGroundedBranch> grounding)
+    {
+        PoloxiProposedBranch Build(FlattenedSemanticBranch branch)
+        {
+            grounding.TryGetValue(branch.BranchCode,out var grounded);
+            var children=flattened.Where(child=>string.Equals(child.ParentBranchCode,branch.BranchCode,StringComparison.OrdinalIgnoreCase)).Select(Build).ToArray();
+            return new(branch.BranchCode,branch.DisplayName,branch.Condition,grounded?.CapabilityCode,grounded?.SearchText,grounded?.OrderByRecency??false,branch.Confidence,children);
+        }
+        var rootBranches=flattened.Where(branch=>branch.ParentBranchCode is null).Select(Build).ToArray();
+        var conceptCode=NormalizeCode(semantic.SemanticRoots?.FirstOrDefault()?.RootId ?? "SEMANTIC_PROPOSAL");
+        var displayName=string.IsNullOrWhiteSpace(semantic.QueryUnderstanding)?"Semantic Proposal":semantic.QueryUnderstanding!.Trim();
+        return new(conceptCode,displayName,0.7m,rootBranches);
     }
 
     private static IReadOnlyCollection<PoloxiBranchRecord> ValidatePoloxiBranches(PoloxiHierarchyProposal proposal,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,PoloxiConfiguration configuration)
@@ -745,7 +939,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // branches that were later eliminated must not surface as authorized evidence.
             var survivingBranchIds=allBranches.Where(branch=>!branch.IsEliminated).Select(branch=>branch.WideBranchId).ToHashSet();
             var survivingEvidence=evidence.Where(item=>survivingBranchIds.Contains(item.HierarchyBranchId)).ToList();
-            var ranked=RankEvidence(survivingEvidence,poloxiRequest,new(false,1,configuration.MinimumBranchConfidence,configuration.MaximumBranchesPerLevel*Math.Max(depth,1),request.MaximumResults));
+            var ranked=RankEvidence(survivingEvidence,poloxiRequest,new(false,1,configuration.MinimumBranchConfidence,configuration.MaximumBranchesPerLevel*Math.Max(depth,1),request.MaximumResults,false));
 
             // Stage 3: verified answer composed from surviving paths + enterprise evidence.
             var survivorsFinal=allBranches.Where(branch=>!branch.IsEliminated).ToArray();
@@ -2175,6 +2369,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // Not-prioritized (DORMANT) branches are included so their interpretations still receive full
         // result sets — they render as secondary-importance results, never disappear from the surface.
         var allInterpretiveBranches=survivors.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE"||branch.BranchStateCode==WideBranchStates.Dormant).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
+        // Fallback: a run can produce surviving branches none of which are tagged INTERPRETIVE/Dormant
+        // (for example every branch resolved against a capability). Without numbered paths the answer LLM
+        // returns zero interpretiveResults and the LLM-knowledge section renders empty - leaving the POLOXI
+        // answer inferior to a plain single-shot answer. Seed the numbered paths from the surviving branches
+        // that carry an interpretation so the interpretive result sets are still generated. This never alters
+        // ranking, evidence admission, or scoring - it only ensures the LLM-knowledge narrowing paths exist.
+        if(allInterpretiveBranches.Length==0)
+            allInterpretiveBranches=orderedSurvivors.Where(branch=>!string.IsNullOrWhiteSpace(branch.Interpretation)).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
         var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,10);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
         WideBranchRecord[] topInterpretiveBranches;string userPrompt;
         while(true)

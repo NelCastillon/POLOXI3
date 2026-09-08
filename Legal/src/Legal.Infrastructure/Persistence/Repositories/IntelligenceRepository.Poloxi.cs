@@ -14,11 +14,12 @@ CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,Defaul
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.HierarchyCacheHours' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),168) HierarchyCacheHours,
 COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.MinimumBranchConfidence' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.65) MinimumBranchConfidence,
 COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.MaximumBranches' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),12) MaximumBranches,
-COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.MaximumResults' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),50) MaximumResults;
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.MaximumResults' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),50) MaximumResults,
+CONVERT(bit,COALESCE(TRY_CONVERT(bit,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Poloxi.EnableSemanticProposal' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0)) EnableSemanticProposal;
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var row=await connection.QuerySingleAsync<PoloxiConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
-        return new(row.EnableHierarchyReuse,Math.Clamp(row.HierarchyCacheHours,1,8760),Math.Clamp(row.MinimumBranchConfidence,0,1),Math.Clamp(row.MaximumBranches,1,50),Math.Clamp(row.MaximumResults,1,100));
+        return new(row.EnableHierarchyReuse,Math.Clamp(row.HierarchyCacheHours,1,8760),Math.Clamp(row.MinimumBranchConfidence,0,1),Math.Clamp(row.MaximumBranches,1,50),Math.Clamp(row.MaximumResults,1,100),row.EnableSemanticProposal);
     }
 
     public async Task<IReadOnlyCollection<PoloxiCapabilityDto>> GetPoloxiCapabilitiesAsync(Guid tenantId,CancellationToken cancellationToken=default)
@@ -110,7 +111,7 @@ COMMIT;
     }
 
     private static PoloxiHierarchyRecord ToHierarchy(PoloxiHierarchyRow row,IReadOnlyCollection<PoloxiBranchRecord> branches)=>new(row.HierarchyId,row.QuerySignature,row.ConceptCode,row.DisplayName,row.NormalizedQuery,row.VersionNumber,row.StatusCode,row.GeneratedByProviderCode,row.GeneratedByModelCode,row.Confidence,row.UsageCount,row.SuccessfulUsageCount,row.ExpiresDateUtc,branches);
-    private sealed record PoloxiConfigurationRow(bool EnableHierarchyReuse,int HierarchyCacheHours,decimal MinimumBranchConfidence,int MaximumBranches,int MaximumResults);
+    private sealed record PoloxiConfigurationRow(bool EnableHierarchyReuse,int HierarchyCacheHours,decimal MinimumBranchConfidence,int MaximumBranches,int MaximumResults,bool EnableSemanticProposal);
     private sealed record PoloxiCapabilityRow(Guid CapabilityId,string CapabilityCode,string DisplayName,string Description,string EntityTypeCode,string ModuleCode,string ExecutionHandlerCode,string ApprovedTermsJson,bool SupportsRecency,decimal MinimumConfidence,int SortOrder);
     private sealed record PoloxiHierarchyRow(Guid HierarchyId,string QuerySignature,string ConceptCode,string DisplayName,string NormalizedQuery,int VersionNumber,string StatusCode,string? GeneratedByProviderCode,string? GeneratedByModelCode,decimal Confidence,int UsageCount,int SuccessfulUsageCount,DateTime? ExpiresDateUtc);
     private sealed record PoloxiEvidenceRow(Guid SearchDocumentId,string EntityTypeCode,Guid EntityId,string ModuleCode,string Title,string? Excerpt,string? NavigationRoute,decimal RelevanceScore);
