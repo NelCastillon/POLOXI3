@@ -16,7 +16,12 @@ namespace Legal.Application;
 // tweaked freely without changing /intelligence/search/poloxi behavior.
 public sealed class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
 {
-    private const int WideUserPromptBudget=12000;
+    private const int WideUserPromptBudget=48000;
+    // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
+    // configured Intelligence.Safety.MaximumInputCharacters guard (raised to 60000 in migration 0194)
+    // with headroom so the large Wide answer system prompt plus the clamped user prompt never trips
+    // the safety violation, while still staying well inside the model input token budget.
+    private const int WideAnswerInputCeiling=58000;
 
     // Model selection: null/whitespace = Auto (feature-policy routing); otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)?null:request.ModelCode.Trim();
@@ -291,16 +296,16 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var semantic=JsonSerializer.Deserialize<SemanticProposalResult>(proposalResult.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true})??throw new ValidationException("The POLOXI semantic proposal response was empty.");
 
         // Flatten the semantic forest into legacy two-level branches (root -> immediate children), which is
-        // the shape ValidatePoloxiBranches and progressive narrowing operate on.
+        // the shape ValidatePoloxiBranches and progressive narrowing operate on. Grounding
+        // (capabilityCode + searchText + orderByRecency) is produced inline by WIDE_SEMANTIC_PROPOSAL v1.1,
+        // so no second grounding LLM call is required.
         var flattened=FlattenSemanticProposal(semantic,configuration.MaximumBranches);
         if(flattened.Count==0)throw new ValidationException("The POLOXI semantic proposal produced no branches.");
 
-        // Stage 2: ground the flattened branches against the approved capability catalog.
-        var grounding=await GroundSemanticBranchesAsync(request,capabilities,flattened,catalog,cancellationToken);
-        var proposal=AdaptSemanticProposal(semantic,flattened,grounding);
+        var proposal=AdaptSemanticProposal(semantic,flattened);
         // Quality floor: the semantic path must never yield an evidence-free result that is inferior to the
-        // legacy path. If grounding produced no branch that a validated approved capability can ground,
-        // throw so GeneratePoloxiProposalAsync deterministically falls back to WIDE_POLOXI_HIERARCHY.
+        // legacy path. If the inline grounding produced no branch that a validated approved capability can
+        // ground, throw so GeneratePoloxiProposalAsync deterministically falls back to WIDE_POLOXI_HIERARCHY.
         var groundedBranchCount=ValidatePoloxiBranches(proposal,capabilities,configuration).Count(branch=>branch.ValidationStatusCode.Equals("VALID",StringComparison.OrdinalIgnoreCase));
         if(groundedBranchCount==0)throw new ValidationException("The POLOXI semantic proposal produced no grounded branches.");
         return (proposal,proposalResult.ProviderCode,proposalResult.ModelCode);
@@ -325,61 +330,23 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         {
             if(result.Count>=maximumBranches)break;
             var rootCode=MakeCode(root.RootId ?? root.Label,$"ROOT_{result.Count+1}");
-            result.Add(new(rootCode,(root.Label??rootCode).Trim(),(root.SemanticQuestion??root.WhyOutcomeRelevant??root.Label??rootCode).Trim(),0.7m,null));
+            result.Add(new(rootCode,(root.Label??rootCode).Trim(),(root.SemanticQuestion??root.WhyOutcomeRelevant??root.Label??rootCode).Trim(),0.7m,null,null,null,false));
             foreach(var child in root.Children??[])
             {
                 if(result.Count>=maximumBranches)break;
                 var childCode=MakeCode(child.BranchId ?? child.Label,$"{rootCode}_C{result.Count+1}");
-                result.Add(new(childCode,(child.Label??childCode).Trim(),(child.SemanticQuestion??child.Interpretation??child.WhyMaterial??child.Label??childCode).Trim(),0.65m,rootCode));
+                result.Add(new(childCode,(child.Label??childCode).Trim(),(child.SemanticQuestion??child.Interpretation??child.WhyMaterial??child.Label??childCode).Trim(),0.65m,rootCode,string.IsNullOrWhiteSpace(child.CapabilityCode)?null:child.CapabilityCode!.Trim(),string.IsNullOrWhiteSpace(child.SearchText)?null:child.SearchText!.Trim(),child.OrderByRecency));
             }
         }
         return result;
     }
 
-    private async Task<IReadOnlyDictionary<string,SemanticGroundedBranch>> GroundSemanticBranchesAsync(PoloxiSearchRequest request,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,IReadOnlyList<FlattenedSemanticBranch> branches,string catalog,CancellationToken cancellationToken)
-    {
-        const string groundingSchema="""
-{
-  "type": "object",
-  "properties": {
-    "branches": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "branchCode": { "type": "string" },
-          "capabilityCode": { "type": ["string", "null"] },
-          "searchText": { "type": ["string", "null"] },
-          "orderByRecency": { "type": "boolean" }
-        },
-        "required": ["branchCode", "capabilityCode", "searchText", "orderByRecency"],
-        "additionalProperties": false
-      }
-    }
-  },
-  "required": ["branches"],
-  "additionalProperties": false
-}
-""";
-        var branchList=string.Join('\n',branches.Select(branch=>$"{branch.BranchCode}: {branch.DisplayName} - {branch.Condition}"));
-        var groundingResult=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_POLOXI_HIERARCHY",await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideSemanticGrounding,cancellationToken),$"Semantic branches to ground:\n{branchList}\n\nApproved capability catalog:\n{catalog}",groundingSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"POLOXI_SEMANTIC_GROUNDING",null,request.CorrelationId,"Intelligent Search Wide"),cancellationToken:cancellationToken);
-        var grounding=JsonSerializer.Deserialize<SemanticGroundingResult>(groundingResult.Content,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
-        var map=new Dictionary<string,SemanticGroundedBranch>(StringComparer.OrdinalIgnoreCase);
-        foreach(var grounded in grounding?.Branches??[])
-        {
-            if(string.IsNullOrWhiteSpace(grounded.BranchCode))continue;
-            map[grounded.BranchCode.Trim()]=grounded;
-        }
-        return map;
-    }
-
-    private static PoloxiHierarchyProposal AdaptSemanticProposal(SemanticProposalResult semantic,IReadOnlyList<FlattenedSemanticBranch> flattened,IReadOnlyDictionary<string,SemanticGroundedBranch> grounding)
+    private static PoloxiHierarchyProposal AdaptSemanticProposal(SemanticProposalResult semantic,IReadOnlyList<FlattenedSemanticBranch> flattened)
     {
         PoloxiProposedBranch Build(FlattenedSemanticBranch branch)
         {
-            grounding.TryGetValue(branch.BranchCode,out var grounded);
             var children=flattened.Where(child=>string.Equals(child.ParentBranchCode,branch.BranchCode,StringComparison.OrdinalIgnoreCase)).Select(Build).ToArray();
-            return new(branch.BranchCode,branch.DisplayName,branch.Condition,grounded?.CapabilityCode,grounded?.SearchText,grounded?.OrderByRecency??false,branch.Confidence,children);
+            return new(branch.BranchCode,branch.DisplayName,branch.Condition,branch.CapabilityCode,branch.SearchText,branch.OrderByRecency,branch.Confidence,children);
         }
         var rootBranches=flattened.Where(branch=>branch.ParentBranchCode is null).Select(Build).ToArray();
         var conceptCode=NormalizeCode(semantic.SemanticRoots?.FirstOrDefault()?.RootId ?? "SEMANTIC_PROPOSAL");
@@ -2378,6 +2345,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         if(allInterpretiveBranches.Length==0)
             allInterpretiveBranches=orderedSurvivors.Where(branch=>!string.IsNullOrWhiteSpace(branch.Interpretation)).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
         var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,10);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
+        // The safety guard rejects prompts where systemPrompt.Length + userPrompt.Length exceeds the
+        // configured maximum, so the user-prompt budget must reserve room for the (large) system prompt.
+        // Fetch it up front and shrink the user prompt against the remaining headroom, never below a floor.
+        var systemPrompt=await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideAnswer,cancellationToken);
+        var userPromptBudget=Math.Max(3000,Math.Min(WideUserPromptBudget,WideAnswerInputCeiling-systemPrompt.Length));
         WideBranchRecord[] topInterpretiveBranches;string userPrompt;
         while(true)
         {
@@ -2389,7 +2361,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // feature-policy input budget (Tavily content blocks can be several thousand characters).
             var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(snippetCount).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,snippetLength)}"));
             userPrompt=$"Question: {Truncate(request.Query,4000)}{Truncate(contractContext,3000)}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
-            if(userPrompt.Length<=WideUserPromptBudget)break;
+            if(userPrompt.Length<=userPromptBudget)break;
             // Shrink in evidence-preserving order: snippet length, snippet count, path list, then interpretive paths.
             if(snippetLength>400){snippetLength=400;continue;}
             if(snippetCount>4){snippetCount=4;continue;}
@@ -2398,8 +2370,11 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             if(interpretiveCount>4){interpretiveCount=4;continue;}
             break;
         }
+        // Final hard guard: if even the minimum sections exceed the headroom, truncate so the combined
+        // system+user prompt cannot trip the AI safety maximum-input guard.
+        userPrompt=Truncate(userPrompt,userPromptBudget)!;
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideAnswer,cancellationToken),
+                systemPrompt,
             userPrompt,
             AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return (JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty."),result.ProviderCode,result.ModelCode);

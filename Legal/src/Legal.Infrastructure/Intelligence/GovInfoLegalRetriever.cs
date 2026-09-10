@@ -112,7 +112,7 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
 
     private static string BuildEcfrTitle(EcfrSearchResult result)
     {
-        var heading=result.HierarchyHeadings is{Count:>0}?string.Join(" \u203a ",result.HierarchyHeadings.Where(text=>!string.IsNullOrWhiteSpace(text))):null;
+        var heading=result.HierarchyHeadings is{Count:>0}?string.Join(" \u203a ",result.HierarchyHeadings.Values.Where(text=>!string.IsNullOrWhiteSpace(text))):null;
         return string.IsNullOrWhiteSpace(heading)?"eCFR current regulation":$"eCFR: {heading}";
     }
 
@@ -137,7 +137,9 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
 
     private sealed record EcfrSearchResponse([property:JsonPropertyName("results")]List<EcfrSearchResult>? Results);
 
+    // eCFR returns hierarchy_headings as an OBJECT keyed by hierarchy level (title/subtitle/chapter/part/...),
+    // not a JSON array, so it deserializes into a dictionary. Values may be null for absent levels.
     private sealed record EcfrSearchResult(
         [property:JsonPropertyName("full_text_excerpt")]string? FullTextExcerpt,
-        [property:JsonPropertyName("hierarchy_headings")]List<string>? HierarchyHeadings);
+        [property:JsonPropertyName("hierarchy_headings")]Dictionary<string,string?>? HierarchyHeadings);
 }

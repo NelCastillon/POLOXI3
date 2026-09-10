@@ -30,7 +30,10 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IAiProviderRouter, AiProviderRouter>();
-        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>();
+        // Disable the HttpClient-level timeout (default 100s) so the per-request timeout defined by the
+        // route policy (AzureOpenAiProvider.CreateTimeout, up to 900s for reasoning models such as
+        // gpt-5.6-sol) governs cancellation instead of prematurely aborting long reasoning completions.
+        services.AddHttpClient<IAiProvider, AzureOpenAiProvider>(client => client.Timeout = Timeout.InfiniteTimeSpan);
         services.AddHttpClient<IExternalKnowledgeProvider, TavilyExternalKnowledgeProvider>();
 
         // Legal-context grounding sources (selected when the LEGAL search context is used).
