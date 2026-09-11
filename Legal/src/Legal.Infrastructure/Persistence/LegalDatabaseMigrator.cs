@@ -72,6 +72,14 @@ public sealed partial class LegalDatabaseMigrator
             var astraPromptCount = await AstraPromptContractMigration.ApplyAsync(lockConnection, cancellationToken);
             if (astraPromptCount > 0)
                 _logger.LogInformation("Applied {Count} Astra prompt contracts", astraPromptCount);
+
+            var mathBasePromptCount = await MathBasePromptMigration.ApplyAsync(lockConnection, cancellationToken);
+            if (mathBasePromptCount > 0)
+                _logger.LogInformation("Seeded {Count} Math base prompts", mathBasePromptCount);
+
+            var mathPromptCount = await MathPromptContractMigration.ApplyAsync(lockConnection, cancellationToken);
+            if (mathPromptCount > 0)
+                _logger.LogInformation("Applied {Count} Math prompt contracts", mathPromptCount);
         }
         finally
         {

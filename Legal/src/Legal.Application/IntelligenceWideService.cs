@@ -26,6 +26,22 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)?"gpt-4.1-mini":request.ModelCode.Trim();
 
+    // Tiered model routing (highest-leverage latency lever; DB-seeded via migration 0205).
+    // Mechanical strict-JSON stages (intent, hierarchy step, query contract, candidate enumeration,
+    // legal-authority proposal, information value, challenge round, candidate matrix, ABV) NEVER need a
+    // reasoning model: their output is a bounded schema a fast model produces reliably and quickly, and
+    // every seed/score they emit still faces the deterministic filters and evidence gates downstream.
+    // Forcing them onto the fast tier means selecting a reasoning model (e.g. Astra) only costs reasoning
+    // latency on the handful of user-facing SYNTHESIS calls, not on the ~9 mechanical calls per run.
+    // When tiered routing is disabled, every stage routes through the requested model (legacy behavior).
+    private static string? MechanicalModel(WideConfiguration configuration,WideSearchRequest request)=>
+        configuration.EnableTieredModelRouting
+            ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
+            :ModelOverride(request);
+
+    // Synthesis stages: honor the requested reasoning model (Auto still falls back to the fast tier).
+    private static string? SynthesisModel(WideSearchRequest request)=>ModelOverride(request);
+
     public Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetWideModelsAsync(tenantId,cancellationToken);
 
     public Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetSearchContextsAsync(tenantId,cancellationToken);
@@ -447,202 +463,6 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         return NormalizeQuery(string.Join(' ',doctrinal.Take(12))).ToLowerInvariant();
     }
 
-    // A specific legal authority parsed from branch text, with the source it should be routed to and
-    // the distinctive tokens a retrieved source must contain to verify it is actually that authority.
-    private readonly record struct LegalAuthorityReference(string Query,LegalAuthorityKind Kind,IReadOnlyList<string> VerificationTokens);
-
-    // Matches reported case names of the form "Party v Party" / "Party v. Party", capturing multi-word
-    // party names (e.g. "Konic International Corp. v. Spokane Computer Services"). Deterministic and
-    // fail-soft: yields nothing when no citation is present.
-    private static readonly System.Text.RegularExpressions.Regex LegalCaseCitationRegex=new(
-        @"\b[A-Z][A-Za-z.&'\u2019\-]+(?:\s+[A-Z][A-Za-z0-9.&'\u2019\-]+){0,5}\s+v\.?\s+[A-Z][A-Za-z.&'\u2019\-]+(?:\s+[A-Za-z0-9.&'\u2019\-]+){0,5}",
-        System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    // Matches U.S.C. citations and Public Law numbers (legislative material → GovInfo).
-    private static readonly System.Text.RegularExpressions.Regex LegalStatuteCitationRegex=new(
-        @"\b(?:\d+\s+U\.?\s?S\.?\s?C\.?\s+(?:§+\s*)?\d[\w.\-]*|Pub(?:lic)?\.?\s+L(?:aw)?\.?\s+(?:No\.?\s*)?\d+[\-\u2013]\d+)",
-        System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    // Matches C.F.R. citations (regulatory material → GovInfo/eCFR).
-    private static readonly System.Text.RegularExpressions.Regex LegalRegulationCitationRegex=new(
-        @"\b\d+\s+C\.?\s?F\.?\s?R\.?\s+(?:§+\s*)?\d[\w.\-]*",
-        System.Text.RegularExpressions.RegexOptions.Compiled|System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant);
-
-    // Generic corporate/legal-entity tokens that never distinguish one party from another; excluded
-    // from case verification tokens so matching relies on the distinctive party names.
-    private static readonly HashSet<string> CaseTokenStopwords=new(StringComparer.OrdinalIgnoreCase)
-    {
-        "corp","corporation","inc","incorporated","llc","company","co","ltd","limited","the","and"
-    };
-
-    // Extracts the explicit legal authorities a branch already cites (case names, U.S.C./Public Law,
-    // and C.F.R. citations), classified so each can be routed to the correct source and verified. No
-    // additional LLM call — extraction is deterministic. Returns up to three authorities per branch.
-    private static IReadOnlyList<LegalAuthorityReference> ExtractLegalAuthorities(string text)
-    {
-        if(string.IsNullOrWhiteSpace(text))return [];
-        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var authorities=new List<LegalAuthorityReference>();
-        void Add(string raw,LegalAuthorityKind kind,IReadOnlyList<string> tokens)
-        {
-            var name=NormalizeQuery(raw);
-            if(name.Length<3||tokens.Count==0||!seen.Add(name))return;
-            authorities.Add(new(name,kind,tokens));
-        }
-        foreach(System.Text.RegularExpressions.Match match in LegalCaseCitationRegex.Matches(text))
-            Add(match.Value,LegalAuthorityKind.Case,CaseVerificationTokens(match.Value));
-        foreach(System.Text.RegularExpressions.Match match in LegalStatuteCitationRegex.Matches(text))
-            Add(match.Value,LegalAuthorityKind.Statute,CitationVerificationTokens(match.Value));
-        foreach(System.Text.RegularExpressions.Match match in LegalRegulationCitationRegex.Matches(text))
-            Add(match.Value,LegalAuthorityKind.Regulation,CitationVerificationTokens(match.Value));
-        return authorities.Take(3).ToArray();
-    }
-
-    // Concept fallback bridge: when a legal branch names no explicit citation, map its decisive doctrine
-    // to concrete UCC/U.S. Code citations using the DB-backed concept map (POLOXI.Legal_LegalConceptAuthority).
-    // Deterministic AND-match: every keyword in a concept row must appear in the branch text. The emitted
-    // citations flow through the SAME retrieval + mandatory identity gate, so a wrong mapping simply fails
-    // verification and is dropped (never inflates confidence). Returns up to three authorities.
-    private static IReadOnlyList<LegalAuthorityReference> ResolveConceptAuthorities(string text,IReadOnlyCollection<WideLegalConceptAuthorityDto> conceptMap)
-    {
-        if(string.IsNullOrWhiteSpace(text)||conceptMap.Count==0)return [];
-        var haystack=NormalizeQuery(text).ToLowerInvariant();
-        if(haystack.Length<3)return [];
-        var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var authorities=new List<LegalAuthorityReference>();
-        foreach(var concept in conceptMap)
-        {
-            var keywords=(concept.ConceptKeywords??string.Empty).Split([' ','\t',','],StringSplitOptions.RemoveEmptyEntries);
-            if(keywords.Length==0||!keywords.All(keyword=>ContainsWord(haystack,keyword.ToLowerInvariant())))continue;
-            // Context-anchor gate: when a concept declares domain-context tokens, at least one must ALSO
-            // appear in the text before it resolves. This stops generic doctrine words (e.g. "cure",
-            // "waiver", "good faith") from matching commercial statutes on unrelated (family, medical,
-            // constitutional) questions. Empty anchors preserve the original keyword-only behavior.
-            var anchors=(concept.ContextAnchors??string.Empty).Split([',',';'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
-            if(anchors.Length>0&&!anchors.Any(anchor=>ContainsWord(haystack,anchor.ToLowerInvariant())))continue;
-            var citation=NormalizeQuery(concept.CitationText);
-            if(citation.Length<3||!seen.Add(citation))continue;
-            var tokens=(concept.VerificationTokens??string.Empty).Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(token=>token.Length>=1).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if(tokens.Length==0)tokens=CitationVerificationTokens(concept.CitationText).ToArray();
-            if(tokens.Length==0)continue;
-            var kind=Enum.TryParse<LegalAuthorityKind>(concept.AuthorityKindCode,ignoreCase:true,out var parsed)?parsed:LegalAuthorityKind.Statute;
-            authorities.Add(new(citation,kind,tokens));
-            if(authorities.Count>=3)break;
-        }
-        return authorities;
-    }
-
-    // Word-boundary containment over a space-normalized, lowercased haystack. A keyword matches only when
-    // it appears as a whole word (or whole multi-word phrase), so "cure" no longer matches "secure" and a
-    // commercial doctrine cannot latch onto an unrelated substring. Multi-word keywords match if all their
-    // sub-tokens appear as whole words (order-independent), preserving the existing AND-phrase behavior.
-    private static bool ContainsWord(string haystack,string keyword)
-    {
-        if(string.IsNullOrWhiteSpace(keyword))return false;
-        foreach(var token in keyword.Split([' ','\t'],StringSplitOptions.RemoveEmptyEntries))
-        {
-            var index=0;
-            var found=false;
-            while((index=haystack.IndexOf(token,index,StringComparison.Ordinal))>=0)
-            {
-                var beforeOk=index==0||!char.IsLetterOrDigit(haystack[index-1]);
-                var after=index+token.Length;
-                var afterOk=after>=haystack.Length||!char.IsLetterOrDigit(haystack[after]);
-                if(beforeOk&&afterOk){found=true;break;}
-                index=after;
-            }
-            if(!found)return false;
-        }
-        return true;
-    }
-
-    private static IReadOnlyList<string> CaseVerificationTokens(string caseName)
-    {
-        var tokens=new List<string>();
-        foreach(var raw in caseName.Split([' ','.',',','\'','\u2019','-'],StringSplitOptions.RemoveEmptyEntries))
-        {
-            var token=raw.Trim();
-            if(token.Length<4||string.Equals(token,"v",StringComparison.OrdinalIgnoreCase)||CaseTokenStopwords.Contains(token))continue;
-            tokens.Add(token);
-        }
-        return tokens;
-    }
-
-    private static IReadOnlyList<string> CitationVerificationTokens(string citation)=>
-        System.Text.RegularExpressions.Regex.Matches(citation,@"\d+").Select(match=>match.Value).Where(value=>value.Length>=2).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-
-    // Verification gate: an authority proposed by the LLM is only evidence once a retrieved source
-    // actually refers to it. The single-snippet identity check below is the mandatory gate applied
-    // during retrieval before proposition-support scoring.
-    // Identity check for a single snippet: does the retrieved source actually reference the proposed
-    // authority (at least one distinctive token in the title/snippet)? This is the MANDATORY gate.
-    private static bool SnippetMatchesAuthorityIdentity(WideExternalKnowledgeSnippet snippet,LegalAuthorityReference authority)
-    {
-        if(authority.VerificationTokens.Count==0)return false;
-        // Normalize both sides so ordinary legal-name formatting (punctuation, "v." vs "v", extra
-        // whitespace, casing) never causes a false negative: "Raffles v. Wichelhaus",
-        // "Raffles v Wichelhaus", and "Raffles versus Wichelhaus" all resolve identically.
-        var haystack=NormalizeIdentityText($"{snippet.Title} {snippet.Snippet}");
-        return authority.VerificationTokens.Any(token=>haystack.Contains(NormalizeIdentityText(token),StringComparison.Ordinal));
-    }
-
-    // Identity normalization: lowercase, replace any non-alphanumeric run with a single space, and trim.
-    // This makes distinctive-token matching resilient to citation punctuation without weakening identity
-    // (the distinctive party/citation tokens themselves must still be present).
-    private static string NormalizeIdentityText(string text)=>
-        string.IsNullOrWhiteSpace(text)?string.Empty:System.Text.RegularExpressions.Regex.Replace(text.ToLowerInvariant(),@"[^a-z0-9]+"," ").Trim();
-
-    // Tri-state proposition-support status. Deterministic, no LLM. A weighting signal, not legal truth.
-    private const string PropositionStatusVerifiedSupport="VERIFIED_SUPPORT";
-    private const string PropositionStatusUnclear="AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR";
-    private const string PropositionStatusUnverified="UNVERIFIED";
-    // Overlap at/above this share of branch-claim concept tokens counts as strong proposition support.
-    private const decimal PropositionSupportThreshold=0.34m;
-
-    // Deterministic proposition-support score in [0,1]: weighted overlap between the branch claim's
-    // distinctive concept tokens and the retrieved snippet text. Normalizes case, strips stopwords, and
-    // rewards longer (more distinctive) claim terms. This does NOT establish legal truth — it only
-    // measures how much the source text talks about the same concepts the branch claim asserts, and is
-    // used to weight (never to gate) evidence contribution. Identity verification remains the gate.
-    private static decimal ComputePropositionSupport(string branchClaim,string snippetText)
-    {
-        var claimTokens=PropositionConceptTokens(branchClaim);
-        if(claimTokens.Count==0||string.IsNullOrWhiteSpace(snippetText))return 0m;
-        var haystackTokens=PropositionConceptTokens(snippetText).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if(haystackTokens.Count==0)return 0m;
-        decimal matchedWeight=0m,totalWeight=0m;
-        foreach(var token in claimTokens.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            // Longer terms are more distinctive; weight them more heavily than short common words.
-            var weight=token.Length>=8?3m:token.Length>=6?2m:1m;
-            totalWeight+=weight;
-            if(haystackTokens.Contains(token))matchedWeight+=weight;
-        }
-        return totalWeight==0m?0m:Math.Clamp(matchedWeight/totalWeight,0m,1m);
-    }
-
-    // Concept tokens for proposition overlap: lowercase alphanumeric words >=4 chars that are not
-    // conversational stopwords. Legal phrasing (mutual, assent, meanings, peerless, contract, ...) is
-    // preserved; filler (the, with, would, ...) is dropped.
-    private static IReadOnlyList<string> PropositionConceptTokens(string text)
-    {
-        if(string.IsNullOrWhiteSpace(text))return [];
-        return System.Text.RegularExpressions.Regex.Matches(text.ToLowerInvariant(),@"[a-z0-9]{4,}")
-            .Select(match=>match.Value)
-            .Where(token=>!RetrievalQueryStopwords.Contains(token))
-            .ToArray();
-    }
-
-    // Classifies a single legal snippet into the tri-state status. Identity failure is terminal:
-    // proposition scoring can never rescue an authority that was not actually retrieved.
-    private static (bool IdentityVerified,decimal SupportScore,string Status) ClassifyLegalSnippet(WideExternalKnowledgeSnippet snippet,LegalAuthorityReference authority,string branchClaim)
-    {
-        if(!SnippetMatchesAuthorityIdentity(snippet,authority))return (false,0m,PropositionStatusUnverified);
-        var support=ComputePropositionSupport(branchClaim,$"{snippet.Title} {snippet.Snippet}");
-        var status=support>=PropositionSupportThreshold?PropositionStatusVerifiedSupport:PropositionStatusUnclear;
-        return (true,support,status);
-    }
-
     // Explicit branch attribution: stamp the stable BranchId (+display name) that ComputeEvidenceSupport
     // uses to link a snippet to its branch. Also keeps snippet.Query aligned to the attribution query so
     // the legacy query-substring fallback still works for legacy rows and non-legal snippets.
@@ -782,7 +602,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             // awaited where seeds are consumed (before the information rounds). Same guard, same prompt
             // inputs, same fail-soft semantics as the previous inline call — only the timing overlaps
             // Stage 1 intent, hierarchy narrowing, and grounding. Same accepted pattern as llmRawTask.
-            var candidateSeedTask=configuration.EnableInformationValue?EnumerateCandidateSeedsAsync(request,queryContract,cancellationToken):null;
+            var candidateSeedTask=configuration.EnableInformationValue?EnumerateCandidateSeedsAsync(request,configuration,queryContract,cancellationToken):null;
 
             // V3.20 Legal authority proposal overlap: like the candidate-seed enumeration, this depends only
             // on the query and finalized contract, so its one fail-soft LLM call is started here and awaited
@@ -791,7 +611,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             // identity/support admission gates. Legal context + flag gated; null otherwise.
             var legalAuthorityProposalTask=configuration.EnableLegalAuthorityProposal
                 &&string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase)
-                ?ProposeLegalAuthoritiesAsync(request,queryContract,cancellationToken):null;
+                ?ProposeLegalAuthoritiesAsync(request,configuration,queryContract,cancellationToken):null;
 
             // Stage 1: Ambiguous intent framing -> problem-specific Level-1 hierarchy (open, not catalog-limited).
             var intent=await ProposeIntentAsync(request,capabilities,configuration,queryContract,cancellationToken);
@@ -1068,7 +888,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                         // bottleneck is (deterministic leader vs runner-up over the frozen candidate basis).
                         // Prompt-context only — scoring, selection, and narrowing are untouched.
                         var contestedPair=DescribeContestedPair(roundCandidateBasis,evidence,externalKnowledgeAll);
-                        var proposal=await EstimateInformationValueAsync(request,eligible,entropyBefore,queryContract,contestedPair,cancellationToken);
+                        var proposal=await EstimateInformationValueAsync(request,configuration,eligible,entropyBefore,queryContract,contestedPair,cancellationToken);
                         llmCalls++;
                         if(proposal is null||proposal.Targets.Count==0)break;
                         var branchesByCode=eligible.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
@@ -1444,7 +1264,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 var lowEvidenceCoverage=decisionEvidenceCoverage<.50m;
                 var unstableWinner=winnerStability is <=.05m;
                 if(challengeMargin<configuration.ChallengeMarginThreshold||lowEvidenceCoverage||unstableWinner)
-                    challengeTask=ChallengeWinnerAndPersistAsync(request,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
+                    challengeTask=ChallengeWinnerAndPersistAsync(request,configuration,executionId,topCandidates[0],topCandidates[1],challengeMargin,externalKnowledge,cancellationToken);
             }
             // V2.8 Clarification Gate, upgraded to V2.8.4 Clarification Intelligence.
             // Intent Gap classifier: unresolved uncertainty is an EVIDENCE gap (POLOXI doesn't know the
@@ -1644,7 +1464,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                 if(abvComposite is not null)
                 {
                     llmCalls++;
-                    abvAction=await ResolveAbvActionAsync(request,abvComposite,cancellationToken);
+                    abvAction=await ResolveAbvActionAsync(request,configuration,abvComposite,cancellationToken);
                 }
             }
             // Legal Answer Composer (PRESENTATION ONLY, legal context + POLOXI engine). Runs AFTER POLOXI
@@ -1683,12 +1503,12 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // Fail-soft: any failure (rejected intent, provider error) returns null so the delivered answer is
     // never affected. The LLM proposes intent only; impact/urgency/owner/action resolve
     // deterministically from the database-backed Domain Pack with provenance.
-    private async Task<WideAbvActionDto?> ResolveAbvActionAsync(WideSearchRequest request,InterpretationComposite composite,CancellationToken cancellationToken)
+    private async Task<WideAbvActionDto?> ResolveAbvActionAsync(WideSearchRequest request,WideConfiguration configuration,InterpretationComposite composite,CancellationToken cancellationToken)
     {
         try
         {
             var correlationId=string.IsNullOrWhiteSpace(request.CorrelationId)?$"abv:{Guid.NewGuid():N}":request.CorrelationId;
-            var outcome=await abvEngine.ResolveAsync(new(request.TenantId,request.UserId,null,composite,correlationId){ModelCode=ModelOverride(request)},cancellationToken);
+            var outcome=await abvEngine.ResolveAsync(new(request.TenantId,request.UserId,null,composite,correlationId){ModelCode=MechanicalModel(configuration,request)},cancellationToken);
             return MapAbv(outcome);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -1896,7 +1716,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAnswer,cancellationToken),
                 userPrompt,
-                LegalAnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                LegalAnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<LegalAnswerProposal>(result.Content,JsonOptions);
             return ValidateLegalAnswer(proposal,verifiedAuthorities,winnerDisplayName,resolutionDeliverable,interpretationStatus);
         }
@@ -1975,7 +1795,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLlmOnlyAnswer,cancellationToken),
                 $"Question: {request.Query}",
-                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_ONLY",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_ONLY",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide LLM-only answer response was empty.");
             var confidence=Math.Clamp(answer.Confidence,0,1);
             timer.Stop();
@@ -2001,7 +1821,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLlmRawAnswer,cancellationToken),
                 $"Question: {request.Query}",
-                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_RAW",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_RAW",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions);
             var items=(answer?.InterpretiveResults??[]).FirstOrDefault(entry=>entry.Items is{Count:>0})?.Items;
             return items is null?[]:items.OrderBy(item=>item.RankNumber).Select((item,index)=>new WideInterpretiveResultItemDto(item.RankNumber>0?item.RankNumber:index+1,item.Name.Trim(),item.Detail.Trim(),NormalizeScore(item.Score))).ToArray();
@@ -2040,7 +1860,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideIntent,cancellationToken),
             userPrompt,
-            IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
 
@@ -2057,7 +1877,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
             userPrompt,
-            LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
     }
 
@@ -2398,7 +2218,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 systemPrompt,
             userPrompt,
-            AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+            AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),SynthesisModel(request),cancellationToken);
         return (JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide answer response was empty."),result.ProviderCode,result.ModelCode);
     }
 
@@ -3389,7 +3209,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideQueryContract,cancellationToken),
                 $"Question: {request.Query}",
-                QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
             var contract=new WideQueryContract(proposal.EntityType,proposal.GeographicConstraint,proposal.RequestedCount,proposal.RankingConcept,proposal.HardConstraints??[],proposal.AmbiguousConcepts??[],proposal.OutputRequirements??[])
@@ -4267,7 +4087,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // V3.5 enumeration seeding: one cheap LLM call naming concrete candidates. Enumeration is the one
     // task mini-tier models do reliably; output is untrusted and every seed faces the deterministic
     // filters and evidence gates downstream. Fail-soft: any failure returns an empty list.
-    private async Task<IReadOnlyCollection<string>> EnumerateCandidateSeedsAsync(WideSearchRequest request,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<string>> EnumerateCandidateSeedsAsync(WideSearchRequest request,WideConfiguration configuration,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         try
         {
@@ -4275,7 +4095,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateEnumeration,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
-                CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateEnumerationProposal>(result.Content,JsonOptions);
             return proposal?.Candidates?.Where(name=>!string.IsNullOrWhiteSpace(name)).Select(name=>name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()??[];
         }
@@ -4295,7 +4115,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // routed through the SAME mandatory identity + proposition-support admission gates in RetrieveStampedAsync,
     // so a hallucinated authority simply fails verification and never becomes evidence. Runs only in the
     // legal context. Fail-soft: any provider/parse failure returns an empty list and the pipeline is unchanged.
-    private async Task<IReadOnlyList<ProposedLegalAuthority>> ProposeLegalAuthoritiesAsync(WideSearchRequest request,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<ProposedLegalAuthority>> ProposeLegalAuthoritiesAsync(WideSearchRequest request,WideConfiguration configuration,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         try
         {
@@ -4303,7 +4123,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAuthorityProposal,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
-                LegalAuthorityProposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_AUTHORITY_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                LegalAuthorityProposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_AUTHORITY_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideLegalAuthorityProposal>(result.Content,JsonOptions);
             if(proposal?.Authorities is null)return [];
             var seen=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -4394,9 +4214,9 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
     // Phase 2a Challenge-the-Winner (WATCH MODE): one adversarial LLM assessment that argues AGAINST
     // the current leader using only the already-retrieved evidence — no new retrieval calls. Fail-soft:
     // any provider/parse failure returns null and the run proceeds exactly as before.
-    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAndPersistAsync(WideSearchRequest request,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
+    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAndPersistAsync(WideSearchRequest request,WideConfiguration configuration,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
     {
-        var challengeOutcome=await ChallengeWinnerAsync(request,executionId,leader,runnerUp,margin,externalKnowledge,cancellationToken);
+        var challengeOutcome=await ChallengeWinnerAsync(request,configuration,executionId,leader,runnerUp,margin,externalKnowledge,cancellationToken);
         if(challengeOutcome is not null)
         {
             try{await wideRepository.UpdateWideExecutionChallengeOutcomeAsync(request.TenantId,request.UserId,executionId,JsonSerializer.Serialize(challengeOutcome,JsonOptions),cancellationToken);}
@@ -4405,7 +4225,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
         return challengeOutcome;
     }
 
-    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAsync(WideSearchRequest request,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
+    private async Task<WideChallengeOutcomeDto?> ChallengeWinnerAsync(WideSearchRequest request,WideConfiguration configuration,Guid executionId,WideCandidateDto leader,WideCandidateDto runnerUp,decimal margin,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,CancellationToken cancellationToken)
     {
         try
         {
@@ -4415,7 +4235,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideChallengeRound,cancellationToken),
                 $"Question: {request.Query}\nLeader: {leader.DisplayName} (composite {leader.CompositeScore:0.00}; dimensions: {leaderScores})\nRunner-up: {runnerUp.DisplayName} (composite {runnerUp.CompositeScore:0.00}; dimensions: {runnerUpScores})\nMargin: {margin:0.00}\nEvidence:\n{evidenceContext}",
-                ChallengeVerdictSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CHALLENGE_ROUND",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                ChallengeVerdictSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CHALLENGE_ROUND",executionId,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideChallengeVerdictProposal>(result.Content,JsonOptions);
             if(proposal is null||string.IsNullOrWhiteSpace(proposal.VerdictCode))return null;
             var verdict=proposal.VerdictCode.Trim().ToUpperInvariant() switch
@@ -4518,7 +4338,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     // One BATCHED call estimates information value for all eligible branches, including falsifiable
     // candidate ranking-change predictions POLOXI can later verify. Fail-soft: returns null on any failure.
-    private async Task<WideInformationValueProposal?> EstimateInformationValueAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> eligible,WideEntropyResult entropy,WideQueryContract? queryContract,string? contestedPair,CancellationToken cancellationToken)
+    private async Task<WideInformationValueProposal?> EstimateInformationValueAsync(WideSearchRequest request,WideConfiguration configuration,IReadOnlyCollection<WideBranchRecord> eligible,WideEntropyResult entropy,WideQueryContract? queryContract,string? contestedPair,CancellationToken cancellationToken)
     {
         try
         {
@@ -4535,7 +4355,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideInformationValue,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nUnresolved bottleneck: {contestedPair??"(no contested pair yet — candidate signals are not established)"}\nBranches:\n{branchContext}\nOutput requirements: keep each rationale to ONE short sentence (at most 15 words). Include predictedRankingChanges only when the direction is clearly implied by the branch context (at most 2 per target; an empty array is the correct answer when no change is implied). Do not restate branch names or interpretations in rationales.",
-                InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             return JsonSerializer.Deserialize<WideInformationValueProposal>(result.Content,JsonOptions);
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
@@ -5476,7 +5296,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
                     var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
                         await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
                         $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{requestedBranchList}\nCandidates:\n{candidateList}",
-                        CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
+                        CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
                     var chunkProposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);
                     return chunkProposal?.Candidates?.ToList()??[];
                 }

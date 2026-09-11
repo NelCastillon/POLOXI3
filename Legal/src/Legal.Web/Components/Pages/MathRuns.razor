@@ -1,0 +1,214 @@
+@page "/legal/math/runs"
+@using Legal.Application.Abstractions.Persistence
+@inject ApiClient Api
+
+<LegalWorkspace>
+    <div class="poloxi-page">
+        <header class="poloxi-hero">
+            <div class="poloxi-hero-icon"><i class="bi bi-calculator"></i></div>
+            <div>
+                <span>POLOXI Scientific Reasoning — Mathematics V1 audit trail</span>
+                <h1>Math Run History</h1>
+                <p>Every solve run is persisted with the deterministic verification verdicts. Nothing is accepted on LLM confidence — select a run to inspect its obligations and ranked candidates exactly as the verifier decided them.</p>
+            </div>
+        </header>
+
+        <section class="poloxi-composer" aria-label="Math run history controls">
+            <div class="poloxi-composer-footer">
+                <button class="um-btn um-btn-primary" @onclick="LoadRunsAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            </div>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="poloxi-loading" role="status" aria-live="polite">
+                <i class="bi bi-water poloxi-spinner"></i>
+                <div><strong>Loading Math run history…</strong></div>
+            </section>
+        }
+        else if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_error</div>
+        }
+        else
+        {
+            <div class="poloxi-math-layout" style="display:flex; gap:1rem; align-items:flex-start;">
+                <section style="flex:1 1 420px; min-width:340px;">
+                    @if (_runs.Count == 0)
+                    {
+                        <div class="alert alert-info">No Math runs have been persisted yet.</div>
+                    }
+                    else
+                    {
+                        <table class="br-table" style="width:100%;">
+                            <thead>
+                                <tr>
+                                    <th>Problem</th>
+                                    <th>Outcome</th>
+                                    <th>Verification</th>
+                                    <th>Answer</th>
+                                    <th>When (UTC)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var run in _runs)
+                                {
+                                    <tr class="br-table-row @(_selected?.MathExecutionId == run.MathExecutionId ? "br-table-row--selected" : null)"
+                                        style="cursor:pointer;" @onclick="() => SelectRunAsync(run.MathExecutionId)">
+                                        <td>@Truncate(run.ProblemText, 80)</td>
+                                        <td><span class="poloxi-status">@run.OutcomeCode</span></td>
+                                        <td>@run.VerificationStatusCode</td>
+                                        <td>@(run.CanonicalAnswer ?? "—")</td>
+                                        <td>@run.CreatedDateUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </section>
+
+                <section style="flex:1 1 480px; min-width:360px;">
+                    @if (_detailLoading)
+                    {
+                        <div class="poloxi-loading" role="status"><i class="bi bi-water poloxi-spinner"></i><div><strong>Loading run…</strong></div></div>
+                    }
+                    else if (_selected is not null)
+                    {
+                        <div class="poloxi-explanation">
+                            <div class="poloxi-explanation-body">
+                                <div class="poloxi-panel-header">
+                                    <div><span>Run @_selected.CorrelationId</span><h2>Verification Trail</h2></div>
+                                    <span class="poloxi-status">@_selected.OutcomeCode</span>
+                                </div>
+                                <p><strong>Problem:</strong> @_selected.ProblemText</p>
+                                <p>
+                                    <strong>Final answer:</strong> @(_selected.FinalAnswer ?? "—")
+                                    @if (!string.IsNullOrWhiteSpace(_selected.CanonicalAnswer))
+                                    {
+                                        <span> (canonical: @_selected.CanonicalAnswer)</span>
+                                    }
+                                </p>
+                                @if (!string.IsNullOrWhiteSpace(_selected.SolutionSummary))
+                                {
+                                    <p><strong>Summary:</strong> @_selected.SolutionSummary</p>
+                                }
+                                <p>
+                                    <strong>Discovery confidence:</strong> @_selected.DiscoveryConfidence.ToString("0.####")
+                                    &middot; <strong>Self-consistency:</strong> @_selected.SelfConsistencyAgreement.ToString("0.####")
+                                    @if (_selected.DurationMilliseconds is { } ms)
+                                    {
+                                        <span> &middot; <strong>Duration:</strong> @ms ms</span>
+                                    }
+                                </p>
+                                @if (!string.IsNullOrWhiteSpace(_selected.RemainingUncertainty))
+                                {
+                                    <p><strong>Remaining uncertainty:</strong> @_selected.RemainingUncertainty</p>
+                                }
+
+                                <h3>Obligations</h3>
+                                @if (_selected.Obligations.Count == 0)
+                                {
+                                    <p>No obligations recorded.</p>
+                                }
+                                else
+                                {
+                                    <table class="br-table" style="width:100%;">
+                                        <thead><tr><th>Statement</th><th>Method</th><th>Status</th><th>Counterexample</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var o in _selected.Obligations)
+                                            {
+                                                <tr>
+                                                    <td>@o.Statement</td>
+                                                    <td>@o.VerificationMethodCode</td>
+                                                    <td>@o.StatusCode</td>
+                                                    <td>@o.CounterexampleStatusCode</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+
+                                <h3>Candidates</h3>
+                                @if (_selected.Candidates.Count == 0)
+                                {
+                                    <p>No candidates recorded.</p>
+                                }
+                                else
+                                {
+                                    <table class="br-table" style="width:100%;">
+                                        <thead><tr><th>Name</th><th>Type</th><th>Verification</th><th>Confidence</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var c in _selected.Candidates)
+                                            {
+                                                <tr>
+                                                    <td>@c.Name</td>
+                                                    <td>@c.ObjectTypeCode</td>
+                                                    <td>@c.VerificationStatusCode</td>
+                                                    <td>@c.DiscoveryConfidence.ToString("0.####")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-info">Select a run to view its verification trail.</div>
+                    }
+                </section>
+            </div>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    private IReadOnlyList<MathExecutionSummary> _runs = [];
+    private MathExecutionDetail? _selected;
+    private bool _loading;
+    private bool _detailLoading;
+    private string? _error;
+
+    protected override Task OnInitializedAsync() => LoadRunsAsync();
+
+    private async Task LoadRunsAsync()
+    {
+        _loading = true;
+        _error = null;
+        _selected = null;
+        try
+        {
+            _runs = await Api.GetMathRunsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SelectRunAsync(Guid mathExecutionId)
+    {
+        _detailLoading = true;
+        _error = null;
+        try
+        {
+            _selected = await Api.GetMathRunAsync(mathExecutionId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _detailLoading = false;
+        }
+    }
+
+    private static string Truncate(string value, int max) =>
+        string.IsNullOrEmpty(value) || value.Length <= max ? value : value[..max] + "…";
+}

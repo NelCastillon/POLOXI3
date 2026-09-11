@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IIntelligenceRepository, IntelligenceRepository>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
+        services.AddScoped<IMathReasoningRepository, MathReasoningRepository>();
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
 
         services.AddScoped<IPromptCatalog, PromptCatalog>();
@@ -64,6 +65,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IAmbiguityResolutionEngine, Legal.Application.Features.Intelligence.Ambiguity.AmbiguityResolutionEngine>();
 
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
+
+        // POLOXI Scientific Reasoning — Mathematics V1 pack.
+        services.AddScoped<IMathReasoningService, MathReasoningService>();
 
         return services;
     }

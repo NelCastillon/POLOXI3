@@ -719,6 +719,17 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // When elapsed, in-flight retrievals are cancelled fail-soft and the run proceeds with the
     // evidence already gathered. 0 disables the budget.
     public int ExternalGroundingBudgetSeconds{get;init;}=120;
+    // Tiered model routing (DB-seeded; see migration 0205). When enabled, mechanical strict-JSON
+    // stages (intent, hierarchy step, query contract, candidate enumeration, legal-authority
+    // proposal, information value, challenge round, candidate matrix, ABV) always run on FastModelCode
+    // regardless of the requested model, so selecting a reasoning model (e.g. Astra) only costs
+    // reasoning latency on the user-facing synthesis calls. Their output is a bounded schema a fast
+    // model produces reliably, and every value still faces the deterministic filters/evidence gates
+    // downstream. When disabled, every stage routes through the requested model (legacy behavior).
+    public bool EnableTieredModelRouting{get;init;}=true;
+    // Fast-tier model code used by mechanical stages when EnableTieredModelRouting is on. Must be an
+    // active CHAT deployment with feature routes for the wide mechanical features. Also the Auto default.
+    public string FastModelCode{get;init;}="gpt-4.1-mini";
     // V3.11 Guardrail-Constrained Weighted Utility: ordinary preference scores remain compensatory,
     // but guardrail criteria apply a deterministic veto-inspired penalty when performance is below
     // an acceptable floor. The LLM may describe criteria; POLOXI owns these thresholds and math.

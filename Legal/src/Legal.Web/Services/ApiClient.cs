@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence;
 
 namespace Legal.Web.Services;
@@ -47,7 +48,19 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyCollection<WideSearchContextDto>> GetIntelligenceSearchContextsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchContextDto>>("api/intelligence_wide/contexts",token)??[];
 
-    // ── Configuration center ──────────────────────────────────────────────────
+    // ── POLOXI Math run history (audit trail) ────────────────────────────────
+    public async Task<IReadOnlyList<MathExecutionSummary>> GetMathRunsAsync(int take=50,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<MathExecutionSummary>>($"api/intelligence_math/runs?take={take}",token)??[];
+    public Task<MathExecutionDetail?> GetMathRunAsync(Guid mathExecutionId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<MathExecutionDetail>($"api/intelligence_math/runs/{mathExecutionId}",token);
+
+    // ── POLOXI Math solve (deterministic verification pipeline) ──────────────
+    public async Task<Legal.Application.Features.Intelligence.Science.MathSolveResponse?> SolveMathAsync(Legal.Application.Features.Intelligence.Science.MathSolveRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync("api/intelligence_math/solve",request,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Science.MathSolveResponse>(cancellationToken:token);
+    }
+
+    // ── Configuration center
     public Task<IntelligencePlatformSummaryDto?> GetIntelligencePlatformAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<IntelligencePlatformSummaryDto>("api/intelligence/platform",token);
     public async Task<IReadOnlyCollection<AiProviderDto>> GetIntelligenceProvidersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<AiProviderDto>>("api/intelligence/providers",token)??[];
     public async Task SaveIntelligenceProviderAsync(string providerCode,SaveAiProviderRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/providers/{Uri.EscapeDataString(providerCode)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
