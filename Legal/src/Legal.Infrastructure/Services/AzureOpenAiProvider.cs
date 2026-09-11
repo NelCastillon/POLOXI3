@@ -6,11 +6,15 @@ using System.Text.Json.Nodes;
 using Legal.Application.Abstractions.Intelligence;
 using Azure.Core;
 using Azure.Identity;
+using Microsoft.Extensions.Logging;
 
 namespace Legal.Infrastructure.Services;
 
-public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
+public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenAiProvider> logger):IAiProvider
 {
+    // Process-wide monotonic call counter: makes it obvious in the console whether repeated
+    // identical-URL requests are distinct pipeline stages progressing or the same stage retrying.
+    private static int _callSequence;
     private static readonly string[] Scope=["https://cognitiveservices.azure.com/.default"];
     // Managed identity is only attempted when the host exposes an identity endpoint; otherwise IMDS probes (169.254.169.254) time out locally and abort the request.
     // Locally the Azure CLI session is used. Token is cached until shortly before expiry to avoid re-invoking az per request.
@@ -44,11 +48,36 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
         var dropTemperature=profile.DropTemperature||IsReasoningModel(request.Context.ModelCode);
         var body=new JsonObject{["messages"]=new JsonArray(new JsonObject{["role"]="system",["content"]=request.SystemPrompt},new JsonObject{["role"]="user",["content"]=request.UserPrompt})};
         if(!dropTemperature)body["temperature"]=request.Temperature;
-        if(useCompletionTokens)body["max_completion_tokens"]=request.MaximumOutputTokens;else body["max_tokens"]=request.MaximumOutputTokens;
+        // Payload shaping for mechanical stages on reasoning models: migration 0167 raised the shared
+        // Wide feature-policy output budget to 16000 tokens so the ANSWER stage never truncates, but the
+        // mechanical strict-JSON stages (intent, hierarchy, information value, enumeration) emit small
+        // structured objects and NEVER need that headroom. On a reasoning model, max_completion_tokens is
+        // also the hidden-reasoning ceiling for the call, so an oversized budget directly inflates
+        // wall-clock latency (observed: multi-minute stalls on INTELLIGENCE_WIDE_INFORMATION_VALUE).
+        // Mechanical stages are therefore capped at 4000 completion tokens; the existing truncation
+        // retry (doubled budget on finish_reason=length) remains the fail-soft safety net, and
+        // answer/explanation stages keep the full configured budget.
+        var outputBudget=request.MaximumOutputTokens;
+        if(IsReasoningModel(request.Context.ModelCode)&&ResolveReasoningEffort(request.FeatureCode)=="minimal")outputBudget=Math.Min(outputBudget,4000);
+        if(useCompletionTokens)body["max_completion_tokens"]=outputBudget;else body["max_tokens"]=outputBudget;
+        // Reasoning models spend most of their latency on hidden reasoning tokens. Mechanical extraction
+        // stages (intent, hierarchy, information value, enumeration) are strict-JSON structured tasks that
+        // gain little from deep reasoning, so they run at low effort; judgment stages (final answer,
+        // challenge, explanation) keep medium effort. This keeps every stage on the selected reasoning
+        // model while cutting per-call latency substantially. Deployments that reject the parameter fall
+        // back through the existing unsupported_parameter negotiation below.
+        if(IsReasoningModel(request.Context.ModelCode)&&!profile.DropReasoningEffort){var effort=ResolveReasoningEffort(request.FeatureCode);body["reasoning_effort"]=profile.MinimalEffortRejected&&effort=="minimal"?"low":effort;}
         if(responseFormat is not null)body["response_format"]=JsonSerializer.SerializeToNode(responseFormat);
         string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;
         for(var attempt=0;;attempt++)
         {
+            var callNumber=Interlocked.Increment(ref _callSequence);
+            // Payload diagnostics: for non-streaming chat/completions, response HEADERS only arrive after the
+            // model finishes generating, so a "hanging" call is usually the model reasoning against a large
+            // max_completion_tokens budget. Logging the exact effective payload shape (prompt sizes, output
+            // budget, reasoning_effort actually sent or dropped) makes that visible per call.
+            logger.LogInformation("AI call #{CallNumber} payload: feature {FeatureCode}, systemChars={SystemChars}, userChars={UserChars}, outputBudget={OutputBudget}, reasoningEffort={ReasoningEffort}, strictJson={StrictJson}, timeoutSeconds={TimeoutSeconds}",callNumber,request.FeatureCode,request.SystemPrompt?.Length??0,request.UserPrompt?.Length??0,(body["max_completion_tokens"]??body["max_tokens"])?.GetValue<int>(),body["reasoning_effort"]?.GetValue<string>()??"(not sent)",responseFormat is not null,Math.Clamp(request.Context.TimeoutSeconds,1,900)*(IsReasoningModel(request.Context.ModelCode)?3:1));
+            logger.LogInformation("AI call #{CallNumber} start: feature {FeatureCode}, model {ModelCode}, attempt {Attempt}, correlation {CorrelationId}",callNumber,request.FeatureCode,request.Context.ModelCode,attempt,request.CorrelationId);
             using var message=new HttpRequestMessage(HttpMethod.Post,BuildUri(request.Context,"chat/completions")){Content=JsonContent.Create(body)};await AuthorizeAsync(message,request.Context,timeout.Token);using var response=await httpClient.SendAsync(message,timeout.Token);json=await response.Content.ReadAsStringAsync(timeout.Token);statusCode=response.StatusCode;requestId=response.Headers.TryGetValues("x-request-id",out var values)?values.FirstOrDefault()??string.Empty:string.Empty;
             if(response.IsSuccessStatusCode)
             {
@@ -57,14 +86,23 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
                 // visible answer. Retry ONCE for those specific models only, with doubled completion headroom.
                 if(!reasoningBudgetRaised&&IsReasoningModel(request.Context.ModelCode)&&body.ContainsKey("max_completion_tokens")&&IsTruncated(json))
                 {
-                    reasoningBudgetRaised=true;body["max_completion_tokens"]=request.MaximumOutputTokens*2;continue;
+                    logger.LogWarning("AI call #{CallNumber} truncated: feature {FeatureCode} retrying once with doubled completion budget.",callNumber,request.FeatureCode);
+                    // Double the EFFECTIVE budget (not the raw configured one) so a capped mechanical stage
+                    // retries at 8000 rather than jumping straight to 32000 reasoning-token headroom.
+                    reasoningBudgetRaised=true;body["max_completion_tokens"]=outputBudget*2;continue;
                 }
+                logger.LogInformation("AI call #{CallNumber} completed: feature {FeatureCode}, model {ModelCode}, {ElapsedMs}ms elapsed.",callNumber,request.FeatureCode,request.Context.ModelCode,timer.ElapsedMilliseconds);
                 break;
             }
             if((int)statusCode==400&&attempt<3&&TryGetUnsupportedParameter(json,out var unsupported))
             {
-                if(unsupported=="max_tokens"&&body.ContainsKey("max_tokens")){body.Remove("max_tokens");body["max_completion_tokens"]=request.MaximumOutputTokens;LearnedModelProfiles.AddOrUpdate(modelKey,(true,false),(_,existing)=>(true,existing.DropTemperature));continue;}
-                if(unsupported is "temperature" or "max_completion_tokens"&&body.Remove(unsupported)){if(unsupported=="temperature")LearnedModelProfiles.AddOrUpdate(modelKey,(false,true),(_,existing)=>(existing.UseCompletionTokens,true));continue;}
+                if(unsupported=="max_tokens"&&body.ContainsKey("max_tokens")){body.Remove("max_tokens");body["max_completion_tokens"]=outputBudget;LearnedModelProfiles.AddOrUpdate(modelKey,new LearnedModelProfile(true,false,false,false),(_,existing)=>existing with{UseCompletionTokens=true});continue;}
+                // reasoning_effort degrades gracefully: a deployment that rejects "minimal" retries at
+                // "low" (still far cheaper than the model's medium default) before the parameter is
+                // dropped entirely. Dropping on first rejection silently reverted mechanical stages to
+                // default effort, which is the slowest possible configuration.
+                if(unsupported=="reasoning_effort"&&body["reasoning_effort"]?.GetValue<string>()=="minimal"){logger.LogWarning("AI call feature {FeatureCode}: model {ModelCode} rejected reasoning_effort=minimal; retrying with low.",request.FeatureCode,request.Context.ModelCode);body["reasoning_effort"]="low";LearnedModelProfiles.AddOrUpdate(modelKey,new LearnedModelProfile(false,false,false,true),(_,existing)=>existing with{MinimalEffortRejected=true});continue;}
+                if(unsupported is "temperature" or "max_completion_tokens" or "reasoning_effort"&&body.Remove(unsupported)){if(unsupported=="temperature")LearnedModelProfiles.AddOrUpdate(modelKey,new LearnedModelProfile(false,true,false,false),(_,existing)=>existing with{DropTemperature=true});if(unsupported=="reasoning_effort")LearnedModelProfiles.AddOrUpdate(modelKey,new LearnedModelProfile(false,false,true,false),(_,existing)=>existing with{DropReasoningEffort=true});continue;}
             }
             throw new HttpRequestException($"Azure OpenAI generation failed with HTTP {(int)statusCode}: {json}",null,statusCode);
         }
@@ -88,12 +126,22 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient):IAiProvider
 
     // Scoped to reasoning-family model codes only (gpt-5*, o1*, o3*, o4*); standard models like
     // gpt-4.1-mini keep their configured budget untouched because they don't spend hidden reasoning tokens.
-    private static bool IsReasoningModel(string? modelCode)=>modelCode is not null&&(modelCode.StartsWith("gpt-5",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o1",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o3",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o4",StringComparison.OrdinalIgnoreCase));
+    private static bool IsReasoningModel(string? modelCode)=>modelCode is not null&&(modelCode.StartsWith("gpt-5",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("gpt-6",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o1",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o3",StringComparison.OrdinalIgnoreCase)||modelCode.StartsWith("o4",StringComparison.OrdinalIgnoreCase));
 
     // Learned per-model parameter adjustments (process lifetime). A model that rejects max_tokens or a
     // non-default temperature pays the negotiation 400 ONCE; every later call builds the body correctly
     // up front. Known reasoning families never pay it at all (seeded by IsReasoningModel).
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,(bool UseCompletionTokens,bool DropTemperature)> LearnedModelProfiles=new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,LearnedModelProfile> LearnedModelProfiles=new(StringComparer.OrdinalIgnoreCase);
+    private readonly record struct LearnedModelProfile(bool UseCompletionTokens,bool DropTemperature,bool DropReasoningEffort,bool MinimalEffortRejected);
+
+    // Stage-tuned reasoning effort: judgment stages (final answer/challenge/explanation) keep medium;
+    // every mechanical structured-extraction stage runs at minimal effort for maximum speed on the same
+    // model. Measured basis (AI.Legal_Execution): at "low" the hierarchy step still spent 68-155s per
+    // call at ~35-40 output tok/s (hidden reasoning dominating a strict-JSON extraction task); "minimal"
+    // suppresses nearly all hidden reasoning for these stages. Deployments that reject the value fall
+    // back through the existing unsupported_value negotiation and drop the parameter.
+    private static string ResolveReasoningEffort(string featureCode)=>
+        featureCode.Contains("ANSWER",StringComparison.OrdinalIgnoreCase)||featureCode.Contains("EXPLANATION",StringComparison.OrdinalIgnoreCase)?"medium":"minimal";
 
     // True when the successful completion envelope reports finish_reason=length (output truncated by token budget).
     private static bool IsTruncated(string json)

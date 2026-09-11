@@ -12,7 +12,7 @@ public sealed class ApiClient(HttpClient httpClient)
     // ── POLOXI Wide search (start+poll transport) ─────────────────────────────
     public async Task<WideSearchResponse?> IntelligentSearchWideDynamicAsync(WideSearchRequest request,CancellationToken token=default)
     {
-        var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic/start",request,token);
+        using var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide/search/dynamic/start",request,token);
         startResponse.EnsureSuccessStatusCode();
         var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
         try
@@ -21,14 +21,24 @@ public sealed class ApiClient(HttpClient httpClient)
             {
                 await Task.Delay(TimeSpan.FromSeconds(2),token);
                 var status=await _httpClient.GetFromJsonAsync<WideSearchOperationStatusResponse>($"api/intelligence_wide/search/dynamic/status/{start.OperationId}",token)??throw new InvalidOperationException("The wide search operation is no longer available.");
-                if(status.StatusCode=="COMPLETED")return status.Response;
+                if(status.StatusCode=="COMPLETED")return status.Response??throw new InvalidOperationException("The wide search completed without a result.");
                 if(status.StatusCode=="CANCELLED")throw new OperationCanceledException("The wide search was cancelled.");
                 if(status.StatusCode=="FAILED")throw new InvalidOperationException(status.ErrorMessage??"The wide search failed.");
+                if(status.StatusCode!="RUNNING")throw new InvalidOperationException($"The wide search returned an unexpected status: {status.StatusCode}.");
             }
         }
         catch(OperationCanceledException)when(token.IsCancellationRequested)
         {
-            try{using var stop=await _httpClient.PostAsync($"api/intelligence_wide/search/dynamic/cancel/{start.OperationId}",null,CancellationToken.None);}catch{/* cancellation is best-effort */}
+            using var stopTimeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                using var stop=await _httpClient.PostAsync($"api/intelligence_wide/search/dynamic/cancel/{start.OperationId}",null,stopTimeout.Token);
+                await EnsureSuccessWithDetailAsync(stop,stopTimeout.Token);
+            }
+            catch(Exception ex)
+            {
+                throw new InvalidOperationException($"Stopped waiting for results, but server cancellation could not be confirmed: {ex.Message}",ex);
+            }
             throw;
         }
     }

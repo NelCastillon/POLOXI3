@@ -26,9 +26,12 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
 
         // GovInfo and eCFR are related but distinct sources; each fails soft independently so one
         // outage never discards the other's results. Both are capped by MaximumSnippetsPerQuery.
-        var govInfo=await SearchGovInfoAsync(query,configuration,timeout.Token,cancellationToken);
-        var ecfr=await SearchEcfrAsync(query,configuration,timeout.Token,cancellationToken);
-        return govInfo.Concat(ecfr).Take(configuration.MaximumSnippetsPerQuery).ToList();
+        // They run in parallel: neither call depends on the other, and running them sequentially
+        // doubled the worst-case latency of this source under slow government endpoints.
+        var govInfoTask=SearchGovInfoAsync(query,configuration,timeout.Token,cancellationToken);
+        var ecfrTask=SearchEcfrAsync(query,configuration,timeout.Token,cancellationToken);
+        await Task.WhenAll(govInfoTask,ecfrTask);
+        return govInfoTask.Result.Concat(ecfrTask.Result).Take(configuration.MaximumSnippetsPerQuery).ToList();
     }
 
     private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchGovInfoAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken timeoutToken,CancellationToken cancellationToken)

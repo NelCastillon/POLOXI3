@@ -68,6 +68,10 @@ public sealed partial class LegalDatabaseMigrator
                     cancellationToken: cancellationToken));
                 _logger.LogInformation("Legal migration applied: {Name}", name);
             }
+
+            var astraPromptCount = await AstraPromptContractMigration.ApplyAsync(lockConnection, cancellationToken);
+            if (astraPromptCount > 0)
+                _logger.LogInformation("Applied {Count} Astra prompt contracts", astraPromptCount);
         }
         finally
         {

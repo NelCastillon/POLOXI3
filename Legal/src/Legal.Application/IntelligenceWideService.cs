@@ -14,7 +14,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
+public sealed partial class IntelligenceWideService(IIntelligenceRepository repository,IIntelligenceWideRepository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILogger<IntelligenceWideService> logger):IIntelligenceWideService
 {
     private const int WideUserPromptBudget=48000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
@@ -23,8 +23,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // the safety violation, while still staying well inside the model input token budget.
     private const int WideAnswerInputCeiling=58000;
 
-    // Model selection: null/whitespace = Auto (feature-policy routing); otherwise route every wide LLM call through the requested model.
-    private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)?null:request.ModelCode.Trim();
+    // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
+    private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)?"gpt-4.1-mini":request.ModelCode.Trim();
 
     public Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetWideModelsAsync(tenantId,cancellationToken);
 
@@ -922,7 +922,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // retrieval coverage for legal branches that name no citation; the admission gates are unchanged.
             IReadOnlyList<ProposedLegalAuthority> proposedLegalAuthorities=legalAuthorityProposalTask is null?[]:await legalAuthorityProposalTask;
             var proposedAuthorityLeads=proposedLegalAuthorities.Select(item=>item.Reference).ToArray();
-            var externalKnowledge=await GatherExternalKnowledgeAsync(request,executionId,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,cancellationToken);
+            var externalKnowledge=await GatherExternalKnowledgeAsync(request,executionId,survivorsFinal.Where(branch=>branch.GroundingStatusCode=="INTERPRETIVE").ToArray(),configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,configuration.ExternalGroundingBudgetSeconds,cancellationToken);
             if(continuationState is not null)
             {
                 try
@@ -1172,7 +1172,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         }
                         // Targeted parallel retrieval: evidence target text focuses the query per branch.
                         var retrievalBranches=selected.Select(item=>string.IsNullOrWhiteSpace(item.Target.EvidenceTarget)?item.Branch:item.Branch with{SearchText=Truncate(item.Target.EvidenceTarget,400)}).ToArray();
-                        var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,cancellationToken);
+                        var newKnowledge=await GatherExternalKnowledgeAsync(request,executionId,retrievalBranches,configuration.ExternalRetrievalConcurrency,proposedAuthorityLeads,configuration.ExternalGroundingBudgetSeconds,cancellationToken);
                         // V3.6.1: rounds frequently re-surface URLs already in the pool (cache-first
                         // retrieval); duplicates would double-count evidence signals and inflate the
                         // disclosed evidence total, so only genuinely new URLs join the pool.
@@ -1634,10 +1634,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             // cost. ABV issues exactly one taxonomy-bounded intent call, so it is folded into llmCalls
             // and the execution duration below. Fail-soft: any failure leaves AbvAction null.
             WideAbvActionDto? abvAction=null;
+            if(configuration.EnableAbv)
             {
                 // ABV runs on every responsibly-produced run, including clarification-required runs:
                 // the top-ranked meaning is treated as the provisional decision so an actual Action
                 // Business Plan is always surfaced for review. Fail-soft: any failure leaves it null.
+                // DB-gated (Intelligence.SearchWide.EnableAbv, default false; see migration 0203).
                 var abvComposite=BuildAbvComposite(request,queryContract,candidates,ambiguityGroups,decisionConfidence);
                 if(abvComposite is not null)
                 {
@@ -1891,8 +1893,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                 :decisionEvidenceCoverage>=0.75m?"VERIFIED"
                 :"PARTIALLY_VERIFIED";
             var userPrompt=BuildLegalComposerContext(request,poloxiConclusion,winnerDisplayName,resolutionDeliverable,verifiedAuthorities,interpretiveResults,interpretationStatus,evidenceStatus,decisionConfidence,decisionEvidenceCoverage,evidenceCoverage,finalEntropy);
-            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideLegalAnswer,cancellationToken),
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAnswer,cancellationToken),
                 userPrompt,
                 LegalAnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<LegalAnswerProposal>(result.Content,JsonOptions);
@@ -1970,8 +1972,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var executionId=await wideRepository.StartWideExecutionAsync(new(request.TenantId,request.UserId,request.Query,request.CorrelationId),cancellationToken);
         try
         {
-            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideLlmOnlyAnswer,cancellationToken),
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLlmOnlyAnswer,cancellationToken),
                 $"Question: {request.Query}",
                 AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_ONLY",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide LLM-only answer response was empty.");
@@ -1996,8 +1998,8 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         try
         {
-            var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideLlmRawAnswer,cancellationToken),
+            var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLlmRawAnswer,cancellationToken),
                 $"Question: {request.Query}",
                 AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LLM_RAW",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var answer=JsonSerializer.Deserialize<WideAnswerProposal>(result.Content,JsonOptions);
@@ -2036,7 +2038,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
         var userPrompt=BuildIntentUserPrompt(request.Query,contractContext,catalog,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideIntent,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideIntent,cancellationToken),
             userPrompt,
             IntentSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INTENT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
@@ -2053,7 +2055,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
         var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
             userPrompt,
             LevelSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_HIERARCHY_STEP",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
         return JsonSerializer.Deserialize<WideLevelProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide hierarchy step response was empty.");
@@ -2087,9 +2089,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.
     // Retrievals run concurrently under a bounded gate; results merge in branch-priority order.
-    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,IReadOnlyList<LegalAuthorityReference> proposedLegalAuthorities,CancellationToken cancellationToken)
+    private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GatherExternalKnowledgeAsync(WideSearchRequest request,Guid executionId,IReadOnlyCollection<WideBranchRecord> interpretiveBranches,int retrievalConcurrency,IReadOnlyList<LegalAuthorityReference> proposedLegalAuthorities,int groundingBudgetSeconds,CancellationToken cancellationToken)
     {
         if(interpretiveBranches.Count==0)return [];
+        // Total wall-clock budget for the WHOLE grounding phase (all branches x all sources).
+        // Per-call source timeouts still apply, but many slow-but-not-failing calls can otherwise
+        // stack into a multi-minute stall between LLM stages. When the budget elapses, in-flight
+        // retrievals are cancelled fail-soft and the run proceeds with the evidence already gathered.
+        // Grounding is advisory, so a truncated phase never fails the search. 0 disables the budget.
+        var outerToken=cancellationToken;
+        using var budgetCts=CancellationTokenSource.CreateLinkedTokenSource(outerToken);
+        if(groundingBudgetSeconds>0)budgetCts.CancelAfter(TimeSpan.FromSeconds(groundingBudgetSeconds));
+        cancellationToken=budgetCts.Token;
+        var phaseStopwatch=System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var isLegalContext=string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase);
@@ -2214,7 +2226,10 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             await Task.WhenAll(targets.Select(async(branch,index)=>
             {
-                await retrievalGate.WaitAsync(cancellationToken);
+                // Budget expiry while queued behind the gate is fail-soft: the branch simply yields
+                // no snippets instead of faulting the whole Task.WhenAll.
+                try{await retrievalGate.WaitAsync(cancellationToken);}
+                catch(OperationCanceledException)when(!outerToken.IsCancellationRequested){results[index]=[];return;}
                 try
                 {
                     var conceptQuery=BuildCandidateSeekingQuery(request.Query,branch.DisplayName);
@@ -2287,13 +2302,14 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         results[index]=await RetrieveStampedAsync(branch,conceptQuery,conceptQuery,LegalAuthorityKind.Any,null);
                     }
                 }
-                catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+                catch(Exception ex)when(!outerToken.IsCancellationRequested)
                 {
                     // Fail-soft per branch: one provider failure never discards the other branches' snippets.
-                    // The exception is logged (not swallowed silently) so an upstream failure — e.g. a Dapper
-                    // materialization crash in the cache read — is visible in the LEGAL-TRACE instead of
-                    // masquerading as a zero-evidence result.
-                    logger.LogWarning(ex,"LEGAL-TRACE stage=branch-error branchId={BranchId} branch=\"{Branch}\" message={Message}",branch.WideBranchId,branch.DisplayName,ex.Message);
+                    // Budget-expiry cancellations land here too (outer token still live) so partially
+                    // gathered evidence survives. The exception is logged (not swallowed silently) so an
+                    // upstream failure — e.g. a Dapper materialization crash in the cache read — is visible
+                    // in the LEGAL-TRACE instead of masquerading as a zero-evidence result.
+                    logger.LogWarning(ex,"LEGAL-TRACE stage=branch-error branchId={BranchId} branch=\"{Branch}\" budgetExpired={BudgetExpired} message={Message}",branch.WideBranchId,branch.DisplayName,budgetCts.IsCancellationRequested,ex.Message);
                     results[index]=[];
                 }
                 finally{retrievalGate.Release();}
@@ -2305,6 +2321,12 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var deduped=results.SelectMany(item=>item??[])
                 .DistinctBy(snippet=>$"{snippet.Query}\u0001{snippet.Url}",StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            // PHASE TIMING: the grounding phase was the hidden latency sink (25+ minute runs with only
+            // ~140s of LLM time), so its wall-clock duration and budget outcome are always logged.
+            if(budgetCts.IsCancellationRequested&&!outerToken.IsCancellationRequested)
+                logger.LogWarning("LEGAL-TRACE stage=grounding-budget outcome=EXPIRED budgetSeconds={Budget} elapsedSeconds={Elapsed:F1} branches={Branches} snippetsGathered={Snippets}; in-flight retrievals were cancelled fail-soft and the run proceeds with gathered evidence.",groundingBudgetSeconds,phaseStopwatch.Elapsed.TotalSeconds,targets.Length,deduped.Length);
+            else
+                logger.LogInformation("LEGAL-TRACE stage=grounding-budget outcome=WITHIN_BUDGET budgetSeconds={Budget} elapsedSeconds={Elapsed:F1} branches={Branches} snippetsGathered={Snippets}",groundingBudgetSeconds,phaseStopwatch.Elapsed.TotalSeconds,targets.Length,deduped.Length);
             if(useLegalGrounding)
             {
                 // STAGE 10 (final diagnostic): one-line rollup so the FIRST failing stage is obvious.
@@ -2316,7 +2338,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             }
             return deduped;
         }
-        catch(Exception)when(!cancellationToken.IsCancellationRequested)
+        catch(Exception)when(!outerToken.IsCancellationRequested)
         {
             return [];
         }
@@ -2348,7 +2370,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // The safety guard rejects prompts where systemPrompt.Length + userPrompt.Length exceeds the
         // configured maximum, so the user-prompt budget must reserve room for the (large) system prompt.
         // Fetch it up front and shrink the user prompt against the remaining headroom, never below a floor.
-        var systemPrompt=await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideAnswer,cancellationToken);
+        var systemPrompt=await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideAnswer,cancellationToken);
         var userPromptBudget=Math.Max(3000,Math.Min(WideUserPromptBudget,WideAnswerInputCeiling-systemPrompt.Length));
         WideBranchRecord[] topInterpretiveBranches;string userPrompt;
         while(true)
@@ -2373,7 +2395,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         // Final hard guard: if even the minimum sections exceed the headroom, truncate so the combined
         // system+user prompt cannot trip the AI safety maximum-input guard.
         userPrompt=Truncate(userPrompt,userPromptBudget)!;
-        var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
+        var result=await aiProviderRouter.GenerateAsync(request.TenantId,AnswerFeatureCode(request),
                 systemPrompt,
             userPrompt,
             AnswerSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_ANSWER",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
@@ -3365,7 +3387,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         try
         {
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideQueryContract,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideQueryContract,cancellationToken),
                 $"Question: {request.Query}",
                 QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
@@ -4251,7 +4273,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         {
             var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; candidateKind: {queryContract.CandidateKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateEnumeration,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateEnumeration,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
                 CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateEnumerationProposal>(result.Content,JsonOptions);
@@ -4279,7 +4301,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
         {
             var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideLegalAuthorityProposal,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideLegalAuthorityProposal,cancellationToken),
                 $"Question: {request.Query}\nQuery contract: {contractContext}",
                 LegalAuthorityProposalSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_LEGAL_AUTHORITY_PROPOSAL",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideLegalAuthorityProposal>(result.Content,JsonOptions);
@@ -4391,7 +4413,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
             var runnerUpScores=string.Join("; ",runnerUp.BranchScores.Select(score=>$"{score.BranchDisplayName}: {score.EvidenceScore:0.00}"));
             var evidenceContext=string.Join('\n',externalKnowledge.Take(12).Select((snippet,index)=>$"[{index+1}] {snippet.Title}: {snippet.Snippet}"));
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideChallengeRound,cancellationToken),
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideChallengeRound,cancellationToken),
                 $"Question: {request.Query}\nLeader: {leader.DisplayName} (composite {leader.CompositeScore:0.00}; dimensions: {leaderScores})\nRunner-up: {runnerUp.DisplayName} (composite {runnerUp.CompositeScore:0.00}; dimensions: {runnerUpScores})\nMargin: {margin:0.00}\nEvidence:\n{evidenceContext}",
                 ChallengeVerdictSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CHALLENGE_ROUND",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideChallengeVerdictProposal>(result.Content,JsonOptions);
@@ -4500,11 +4522,19 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
     {
         try
         {
-            var branchContext=string.Join('\n',eligible.Select(branch=>$"- branchCode: {branch.BranchCode} | name: {branch.DisplayName} | interpretation: {Truncate(branch.Interpretation,200)} | state: {branch.BranchStateCode} | poloxiConfidence: {branch.PoloxiConfidence:F2} | evidenceSupport: {branch.EvidenceSupport:F2} | evidenceCount: {branch.EvidenceCount}"));
+            // Payload content shaping: this is a BATCHED call whose schema requires a free-text rationale
+            // and up to 8 ranking-change predictions PER TARGET. Unbounded, a reasoning model generates
+            // 12 essays + up to 96 prediction objects in one strict-JSON completion, and every output
+            // token amplifies hidden reasoning latency (observed as the multi-minute silent stall on this
+            // stage). The target list is clamped to the schema's 12-item ceiling (highest-uncertainty
+            // branches first so the clamp never drops the branches the round exists to resolve), and the
+            // prompt now demands terse rationales and only material predictions.
+            var clamped=eligible.Count<=12?eligible:eligible.OrderByDescending(branch=>1m-branch.PoloxiConfidence).ThenBy(branch=>branch.EvidenceCount).Take(12).ToArray();
+            var branchContext=string.Join('\n',clamped.Select(branch=>$"- branchCode: {branch.BranchCode} | name: {branch.DisplayName} | interpretation: {Truncate(branch.Interpretation,200)} | state: {branch.BranchStateCode} | poloxiConfidence: {branch.PoloxiConfidence:F2} | evidenceSupport: {branch.EvidenceSupport:F2} | evidenceCount: {branch.EvidenceCount}"));
             var contractContext=queryContract is null?"(none)":$"entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
-                await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideInformationValue,cancellationToken),
-                $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nUnresolved bottleneck: {contestedPair??"(no contested pair yet — candidate signals are not established)"}\nBranches:\n{branchContext}",
+                await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideInformationValue,cancellationToken),
+                $"Question: {request.Query}\nQuery contract: {contractContext}\nCurrent normalized uncertainty (0=resolved, 1=maximal): {entropy.NormalizedEntropy:F2}\nUnresolved bottleneck: {contestedPair??"(no contested pair yet — candidate signals are not established)"}\nBranches:\n{branchContext}\nOutput requirements: keep each rationale to ONE short sentence (at most 15 words). Include predictedRankingChanges only when the direction is clearly implied by the branch context (at most 2 per target; an empty array is the correct answer when no change is implied). Do not restate branch names or interpretations in rationales.",
                 InformationValueSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_INFORMATION_VALUE",null,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
             return JsonSerializer.Deserialize<WideInformationValueProposal>(result.Content,JsonOptions);
         }
@@ -5444,7 +5474,7 @@ public sealed class IntelligenceWideService(IIntelligenceRepository repository,I
                         ?branchList
                         :string.Join('\n',requestedBranches.Select((branch,index)=>$"B{index+1}. {branch.DisplayName}: {branch.Interpretation}"));
                     var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_ANSWER",
-                        await promptCatalog.GetSystemPromptAsync(request.TenantId,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
+                        await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateMatrix,cancellationToken),
                         $"Question: {request.Query}\n{contractContext}\nCandidate kind: {candidateKind}\nInterpretation branches:\n{requestedBranchList}\nCandidates:\n{candidateList}",
                         CandidateScoringSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_MATRIX",executionId,request.CorrelationId,"Intelligent Search Wide"),ModelOverride(request),cancellationToken);
                     var chunkProposal=JsonSerializer.Deserialize<WideCandidateScoringProposal>(result.Content,JsonOptions);

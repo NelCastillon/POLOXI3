@@ -134,3 +134,4 @@
 
 ## Troubleshooting Guidelines
 - When troubleshooting, provide direct instructions tied to the exact current log/state; avoid mixing alternative paths or unnecessary background details.
+- **Do not use profiling tools; keep diagnostic work tightly scoped and avoid new paid model calls.**

@@ -57,16 +57,16 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
         EvictExpired();
         if(!_operations.TryGetValue(operationId,out var operation)||operation.TenantId!=tenantId)return null;
         var status=operation.Snapshot();
-        // Completed/failed operations are removed once observed so results are not retained longer than needed.
-        if(status.StatusCode is not "RUNNING")_operations.TryRemove(operationId,out _);
         return status with{OperationId=operationId};
     }
 
     private void EvictExpired()
     {
+        // Retain terminal results from completion, not creation, so long searches and repeated polls
+        // can retrieve the result. Running operations have no completion timestamp and are not evicted.
         var cutoff=DateTime.UtcNow-Retention;
         foreach(var(key,operation)in _operations)
-            if(operation.CreatedUtc<cutoff)_operations.TryRemove(key,out _);
+            if(operation.FinishedUtc is{}finishedUtc&&finishedUtc<cutoff)_operations.TryRemove(key,out _);
     }
 
     private sealed class Operation(Guid tenantId)
@@ -75,15 +75,26 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
         private readonly CancellationTokenSource _cancellation=new();
         private WideSearchResponse? _response;
         private string? _error;
+        private DateTime? _finishedUtc;
         private string _statusCode="RUNNING";
         public Guid TenantId{get;}=tenantId;
-        public DateTime CreatedUtc{get;}=DateTime.UtcNow;
         public CancellationToken Token=>_cancellation.Token;
+        public DateTime? FinishedUtc{get{lock(_gate){return _finishedUtc;}}}
 
-        public void Complete(WideSearchResponse response){lock(_gate){_response=response;_statusCode="COMPLETED";}}
-        public void Fail(string error){lock(_gate){_error=error;_statusCode="FAILED";}}
-        public void MarkCancelled(){lock(_gate){_statusCode="CANCELLED";}}
-        public void RequestCancel(){try{_cancellation.Cancel();}catch(ObjectDisposedException){/* already finished */}}
+        public void Complete(WideSearchResponse response){lock(_gate){if(_statusCode!="RUNNING")return;_response=response;_statusCode="COMPLETED";_finishedUtc=DateTime.UtcNow;}}
+        public void Fail(string error){lock(_gate){if(_statusCode!="RUNNING")return;_error=error;_statusCode="FAILED";_finishedUtc=DateTime.UtcNow;}}
+        public void MarkCancelled(){lock(_gate){if(_statusCode!="RUNNING")return;_statusCode="CANCELLED";_finishedUtc=DateTime.UtcNow;}}
+        public void RequestCancel()
+        {
+            lock(_gate)
+            {
+                if(_statusCode!="RUNNING")return;
+                _statusCode="CANCELLED";
+                _finishedUtc=DateTime.UtcNow;
+            }
+            // Signal outside the lock: callbacks may re-enter operation state.
+            _cancellation.Cancel();
+        }
         public WideSearchOperationStatusResponse Snapshot(){lock(_gate){return new(Guid.Empty,_statusCode,_response,_error);}}
     }
 }

@@ -711,6 +711,14 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // is bit-identical until explicitly enabled. Watch mode only — outcome is audit data.
     public bool EnableChallengeRound{get;init;}=false;
     public decimal ChallengeMarginThreshold{get;init;}=.10m;
+    // POLOXI ABV advisory stage (DB-seeded; see migration 0203). Default OFF: when disabled, the
+    // Wide pipeline skips the ABV intent LLM call entirely and AbvAction stays null. ABV is
+    // advisory/fail-soft, so the delivered answer is never affected either way.
+    public bool EnableAbv{get;init;}=false;
+    // Total wall-clock budget for the external grounding phase (DB-seeded; see migration 0204).
+    // When elapsed, in-flight retrievals are cancelled fail-soft and the run proceeds with the
+    // evidence already gathered. 0 disables the budget.
+    public int ExternalGroundingBudgetSeconds{get;init;}=120;
     // V3.11 Guardrail-Constrained Weighted Utility: ordinary preference scores remain compensatory,
     // but guardrail criteria apply a deterministic veto-inspired penalty when performance is below
     // an acceptable floor. The LLM may describe criteria; POLOXI owns these thresholds and math.
