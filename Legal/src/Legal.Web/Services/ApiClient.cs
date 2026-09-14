@@ -60,6 +60,14 @@ public sealed class ApiClient(HttpClient httpClient)
         return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Science.MathSolveResponse>(cancellationToken:token);
     }
 
+    // ── POLOXI Formalization Gate (Research → Formalize → Math handoff) ──────────
+    public async Task<Legal.Application.Features.Intelligence.Science.FormalizationResponse?> FormalizeAsync(Legal.Application.Features.Intelligence.Science.FormalizationRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync("api/intelligence_formalization/formalize",request,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+        return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Science.FormalizationResponse>(cancellationToken:token);
+    }
+
     // ── Configuration center
     public Task<IntelligencePlatformSummaryDto?> GetIntelligencePlatformAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<IntelligencePlatformSummaryDto>("api/intelligence/platform",token);
     public async Task<IReadOnlyCollection<AiProviderDto>> GetIntelligenceProvidersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<AiProviderDto>>("api/intelligence/providers",token)??[];

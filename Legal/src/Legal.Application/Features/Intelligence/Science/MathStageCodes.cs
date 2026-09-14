@@ -14,4 +14,8 @@ public static class MathStageCodes
     public const string AnswerExtraction = "MATH_ANSWER_EXTRACTION";
     public const string SelfConsistency = "MATH_SELF_CONSISTENCY";
     public const string AnswerComposer = "MATH_ANSWER_COMPOSER";
+
+    // Formalization Gate stage: Research -> Formalize -> Math. Converts a surviving research idea into a
+    // precise Proof Contract (assumptions => claim) before the Math Solver attacks it.
+    public const string FormalizationGate = "MATH_FORMALIZATION_GATE";
 }

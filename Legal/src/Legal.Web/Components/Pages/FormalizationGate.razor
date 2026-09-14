@@ -1,0 +1,205 @@
+@page "/legal/math/formalize"
+@using Legal.Application.Features.Intelligence.Science
+@inject ApiClient Api
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="poloxi-page">
+        <header class="poloxi-hero">
+            <div class="poloxi-hero-icon"><i class="bi bi-diagram-3"></i></div>
+            <div>
+                <span>POLOXI Scientific Reasoning — Formalization Gate</span>
+                <h1>Formalization Gate</h1>
+                <p>Research decides <em>what</em> deserves mathematics; the Formalization Gate turns a surviving research idea into a precise Proof Contract (Assumptions ⇒ Claim) before the Math Solver attacks it. Research → Formalize → Math Solver → Verifier → Research update.</p>
+            </div>
+        </header>
+
+        <section class="poloxi-composer" aria-label="Research idea">
+            <div class="poloxi-composer-input">
+                <i class="bi bi-lightbulb" aria-hidden="true"></i>
+                <textarea id="research-idea" class="poloxi-query-area" rows="4"
+                          placeholder="Paste the surviving research idea or hypothesis. Example: Persistent transfer coherence may be the remaining obstruction to global regularity."
+                          @bind="_researchIdea" @bind:event="oninput"></textarea>
+            </div>
+            <div class="poloxi-composer-input">
+                <i class="bi bi-journal-text" aria-hidden="true"></i>
+                <textarea id="research-context" class="poloxi-query-area" rows="3"
+                          placeholder="Optional: additional research context — evidence, prior art, candidate comparison — that pins down assumptions and forbidden circular assumptions."
+                          @bind="_researchContext" @bind:event="oninput"></textarea>
+            </div>
+            <div class="poloxi-composer-footer">
+                <span class="poloxi-composer-hint">The formalizer only proposes the contract; nothing here is treated as proven.</span>
+                <label class="poloxi-model-select" title="Choose the language model that proposes the formalization. Auto lets the platform router select the best available deployment.">
+                    <i class="bi bi-cpu" aria-hidden="true"></i>
+                    <select @bind="_modelCode" aria-label="Model" disabled="@(_loading || _modelsLoading)">
+                        <option value="">@(_modelsLoading ? "Loading models…" : "Auto (platform router)")</option>
+                        @foreach (var model in _models)
+                        {
+                            <option value="@model.ModelCode">@model.DeploymentName@(string.IsNullOrWhiteSpace(model.ModelFamily) ? "" : $" · {model.ModelFamily}")</option>
+                        }
+                    </select>
+                </label>
+                <button class="um-btn um-btn-primary" @onclick="FormalizeAsync" disabled="@(_loading || string.IsNullOrWhiteSpace(_researchIdea))"><i class="bi bi-diagram-3"></i> Formalize</button>
+            </div>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="poloxi-loading" role="status" aria-live="polite">
+                <i class="bi bi-diagram-3 poloxi-spinner"></i>
+                <div>
+                    <strong>Formalizing the research idea…</strong>
+                    <p>Converting the surviving proposition into a precise Assumptions ⇒ Claim Proof Contract.</p>
+                    <div class="poloxi-loading-track"><span></span></div>
+                </div>
+            </section>
+        }
+        else if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_error</div>
+        }
+        else if (_response is not null)
+        {
+            <section class="poloxi-explanation">
+                <div class="poloxi-explanation-body">
+                    <div class="poloxi-panel-header">
+                        <div><span>Correlation @_response.CorrelationId</span><h2>@(_response.Contract.CandidateId)</h2></div>
+                        <span class="poloxi-status">@_response.Contract.ObjectType</span>
+                    </div>
+
+                    @if (!_response.ModelAvailable)
+                    {
+                        <div class="poloxi-degraded" role="alert">
+                            <strong>Degraded run:</strong> no active CHAT model route is configured for this tenant and feature,
+                            so the formalizer could not run and returned an echo contract. Configure an active CHAT model
+                            deployment for <code>INTELLIGENCE_MATH_SOLVE</code> in the Configuration Center to enable formalization.
+                        </div>
+                    }
+
+                    <p><strong>Claim:</strong> @_response.Contract.Statement</p>
+                    @if (!string.IsNullOrWhiteSpace(_response.Contract.Target))
+                    {
+                        <p><strong>Target:</strong> @_response.Contract.Target</p>
+                    }
+                    <p><strong>Well-posedness confidence:</strong> @_response.Contract.Confidence.ToString("0.##") <span class="poloxi-muted">(how attackable the formalization is — not the probability the claim is true)</span></p>
+
+                    <div class="poloxi-research-grid">
+                        <div class="poloxi-research-block">
+                            <h4>Assumptions</h4>
+                            @if (_response.Contract.Assumptions.Count == 0) { <p class="poloxi-muted">None stated.</p> }
+                            else { <ul>@foreach (var a in _response.Contract.Assumptions) { <li>@a</li> }</ul> }
+                        </div>
+                        <div class="poloxi-research-block">
+                            <h4>Definitions</h4>
+                            @if (_response.Contract.Definitions.Count == 0) { <p class="poloxi-muted">None stated.</p> }
+                            else { <ul>@foreach (var d in _response.Contract.Definitions) { <li>@d</li> }</ul> }
+                        </div>
+                        <div class="poloxi-research-block">
+                            <h4>Dependencies</h4>
+                            @if (_response.Contract.Dependencies.Count == 0) { <p class="poloxi-muted">None stated.</p> }
+                            else { <ul>@foreach (var d in _response.Contract.Dependencies) { <li>@d</li> }</ul> }
+                        </div>
+                        <div class="poloxi-research-block">
+                            <h4>Allowed tools</h4>
+                            @if (_response.Contract.AllowedTools.Count == 0) { <p class="poloxi-muted">Unrestricted.</p> }
+                            else { <ul>@foreach (var t in _response.Contract.AllowedTools) { <li>@t</li> }</ul> }
+                        </div>
+                        <div class="poloxi-research-block">
+                            <h4>Forbidden (circular) assumptions</h4>
+                            @if (_response.Contract.ForbiddenAssumptions.Count == 0) { <p class="poloxi-muted">None flagged.</p> }
+                            else { <ul>@foreach (var f in _response.Contract.ForbiddenAssumptions) { <li>@f</li> }</ul> }
+                        </div>
+                        <div class="poloxi-research-block">
+                            <h4>Expected returns</h4>
+                            @if (_response.Contract.ExpectedReturns.Count == 0) { <p class="poloxi-muted">—</p> }
+                            else { <ul>@foreach (var r in _response.Contract.ExpectedReturns) { <li>@r</li> }</ul> }
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_response.Contract.ProofStandard))
+                    {
+                        <p><strong>What counts as proof:</strong> @_response.Contract.ProofStandard</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_response.Contract.Falsification))
+                    {
+                        <p><strong>What would falsify it:</strong> @_response.Contract.Falsification</p>
+                    }
+
+                    <h3>Math Solver handoff</h3>
+                    <pre class="poloxi-handoff">@_response.MathSolverHandoff</pre>
+
+                    <p style="margin-top:1rem;">
+                        <button class="um-btn um-btn-primary" @onclick="SendToMathSolver"><i class="bi bi-stars"></i> Send to Math Solver</button>
+                    </p>
+                </div>
+            </section>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    private string _researchIdea = string.Empty;
+    private string _researchContext = string.Empty;
+    private string? _modelCode;
+    private IReadOnlyCollection<WideModelOptionDto> _models = [];
+    private bool _modelsLoading = true;
+    private FormalizationResponse? _response;
+    private bool _loading;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _models = await Api.GetIntelligenceWideModelsAsync();
+        }
+        catch
+        {
+            _models = [];
+        }
+        finally
+        {
+            _modelsLoading = false;
+        }
+    }
+
+    private async Task FormalizeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_researchIdea))
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        _response = null;
+        try
+        {
+            var request = new FormalizationRequest(Guid.Empty, Guid.Empty, _researchIdea.Trim(), Guid.NewGuid().ToString("N"))
+            {
+                ResearchContext = string.IsNullOrWhiteSpace(_researchContext) ? null : _researchContext.Trim(),
+                ModelCode = string.IsNullOrWhiteSpace(_modelCode) ? null : _modelCode.Trim(),
+            };
+            _response = await Api.FormalizeAsync(request);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SendToMathSolver()
+    {
+        if (_response is null)
+        {
+            return;
+        }
+
+        var problem = Uri.EscapeDataString(_response.MathSolverHandoff);
+        Navigation.NavigateTo($"/legal/math/solve?problem={problem}");
+    }
+}

@@ -64,5 +64,6 @@ WHERE NOT EXISTS
         IntelligencePromptCodes.MathAnswerExtraction,
         IntelligencePromptCodes.MathSelfConsistency,
         IntelligencePromptCodes.MathAnswerComposer,
+        IntelligencePromptCodes.MathFormalizationGate,
     ];
 }

@@ -475,6 +475,8 @@ public static class MathPromptContracts
             [IntelligencePromptCodes.MathSelfConsistency] = (MathContractSchemas.SelfConsistencySchema,
                 "Cluster the supplied candidate answers by canonical equality and report the plurality and agreement ratio. Agreement raises discovery confidence but is not verification."),
             [IntelligencePromptCodes.MathAnswerComposer] = (MathContractSchemas.AnswerComposerSchema,
-                "Communicate the already-resolved result. Set outcome to match the supplied verification state; never translate a promising path into PROVEN. State remaining uncertainty explicitly when any critical obligation is unverified.")
+                "Communicate the already-resolved result. Set outcome to match the supplied verification state; never translate a promising path into PROVEN. State remaining uncertainty explicitly when any critical obligation is unverified."),
+            [IntelligencePromptCodes.MathFormalizationGate] = (FormalizationContractSchemas.ProofContractSchema,
+                FormalizationContractSchemas.Directive)
         };
 }

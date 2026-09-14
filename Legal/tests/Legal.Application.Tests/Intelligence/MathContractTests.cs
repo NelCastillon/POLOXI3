@@ -26,6 +26,7 @@ public sealed class MathContractTests
             IntelligencePromptCodes.MathAnswerExtraction,
             IntelligencePromptCodes.MathSelfConsistency,
             IntelligencePromptCodes.MathAnswerComposer,
+            IntelligencePromptCodes.MathFormalizationGate,
         ];
 
         Assert.Equal(mathCodes.Length, MathPromptContracts.All.Count);
@@ -47,6 +48,7 @@ public sealed class MathContractTests
     [InlineData(IntelligencePromptCodes.MathAnswerExtraction)]
     [InlineData(IntelligencePromptCodes.MathSelfConsistency)]
     [InlineData(IntelligencePromptCodes.MathAnswerComposer)]
+    [InlineData(IntelligencePromptCodes.MathFormalizationGate)]
     public void EverySchema_IsAnObjectSchemaWithMatchingRequired(string promptCode)
     {
         var (schemaJson, _) = MathPromptContracts.All[promptCode];
@@ -163,5 +165,35 @@ public sealed class MathContractTests
         Assert.Equal("PROVEN", dto!.Outcome);
         Assert.Equal(2, dto.KeySteps.Count);
         Assert.Null(dto.RemainingUncertainty);
+    }
+
+    [Fact]
+    public void ProofContract_PayloadRoundTrips()
+    {
+        const string json = """
+        {
+          "candidateId": "TRANSFER_COHERENCE_BOUND",
+          "objectType": "REGULARITY_CRITERION",
+          "statement": "For all smooth solutions u on [0,T), if the transfer coherence functional is bounded then u extends past T.",
+          "assumptions": ["u is a smooth solution on [0,T)", "the initial data lies in H^s"],
+          "definitions": ["transfer coherence functional C(t) := ..."],
+          "dependencies": ["Beale-Kato-Majda criterion"],
+          "target": "Show boundedness of C(t) implies global regularity.",
+          "allowedTools": ["energy identity", "Littlewood-Paley"],
+          "forbiddenAssumptions": ["assuming the global bound to be proven"],
+          "proofStandard": "A rigorous a priori estimate closing the bootstrap.",
+          "falsification": "A smooth solution with bounded C(t) that blows up at T.",
+          "expectedReturns": ["PROVED", "DISPROVED", "COUNTEREXAMPLE", "REDUCED_TO_LEMMAS", "INCONCLUSIVE"],
+          "confidence": 0.42
+        }
+        """;
+
+        var dto = JsonSerializer.Deserialize<ProofContract>(json, Options);
+
+        Assert.NotNull(dto);
+        Assert.Equal("REGULARITY_CRITERION", dto!.ObjectType);
+        Assert.Equal(2, dto.Assumptions.Count);
+        Assert.Contains("energy identity", dto.AllowedTools);
+        Assert.Equal(0.42, dto.Confidence, 3);
     }
 }

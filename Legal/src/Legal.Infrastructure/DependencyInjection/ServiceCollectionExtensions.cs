@@ -69,6 +69,9 @@ public static class ServiceCollectionExtensions
         // POLOXI Scientific Reasoning — Mathematics V1 pack.
         services.AddScoped<IMathReasoningService, MathReasoningService>();
 
+        // POLOXI Formalization Gate (Research → Formalize → Math handoff).
+        services.AddScoped<IFormalizationService, FormalizationService>();
+
         return services;
     }
 }
