@@ -1,0 +1,635 @@
+@page "/legal/matters/{MatterId:guid}"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="matter-detail-page">
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+        }
+
+        @if (_loading)
+        {
+            <div class="matter-detail-loading" role="status" aria-live="polite">
+                <i class="bi bi-hourglass-split"></i> Loading matter…
+            </div>
+        }
+        else if (_matter is null)
+        {
+            <div class="matter-detail-empty">
+                <i class="bi bi-folder-x"></i>
+                <h3>Matter not found</h3>
+                <p>This matter may have been removed or you may not have access.</p>
+                <a class="um-btn um-btn-primary" href="/legal/matters"><i class="bi bi-arrow-left"></i> Back to matters</a>
+            </div>
+        }
+        else
+        {
+            <header class="matter-detail-hero">
+                <div class="matter-detail-hero-top">
+                    <a class="um-btn um-btn-ghost um-btn-sm" href="/legal/matters"><i class="bi bi-arrow-left"></i> Matters</a>
+                    <span class="matter-detail-status matter-status-@(_matter.StatusCode.ToLowerInvariant())">@_matter.StatusCode</span>
+                    @if (_matter.CriticalFlipPointCount > 0)
+                    {
+                        <span class="matter-detail-risk" title="@_matter.CriticalFlipPointCount critical flip point(s)"><i class="bi bi-exclamation-octagon-fill"></i> @_matter.CriticalFlipPointCount at risk</span>
+                    }
+                </div>
+                <h1>@_matter.Title</h1>
+                <div class="matter-detail-tags">
+                    @if (!string.IsNullOrWhiteSpace(_matter.MatterTypeCode))
+                    {
+                        <span class="matter-tag"><i class="bi bi-tag"></i> @_matter.MatterTypeCode</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.Jurisdiction))
+                    {
+                        <span class="matter-tag"><i class="bi bi-geo-alt"></i> @_matter.Jurisdiction</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.Posture))
+                    {
+                        <span class="matter-tag"><i class="bi bi-diagram-2"></i> @_matter.Posture</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.Subtype))
+                    {
+                        <span class="matter-tag"><i class="bi bi-tags"></i> @_matter.Subtype</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.CourtSystem))
+                    {
+                        <span class="matter-tag"><i class="bi bi-bank"></i> @_matter.CourtSystem</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.State))
+                    {
+                        <span class="matter-tag"><i class="bi bi-map"></i> @_matter.State</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.CourtLevel))
+                    {
+                        <span class="matter-tag"><i class="bi bi-building"></i> @_matter.CourtLevel</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.County))
+                    {
+                        <span class="matter-tag"><i class="bi bi-pin-map"></i> @_matter.County</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.GoverningLaw))
+                    {
+                        <span class="matter-tag"><i class="bi bi-journal-text"></i> @_matter.GoverningLaw</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.MovingParty))
+                    {
+                        <span class="matter-tag"><i class="bi bi-person-up"></i> Movant: @_matter.MovingParty</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.RespondingParty))
+                    {
+                        <span class="matter-tag"><i class="bi bi-person-down"></i> Respondent: @_matter.RespondingParty</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.MotionTarget))
+                    {
+                        <span class="matter-tag"><i class="bi bi-bullseye"></i> Target: @_matter.MotionTarget</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_matter.RequestedDisposition))
+                    {
+                        <span class="matter-tag"><i class="bi bi-hammer"></i> @_matter.RequestedDisposition</span>
+                    }
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_matter.Description))
+                {
+                    <p class="matter-detail-desc">@_matter.Description</p>
+                }
+                <div class="matter-detail-actions">
+                    <a class="um-btn um-btn-primary" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")">
+                        <i class="bi bi-signpost-split"></i> Decide in this matter
+                    </a>
+                    <button class="um-btn um-btn-light um-btn-sm" @onclick="OpenEdit" disabled="@_busy" title="Edit matter"><i class="bi bi-pencil"></i> Edit</button>
+                    @if (string.Equals(_matter.StatusCode, DecisionMatterStatusCodes.Closed, StringComparison.OrdinalIgnoreCase))
+                    {
+                        <button class="um-btn um-btn-light um-btn-sm" @onclick="ReopenAsync" disabled="@_busy" title="Reopen matter"><i class="bi bi-folder2-open"></i> Reopen</button>
+                    }
+                    else
+                    {
+                        <button class="um-btn um-btn-light um-btn-sm" @onclick="CloseAsync" disabled="@_busy" title="Close matter"><i class="bi bi-archive"></i> Close</button>
+                    }
+                    <button class="um-btn um-btn-light um-btn-sm" @onclick="LoadAsync" disabled="@_loading" title="Refresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+                    <button class="um-btn um-btn-danger um-btn-sm" @onclick="() => _showDelete = true" disabled="@_busy" title="Delete matter"><i class="bi bi-trash"></i> Delete</button>
+                </div>
+            </header>
+
+            <section class="matter-detail-decision-panel">
+                <div class="matter-detail-panel-head"><i class="bi bi-flag"></i> Current best decision</div>
+                @if (_matter.LatestSessionId is not null)
+                {
+                    <div class="matter-detail-decision">
+                        <div class="matter-detail-outcome">
+                            <span class="matter-detail-outcome-label">Outcome on record</span>
+                            <strong>@(string.IsNullOrWhiteSpace(_matter.CurrentOutcome) ? "—" : _matter.CurrentOutcome)</strong>
+                        </div>
+                        <div class="matter-detail-decision-meta">
+                            @if (!string.IsNullOrWhiteSpace(_matter.DecisionStatusCode))
+                            {
+                                <span class="matter-detail-chip">@_matter.DecisionStatusCode</span>
+                            }
+                            <span title="Last decided"><i class="bi bi-clock-history"></i> @(_matter.LastDecidedUtc?.ToLocalTime().ToString("g") ?? "—")</span>
+                            @if (_matter.CriticalFlipPointCount > 0)
+                            {
+                                <span class="matter-detail-flip"><i class="bi bi-exclamation-octagon"></i> @_matter.CriticalFlipPointCount could overturn this</span>
+                            }
+                        </div>
+                        @if (_matter.LatestSessionId is Guid sid)
+                        {
+                            <a class="um-btn um-btn-ghost um-btn-sm" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")">
+                                Open decision cockpit <i class="bi bi-arrow-right-short"></i>
+                            </a>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="matter-detail-nodecision">
+                        <i class="bi bi-hourglass"></i>
+                        <div>
+                            <strong>No decision yet</strong>
+                            <p>Run the first decision for this matter to populate the cockpit.</p>
+                        </div>
+                        <a class="um-btn um-btn-primary um-btn-sm" href="@($"/legal/decision?matterId={_matter.DecisionMatterId}")"><i class="bi bi-play-fill"></i> Start deciding</a>
+                    </div>
+                }
+            </section>
+
+            <section class="matter-detail-meta-grid">
+                <div class="matter-detail-meta-card">
+                    <span class="matter-detail-meta-label">Created</span>
+                    <strong>@_matter.CreatedDateUtc.ToLocalTime().ToString("g")</strong>
+                </div>
+                <div class="matter-detail-meta-card">
+                    <span class="matter-detail-meta-label">Last modified</span>
+                    <strong>@(_matter.ModifiedDateUtc?.ToLocalTime().ToString("g") ?? "—")</strong>
+                </div>
+                <div class="matter-detail-meta-card">
+                    <span class="matter-detail-meta-label">Status</span>
+                    <strong>@_matter.StatusCode</strong>
+                </div>
+                <div class="matter-detail-meta-card">
+                    <span class="matter-detail-meta-label">At-risk flip points</span>
+                    <strong class="@(_matter.CriticalFlipPointCount > 0 ? "matter-detail-danger" : null)">@_matter.CriticalFlipPointCount</strong>
+                </div>
+            </section>
+
+            @if (_actionError is not null)
+            {
+                <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_actionError</div>
+            }
+
+            <section class="matter-detail-history">
+                <div class="matter-detail-panel-head"><i class="bi bi-clock-history"></i> Decision history <span class="matter-detail-history-count">@_sessions.Count</span></div>
+                @if (_sessionsLoading)
+                {
+                    <div class="matter-detail-loading" role="status" aria-live="polite"><i class="bi bi-hourglass-split"></i> Loading decision history…</div>
+                }
+                else if (_sessions.Count == 0)
+                {
+                    <div class="matter-detail-history-empty">
+                        <i class="bi bi-clock"></i>
+                        <span>No decisions recorded for this matter yet.</span>
+                    </div>
+                }
+                else
+                {
+                    <ol class="matter-detail-session-list">
+                        @foreach (var s in _sessions)
+                        {
+                            <li class="matter-detail-session">
+                                <div class="matter-detail-session-main">
+                                    <span class="matter-detail-session-outcome">@(string.IsNullOrWhiteSpace(s.CurrentOutcome) ? "—" : s.CurrentOutcome)</span>
+                                    <span class="matter-detail-session-query" title="@s.QueryText">@s.QueryText</span>
+                                </div>
+                                <div class="matter-detail-session-meta">
+                                    <span class="matter-detail-chip">@(string.IsNullOrWhiteSpace(s.TerminalStateCode) ? s.StatusCode : s.TerminalStateCode)</span>
+                                    <span title="Decision margin"><i class="bi bi-graph-up"></i> @s.DecisionMargin.ToString("0.00")</span>
+                                    <span title="Depth reached"><i class="bi bi-diagram-3"></i> @s.DepthReached</span>
+                                    <span title="LLM calls"><i class="bi bi-cpu"></i> @s.LlmCallCount</span>
+                                    @if (s.CriticalFlipPointCount > 0)
+                                    {
+                                        <span class="matter-detail-session-flip"><i class="bi bi-exclamation-octagon"></i> @s.CriticalFlipPointCount</span>
+                                    }
+                                    <span title="Decided"><i class="bi bi-clock-history"></i> @s.CreatedDateUtc.ToLocalTime().ToString("g")</span>
+                                </div>
+                                <a class="um-btn um-btn-ghost um-btn-sm" href="@($"/legal/decision?matterId={_matter!.DecisionMatterId}&sessionId={s.DecisionSessionId}")" title="Open this decision session">
+                                    <i class="bi bi-box-arrow-up-right"></i> View
+                                </a>
+                            </li>
+                        }
+                    </ol>
+                }
+            </section>
+        }
+    </div>
+
+    @if (_showEdit && _matter is not null)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _showEdit = false">
+            <div class="um-modal" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-pencil-square"></i>
+                    <span>Edit matter</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showEdit = false"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <EditForm Model="_form" OnValidSubmit="SaveEditAsync">
+                    <DataAnnotationsValidator />
+                    <div class="um-modal-body">
+                        <div class="um-form-grid">
+                            <label class="um-field">
+                                <span class="um-field-label">Title</span>
+                                <InputText class="form-control" @bind-Value="_form.Title" placeholder="e.g. Acme v. Globex — Summary Judgment" />
+                                <ValidationMessage For="() => _form.Title" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Matter type</span>
+                                <InputText class="form-control" list="matter-type-options" @bind-Value="_form.MatterTypeCode" placeholder="Select or type a matter type" autocomplete="off" />
+                                <datalist id="matter-type-options">
+                                    @foreach (var v in _facets.MatterTypeCodes)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.MatterTypeCode" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Jurisdiction</span>
+                                <InputText class="form-control" list="matter-jurisdiction-options" @bind-Value="_form.Jurisdiction" placeholder="Select or type a jurisdiction" autocomplete="off" />
+                                <datalist id="matter-jurisdiction-options">
+                                    @foreach (var v in _facets.Jurisdictions)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Jurisdiction" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Posture</span>
+                                <InputText class="form-control" list="matter-posture-options" @bind-Value="_form.Posture" placeholder="Select or type a posture" autocomplete="off" />
+                                <datalist id="matter-posture-options">
+                                    @foreach (var v in _facets.Postures)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Posture" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Subtype</span>
+                                <InputText class="form-control" list="matter-subtype-options" @bind-Value="_form.Subtype" placeholder="Select or type a subtype" autocomplete="off" />
+                                <datalist id="matter-subtype-options">
+                                    @foreach (var v in _facets.Subtypes)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Subtype" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Court system</span>
+                                <InputText class="form-control" list="matter-courtsystem-options" @bind-Value="_form.CourtSystem" placeholder="Select or type a court system" autocomplete="off" />
+                                <datalist id="matter-courtsystem-options">
+                                    @foreach (var v in _facets.CourtSystems)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.CourtSystem" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">State</span>
+                                <InputText class="form-control" list="matter-state-options" @bind-Value="_form.State" placeholder="Select or type a state" autocomplete="off" />
+                                <datalist id="matter-state-options">
+                                    @foreach (var v in _facets.States)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.State" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Court level</span>
+                                <InputText class="form-control" list="matter-courtlevel-options" @bind-Value="_form.CourtLevel" placeholder="Select or type a court level" autocomplete="off" />
+                                <datalist id="matter-courtlevel-options">
+                                    @foreach (var v in _facets.CourtLevels)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.CourtLevel" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">County</span>
+                                <InputText class="form-control" @bind-Value="_form.County" placeholder="e.g. Los Angeles County" autocomplete="off" />
+                                <ValidationMessage For="() => _form.County" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Governing law</span>
+                                <InputText class="form-control" list="matter-governinglaw-options" @bind-Value="_form.GoverningLaw" placeholder="Select or type governing law" autocomplete="off" />
+                                <datalist id="matter-governinglaw-options">
+                                    @foreach (var v in _facets.GoverningLaws)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.GoverningLaw" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Moving party</span>
+                                <InputText class="form-control" @bind-Value="_form.MovingParty" placeholder="Party bringing the motion" autocomplete="off" />
+                                <ValidationMessage For="() => _form.MovingParty" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Responding party</span>
+                                <InputText class="form-control" @bind-Value="_form.RespondingParty" placeholder="Party opposing the motion" autocomplete="off" />
+                                <ValidationMessage For="() => _form.RespondingParty" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Motion target</span>
+                                <InputText class="form-control" @bind-Value="_form.MotionTarget" placeholder="What the motion targets (e.g. contract claim)" autocomplete="off" />
+                                <ValidationMessage For="() => _form.MotionTarget" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Requested disposition</span>
+                                <InputText class="form-control" @bind-Value="_form.RequestedDisposition" placeholder="Relief requested (e.g. judgment without trial)" autocomplete="off" />
+                                <ValidationMessage For="() => _form.RequestedDisposition" class="text-danger" />
+                            </label>
+                            <label class="um-field um-field-wide um-field--full">
+                                <span class="um-field-label">Description</span>
+                                <InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" placeholder="Optional context for this matter" />
+                                <ValidationMessage For="() => _form.Description" class="text-danger" />
+                            </label>
+                        </div>
+                        @if (_editError is not null)
+                        {
+                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_editError</div>
+                        }
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showEdit = false">Cancel</button>
+                        <button type="submit" class="um-btn um-btn-primary" disabled="@_busy">
+                            <i class="bi bi-check-lg"></i> @(_busy ? "Saving…" : "Save changes")
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    }
+
+    @if (_showDelete && _matter is not null)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _showDelete = false">
+            <div class="um-modal um-modal-sm" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-trash"></i>
+                    <span>Delete matter</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showDelete = false"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <div class="um-modal-body">
+                    <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+                    <h3 class="um-confirm-title">Delete this matter?</h3>
+                    <p class="um-confirm-text">"@_matter.Title" will be removed from your matter list. Its decision sessions are preserved but will no longer be grouped under this matter. This cannot be undone.</p>
+                    @if (_deleteError is not null)
+                    {
+                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_deleteError</div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showDelete = false">Cancel</button>
+                    <button type="button" class="um-btn um-btn-danger" @onclick="DeleteAsync" disabled="@_busy">
+                        <i class="bi bi-trash"></i> @(_busy ? "Deleting…" : "Delete matter")
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</LegalWorkspace>
+
+@code {
+    [Parameter] public Guid MatterId { get; set; }
+
+    private bool _loading = true;
+    private bool _sessionsLoading = true;
+    private bool _busy;
+    private bool _showEdit;
+    private bool _showDelete;
+    private string? _loadError;
+    private string? _actionError;
+    private string? _editError;
+    private string? _deleteError;
+    private DecisionMatterDto? _matter;
+    private IReadOnlyCollection<DecisionSessionSummaryDto> _sessions = [];
+    private DecisionMatterFacetsDto _facets = new([], [], []);
+    private MatterEditForm _form = new();
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            _matter = await Api.GetLegalDecisionMatterAsync(MatterId);
+            _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+            Breadcrumbs.SetCrumbs(
+                new("Home", "/"),
+                new("Intelligence", "/intelligence"),
+                new("Matters", "/legal/matters"),
+                new(_matter?.Title ?? "Matter", $"/legal/matters/{MatterId}"));
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load matter: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+
+        if (_matter is not null)
+            await LoadSessionsAsync();
+    }
+
+    private async Task LoadSessionsAsync()
+    {
+        _sessionsLoading = true;
+        StateHasChanged();
+        try
+        {
+            _sessions = await Api.GetLegalDecisionMatterSessionsAsync(MatterId);
+        }
+        catch (Exception ex)
+        {
+            _actionError = $"Failed to load decision history: {ex.Message}";
+        }
+        finally
+        {
+            _sessionsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OpenEdit()
+    {
+        if (_matter is null) return;
+        _editError = null;
+        _form = new MatterEditForm
+        {
+            Title = _matter.Title,
+            MatterTypeCode = _matter.MatterTypeCode,
+            Jurisdiction = _matter.Jurisdiction,
+            Posture = _matter.Posture,
+            Subtype = _matter.Subtype,
+            CourtSystem = _matter.CourtSystem,
+            State = _matter.State,
+            CourtLevel = _matter.CourtLevel,
+            County = _matter.County,
+            GoverningLaw = _matter.GoverningLaw,
+            MovingParty = _matter.MovingParty,
+            RespondingParty = _matter.RespondingParty,
+            MotionTarget = _matter.MotionTarget,
+            RequestedDisposition = _matter.RequestedDisposition,
+            Description = _matter.Description
+        };
+        _showEdit = true;
+    }
+
+    private async Task SaveEditAsync()
+    {
+        _busy = true;
+        _editError = null;
+        StateHasChanged();
+        try
+        {
+            var request = new DecisionMatterUpdateRequest(
+                _form.Title.Trim(),
+                string.IsNullOrWhiteSpace(_form.MatterTypeCode) ? null : _form.MatterTypeCode.Trim(),
+                string.IsNullOrWhiteSpace(_form.Jurisdiction) ? null : _form.Jurisdiction.Trim(),
+                string.IsNullOrWhiteSpace(_form.Posture) ? null : _form.Posture.Trim(),
+                string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim())
+            {
+                Subtype = string.IsNullOrWhiteSpace(_form.Subtype) ? null : _form.Subtype.Trim(),
+                CourtSystem = string.IsNullOrWhiteSpace(_form.CourtSystem) ? null : _form.CourtSystem.Trim(),
+                State = string.IsNullOrWhiteSpace(_form.State) ? null : _form.State.Trim(),
+                CourtLevel = string.IsNullOrWhiteSpace(_form.CourtLevel) ? null : _form.CourtLevel.Trim(),
+                County = string.IsNullOrWhiteSpace(_form.County) ? null : _form.County.Trim(),
+                GoverningLaw = string.IsNullOrWhiteSpace(_form.GoverningLaw) ? null : _form.GoverningLaw.Trim(),
+                MovingParty = string.IsNullOrWhiteSpace(_form.MovingParty) ? null : _form.MovingParty.Trim(),
+                RespondingParty = string.IsNullOrWhiteSpace(_form.RespondingParty) ? null : _form.RespondingParty.Trim(),
+                MotionTarget = string.IsNullOrWhiteSpace(_form.MotionTarget) ? null : _form.MotionTarget.Trim(),
+                RequestedDisposition = string.IsNullOrWhiteSpace(_form.RequestedDisposition) ? null : _form.RequestedDisposition.Trim()
+            };
+            await Api.UpdateLegalDecisionMatterAsync(MatterId, request);
+            _showEdit = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _editError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task CloseAsync() => ChangeStatusAsync(DecisionMatterStatusCodes.Closed);
+    private Task ReopenAsync() => ChangeStatusAsync(DecisionMatterStatusCodes.Open);
+
+    private async Task ChangeStatusAsync(string statusCode)
+    {
+        _busy = true;
+        _actionError = null;
+        StateHasChanged();
+        try
+        {
+            await Api.UpdateLegalDecisionMatterStatusAsync(MatterId, statusCode);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _actionError = $"Status change failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true;
+        _deleteError = null;
+        StateHasChanged();
+        try
+        {
+            await Api.DeleteLegalDecisionMatterAsync(MatterId);
+            _showDelete = false;
+            Navigation.NavigateTo("/legal/matters");
+        }
+        catch (Exception ex)
+        {
+            _deleteError = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private sealed class MatterEditForm
+    {
+        [Required, StringLength(300, MinimumLength = 2)]
+        public string Title { get; set; } = string.Empty;
+
+        [StringLength(80)]
+        public string? MatterTypeCode { get; set; }
+
+        [StringLength(120)]
+        public string? Jurisdiction { get; set; }
+
+        [StringLength(200)]
+        public string? Posture { get; set; }
+
+        [StringLength(120)]
+        public string? Subtype { get; set; }
+
+        [StringLength(120)]
+        public string? CourtSystem { get; set; }
+
+        [StringLength(120)]
+        public string? State { get; set; }
+
+        [StringLength(120)]
+        public string? CourtLevel { get; set; }
+
+        [StringLength(120)]
+        public string? County { get; set; }
+
+        [StringLength(120)]
+        public string? GoverningLaw { get; set; }
+
+        [StringLength(200)]
+        public string? MovingParty { get; set; }
+
+        [StringLength(200)]
+        public string? RespondingParty { get; set; }
+
+        [StringLength(300)]
+        public string? MotionTarget { get; set; }
+
+        [StringLength(300)]
+        public string? RequestedDisposition { get; set; }
+
+        [StringLength(4000)]
+        public string? Description { get; set; }
+    }
+}

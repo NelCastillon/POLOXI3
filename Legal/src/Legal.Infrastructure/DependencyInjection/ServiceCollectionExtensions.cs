@@ -72,6 +72,12 @@ public static class ServiceCollectionExtensions
         // POLOXI Formalization Gate (Research → Formalize → Math handoff).
         services.AddScoped<IFormalizationService, FormalizationService>();
 
+        // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
+        services.AddScoped<ILegalDecisionRepository, LegalDecisionRepository>();
+        services.AddScoped<ILegalDecisionAiProvider, LegalDecisionAiProvider>();
+        services.AddScoped<ILegalDecisionRetriever, LegalDecisionRetriever>();
+        services.AddScoped<ILegalDecisionService, LegalDecisionService>();
+
         return services;
     }
 }
