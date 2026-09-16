@@ -76,6 +76,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalDecisionRepository, LegalDecisionRepository>();
         services.AddScoped<ILegalDecisionAiProvider, LegalDecisionAiProvider>();
         services.AddScoped<ILegalDecisionRetriever, LegalDecisionRetriever>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.IDependencyPropagationService, Legal.Application.Features.Intelligence.Decision.Core.DependencyPropagationService>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.ILegalDecisionImpactMapper, Legal.Application.Features.Intelligence.Decision.Core.LegalDecisionImpactMapper>();
         services.AddScoped<ILegalDecisionService, LegalDecisionService>();
 
         return services;

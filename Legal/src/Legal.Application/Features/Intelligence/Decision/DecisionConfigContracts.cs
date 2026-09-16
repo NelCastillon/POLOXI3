@@ -182,6 +182,15 @@ public sealed record DecisionGraphNodePersistence(
     public string? StandardOfProof { get; init; }
     public Guid? CandidateId { get; init; }
     public bool IsDispositive { get; init; }
+
+    // V2.1 lineage (0220): the authoritative POLOXI object this node derives from. Enables the
+    // closed loop to map a graph change to the exact branch/candidate WITHOUT string matching.
+    public Guid? SourceBranchId { get; init; }
+    public Guid? SourceCandidateId { get; init; }
+    public Guid? SourceEvidenceId { get; init; }
+    public string? SourceAuthorityId { get; init; }
+    public Guid? MatterId { get; init; }
+    public int RowVersionNo { get; init; } = 1;
 }
 
 public sealed record DecisionGraphEdgePersistence(
@@ -197,7 +206,18 @@ public sealed record DecisionGraphEdgePersistence(
     bool IsDispositive,
     string VerificationStatus,
     string? VerificationNotes,
-    string? PropagatedStateCode);
+    string? PropagatedStateCode)
+{
+    // V2.1 lineage + propagation policy (0220).
+    public Guid? SourceBranchId { get; init; }
+    public Guid? SourceCandidateId { get; init; }
+    public Guid? SourceEvidenceId { get; init; }
+    public string? SourceAuthorityId { get; init; }
+    public Guid? MatterId { get; init; }
+    public bool AlternativePathAllowed { get; init; }
+    public string PropagationPolicy { get; init; } = "DEPENDENCY";
+    public int RowVersionNo { get; init; } = 1;
+}
 
 public sealed record DecisionLosingSideTestPersistence(
     Guid DecisionLosingSideTestId,

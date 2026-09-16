@@ -90,7 +90,7 @@ BEGIN
 	UPDATE POLOXI.Legal_DecisionSession
 	   SET UseDependencyGraph = 1,
 		   ReadinessSatisfied = 0,
-		   ReadinessBlockersJson = N'["Essential dependencies are unsatisfied.","Material authority is not sufficiently verified."]',
+			   ReadinessBlockersJson = N'["Essential dependencies are unsatisfied.","No material authority has been established yet."]',
 		   ModifiedDateUtc = SYSUTCDATETIME(),
 		   ModifiedByUserId = @User
 	 WHERE DecisionSessionId = @S1 AND TenantId = @Tenant;

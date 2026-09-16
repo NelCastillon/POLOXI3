@@ -95,7 +95,7 @@
             @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
             {
                 <section class="decision-panel decision-answer">
-                    <div class="decision-panel-header"><div><span>Decision explanation</span><h2>Recommended outcome</h2></div><span class="decision-status">@_response.StatusCode</span></div>
+                    <div class="decision-panel-header"><div><span>Decision explanation</span><h2>Recommended outcome</h2></div><span class="decision-status">@StatusLabel(_response.StatusCode)</span></div>
                     <div class="decision-answer-body">@_response.FinalAnswer</div>
                 </section>
             }
@@ -104,14 +104,20 @@
             @if (Winner is not null)
             {
                 var support = DecisionSupport.Classify(Winner.CompositeScore);
-                var supportClass = support == DecisionSupport.StronglySupported ? "verdict-strong"
-                                 : support == DecisionSupport.Viable ? "verdict-viable" : "verdict-weak";
+                // Candidate support (how well the leader scores) is distinct from decision strength
+                // (how reliable the outcome is after uncertainty, verification and open dependencies).
+                // Only present the "strong" verdict treatment when the decision is actually ready;
+                // a provisional/exhausted/clarification run is never visually "strong" regardless of score.
+                var decisionReady = _response.StatusCode == DecisionStatusCodes.DecisionReady;
+                var supportClass = (decisionReady && support == DecisionSupport.StronglySupported) ? "verdict-strong"
+                                 : support == DecisionSupport.Weak ? "verdict-weak" : "verdict-viable";
                 <section class="decision-verdict @supportClass">
                     <div class="decision-verdict-main">
-                        <span class="decision-verdict-eyebrow">Current best decision</span>
+                        <span class="decision-verdict-eyebrow">Current leading outcome</span>
                         <h2 class="decision-verdict-title">@(Winner.Outcome ?? Winner.DisplayName)</h2>
                         <div class="decision-verdict-meta">
-                            <span class="decision-verdict-support">@support</span>
+                            <span class="decision-verdict-support" title="Composite support score of the leading candidate.">Composite support: @support</span>
+                            <span class="decision-verdict-state" title="Overall decision reliability after uncertainty, verification and open dependencies.">Decision state: @StatusLabel(_response.StatusCode)</span>
                             @if (!string.IsNullOrWhiteSpace(_response.CounterfactualAssumption))
                             {
                                 <span class="decision-verdict-cf" title="This decision was re-run under a hypothetical assumption."><i class="bi bi-magic"></i> Counterfactual: @_response.CounterfactualAssumption</span>
@@ -119,7 +125,7 @@
                         </div>
                     </div>
                     <div class="decision-verdict-scores">
-                        <div class="decision-verdict-score"><span>Confidence</span><strong>@Winner.CompositeScore.ToString("0%")</strong></div>
+                        <div class="decision-verdict-score"><span>Composite support</span><strong>@Winner.CompositeScore.ToString("0%")</strong></div>
                         <div class="decision-verdict-score"><span>Margin over #2</span><strong>@_response.DecisionMargin.ToString("0.###")</strong></div>
                         @if (RunnerUp is not null)
                         {
@@ -219,7 +225,7 @@
                 @if (_response.GraphNodes.Count > 0)
                 {
                     <section class="decision-panel">
-                        <div class="decision-panel-header"><div><span>Typed legal dependency graph (V2)</span><h2>@_response.GraphNodes.Count nodes · @_response.GraphEdges.Count edges</h2></div></div>
+                        <div class="decision-panel-header"><div><span>Typed legal dependency graph (V2)</span><h2>@_response.GraphNodes.Count nodes · @_response.GraphEdges.Count edges</h2></div>@if (_loopBusy){<span class="decision-loop-busy"><i class="bi bi-hourglass-split decision-spinner"></i> Applying verification…</span>}</div>
                         <ul class="decision-readiness-list">
                             @foreach (var edge in _response.GraphEdges)
                             {
@@ -233,15 +239,95 @@
                                             @edge.VerificationStatus · materiality @edge.Materiality.ToString("0.00")@(edge.IsEssential ? " · essential" : "")@(edge.IsDispositive ? " · dispositive" : "")@(string.IsNullOrWhiteSpace(edge.PropagatedStateCode) ? "" : $" · {edge.PropagatedStateCode}")
                                         </span>
                                     </div>
+                                    <div class="decision-edge-actions">
+                                        @if (!verified)
+                                        {
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@_loopBusy" @onclick='() => ApplyVerificationAsync(edge.EdgeId, "VERIFIED")'>Mark verified</button>
+                                        }
+                                        @if (!invalidated)
+                                        {
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@_loopBusy" @onclick='() => ApplyVerificationAsync(edge.EdgeId, "INVALIDATED")'>Invalidate</button>
+                                        }
+                                    </div>
                                 </li>
                             }
                         </ul>
+                    </section>
+                }
+                else
+                {
+                    @* Graph was ENABLED for this run but produced no nodes — make that state explicit
+                       instead of silently omitting the V2 section (distinguishes GraphEnabledButEmpty
+                       from GraphDisabled / GraphEnabledAndOperational). *@
+                    <section class="decision-panel">
+                        <div class="decision-panel-header"><div><span>Typed legal dependency graph (V2)</span><h2>Enabled · no graph generated</h2></div></div>
+                        <p class="decision-readiness-detail">
+                            <i class="bi bi-diagram-3"></i>
+                            Dependency Graph (V2) was enabled for this run, but no dependency graph was generated for this matter, so the typed graph, adversarial gate, and dependency-constrained readiness are unavailable. This is an empty graph, not a disabled one.
+                        </p>
+                    </section>
+                }
+
+                @if (_loopResult is not null)
+                {
+                    <section class="decision-panel">
+                        <div class="decision-panel-header"><div><span>Closed-loop result (V2.1)</span><h2>@(_loopResult.AlreadyProcessed ? "Already processed" : _loopResult.Applied ? "Applied" : "No change")</h2></div></div>
+                        @if (_loopResult.Recompetition is not null)
+                        {
+                            var rc = _loopResult.Recompetition;
+                            <p class="decision-readiness-detail">
+                                Entropy @rc.PreviousEntropy.ToString("0.000") → @rc.CurrentEntropy.ToString("0.000") ·
+                                margin @rc.PreviousMargin.ToString("0.000") → @rc.CurrentMargin.ToString("0.000") ·
+                                @rc.ReopenedBranchCount branch(es) reopened@(rc.WinnerChanged ? " · winner flipped" : "")
+                            </p>
+                        }
+                        @if (_loopResult.ResearchNeed is not null)
+                        {
+                            var rn = _loopResult.ResearchNeed;
+                            <div class="decision-readiness-list">
+                                <strong>Next investigation: @rn.IssueLabel</strong>
+                                <span class="decision-readiness-detail">@rn.PropositionToResolve</span>
+                            </div>
+                        }
+                        @if (_loopResult.AuditNarrative is not null && _loopResult.AuditNarrative.Count > 0)
+                        {
+                            <ul class="decision-readiness-list">
+                                @foreach (var line in _loopResult.AuditNarrative)
+                                {
+                                    <li><i class="bi bi-arrow-right-short"></i><div><span class="decision-readiness-detail">@line</span></div></li>
+                                }
+                            </ul>
+                        }
+                    </section>
+                }
+                else if (_response.LastRecompetition is not null || _response.PendingResearchNeed is not null)
+                {
+                    <section class="decision-panel">
+                        <div class="decision-panel-header"><div><span>Closed-loop result (V2.1)</span><h2>Last verification impact</h2></div></div>
+                        @if (_response.LastRecompetition is not null)
+                        {
+                            var rc = _response.LastRecompetition;
+                            <p class="decision-readiness-detail">
+                                Entropy @rc.PreviousEntropy.ToString("0.000") → @rc.CurrentEntropy.ToString("0.000") ·
+                                margin @rc.PreviousMargin.ToString("0.000") → @rc.CurrentMargin.ToString("0.000") ·
+                                @rc.ReopenedBranchCount branch(es) reopened@(rc.WinnerChanged ? " · winner flipped" : "")
+                            </p>
+                        }
+                        @if (_response.PendingResearchNeed is not null)
+                        {
+                            var rn = _response.PendingResearchNeed;
+                            <div class="decision-readiness-list">
+                                <strong>Next investigation: @rn.IssueLabel</strong>
+                                <span class="decision-readiness-detail">@rn.PropositionToResolve</span>
+                            </div>
+                        }
                     </section>
                 }
             }
             <section class="decision-metrics" aria-label="Decision metrics">
                 <div class="decision-metric" title="Normalized entropy across competing candidates (§9 uncertainty, not truth).">
                     <span class="decision-metric-label">Candidate entropy</span>
+                    <span class="decision-metric-value">@_response.CandidateEntropy.ToString("0.###")</span>
                 </div>
                 <div class="decision-metric" title="Margin between the top two candidates (§decision margin).">
                     <span class="decision-metric-label">Decision margin</span>
@@ -249,7 +335,7 @@
                 </div>
                 <div class="decision-metric" title="Query/Decision contract completeness (§7).">
                     <span class="decision-metric-label">Contract completeness</span>
-                    <span class="decision-metric-value">@_response.ContractCompleteness.ToString("0%")</span>
+                    <span class="decision-metric-value">@(_response.ContractCompleteness > 0 ? _response.ContractCompleteness.ToString("0%") : "Not evaluated")</span>
                 </div>
                 <div class="decision-metric" title="Adaptive hierarchy depth reached (§10).">
                     <span class="decision-metric-label">Depth</span>
@@ -263,6 +349,32 @@
                     <span class="decision-metric-label">Duration</span>
                     <span class="decision-metric-value">@_response.DurationMilliseconds ms</span>
                 </div>
+                @{
+                    var kpiRecomp = _loopResult?.Recompetition ?? _response.LastRecompetition;
+                    var kpiResearch = _loopResult?.ResearchNeed ?? _response.PendingResearchNeed;
+                }
+                @if (kpiRecomp is not null)
+                {
+                    <div class="decision-metric" title="Branches POLOXI reopened for investigation after the last dependency change (§closed loop).">
+                        <span class="decision-metric-label">Branches reopened</span>
+                        <span class="decision-metric-value">@kpiRecomp.ReopenedBranchCount</span>
+                    </div>
+                    <div class="decision-metric" title="Whether the last dependency propagation changed the leading candidate (§recompetition).">
+                        <span class="decision-metric-label">Winner flipped</span>
+                        <span class="decision-metric-value">@(kpiRecomp.WinnerChanged ? "Yes" : "No")</span>
+                    </div>
+                    <div class="decision-metric" title="Candidate entropy change from the last recompetition (before → after).">
+                        <span class="decision-metric-label">Entropy Δ</span>
+                        <span class="decision-metric-value">@((kpiRecomp.CurrentEntropy - kpiRecomp.PreviousEntropy).ToString("+0.###;-0.###;0"))</span>
+                    </div>
+                }
+                @if (kpiResearch is not null)
+                {
+                    <div class="decision-metric" title="Information value of the next investigation POLOXI generated from the frontier (§18).">
+                        <span class="decision-metric-label">Next research IV</span>
+                        <span class="decision-metric-value">@kpiResearch.InformationValue.ToString("0.###")</span>
+                    </div>
+                }
             </section>
 
             @if (_response.Candidates.Count > 0)
@@ -301,13 +413,14 @@
             @if (_response.FlipPoints.Count > 0)
             {
                 <section class="decision-panel">
-                    <div class="decision-panel-header"><div><span>What could still overturn the current winner (§1 outcome-flip potential) — click to test</span><h2>What could change this?</h2></div></div>
+                    <div class="decision-panel-header"><div><span>How resolving each open issue would change the ranking (§1 counterfactual) — click to test</span><h2>What could change this?</h2></div></div>
                     <ul class="decision-flip-list">
                         @foreach (var f in _response.FlipPoints)
                         {
                             var flipCand = CandidateLabelForBranch(f.DecisionBranchId);
-                            <li class="decision-flip-item @(f.WinnerChanges ? "decision-flip-critical" : null)">
-                                <i class="bi @(f.WinnerChanges ? "bi-exclamation-octagon" : "bi-info-circle")"></i>
+                            var effect = ClassifyCounterfactual(f);
+                            <li class="decision-flip-item @CounterfactualCss(effect)">
+                                <i class="bi @CounterfactualIcon(effect)"></i>
                                 <span class="decision-flip-text">
                                     @f.Description
                                     @if (!string.IsNullOrWhiteSpace(flipCand))
@@ -315,7 +428,17 @@
                                         <span class="decision-branch-cand">@flipCand</span>
                                     }
                                 </span>
-                                <span class="decision-flip-meta">Δrank @f.RankDelta @(f.WinnerChanges ? "· flips winner" : "")</span>
+                                <span class="decision-flip-meta">
+                                    <span class="decision-cf-badge @CounterfactualCss(effect)">@CounterfactualLabel(effect)</span>
+                                    @if (effect == CounterfactualEffect.WinnerFlip && Winner is not null && !string.IsNullOrWhiteSpace(flipCand))
+                                    {
+                                        <span title="Resolving this could change which outcome wins.">@(Winner.Outcome ?? Winner.DisplayName) → @flipCand</span>
+                                    }
+                                    else
+                                    {
+                                        <span title="Effect on the current winner's rank position.">Δrank @f.RankDelta</span>
+                                    }
+                                </span>
                                 <button class="um-btn um-btn-ghost um-btn-sm decision-flip-test" title="Re-decide under this hypothetical"
                                         @onclick="() => RunCounterfactualAsync(f.Description)" disabled="@_loading">
                                     <i class="bi bi-magic"></i> Test
@@ -417,12 +540,15 @@
     private string? _selectedModelCode;
     private string _selectedContextCode = DecisionContexts.General;
     private bool _usePoloxiEngine = true;
-    private bool _useDependencyGraph = false;
+    private bool _useDependencyGraph = true;
     private bool _loading;
     private string? _error;
     private string? _clarificationAnswer;
     private DecisionSearchResponse? _response;
     private IReadOnlyCollection<DecisionTimelineEventDto> _timeline = [];
+
+    private DecisionClosedLoopResultDto? _loopResult;
+    private bool _loopBusy;
 
     private IReadOnlyCollection<DecisionModelOptionDto> _models = [];
     private IReadOnlyCollection<DecisionContextDto> _contexts = [];
@@ -442,7 +568,21 @@
     private DecisionCandidateDto? RunnerUp => _response is null ? null
         : _response.Candidates.Where(x => !x.IsWinner).OrderBy(x => x.RankOrder).FirstOrDefault();
 
-    // A branch belongs to a candidate via its code prefix (e.g. "C1.B2" -> candidate "C1").
+    // Human-readable label for a terminal/status code shown in the status badge.
+    private static string StatusLabel(string? statusCode) => statusCode switch
+    {
+        DecisionStatusCodes.DecisionReady => "Decision ready",
+        DecisionStatusCodes.ProvisionalDecision => "Provisional - research remains",
+        DecisionStatusCodes.ResearchExhausted => "Research exhausted",
+        DecisionStatusCodes.UserClarificationRequired => "Clarification needed",
+        DecisionStatusCodes.BudgetExhausted => "Budget exhausted",
+        DecisionStatusCodes.Abstained => "Abstained",
+        DecisionStatusCodes.Running => "Running",
+        DecisionStatusCodes.Failed => "Failed",
+        _ => statusCode ?? string.Empty
+    };
+
+    // A branch belongs to a candidate via its code prefix
     // We surface a short, human-readable outcome label so the two candidates' identical legal
     // issues are distinguishable ("... - for Grant Motion to Dismiss" vs "- for Deny Motion...").
     private string? CandidateLabelFor(string? branchCode)
@@ -465,6 +605,47 @@
         var branch = _response.Branches.FirstOrDefault(b => b.DecisionBranchId == id);
         return branch is null ? null : CandidateLabelFor(branch.BranchCode);
     }
+
+    // Counterfactual classification (presentation-only): map a flip point's persisted effect onto a
+    // richer 4-way outcome than binary flip/no-flip, so the "What could change this?" panel says what
+    // resolving the branch would actually do to the current ranking. Core scoring is unchanged; this
+    // only reads WinnerChanges + RankDelta that POLOXI already computed.
+    private enum CounterfactualEffect { WinnerFlip, WinnerWeakened, WinnerStrengthened, NoRankChange }
+
+    private static CounterfactualEffect ClassifyCounterfactual(DecisionFlipPointDto f)
+    {
+        if (f.WinnerChanges)
+            return CounterfactualEffect.WinnerFlip;
+        if (f.RankDelta < 0)
+            return CounterfactualEffect.WinnerWeakened;
+        if (f.RankDelta > 0)
+            return CounterfactualEffect.WinnerStrengthened;
+        return CounterfactualEffect.NoRankChange;
+    }
+
+    private static string CounterfactualLabel(CounterfactualEffect e) => e switch
+    {
+        CounterfactualEffect.WinnerFlip => "Winner flip",
+        CounterfactualEffect.WinnerWeakened => "Winner weakened",
+        CounterfactualEffect.WinnerStrengthened => "Winner strengthened",
+        _ => "No rank change",
+    };
+
+    private static string CounterfactualCss(CounterfactualEffect e) => e switch
+    {
+        CounterfactualEffect.WinnerFlip => "decision-cf-flip",
+        CounterfactualEffect.WinnerWeakened => "decision-cf-weakened",
+        CounterfactualEffect.WinnerStrengthened => "decision-cf-strengthened",
+        _ => "decision-cf-none",
+    };
+
+    private static string CounterfactualIcon(CounterfactualEffect e) => e switch
+    {
+        CounterfactualEffect.WinnerFlip => "bi-exclamation-octagon",
+        CounterfactualEffect.WinnerWeakened => "bi-arrow-down-right",
+        CounterfactualEffect.WinnerStrengthened => "bi-arrow-up-right",
+        _ => "bi-dash-circle",
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -586,6 +767,37 @@
         finally
         {
             _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    // Apply an edge verification change and run the POLOXI closed loop, then refresh the decision.
+    private async Task ApplyVerificationAsync(Guid edgeId, string newStatus)
+    {
+        if (_response is null || _loopBusy)
+            return;
+
+        _loopBusy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var request = new DecisionVerificationChangeRequest(
+                edgeId,
+                newStatus,
+                IdempotencyKey: $"{_response.DecisionSessionId:N}:{edgeId:N}:{newStatus}",
+                RunClosedLoop: true);
+            _loopResult = await Api.ApplyLegalDecisionVerificationAsync(_response.DecisionSessionId, request);
+            if (_loopResult?.Decision is not null)
+                _response = _loopResult.Decision;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Verification failed: {ex.Message}";
+        }
+        finally
+        {
+            _loopBusy = false;
             StateHasChanged();
         }
     }

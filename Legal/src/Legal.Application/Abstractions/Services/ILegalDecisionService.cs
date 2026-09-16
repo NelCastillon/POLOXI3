@@ -9,6 +9,12 @@ public interface ILegalDecisionService
 {
     Task<DecisionSearchResponse> DecideAsync(DecisionSearchRequest request, CancellationToken cancellationToken = default);
     Task<DecisionSearchResponse?> GetSessionResultAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
+
+    // POLOXI Legal V2.1 — synchronous closed loop: apply one edge verification change and (optionally)
+    // run dependency propagation → Candidate×Branch recompetition → frontier/IV recalculation →
+    // ResearchNeed generation. POLOXI remains the sole scorer; the graph only emits signals.
+    Task<DecisionClosedLoopResultDto> ApplyVerificationChangeAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId, DecisionVerificationChangeRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionModelOptionDto>> GetModelsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(Guid tenantId, CancellationToken cancellationToken = default);
 

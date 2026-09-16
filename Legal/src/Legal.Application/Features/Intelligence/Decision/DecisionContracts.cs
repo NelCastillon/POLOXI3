@@ -77,6 +77,9 @@ public static class DecisionStatusCodes
 {
     public const string Running = "RUNNING";
     public const string DecisionReady = "DECISION_READY";
+    // Leading outcome identified, but executable high-value research still remains on the frontier.
+    // This is NOT terminal-because-nothing-is-left; it is an honest "provisional" verdict.
+    public const string ProvisionalDecision = "PROVISIONAL_DECISION";
     public const string UserClarificationRequired = "USER_CLARIFICATION_REQUIRED";
     public const string ResearchExhausted = "RESEARCH_EXHAUSTED";
     public const string BudgetExhausted = "BUDGET_EXHAUSTED";
@@ -180,6 +183,10 @@ public sealed record DecisionSearchResponse(
     public IReadOnlyCollection<DecisionGraphEdgeDto> GraphEdges { get; init; } = [];
     public DecisionLosingSideTestDto? LosingSideTest { get; init; }
     public DecisionReadinessVerdictDto? ReadinessVerdict { get; init; }
+
+    // ── POLOXI Legal V2.1 (closed-loop) additions. Empty/null unless the loop has run. ──
+    public DecisionRecompetitionDto? LastRecompetition { get; init; }
+    public DecisionResearchNeedDto? PendingResearchNeed { get; init; }
 }
 
 // The single highest-impact recommended investigation, derived from the decision frontier.

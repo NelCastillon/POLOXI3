@@ -52,7 +52,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         int I(string key, int fallback) => map.TryGetValue(key, out var v) && int.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) ? i : fallback;
 
         return new DecisionV2Settings(
-            B("Decision.V2.UseDependencyGraph.Default", false),
+            B("Decision.V2.UseDependencyGraph.Default", true),
             D("Decision.V2.Materiality.Threshold", 0.50),
             D("Decision.V2.Readiness.MinAuthorityVerified", 1.00),
             D("Decision.V2.Readiness.LosingSideMargin", 0.05),
@@ -868,6 +868,209 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             }, transaction, cancellationToken: cancellationToken));
 
         transaction.Commit();
+    }
+
+    // ── POLOXI Legal V2.1 — closed-loop persistence ─────────────────────────────────────────────
+
+    public async Task<DecisionV21Settings> GetV21SettingsAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<(string SettingKey, string SettingValue)>(new CommandDefinition(
+            "SELECT SettingKey, SettingValue FROM POLOXI.Legal_DecisionSetting WHERE IsDeleted = 0;",
+            cancellationToken: cancellationToken));
+        var map = rows.ToDictionary(r => r.SettingKey, r => r.SettingValue, StringComparer.OrdinalIgnoreCase);
+
+        bool B(string key, bool fallback) => map.TryGetValue(key, out var v) && bool.TryParse(v, out var b) ? b : fallback;
+        int I(string key, int fallback) => map.TryGetValue(key, out var v) && int.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) ? i : fallback;
+        double D(string key, double fallback) => map.TryGetValue(key, out var v) && double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : fallback;
+
+        return new DecisionV21Settings(
+            B("Decision.V2.UseDependencyPropagation", true),
+            B("Decision.V2.UseGraphDrivenRecompetition", true),
+            B("Decision.V2.UseGraphFrontierSignals", true),
+            I("Decision.V2.Loop.MaxReopensPerBranch", 3),
+            I("Decision.V2.Loop.MaxResearchActions", 8),
+            D("Decision.V2.Loop.NoInformationGainEpsilon", 0.01),
+            B("Decision.V2.Benchmark.Enabled", true));
+    }
+
+    public async Task<DecisionDependencyEventPersistence?> GetDependencyEventAsync(Guid tenantId, Guid decisionSessionId, string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<DecisionDependencyEventPersistence>(new CommandDefinition("""
+            SELECT DecisionDependencyEventId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, MatterId,
+                   DecisionGraphEdgeId, IdempotencyKey, PreviousStatus, NewStatus, ImpactJson,
+                   AffectedBranchCount, AffectedCandidateCount, RecompetitionTriggered
+            FROM POLOXI.Legal_DecisionDependencyEvent
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IdempotencyKey = @IdempotencyKey AND IsDeleted = 0;
+            """, new { SessionId = decisionSessionId, TenantId = tenantId, IdempotencyKey = idempotencyKey }, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistDependencyEventAsync(DecisionDependencyEventPersistence dependencyEvent, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionDependencyEvent
+                (DecisionDependencyEventId, DecisionSessionId, MatterId, DecisionGraphEdgeId, IdempotencyKey, PreviousStatus,
+                 NewStatus, ImpactJson, AffectedBranchCount, AffectedCandidateCount, RecompetitionTriggered, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionDependencyEventId, @DecisionSessionId, @MatterId, @DecisionGraphEdgeId, @IdempotencyKey, @PreviousStatus,
+                 @NewStatus, @ImpactJson, @AffectedBranchCount, @AffectedCandidateCount, @RecompetitionTriggered, @TenantId, @ActorUserId);
+            """, dependencyEvent, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistRecompetitionAsync(DecisionRecompetitionPersistence recompetition, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionRecompetition
+                (DecisionRecompetitionId, DecisionSessionId, DecisionDependencyEventId, PreviousWinnerCandidateId, CurrentWinnerCandidateId,
+                 WinnerChanged, PreviousEntropy, CurrentEntropy, PreviousMargin, CurrentMargin, ReopenedBranchCount,
+                 PreviousRankingJson, CurrentRankingJson, ReasonCode, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionRecompetitionId, @DecisionSessionId, @DecisionDependencyEventId, @PreviousWinnerCandidateId, @CurrentWinnerCandidateId,
+                 @WinnerChanged, @PreviousEntropy, @CurrentEntropy, @PreviousMargin, @CurrentMargin, @ReopenedBranchCount,
+                 @PreviousRankingJson, @CurrentRankingJson, @ReasonCode, @TenantId, @ActorUserId);
+            """, recompetition, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistResearchNeedAsync(DecisionResearchNeedPersistence researchNeed, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionResearchNeed
+                (DecisionResearchNeedId, DecisionSessionId, MatterId, DecisionBranchId, DecisionDependencyEventId, IssueLabel,
+                 PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant, ExpectedDiscrimination,
+                 CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionResearchNeedId, @DecisionSessionId, @MatterId, @DecisionBranchId, @DecisionDependencyEventId, @IssueLabel,
+                 @PropositionToResolve, @AuthorityKind, @RequiredEvidenceKind, @WhyDecisionRelevant, @ExpectedDiscrimination,
+                 @CurrentUncertainty, @InformationValue, @FalsificationCondition, @StatusCode, @TenantId, @ActorUserId);
+            """, researchNeed, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistFrontierSnapshotAsync(DecisionFrontierSnapshotPersistence snapshot, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionFrontierSnapshot
+                (DecisionFrontierSnapshotId, DecisionSessionId, DecisionRecompetitionId, Entropy, Margin, OpenFrontierCount,
+                 TopBranchId, TopBranchInformationValue, FrontierJson, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionFrontierSnapshotId, @DecisionSessionId, @DecisionRecompetitionId, @Entropy, @Margin, @OpenFrontierCount,
+                 @TopBranchId, @TopBranchInformationValue, @FrontierJson, @TenantId, @ActorUserId);
+            """, snapshot, cancellationToken: cancellationToken));
+    }
+
+    public async Task<int> CountBranchReopensAsync(Guid tenantId, Guid decisionSessionId, Guid decisionBranchId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+            SELECT COUNT(1) FROM POLOXI.Legal_DecisionResearchNeed
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND DecisionBranchId = @BranchId AND IsDeleted = 0;
+            """, new { SessionId = decisionSessionId, TenantId = tenantId, BranchId = decisionBranchId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<int> CountResearchNeedsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+            SELECT COUNT(1) FROM POLOXI.Legal_DecisionResearchNeed
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IsDeleted = 0;
+            """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<DecisionRecompetitionPersistence?> GetLatestRecompetitionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<DecisionRecompetitionPersistence>(new CommandDefinition("""
+            SELECT TOP 1 DecisionRecompetitionId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, DecisionDependencyEventId,
+                   PreviousWinnerCandidateId, CurrentWinnerCandidateId, WinnerChanged, PreviousEntropy, CurrentEntropy,
+                   PreviousMargin, CurrentMargin, ReopenedBranchCount, PreviousRankingJson, CurrentRankingJson, ReasonCode
+            FROM POLOXI.Legal_DecisionRecompetition
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IsDeleted = 0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<DecisionResearchNeedPersistence?> GetLatestOpenResearchNeedAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<DecisionResearchNeedPersistence>(new CommandDefinition("""
+            SELECT TOP 1 DecisionResearchNeedId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, MatterId, DecisionBranchId,
+                   DecisionDependencyEventId, IssueLabel, PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant,
+                   ExpectedDiscrimination, CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode
+            FROM POLOXI.Legal_DecisionResearchNeed
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND StatusCode = N'OPEN' AND IsDeleted = 0
+            ORDER BY InformationValue DESC, CreatedDateUtc DESC;
+            """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateSessionOutcomeAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string statusCode, decimal entropy, decimal margin, Guid? winnerCandidateId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE POLOXI.Legal_DecisionSession
+               SET StatusCode = @StatusCode,
+                   CandidateEntropy = @Entropy,
+                   DecisionMargin = @Margin,
+                   WinnerCandidateId = @WinnerCandidateId,
+                   ModifiedDateUtc = SYSUTCDATETIME(),
+                   ModifiedByUserId = @UserId
+             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId;
+            """, new { StatusCode = statusCode, Entropy = entropy, Margin = margin, WinnerCandidateId = winnerCandidateId, SessionId = decisionSessionId, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task ReplaceBranchesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionBranchPersistence> branches, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        foreach (var b in branches)
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE POLOXI.Legal_DecisionBranch
+                   SET BranchStateCode = @BranchStateCode,
+                       InformationValue = @InformationValue,
+                       DecisionRelevance = @DecisionRelevance,
+                       FlipPotential = @FlipPotential,
+                       EvidenceAvailability = @EvidenceAvailability,
+                       AdvScore = @AdvScore,
+                       Cost = @Cost,
+                       IsOnFrontier = @IsOnFrontier,
+                       StopReason = @StopReason,
+                       ModifiedDateUtc = SYSUTCDATETIME(),
+                       ModifiedByUserId = @UserId
+                 WHERE DecisionBranchId = @DecisionBranchId AND DecisionSessionId = @SessionId AND TenantId = @TenantId;
+                """, new
+            {
+                b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability,
+                b.AdvScore, b.Cost, b.IsOnFrontier, b.StopReason, b.DecisionBranchId,
+                SessionId = decisionSessionId, TenantId = tenantId, UserId = userId
+            }, cancellationToken: cancellationToken));
+    }
+
+    public async Task ReplaceCandidatesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionCandidatePersistence> candidates, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        foreach (var c in candidates)
+            await connection.ExecuteAsync(new CommandDefinition("""
+                UPDATE POLOXI.Legal_DecisionCandidate
+                   SET EvidenceSupport = @EvidenceSupport,
+                       AuthoritySupport = @AuthoritySupport,
+                       VerificationScore = @Verification,
+                       Uncertainty = @Uncertainty,
+                       CompositeScore = @CompositeScore,
+                       DecisionSupportCeiling = @DecisionSupportCeiling,
+                       RankOrder = @RankOrder,
+                       IsWinner = @IsWinner,
+                       IsEliminated = @IsEliminated,
+                       ModifiedDateUtc = SYSUTCDATETIME(),
+                       ModifiedByUserId = @UserId
+                 WHERE DecisionCandidateId = @DecisionCandidateId AND DecisionSessionId = @SessionId AND TenantId = @TenantId;
+                """, new
+            {
+                c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.CompositeScore,
+                c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated, c.DecisionCandidateId,
+                SessionId = decisionSessionId, TenantId = tenantId, UserId = userId
+            }, cancellationToken: cancellationToken));
     }
 
     private static DecisionGraphNodePersistence Map(GraphNodeRow r, string kind) => new(

@@ -113,4 +113,11 @@ public sealed class LegalDecisionController(ILegalDecisionService service) : Con
         var result = await service.GetSessionResultAsync(TenantId, sessionId, cancellationToken);
         return result is null ? NotFound() : Ok(result);
     }
+
+    // POLOXI Legal V2.1 — synchronous closed loop: apply one edge verification change and run
+    // dependency propagation → Candidate×Branch recompetition → frontier/IV → ResearchNeed.
+    [HttpPost("sessions/{sessionId:guid}/verify")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> Verify(Guid sessionId, [FromBody] DecisionVerificationChangeRequest request, CancellationToken cancellationToken)
+        => Ok(await service.ApplyVerificationChangeAsync(TenantId, ActorUserId, sessionId, request, cancellationToken));
 }

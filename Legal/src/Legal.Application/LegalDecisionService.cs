@@ -23,6 +23,8 @@ public sealed class LegalDecisionService(
     ILegalDecisionRepository repository,
     ILegalDecisionAiProvider aiProvider,
     ILegalDecisionRetriever retriever,
+    IDependencyPropagationService propagationService,
+    ILegalDecisionImpactMapper impactMapper,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -125,6 +127,19 @@ public sealed class LegalDecisionService(
         var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, out var branches, cancellationToken);
         Record("CANDIDATES_SCORED", "COMPETITION", new { candidateCount = candidates.Count });
 
+        // Bounded adaptive deepening telemetry: emit an observable event only when the deepening pass
+        // actually materialized sub-branches (LevelNumber > 1), so a deepened run is traceable and the
+        // seeded regression matter mirrors real runtime behavior. Flat runs (the common case) skip it.
+        var maxDepthReached = branches.Count == 0 ? 0 : branches.Max(b => b.LevelNumber);
+        if (maxDepthReached > 1)
+            Record("BRANCH_DEEPENED", "COMPETITION", new
+            {
+                depth = maxDepthReached,
+                deepenedBranchCount = branches.Count(b => b.LevelNumber > 1),
+                deepeningFlip = settings.ThresholdDeepeningFlip,
+                maxDepth = settings.MaxDepth
+            });
+
         // ── Uncertainty / Entropy (uncertainty signal only, not truth) ──────────────────────────
         var orderedScores = candidates.Select(c => (double)c.CompositeScore).OrderByDescending(x => x).ToArray();
         var distribution = DecisionCoreMath.Distribution(orderedScores);
@@ -136,7 +151,7 @@ public sealed class LegalDecisionService(
         Record("EVIDENCE_RETRIEVED", "RETRIEVAL", new { evidenceCount = evidence.Count });
 
         // ── Frontier + Flip Points (§11,§30) ────────────────────────────────────────────────────
-        var flipPoints = BuildFlipPoints(branches, sessionId, request.TenantId);
+        var flipPoints = BuildFlipPoints(branches, candidates, sessionId, request.TenantId);
 
         // ── Convergence / Terminal State (§32,§33,§34) ──────────────────────────────────────────
         var winner = candidates.OrderBy(c => c.RankOrder).FirstOrDefault();
@@ -163,11 +178,23 @@ public sealed class LegalDecisionService(
                     : $"To decide between the leading outcomes, can you clarify '{pivot.DisplayName}'? {pivot.Interpretation}";
             }
         }
-        Record("TERMINAL_STATE", "CONVERGENCE", new { statusCode, terminalState, margin, entropy });
+        // The run always terminates here, but that is NOT the same as the decision converging. A run
+        // can complete while the decision remains provisional with research still open. The timeline
+        // phase reflects the DECISION state (not the run) so a provisional run is never mislabeled as
+        // "CONVERGENCE". This is a presentation label only; it does not affect scoring or the pipeline.
+        var terminalPhase = statusCode switch
+        {
+            DecisionStatusCodes.DecisionReady => "CONVERGENCE",
+            DecisionStatusCodes.ProvisionalDecision => "PROVISIONAL_RESEARCH_REMAINS",
+            DecisionStatusCodes.UserClarificationRequired => "CLARIFICATION_REQUIRED",
+            DecisionStatusCodes.ResearchExhausted => "RESEARCH_EXHAUSTED",
+            _ => "TERMINAL_STATE"
+        };
+        Record("TERMINAL_STATE", terminalPhase, new { statusCode, terminalState, margin, entropy });
 
         // ── Answer Assembly (§37): composer reads the structured artifact only ──────────────────
         string? finalAnswer = null;
-        if (statusCode == DecisionStatusCodes.DecisionReady || statusCode == DecisionStatusCodes.ResearchExhausted)
+        if (statusCode == DecisionStatusCodes.DecisionReady || statusCode == DecisionStatusCodes.ResearchExhausted || statusCode == DecisionStatusCodes.ProvisionalDecision)
         {
             finalAnswer = await ComposeAnswerAsync(request, route, candidates, branches, flipPoints, margin, entropy, cancellationToken);
             llmCalls++;
@@ -260,7 +287,7 @@ public sealed class LegalDecisionService(
 
         var graph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken);
         if (graph is null)
-            return BuildResponse(session, nextAction, readiness);
+            return await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness), tenantId, decisionSessionId, cancellationToken);
 
         var nodeDtos = graph.Nodes
             .Select(n => new DecisionGraphNodeDto(n.NodeId, n.NodeKind, n.NodeCode, n.DisplayName, n.Statement, n.Support, n.IsEssential, n.IsSatisfied, n.VerificationStatus, n.SortOrder))
@@ -282,7 +309,195 @@ public sealed class LegalDecisionService(
         var verdict = new DecisionReadinessVerdictDto(graph.ReadinessSatisfied, blockers, predicate);
 
         var v2 = new DecisionV2Result(graph, nodeDtos, edgeDtos, losingDto, verdict);
-        return BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2);
+        return await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2), tenantId, decisionSessionId, cancellationToken);
+    }
+
+    // Hydrate the persisted V2.1 closed-loop readback (last recompetition + latest open research
+    // need) so a page reload or an idempotent replay shows the same closed-loop state.
+    private async Task<DecisionSearchResponse> HydrateClosedLoopAsync(
+        DecisionSearchResponse response, Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken)
+    {
+        var recompetition = await repository.GetLatestRecompetitionAsync(tenantId, decisionSessionId, cancellationToken);
+        var researchNeed = await repository.GetLatestOpenResearchNeedAsync(tenantId, decisionSessionId, cancellationToken);
+        if (recompetition is null && researchNeed is null)
+            return response;
+
+        var recompetitionDto = recompetition is null ? null : new DecisionRecompetitionDto(
+            recompetition.DecisionRecompetitionId, recompetition.PreviousWinnerCandidateId, recompetition.CurrentWinnerCandidateId,
+            recompetition.WinnerChanged, recompetition.PreviousEntropy, recompetition.CurrentEntropy,
+            recompetition.PreviousMargin, recompetition.CurrentMargin, recompetition.ReopenedBranchCount,
+            recompetition.ReasonCode, DateTime.UtcNow);
+
+        var researchNeedDto = researchNeed is null ? null : new DecisionResearchNeedDto(
+            researchNeed.DecisionResearchNeedId, researchNeed.DecisionBranchId, researchNeed.IssueLabel, researchNeed.PropositionToResolve,
+            researchNeed.AuthorityKind, researchNeed.RequiredEvidenceKind, researchNeed.WhyDecisionRelevant, researchNeed.ExpectedDiscrimination,
+            researchNeed.CurrentUncertainty, researchNeed.InformationValue, researchNeed.FalsificationCondition, researchNeed.StatusCode);
+
+        return response with { LastRecompetition = recompetitionDto, PendingResearchNeed = researchNeedDto };
+    }
+
+    // ── POLOXI Legal V2.1 — synchronous closed loop ─────────────────────────────────────────────
+    // verification change → dependency propagation → domain-neutral signals → Candidate×Branch
+    // recompetition → frontier/IV recalculation → ResearchNeed → readiness/audit. POLOXI stays the
+    // sole scorer: the graph only supplies signals; DecisionRecompetition + DecisionCoreMath re-rank.
+    public async Task<DecisionClosedLoopResultDto> ApplyVerificationChangeAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId, DecisionVerificationChangeRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var session = await repository.GetSessionAsync(tenantId, decisionSessionId, cancellationToken)
+            ?? throw new InvalidOperationException($"Decision session {decisionSessionId} was not found.");
+
+        var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? $"{request.EdgeId:N}:{request.NewStatus}"
+            : request.IdempotencyKey!;
+
+        // Idempotency: a retried event must not run the loop twice (§36).
+        var existing = await repository.GetDependencyEventAsync(tenantId, decisionSessionId, idempotencyKey, cancellationToken);
+        if (existing is not null)
+        {
+            var already = await GetSessionResultAsync(tenantId, decisionSessionId, cancellationToken)
+                ?? throw new InvalidOperationException("Session result unavailable after idempotent replay.");
+            return new DecisionClosedLoopResultDto(
+                decisionSessionId, Applied: false, AlreadyProcessed: true,
+                DependencyImpact.Empty, already.LastRecompetition, already.PendingResearchNeed, already,
+                ["This verification change was already processed; returning the existing decision state."]);
+        }
+
+        var v21 = await repository.GetV21SettingsAsync(cancellationToken);
+        var v2Settings = await repository.GetV2SettingsAsync(cancellationToken);
+        var coreSettings = await repository.GetCoreSettingsAsync(cancellationToken);
+
+        var graph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken)
+            ?? throw new InvalidOperationException("This session has no dependency graph; the closed loop requires V2 graph data.");
+
+        var audit = new List<string>();
+
+        // 1) Deterministic dependency propagation (graph produces impact only).
+        var outcome = v21.UseDependencyPropagation
+            ? propagationService.Apply(graph, request.EdgeId, request.NewStatus, v2Settings.PropagationMaxDepth)
+            : new DependencyPropagationOutcome(DependencyImpact.Empty, DependencyPropagationService.BuildModel(graph), null, EdgeFound: true);
+
+        if (!outcome.EdgeFound)
+            throw new InvalidOperationException($"Edge {request.EdgeId} was not found in the session graph.");
+
+        var impact = outcome.Impact;
+        audit.Add($"Edge {request.EdgeId} verification changed {outcome.PreviousStatus ?? "UNKNOWN"} → {request.NewStatus}; {impact.AffectedBranchIds.Count} branch(es) and {impact.AffectedCandidateIds.Count} candidate(s) affected.");
+
+        // 2) Persist the edge verification change (authoritative graph state).
+        var changedEdge = graph.Edges.First(e => e.EdgeId == request.EdgeId);
+        await repository.UpdateEdgeVerificationAsync(tenantId, userId, decisionSessionId,
+            [changedEdge with { VerificationStatus = request.NewStatus, VerificationNotes = request.Notes }], cancellationToken);
+
+        // 3) Persist the dependency event (idempotency + audit substrate).
+        var dependencyEventId = Guid.NewGuid();
+        await repository.PersistDependencyEventAsync(new DecisionDependencyEventPersistence(
+            dependencyEventId, decisionSessionId, tenantId, userId, session.MatterId, request.EdgeId, idempotencyKey,
+            outcome.PreviousStatus, request.NewStatus, JsonSerializer.Serialize(impact),
+            impact.AffectedBranchIds.Count, impact.AffectedCandidateIds.Count, impact.RecompetitionRequired), cancellationToken);
+
+        DecisionRecompetitionDto? recompetitionDto = null;
+        DecisionResearchNeedDto? researchNeedDto = null;
+
+        // 4) Candidate×Branch recompetition — POLOXI re-scores (only when enabled and requested).
+        if (request.RunClosedLoop && v21.UseGraphDrivenRecompetition && impact.RecompetitionRequired)
+        {
+            var signals = impactMapper.Map(impact, graph, session.Branches.ToList(), session.Candidates.ToList());
+            if (signals.Count > 0)
+            {
+                // Loop-safety: only branches under the reopen cap may be reopened this session.
+                var reopenAllowed = new HashSet<Guid>();
+                foreach (var bid in signals.Where(s => s.ReopenRequested && s.BranchId is not null).Select(s => s.BranchId!.Value).Distinct())
+                {
+                    var reopens = await repository.CountBranchReopensAsync(tenantId, decisionSessionId, bid, cancellationToken);
+                    if (reopens < v21.LoopMaxReopensPerBranch)
+                        reopenAllowed.Add(bid);
+                }
+
+                var result = DecisionRecompetition.Run(
+                    session.Candidates.ToList(), session.Branches.ToList(), signals, coreSettings, reopenAllowed);
+
+                var infoGain = Math.Abs(result.CurrentEntropy - result.PreviousEntropy);
+                audit.Add($"Recompetition: entropy {result.PreviousEntropy:F3}→{result.CurrentEntropy:F3}, margin {result.PreviousMargin:F3}→{result.CurrentMargin:F3}, {result.ReopenedBranchCount} branch(es) reopened.");
+                if (result.WinnerChanged)
+                    audit.Add("Leadership flip: the dependency change overturned the previous winning candidate.");
+                if (infoGain < v21.LoopNoInformationGainEpsilon && !result.WinnerChanged)
+                    audit.Add("No material information gain from this recompetition (below epsilon).");
+
+                // Persist re-ranked candidates + branch/frontier state (POLOXI authoritative state).
+                await repository.ReplaceCandidatesAsync(tenantId, userId, decisionSessionId, result.Candidates, cancellationToken);
+                await repository.ReplaceBranchesAsync(tenantId, userId, decisionSessionId, result.Branches, cancellationToken);
+                await repository.UpdateSessionOutcomeAsync(tenantId, userId, decisionSessionId, session.StatusCode,
+                    (decimal)result.CurrentEntropy, (decimal)result.CurrentMargin, result.CurrentWinnerId, cancellationToken);
+
+                var recompetitionId = Guid.NewGuid();
+                var reasonCode = result.WinnerChanged ? "WINNER_FLIP" : "SUPPORT_CHANGED";
+                await repository.PersistRecompetitionAsync(new DecisionRecompetitionPersistence(
+                    recompetitionId, decisionSessionId, tenantId, userId, dependencyEventId,
+                    result.PreviousWinnerId, result.CurrentWinnerId, result.WinnerChanged,
+                    (decimal)result.PreviousEntropy, (decimal)result.CurrentEntropy,
+                    (decimal)result.PreviousMargin, (decimal)result.CurrentMargin, result.ReopenedBranchCount,
+                    JsonSerializer.Serialize(session.Candidates.Select(c => new { c.CandidateCode, c.RankOrder, c.CompositeScore })),
+                    JsonSerializer.Serialize(result.Candidates.Select(c => new { c.CandidateCode, c.RankOrder, c.CompositeScore })),
+                    reasonCode), cancellationToken);
+
+                recompetitionDto = new DecisionRecompetitionDto(
+                    recompetitionId, result.PreviousWinnerId, result.CurrentWinnerId, result.WinnerChanged,
+                    (decimal)result.PreviousEntropy, (decimal)result.CurrentEntropy,
+                    (decimal)result.PreviousMargin, (decimal)result.CurrentMargin, result.ReopenedBranchCount,
+                    reasonCode, DateTime.UtcNow);
+
+                // 5) Frontier / Information-Value snapshot (when graph frontier signals are enabled).
+                if (v21.UseGraphFrontierSignals)
+                {
+                    var openFrontier = result.Branches.Where(b => b.IsOnFrontier).ToList();
+                    var top = openFrontier.OrderByDescending(b => b.InformationValue).FirstOrDefault();
+                    await repository.PersistFrontierSnapshotAsync(new DecisionFrontierSnapshotPersistence(
+                        Guid.NewGuid(), decisionSessionId, tenantId, userId, recompetitionId,
+                        (decimal)result.CurrentEntropy, (decimal)result.CurrentMargin, openFrontier.Count,
+                        top?.DecisionBranchId, top?.InformationValue ?? 0m,
+                        JsonSerializer.Serialize(openFrontier.Select(b => new { b.BranchCode, b.InformationValue, b.FlipPotential }))), cancellationToken);
+                    audit.Add($"Frontier recalculated: {openFrontier.Count} open branch(es) remain.");
+                }
+
+                // 6) Outcome-directed ResearchNeed from the highest-IV frontier (bounded per session).
+                var researchCount = await repository.CountResearchNeedsAsync(tenantId, decisionSessionId, cancellationToken);
+                if (researchCount < v21.LoopMaxResearchActions)
+                {
+                    var need = DecisionResearchNeedFactory.Create(
+                        result.Branches, impact, decisionSessionId, tenantId, userId, session.MatterId, dependencyEventId);
+                    if (need is not null)
+                    {
+                        await repository.PersistResearchNeedAsync(need, cancellationToken);
+                        researchNeedDto = new DecisionResearchNeedDto(
+                            need.DecisionResearchNeedId, need.DecisionBranchId, need.IssueLabel, need.PropositionToResolve,
+                            need.AuthorityKind, need.RequiredEvidenceKind, need.WhyDecisionRelevant, need.ExpectedDiscrimination,
+                            need.CurrentUncertainty, need.InformationValue, need.FalsificationCondition, need.StatusCode);
+                        audit.Add($"Next investigation selected: {need.IssueLabel}.");
+                    }
+                }
+                else
+                {
+                    audit.Add("Research action budget for this session is exhausted; no new ResearchNeed generated.");
+                }
+            }
+            else
+            {
+                audit.Add("Impact produced no signals that map to authoritative branches/candidates; no recompetition run.");
+            }
+        }
+        else if (!impact.RecompetitionRequired)
+        {
+            audit.Add("Dependency change did not require a recompetition (no essential dependency crossed a threshold).");
+        }
+
+        var decision = await GetSessionResultAsync(tenantId, decisionSessionId, cancellationToken)
+            ?? throw new InvalidOperationException("Session result unavailable after closed-loop execution.");
+        decision = decision with { LastRecompetition = recompetitionDto, PendingResearchNeed = researchNeedDto };
+
+        return new DecisionClosedLoopResultDto(
+            decisionSessionId, Applied: true, AlreadyProcessed: false,
+            impact, recompetitionDto, researchNeedDto, decision, audit);
     }
 
     private async Task<DecisionModelRouteDto> ResolveRouteAsync(string? modelCode, CancellationToken cancellationToken)
@@ -312,9 +527,7 @@ public sealed class LegalDecisionService(
                 var branches = new List<ProposedBranch>();
                 if (c.TryGetProperty("branches", out var branchNode) && branchNode.ValueKind == JsonValueKind.Array)
                     foreach (var b in branchNode.EnumerateArray())
-                        branches.Add(new ProposedBranch(
-                            GetString(b, "displayName"), GetString(b, "interpretation"),
-                            GetNumber(b, "decisionRelevance"), GetNumber(b, "flipPotential"), GetNumber(b, "evidenceAvailability")));
+                        branches.Add(ParseBranch(b));
                 results.Add(new ProposedCandidate(
                     GetString(c, "displayName"), GetString(c, "outcome"),
                     GetNumber(c, "legalSupport"), GetNumber(c, "factSupport"), GetNumber(c, "evidenceSupport"),
@@ -329,6 +542,22 @@ public sealed class LegalDecisionService(
             // Non-JSON proposal ⇒ no candidates; the caller surfaces this as a failed proposal.
         }
         return results;
+    }
+
+    // Recursively parses a proposed branch and any nested sub-branches. The discovery LLM may return
+    // a coarse branch with a "subBranches" (or "branches") array of decisive sub-questions; these feed
+    // the bounded adaptive-deepening pass. When absent, Children is empty and nothing deepens.
+    private static ProposedBranch ParseBranch(JsonElement b)
+    {
+        var children = new List<ProposedBranch>();
+        if ((b.TryGetProperty("subBranches", out var childNode) || b.TryGetProperty("branches", out childNode))
+            && childNode.ValueKind == JsonValueKind.Array)
+            foreach (var child in childNode.EnumerateArray())
+                children.Add(ParseBranch(child));
+        return new ProposedBranch(
+            GetString(b, "displayName"), GetString(b, "interpretation"),
+            GetNumber(b, "decisionRelevance"), GetNumber(b, "flipPotential"), GetNumber(b, "evidenceAvailability"),
+            children);
     }
 
     private List<DecisionCandidatePersistence> ScoreCandidates(IReadOnlyList<ProposedCandidate> proposal, DecisionCoreSettings settings, Guid sessionId, Guid tenantId, out List<DecisionBranchPersistence> branches, CancellationToken cancellationToken)
@@ -356,16 +585,7 @@ public sealed class LegalDecisionService(
             var branchIndex = 0;
             foreach (var b in p.Branches)
             {
-                var u = 1d - b.EvidenceAvailability;
-                var iv = DecisionCoreMath.InformationValue(settings, u, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, novelty: 1d, redundancyPenalty: 0d);
-                const double cost = 1d;
-                var adv = DecisionCoreMath.LegalAdv(iv, b.DecisionRelevance, b.FlipPotential, cost);
-                var onFrontier = DecisionCoreMath.IsOnFrontier(settings, DecisionBranchStates.Active, b.DecisionRelevance, b.FlipPotential);
-                branches.Add(new DecisionBranchPersistence(
-                    Guid.NewGuid(), null, 1, $"C{index + 1}.B{branchIndex + 1}", b.DisplayName, b.Interpretation,
-                    DecisionBranchStates.Active, (decimal)iv, (decimal)DecisionCoreMath.Clamp01(b.DecisionRelevance),
-                    (decimal)DecisionCoreMath.Clamp01(b.FlipPotential), (decimal)DecisionCoreMath.Clamp01(b.EvidenceAvailability),
-                    (decimal)adv, (decimal)cost, onFrontier, onFrontier ? null : "BELOW_FRONTIER_THRESHOLD", branchIndex));
+                MaterializeBranch(b, settings, branches, parentBranchId: null, parentCode: $"C{index + 1}", level: 1, sortSeed: branchIndex);
                 branchIndex++;
             }
             index++;
@@ -377,6 +597,47 @@ public sealed class LegalDecisionService(
             ranked[i] = ranked[i] with { RankOrder = i + 1, IsWinner = i == 0 };
         return ranked;
     }
+
+    // Bounded adaptive deepening (§ deepening loop). Scores a proposed branch, appends it to the flat
+    // persistence list, then — only when the branch is genuinely worth deepening — recurses into its
+    // proposed sub-branches. The gate is deterministic and mirrors POLOXI frontier semantics:
+    //   deepen iff the branch is on the frontier, its FlipPotential >= ThresholdDeepeningFlip, the next
+    //   level is still <= MaxDepth, and the LLM actually proposed sub-branches.
+    // When no sub-branches were proposed (the common case), this behaves identically to the prior flat
+    // single-pass materialization, so existing sessions and golden masters are unaffected.
+    internal static void MaterializeBranch(
+        ProposedBranch b, DecisionCoreSettings settings, List<DecisionBranchPersistence> branches,
+        Guid? parentBranchId, string parentCode, int level, int sortSeed)
+    {
+        var u = 1d - b.EvidenceAvailability;
+        var iv = DecisionCoreMath.InformationValue(settings, u, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, novelty: 1d, redundancyPenalty: 0d);
+        const double cost = 1d;
+        var adv = DecisionCoreMath.LegalAdv(iv, b.DecisionRelevance, b.FlipPotential, cost);
+        var onFrontier = DecisionCoreMath.IsOnFrontier(settings, DecisionBranchStates.Active, b.DecisionRelevance, b.FlipPotential);
+        var branchId = Guid.NewGuid();
+        var branchCode = $"{parentCode}.B{sortSeed + 1}";
+        branches.Add(new DecisionBranchPersistence(
+            branchId, parentBranchId, level, branchCode, b.DisplayName, b.Interpretation,
+            DecisionBranchStates.Active, (decimal)iv, (decimal)DecisionCoreMath.Clamp01(b.DecisionRelevance),
+            (decimal)DecisionCoreMath.Clamp01(b.FlipPotential), (decimal)DecisionCoreMath.Clamp01(b.EvidenceAvailability),
+            (decimal)adv, (decimal)cost, onFrontier, onFrontier ? null : "BELOW_FRONTIER_THRESHOLD", sortSeed));
+
+        // Deepening gate: bounded by MaxDepth, driven by frontier membership and flip potential.
+        var shouldDeepen = b.Children.Count > 0
+            && onFrontier
+            && b.FlipPotential >= (double)settings.ThresholdDeepeningFlip
+            && level < settings.MaxDepth;
+        if (!shouldDeepen)
+            return;
+
+        var childIndex = 0;
+        foreach (var child in b.Children)
+        {
+            MaterializeBranch(child, settings, branches, parentBranchId: branchId, parentCode: branchCode, level: level + 1, sortSeed: childIndex);
+            childIndex++;
+        }
+    }
+
 
     private async Task<List<DecisionEvidencePersistence>> RetrieveEvidenceAsync(string contextCode, IReadOnlyList<DecisionBranchPersistence> branches, Guid sessionId, Guid tenantId, int maxResults, CancellationToken cancellationToken)
     {
@@ -404,25 +665,71 @@ public sealed class LegalDecisionService(
         return evidence;
     }
 
-    private static List<DecisionFlipPointPersistence> BuildFlipPoints(IReadOnlyList<DecisionBranchPersistence> branches, Guid sessionId, Guid tenantId)
-        => branches
+    internal static List<DecisionFlipPointPersistence> BuildFlipPoints(IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionCandidatePersistence> candidates, Guid sessionId, Guid tenantId)
+    {
+        // FlipsWinner is defined STRICTLY from candidate identity: a branch can only flip the winner
+        // if the candidate it belongs to is different from the current winner. A high-flip-potential
+        // branch that belongs to the winner itself is important but is NOT a winner flip (it must never
+        // render as "Winner: Deny → for Deny"). Never derive FlipsWinner from FlipPotential/ADV/text.
+        var winnerCode = candidates.OrderBy(c => c.RankOrder).FirstOrDefault()?.CandidateCode;
+        return branches
             .Where(b => b.IsOnFrontier && b.FlipPotential > 0)
             .OrderByDescending(b => b.FlipPotential)
             .Take(6)
-            .Select(b => new DecisionFlipPointPersistence(
-                Guid.NewGuid(), b.DecisionBranchId,
-                $"Resolving '{b.DisplayName}' could change the outcome.",
-                b.Cost, b.FlipPotential >= 0.5m, 0))
+            .Select(b =>
+            {
+                // A branch belongs to a candidate via its code prefix ("<CandidateCode>.<...>").
+                var branchCandidateCode = b.BranchCode.Split('.', 2)[0];
+                var belongsToWinner = winnerCode is not null
+                    && string.Equals(branchCandidateCode, winnerCode, StringComparison.OrdinalIgnoreCase);
+                // A flip that changes the winner is, at minimum, a swap of the top two candidates,
+                // i.e. an ordinal rank displacement of 1. RankDelta must never be 0 when the winner
+                // changes, otherwise "Δrank 0 · flips winner" is self-contradictory. A branch owned by
+                // the winner can never be a winner flip regardless of how high its flip potential is.
+                var winnerChanges = !belongsToWinner && b.FlipPotential >= 0.5m;
+                var rankDelta = winnerChanges ? 1 : 0;
+                return new DecisionFlipPointPersistence(
+                    Guid.NewGuid(), b.DecisionBranchId,
+                    $"Resolving '{b.DisplayName}' could change the outcome.",
+                    b.Cost, winnerChanges, rankDelta);
+            })
             .ToList();
+    }
 
-    private static (string StatusCode, string TerminalState, string Reason) ResolveTerminalState(DecisionCoreSettings settings, double margin, double entropy, bool frontierOpen, double maxAvailableAdv)
+    // Deterministic confidence ceiling for the natural-language composer. The composer may explain the
+    // decision state but must never sound more confident than it. Language such as "clear" or "decisive"
+    // is only warranted when the margin is wide AND uncertainty is contained; a narrow margin or high
+    // entropy caps the wording at "narrow" regardless of which outcome leads.
+    internal static string DescribeConfidence(double margin, double entropy)
     {
+        if (margin >= 0.15 && entropy < 0.60)
+            return "clear — the leader clearly separates from the alternatives; you may state a firm conclusion";
+        if (margin >= 0.10 && entropy < 0.75)
+            return "moderate — the leader has a meaningful but not decisive edge; avoid the word 'clear'";
+        return "narrow — the current leader holds only a narrow advantage over the competing outcome; do not use words like 'clear', 'decisive', or 'strong'";
+    }
+
+    // Terminal-state classifier. Core invariant (§32-34):
+    //   RESEARCH_EXHAUSTED ⇒ no executable, sufficiently valuable research action remains.
+    // Exhaustion is decided ONLY by whether the frontier still offers ADV above the configured floor.
+    internal static (string StatusCode, string TerminalState, string Reason) ResolveTerminalState(DecisionCoreSettings settings, double margin, double entropy, bool frontierOpen, double maxAvailableAdv)
+    {
+        // Genuinely converged: no critical frontier, a clear margin, and contained uncertainty.
         if (!frontierOpen && margin > 0.10 && entropy < 0.60)
             return (DecisionStatusCodes.DecisionReady, DecisionStatusCodes.DecisionReady, "NO_CRITICAL_FRONTIER_AND_CLEAR_MARGIN");
+
+        // A high-value research action still exists on the frontier: research is NOT exhausted.
+        // Emit a provisional (leading-outcome) decision so we compose an honest answer while
+        // signalling that the highest-value investigation remains open.
+        var executableResearchRemains = frontierOpen && maxAvailableAdv >= settings.ThresholdResearchExhaustionAdv;
+        if (executableResearchRemains)
+            return (DecisionStatusCodes.ProvisionalDecision, DecisionStatusCodes.ProvisionalDecision, "LEADING_OUTCOME_WITH_OPEN_HIGH_VALUE_FRONTIER");
+
+        // No frontier action clears the value floor ⇒ nothing worthwhile left to investigate.
         if (maxAvailableAdv < settings.ThresholdResearchExhaustionAdv)
             return (DecisionStatusCodes.ResearchExhausted, DecisionStatusCodes.ResearchExhausted, "MAX_AVAILABLE_ADV_BELOW_THRESHOLD");
-        if (entropy >= 0.85)
-            return (DecisionStatusCodes.ResearchExhausted, DecisionStatusCodes.ResearchExhausted, "HIGH_CANDIDATE_ENTROPY");
+
+        // Frontier closed with no high-value action but uncertainty not fully contained: converged single pass.
         return (DecisionStatusCodes.DecisionReady, DecisionStatusCodes.DecisionReady, "CONVERGED_SINGLE_PASS");
     }
 
@@ -436,6 +743,10 @@ public sealed class LegalDecisionService(
             winner = candidates.FirstOrDefault(c => c.IsWinner)?.DisplayName,
             margin,
             entropy,
+            // Authoritative confidence ceiling: the composer must never sound more confident than the
+            // structured decision state. This descriptor is derived deterministically from margin and
+            // entropy so language like "clear" is only permitted when the numbers actually support it.
+            confidence = DescribeConfidence(margin, entropy),
             candidates = candidates.Select(c => new { c.DisplayName, c.Outcome, c.CompositeScore, c.RankOrder }),
             frontier = branches.Where(b => b.IsOnFrontier).Select(b => new { b.DisplayName, b.FlipPotential, b.DecisionRelevance }),
             flipPoints = flipPoints.Select(f => new { f.Description, f.ChangeCost, f.WinnerChanges })
@@ -523,12 +834,25 @@ public sealed class LegalDecisionService(
         var winner = candidates.OrderBy(c => c.RankOrder).FirstOrDefault();
         var alternative = candidates.OrderBy(c => c.RankOrder).Skip(1).FirstOrDefault();
         var verifiedEvidence = evidence.Count(e => e.VerificationValue >= 0.5m);
-        var openFrontier = branches.Count(b => b.IsOnFrontier);
+        // Single authoritative high-impact frontier count (POLOXI owns the frontier). V2 readiness
+        // consumes this same definition so the two panels can never disagree.
+        var openFrontier = CountHighImpactFrontier(branches);
+        // Winner-separation is decided deterministically on the UNROUNDED margin against a single
+        // authoritative threshold. The detail line exposes higher precision so a value that rounds to
+        // "0.05" in a two-decimal display can never look like it contradicts the separation label
+        // (e.g. 0.0497 vs 0.052 both display as "0.05" but sit on opposite sides of the threshold).
+        const double separationThreshold = 0.05;
+        var marginSeparates = margin >= separationThreshold;
+        var uncertaintyContained = entropy < 0.85;
         return new[]
         {
             new DecisionReadinessItemDto("A leading outcome is identified", winner is not null, winner?.DisplayName),
-            new DecisionReadinessItemDto("Winner separates from the alternative", margin >= 0.05, $"Decision margin {margin:0.###}"),
-            new DecisionReadinessItemDto("Uncertainty is contained", entropy < 0.85, $"Candidate entropy {entropy:0.###}"),
+            new DecisionReadinessItemDto(
+                marginSeparates ? "Winner separates from the alternative" : "Winner does not clearly separate from the alternative",
+                marginSeparates, $"Decision margin {margin:0.####} (threshold {separationThreshold:0.####})"),
+            new DecisionReadinessItemDto(
+                uncertaintyContained ? "Uncertainty is contained" : "Uncertainty is not contained",
+                uncertaintyContained, $"Candidate entropy {entropy:0.####}"),
             new DecisionReadinessItemDto("Strongest opposition considered", alternative is not null, alternative?.DisplayName),
             new DecisionReadinessItemDto("Supporting evidence verified", verifiedEvidence > 0, $"{verifiedEvidence} verified source(s)"),
             new DecisionReadinessItemDto(
@@ -537,6 +861,12 @@ public sealed class LegalDecisionService(
                 openFrontier == 0 ? null : "Resolve open frontier branches before final reliance")
         };
     }
+
+    // The single authoritative "high-impact open frontier" definition. POLOXI owns the decision
+    // frontier; both the ordinary readiness panel and the V2 dependency-readiness gate consume this
+    // same count so they can never independently reconstruct (and disagree about) frontier state.
+    internal static int CountHighImpactFrontier(IReadOnlyCollection<DecisionBranchPersistence> branches)
+        => branches.Count(b => b.IsOnFrontier && b.FlipPotential >= 0.40m);
 
     // ── POLOXI Legal V2 — dependency-aware decision graph orchestration ──────────────────────────
     // Proposes a typed graph (DECISION_GRAPH), runs an INDEPENDENT verifier (DECISION_VERIFY),
@@ -622,7 +952,7 @@ public sealed class LegalDecisionService(
         var losingSide = BuildLosingSideTest(candidates, winner);
 
         // 5. Dependency-constrained readiness verdict (hard gate; margin/entropy are not inputs).
-        var openHighImpact = branches.Count(b => b.IsOnFrontier && b.FlipPotential >= 0.40m);
+        var openHighImpact = CountHighImpactFrontier(branches);
         var verdict = DecisionGraph.EvaluateReadiness(
             model,
             winnerExists: winner is not null,
@@ -854,5 +1184,5 @@ public sealed class LegalDecisionService(
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) ? number : 0d;
 
     private sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches);
-    private sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability);
+    internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children);
 }
