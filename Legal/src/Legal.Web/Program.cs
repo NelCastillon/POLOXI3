@@ -21,6 +21,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseAntiforgery();
 app.MapRazorComponents<Legal.Web.App>()
