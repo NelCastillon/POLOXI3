@@ -80,4 +80,15 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     [HttpDelete("legal-grounding-settings/{settingKey}")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> DeleteLegalGroundingSetting(string settingKey,CancellationToken cancellationToken){await wideService.DeleteLegalGroundingSettingAsync(settingKey,cancellationToken);return NoContent();}
+
+    // Search result display toggle for the End-to-end POLOXI pipeline section (Core.ConfigurationSetting).
+    [HttpGet("show-pipeline")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> GetShowPipeline(CancellationToken cancellationToken)=>Ok(new{showPipeline=await wideService.GetShowPipelineAsync(cancellationToken)});
+
+    [HttpPut("show-pipeline")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveShowPipeline([FromBody]SaveShowPipelineRequest request,CancellationToken cancellationToken){await wideService.SaveShowPipelineAsync(request.ShowPipeline,cancellationToken);return NoContent();}
 }
+
+public sealed record SaveShowPipelineRequest(bool ShowPipeline);

@@ -52,6 +52,10 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     public Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken cancellationToken=default)=>wideRepository.DeleteLegalGroundingSettingAsync(settingKey,cancellationToken);
 
+    public Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)=>wideRepository.GetShowPipelineAsync(cancellationToken);
+
+    public Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)=>wideRepository.SaveShowPipelineAsync(showPipeline,cancellationToken);
+
     public async Task<PoloxiSearchResponse> SearchWithPoloxiWideAsync(PoloxiSearchRequest request,CancellationToken cancellationToken=default)
     {
         Validate(request);

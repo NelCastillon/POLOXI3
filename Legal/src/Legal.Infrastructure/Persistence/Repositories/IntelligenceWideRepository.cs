@@ -162,6 +162,41 @@ WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey=
         await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=settingKey,Prefix=LegalGroundingSettingPrefix},cancellationToken:cancellationToken));
     }
 
+    private const string ShowPipelineSettingKey="Intelligence.SearchWide.ShowPipeline";
+
+    public async Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT TOP 1 SettingValue
+FROM Core.ConfigurationSetting
+WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey=@SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var value=await connection.QueryFirstOrDefaultAsync<string>(new CommandDefinition(sql,new{SettingKey=ShowPipelineSettingKey},cancellationToken:cancellationToken));
+        return string.Equals(value?.Trim(),"true",StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON target.TenantId IS NULL AND target.ScopeCode=N'Platform' AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=@SettingValue,
+        target.DataTypeCode=N'Boolean',
+        target.IsReadOnly=0,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),NULL,N'Platform',N'Intelligence',@SettingKey,@SettingValue,N'false',N'Boolean',N'When enabled, the Wide search result page shows the End-to-end POLOXI pipeline diagnostics section.',0,0,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=ShowPipelineSettingKey,SettingValue=showPipeline?"true":"false"},cancellationToken:cancellationToken));
+    }
+
     public async Task SavePoloxiBranchOutcomesAsync(Guid tenantId,Guid userId,Guid poloxiExecutionId,IReadOnlyCollection<PoloxiBranchOutcomeRecord> outcomes,CancellationToken cancellationToken=default)
     {
         if(outcomes.Count==0)return;

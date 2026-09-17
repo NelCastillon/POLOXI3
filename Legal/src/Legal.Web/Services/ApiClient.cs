@@ -131,5 +131,19 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task SaveLegalGroundingSettingAsync(string settingKey,SaveLegalGroundingSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/legal-grounding-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
     public async Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/intelligence/legal-grounding-settings/{Uri.EscapeDataString(settingKey)}",token);await EnsureSuccessWithDetailAsync(response,token);}
 
+    // Search result display toggle for the End-to-end POLOXI pipeline section.
+    public async Task<bool> GetShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence/show-pipeline",token);
+    public async Task<bool> GetSearchShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide/show-pipeline",token);
+    private async Task<bool> TryGetShowPipelineAsync(string url,CancellationToken token)
+    {
+        using var response=await _httpClient.GetAsync(url,token);
+        if(response.StatusCode==System.Net.HttpStatusCode.NotFound)return false;
+        await EnsureSuccessWithDetailAsync(response,token);
+        return (await response.Content.ReadFromJsonAsync<ShowPipelineResponse>(token))?.ShowPipeline??false;
+    }
+    public async Task SaveShowPipelineAsync(bool showPipeline,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync("api/intelligence/show-pipeline",new{showPipeline},token);await EnsureSuccessWithDetailAsync(response,token);}
+
+    private sealed record ShowPipelineResponse(bool ShowPipeline);
+
     private static async Task EnsureSuccessWithDetailAsync(HttpResponseMessage response,CancellationToken token){if(response.IsSuccessStatusCode)return;var detail=await response.Content.ReadAsStringAsync(token);throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail)?$"Request failed with status {(int)response.StatusCode}.":detail);}
 }

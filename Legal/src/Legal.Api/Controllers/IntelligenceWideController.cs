@@ -50,4 +50,9 @@ public sealed class IntelligenceWideController(IIntelligenceWideService service,
     [HttpGet("contexts")]
     [Authorize(Policy=IntelligencePolicies.Search)]
     public async Task<IActionResult> Contexts(CancellationToken cancellationToken)=>Ok(await service.GetSearchContextsAsync(TenantId,cancellationToken));
+
+    // Platform UI toggle: when true the search result page renders the End-to-end POLOXI pipeline section.
+    [HttpGet("show-pipeline")]
+    [Authorize(Policy=IntelligencePolicies.Search)]
+    public async Task<IActionResult> ShowPipeline(CancellationToken cancellationToken)=>Ok(new{showPipeline=await service.GetShowPipelineAsync(cancellationToken)});
 }
