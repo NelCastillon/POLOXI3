@@ -18,6 +18,12 @@ public interface IIntelligenceWideRepository
     Task<IReadOnlyCollection<LegalGroundingSettingDto>> GetLegalGroundingSettingsAsync(CancellationToken cancellationToken=default);
     Task SaveLegalGroundingSettingAsync(SaveLegalGroundingSettingRequest request,Guid actorUserId,CancellationToken cancellationToken=default);
     Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken cancellationToken=default);
+    // Epistemic Authority (POLOXI EA) configuration surfaced on /legal/configuration. Values resolve
+    // tenant-override -> platform default -> code default; save targets tenant or platform scope.
+    Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default);
+    // Materializes a fully-populated EpistemicAuthoritySettings from the DB for the given tenant.
+    Task<Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings> ResolveEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Platform UI toggle controlling whether the Wide search result page shows the End-to-end POLOXI pipeline section.
     Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default);
     Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default);

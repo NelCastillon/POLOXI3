@@ -25,6 +25,8 @@ public sealed class LegalDecisionService(
     ILegalDecisionRetriever retriever,
     IDependencyPropagationService propagationService,
     ILegalDecisionImpactMapper impactMapper,
+    Features.Intelligence.Epistemic.IEpistemicDecisionBridge epistemicBridge,
+    Abstractions.Persistence.IDecisionGovernanceRepository governanceRepository,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -229,6 +231,7 @@ public sealed class LegalDecisionService(
         // invalidation deterministically, runs the strongest-losing-side gate, and computes the
         // dependency-constrained readiness verdict. Persisted after the session row (FK dependency). ──
         DecisionV2Result? v2 = null;
+        Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null;
         if (useGraph)
         {
             try
@@ -236,6 +239,41 @@ public sealed class LegalDecisionService(
                 v2 = await RunDependencyGraphAsync(request, route, sessionId, contextCode, effectiveQuery,
                     candidates, branches, v2Settings, winner, cancellationToken);
                 await repository.PersistGraphAsync(v2.Persistence, cancellationToken);
+
+                // EA-6/EA-7: advisory epistemic governance overlay. Projects the V2 graph into
+                // authoritative EA claims (verify + authority gate), runs readiness + output audit, and
+                // records a NON-DESTRUCTIVE governance verdict. Advisory by default: it never changes the
+                // V1/V2 verdict; all claims stay visible for reference. Strictly non-blocking.
+                try
+                {
+                    var epistemicContext = new Features.Intelligence.Epistemic.EpistemicDecisionContext
+                    {
+                        SessionId = sessionId,
+                        TenantId = request.TenantId,
+                        MatterId = request.MatterId,
+                        ActorUserId = request.UserId,
+                        ProposedByModel = route.ModelCode,
+                        PromptRunId = request.CorrelationId,
+                        Nodes = v2.Nodes.ToArray(),
+                        Edges = v2.Edges.ToArray(),
+                    };
+                    var governance = await epistemicBridge.ProjectAndGovernAsync(epistemicContext, cancellationToken);
+                    if (governance.Executed)
+                    {
+                        governanceVerdict = await PersistGovernanceVerdictAsync(
+                            request, sessionId, v2, governance, cancellationToken);
+                        logger.LogInformation(
+                            "EA-7 governance for session {SessionId}: {Projected} claim(s), {Authorized} authorized, ready={Ready}, output-clean={Clean}, mode={Mode}, override={Override}.",
+                            sessionId, governance.ProjectedClaimCount, governance.AuthorizedClaimCount,
+                            governance.Readiness?.IsReady, governance.OutputAudit?.IsClean,
+                            Features.Intelligence.Epistemic.EpistemicOverrideModes.ToCode(governance.OverrideMode),
+                            governance.OverrideApplied);
+                    }
+                }
+                catch (Exception epistemicEx)
+                {
+                    logger.LogWarning(epistemicEx, "EA-7 epistemic governance failed for session {SessionId}; decision unaffected.", sessionId);
+                }
             }
             catch (Exception ex)
             {
@@ -245,10 +283,52 @@ public sealed class LegalDecisionService(
             }
         }
 
-        return BuildResponse(persistence, nextAction, readiness, useGraph, v2);
+        return BuildResponse(persistence, nextAction, readiness, useGraph, v2, governanceVerdict);
     }
 
     // ── Direct LLM answer path (POLOXI Engine off) ──────────────────────────────────────────────
+    private async Task<Features.Intelligence.Decision.DecisionGovernanceVerdictDto?> PersistGovernanceVerdictAsync(
+        DecisionSearchRequest request,
+        Guid sessionId,
+        DecisionV2Result v2,
+        Features.Intelligence.Epistemic.EpistemicGovernanceResult governance,
+        CancellationToken cancellationToken)
+    {
+        var v2Ready = v2.ReadinessVerdict?.Satisfied ?? true;
+        var eaReady = governance.EaReady;
+        var outputClean = governance.OutputAudit?.IsClean ?? true;
+        // Effective readiness is the V2 verdict unless a stronger mode actually downgraded it.
+        var effectiveReady = governance.OverrideApplied ? false : v2Ready;
+
+        var blockers = governance.Readiness?.Blockers.Select(b => b.Reason).ToArray() ?? [];
+        var violations = governance.OutputAudit?.Violations.Select(v => v.Reason).ToArray() ?? [];
+        var claims = governance.InvolvedClaims
+            .Select(c => new Features.Intelligence.Decision.GovernanceClaimDto(
+                c.ClaimId, c.Text,
+                Features.Intelligence.Epistemic.ClaimCodes.ToCode(c.VerificationState),
+                Features.Intelligence.Epistemic.ClaimCodes.ToCode(c.DecisionAuthority),
+                c.IsAuthorized, c.IsEssential, c.Annotation))
+            .ToArray();
+        var narrative = governance.AuditNarrative.ToArray();
+        var modeCode = Features.Intelligence.Epistemic.EpistemicOverrideModes.ToCode(governance.OverrideMode);
+
+        var persistence = new Abstractions.Persistence.DecisionGovernanceVerdictPersistence(
+            Guid.NewGuid(), sessionId, request.MatterId, modeCode,
+            v2Ready, eaReady, governance.Readiness?.Enforced ?? false, outputClean, effectiveReady,
+            governance.OverrideApplied, governance.ProjectedClaimCount, governance.AuthorizedClaimCount,
+            blockers.Length, violations.Length,
+            JsonSerializer.Serialize(blockers), JsonSerializer.Serialize(violations),
+            JsonSerializer.Serialize(claims), JsonSerializer.Serialize(narrative),
+            request.TenantId, request.UserId);
+
+        await governanceRepository.UpsertVerdictAsync(persistence, cancellationToken);
+
+        return new Features.Intelligence.Decision.DecisionGovernanceVerdictDto(
+            modeCode, v2Ready, eaReady, outputClean, effectiveReady, governance.OverrideApplied,
+            governance.ProjectedClaimCount, governance.AuthorizedClaimCount,
+            blockers, violations, claims, narrative);
+    }
+
     private async Task<DecisionSearchResponse> ComposeDirectAnswerAsync(DecisionSearchRequest request, Guid sessionId, DecisionModelRouteDto route, string contextCode, List<DecisionEventPersistence> events, Stopwatch timer, CancellationToken cancellationToken)
     {
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken)
@@ -758,7 +838,8 @@ public sealed class LegalDecisionService(
         return result.Content;
     }
 
-    private static DecisionSearchResponse BuildResponse(DecisionSessionPersistence p, DecisionNextActionDto? nextAction, IReadOnlyCollection<DecisionReadinessItemDto> readiness, bool usedDependencyGraph = false, DecisionV2Result? v2 = null)
+    private static DecisionSearchResponse BuildResponse(DecisionSessionPersistence p, DecisionNextActionDto? nextAction, IReadOnlyCollection<DecisionReadinessItemDto> readiness,
+        bool usedDependencyGraph = false, DecisionV2Result? v2 = null, Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null)
         => new(
             p.DecisionSessionId, p.QueryText, p.StatusCode, p.TerminalStateCode, p.TerminationReason,
             p.DepthReached, p.LlmCallCount, p.CandidateEntropy, p.DecisionMargin, p.ContractCompleteness,
@@ -779,7 +860,8 @@ public sealed class LegalDecisionService(
             GraphNodes = v2?.Nodes ?? [],
             GraphEdges = v2?.Edges ?? [],
             LosingSideTest = v2?.LosingSideTest,
-            ReadinessVerdict = v2?.ReadinessVerdict
+            ReadinessVerdict = v2?.ReadinessVerdict,
+            GovernanceVerdict = governanceVerdict
         };
 
     // ── Next Best Action: pick the open (frontier / active) branch with the highest information value.

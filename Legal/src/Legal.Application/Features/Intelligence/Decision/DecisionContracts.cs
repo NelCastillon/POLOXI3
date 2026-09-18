@@ -187,6 +187,10 @@ public sealed record DecisionSearchResponse(
     // ── POLOXI Legal V2.1 (closed-loop) additions. Empty/null unless the loop has run. ──
     public DecisionRecompetitionDto? LastRecompetition { get; init; }
     public DecisionResearchNeedDto? PendingResearchNeed { get; init; }
+
+    // ── POLOXI Legal EA-7 (epistemic governance overlay). Null unless the bridge ran. Advisory by
+    // default: annotation-only and never changes the verdicts above; all claims stay visible. ──
+    public DecisionGovernanceVerdictDto? GovernanceVerdict { get; init; }
 }
 
 // The single highest-impact recommended investigation, derived from the decision frontier.
@@ -443,3 +447,32 @@ public sealed record DecisionReadinessVerdictDto(
     bool Satisfied,
     IReadOnlyCollection<string> Blockers,
     IReadOnlyCollection<DecisionReadinessItemDto> Predicate);
+
+// ── POLOXI Legal EA-7 (epistemic governance overlay) additions ──────────────────────────────────
+// A single involved claim surfaced for UI annotation. ALL claims (authorized + unauthorized) are kept
+// visible for reference; unauthorized ones carry the reason they cannot be relied upon.
+public sealed record GovernanceClaimDto(
+    Guid ClaimId,
+    string Text,
+    string VerificationStateCode,
+    string DecisionAuthorityCode,
+    bool IsAuthorized,
+    bool IsEssential,
+    string Annotation);
+
+// The non-destructive governance verdict. The authoritative V2 verdict and every claim remain intact
+// and visible; this record annotates them and (only in SoftGate/HardGate) reports a downgraded
+// effective readiness. In Advisory mode OverrideApplied is always false.
+public sealed record DecisionGovernanceVerdictDto(
+    string OverrideMode,
+    bool V2ReadinessSatisfied,
+    bool EaReady,
+    bool OutputClean,
+    bool EffectiveReadinessSatisfied,
+    bool OverrideApplied,
+    int ProjectedClaimCount,
+    int AuthorizedClaimCount,
+    IReadOnlyCollection<string> Blockers,
+    IReadOnlyCollection<string> OutputViolations,
+    IReadOnlyCollection<GovernanceClaimDto> InvolvedClaims,
+    IReadOnlyCollection<string> Narrative);

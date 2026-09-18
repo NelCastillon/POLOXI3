@@ -71,6 +71,24 @@ public sealed record SaveLegalGroundingSettingRequest(
     string? Description,
     bool IsEncrypted);
 
+// A single Epistemic Authority (POLOXI EA) configuration row surfaced on /legal/configuration.
+// EffectiveValue is the runtime value after tenant→platform→code fallback; PlatformValue is the
+// platform default; HasTenantOverride indicates a tenant-scoped row exists for the current tenant.
+public sealed record EpistemicSettingDto(
+    string SettingKey,
+    string EffectiveValue,
+    string PlatformValue,
+    string DataTypeCode,
+    string? Description,
+    bool HasTenantOverride);
+
+// Create/update request for an Epistemic Authority configuration row. When Scope is 'Tenant' the
+// value is stored as a tenant override; 'Platform' updates the shared default.
+public sealed record SaveEpistemicSettingRequest(
+    string SettingKey,
+    string SettingValue,
+    string Scope);
+
 // V3.4: continuation state loaded server-side from POLOXI.WideExecution (tenant-scoped).
 // Null when the parent id does not exist for the tenant - the service falls back to client fields.
 public sealed record WideContinuationState(Guid WideExecutionId,string QueryText,int ClarificationRound,decimal? IntentEntropy,string? AnswerKindCode,string? ClarificationTarget);

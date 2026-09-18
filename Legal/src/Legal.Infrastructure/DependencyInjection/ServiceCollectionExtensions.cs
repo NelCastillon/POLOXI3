@@ -2,6 +2,7 @@ using Legal.Application;
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
+using Legal.Application.Features.Intelligence.Epistemic;
 using Legal.Infrastructure.Configuration;
 using Legal.Infrastructure.Intelligence;
 using Legal.Infrastructure.Persistence;
@@ -28,6 +29,31 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
         services.AddScoped<IMathReasoningRepository, MathReasoningRepository>();
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
+        services.AddScoped<IEpistemicClaimRepository, EpistemicClaimRepository>();
+        services.AddScoped<IDecisionGovernanceRepository, DecisionGovernanceRepository>();
+
+        // POLOXI Epistemic Authority Layer (EA-1/EA-2): deterministic, stateless governance services.
+        services.AddSingleton<EpistemicAuthoritySettings>();
+        services.AddSingleton<IClaimAuthorityGate, ClaimAuthorityGate>();
+        services.AddSingleton<IClaimIdentityResolver, ClaimIdentityResolver>();
+        services.AddSingleton<IClaimVerificationPrioritizer, ClaimVerificationPrioritizer>();
+
+        // EA-3: material-claim verification bridge into the V2.1 dependency-propagation loop (scoped:
+        // depends on the scoped IEpistemicClaimRepository).
+        services.AddScoped<IMaterialClaimVerificationService, MaterialClaimVerificationService>();
+
+        // EA-4: closed-loop orchestrator (verify -> propagate -> research need). Scoped: composes the
+        // scoped verification service.
+        services.AddScoped<IEpistemicClosedLoopOrchestrator, EpistemicClosedLoopOrchestrator>();
+
+        // EA-5: readiness blocking + output claim audit. Scoped: read authoritative claims through the
+        // scoped IEpistemicClaimRepository.
+        services.AddScoped<IDecisionReadinessEvaluator, DecisionReadinessEvaluator>();
+        services.AddScoped<IOutputClaimAuditor, OutputClaimAuditor>();
+
+        // EA-6: advisory bridge that projects the live V2 decision graph into authoritative EA claims
+        // and runs readiness/output governance. Scoped: composes the scoped EA services.
+        services.AddScoped<IEpistemicDecisionBridge, EpistemicDecisionBridge>();
 
         services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IAiProviderRouter, AiProviderRouter>();
