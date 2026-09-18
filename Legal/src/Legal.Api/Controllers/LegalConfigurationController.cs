@@ -81,6 +81,15 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> DeleteLegalGroundingSetting(string settingKey,CancellationToken cancellationToken){await wideService.DeleteLegalGroundingSettingAsync(settingKey,cancellationToken);return NoContent();}
 
+    // Epistemic Authority (POLOXI EA) settings stored in Core.ConfigurationSetting (tenant override + platform default).
+    [HttpGet("epistemic-settings")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> EpistemicSettings(CancellationToken cancellationToken)=>Ok(await wideService.GetEpistemicSettingsAsync(TenantId,cancellationToken));
+
+    [HttpPut("epistemic-settings/{settingKey}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveEpistemicSetting(string settingKey,[FromBody]SaveEpistemicSettingRequest request,CancellationToken cancellationToken){await wideService.SaveEpistemicSettingAsync(request with{SettingKey=settingKey},TenantId,ActorUserId,cancellationToken);return NoContent();}
+
     // Search result display toggle for the End-to-end POLOXI pipeline section (Core.ConfigurationSetting).
     [HttpGet("show-pipeline")]
     [Authorize(Policy=IntelligencePolicies.Configure)]

@@ -20,6 +20,9 @@ builder.Services.AddAuthorization(options =>
 });
 builder.Services.AddSingleton<IAuthorizationHandler, IntelligencePermissionAuthorizationHandler>();
 builder.Services.AddLegalInfrastructure(builder.Configuration);
+// Ambient tenant for runtime-effective DB-backed EpistemicAuthoritySettings resolution.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<Legal.Application.Abstractions.Services.IEpistemicTenantAccessor, Legal.Api.Security.HttpEpistemicTenantAccessor>();
 // Async start+poll transport for long-running POLOXI Wide searches (transport only; pipeline unchanged).
 builder.Services.AddSingleton<Legal.Api.Services.WideSearchOperationStore>();
 

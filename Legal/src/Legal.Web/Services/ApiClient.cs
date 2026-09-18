@@ -131,6 +131,10 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task SaveLegalGroundingSettingAsync(string settingKey,SaveLegalGroundingSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/legal-grounding-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
     public async Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/intelligence/legal-grounding-settings/{Uri.EscapeDataString(settingKey)}",token);await EnsureSuccessWithDetailAsync(response,token);}
 
+    // Epistemic Authority (POLOXI EA) settings stored in Core.ConfigurationSetting (tenant override + platform default).
+    public async Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<EpistemicSettingDto>>("api/intelligence/epistemic-settings",token)??[];
+    public async Task SaveEpistemicSettingAsync(string settingKey,SaveEpistemicSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/epistemic-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+
     // Search result display toggle for the End-to-end POLOXI pipeline section.
     public async Task<bool> GetShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence/show-pipeline",token);
     public async Task<bool> GetSearchShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide/show-pipeline",token);

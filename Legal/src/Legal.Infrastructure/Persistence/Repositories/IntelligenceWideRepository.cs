@@ -162,6 +162,105 @@ WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey=
         await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=settingKey,Prefix=LegalGroundingSettingPrefix},cancellationToken:cancellationToken));
     }
 
+    // ── Epistemic Authority (POLOXI EA) configuration ────────────────────────────────────────────
+    private const string EpistemicSettingPrefix="Intelligence.Epistemic.";
+
+    private sealed record EpistemicSettingRow(string SettingKey,string? PlatformValue,string? TenantValue,string DataTypeCode,string? Description);
+
+    public async Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT plat.SettingKey,
+       plat.SettingValue AS PlatformValue,
+       tnt.SettingValue  AS TenantValue,
+       plat.DataTypeCode,
+       plat.Description
+FROM Core.ConfigurationSetting plat
+LEFT JOIN Core.ConfigurationSetting tnt
+       ON tnt.TenantId=@TenantId AND tnt.ScopeCode=N'Tenant' AND tnt.IsDeleted=0 AND tnt.SettingKey=plat.SettingKey
+WHERE plat.TenantId IS NULL AND plat.ScopeCode=N'Platform' AND plat.IsDeleted=0 AND plat.SettingKey LIKE @Prefix + N'%'
+ORDER BY plat.SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<EpistemicSettingRow>(new CommandDefinition(sql,new{TenantId=tenantId,Prefix=EpistemicSettingPrefix},cancellationToken:cancellationToken));
+        return rows.Select(r=>new EpistemicSettingDto(
+            r.SettingKey,
+            r.TenantValue??r.PlatformValue??string.Empty,
+            r.PlatformValue??string.Empty,
+            r.DataTypeCode,
+            r.Description,
+            r.TenantValue is not null)).ToArray();
+    }
+
+    public async Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        var key=request.SettingKey.StartsWith(EpistemicSettingPrefix,StringComparison.OrdinalIgnoreCase)?request.SettingKey:EpistemicSettingPrefix+request.SettingKey;
+        var isTenant=string.Equals(request.Scope,"Tenant",StringComparison.OrdinalIgnoreCase);
+        // Tenant overrides upsert against (TenantId, Scope='Tenant'); platform edits upsert the shared default.
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON ((@IsTenant=1 AND target.TenantId=@TenantId AND target.ScopeCode=N'Tenant')
+    OR (@IsTenant=0 AND target.TenantId IS NULL AND target.ScopeCode=N'Platform'))
+  AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=@SettingValue,
+        target.DataTypeCode=COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=source.SettingKey AND p.IsDeleted=0),target.DataTypeCode),
+        target.IsReadOnly=0,
+        target.ModifiedByUserId=@ActorUserId,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedByUserId,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),CASE WHEN @IsTenant=1 THEN @TenantId ELSE NULL END,CASE WHEN @IsTenant=1 THEN N'Tenant' ELSE N'Platform' END,N'Intelligence',@SettingKey,@SettingValue,
+        COALESCE((SELECT TOP 1 p.DefaultValue FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),@SettingValue),
+        COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N'String'),
+        COALESCE((SELECT TOP 1 p.Description FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N''),0,0,@ActorUserId,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            SettingKey=key,
+            SettingValue=request.SettingValue??string.Empty,
+            IsTenant=isTenant?1:0,
+            TenantId=tenantId,
+            ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task<Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings> ResolveEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        var settings=await GetEpistemicSettingsAsync(tenantId,cancellationToken);
+        var map=settings.ToDictionary(s=>s.SettingKey,s=>s.EffectiveValue,StringComparer.OrdinalIgnoreCase);
+        var d=new Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings();
+
+        bool Bool(string key,bool fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&bool.TryParse(v,out var b)?b:fallback;
+        int Int(string key,int fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&int.TryParse(v,System.Globalization.NumberStyles.Integer,System.Globalization.CultureInfo.InvariantCulture,out var i)?i:fallback;
+        decimal Dec(string key,decimal fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&decimal.TryParse(v,System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var m)?m:fallback;
+
+        var mode=map.TryGetValue(EpistemicSettingPrefix+"OverrideMode",out var mv)
+            ?Legal.Application.Features.Intelligence.Epistemic.EpistemicOverrideModes.Parse(mv)
+            :d.OverrideMode;
+
+        return new Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings
+        {
+            UseClaimAuthorityGate=Bool("UseClaimAuthorityGate",d.UseClaimAuthorityGate),
+            UseMaterialClaimVerification=Bool("UseMaterialClaimVerification",d.UseMaterialClaimVerification),
+            UseClaimDependencyPropagation=Bool("UseClaimDependencyPropagation",d.UseClaimDependencyPropagation),
+            UseClaimReadinessBlocking=Bool("UseClaimReadinessBlocking",d.UseClaimReadinessBlocking),
+            UseOutputClaimAudit=Bool("UseOutputClaimAudit",d.UseOutputClaimAudit),
+            UseEpistemicDecisionBridge=Bool("UseEpistemicDecisionBridge",d.UseEpistemicDecisionBridge),
+            OverrideMode=mode,
+            MaxVerificationActionsPerRound=Int("MaxVerificationActionsPerRound",d.MaxVerificationActionsPerRound),
+            MaxOutputRepairAttempts=Int("MaxOutputRepairAttempts",d.MaxOutputRepairAttempts),
+            MinimumVerificationIV=Dec("MinimumVerificationIV",d.MinimumVerificationIV),
+            MaterialityThreshold=Dec("MaterialityThreshold",d.MaterialityThreshold),
+            FullAuthorityStrengthThreshold=Dec("FullAuthorityStrengthThreshold",d.FullAuthorityStrengthThreshold),
+            VerificationAdequacyThreshold=Dec("VerificationAdequacyThreshold",d.VerificationAdequacyThreshold),
+        };
+    }
+
     private const string ShowPipelineSettingKey="Intelligence.SearchWide.ShowPipeline";
 
     public async Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)

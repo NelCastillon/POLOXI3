@@ -52,6 +52,10 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     public Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken cancellationToken=default)=>wideRepository.DeleteLegalGroundingSettingAsync(settingKey,cancellationToken);
 
+    public Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetEpistemicSettingsAsync(tenantId,cancellationToken);
+
+    public Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)=>wideRepository.SaveEpistemicSettingAsync(request,tenantId,actorUserId,cancellationToken);
+
     public Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)=>wideRepository.GetShowPipelineAsync(cancellationToken);
 
     public Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)=>wideRepository.SaveShowPipelineAsync(showPipeline,cancellationToken);

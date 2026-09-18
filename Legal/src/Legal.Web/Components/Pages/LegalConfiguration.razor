@@ -20,6 +20,7 @@ else
         <article class="intel-kpi-link @(_focusSection=="policies"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to feature policies" @onclick="@(()=>FocusSectionAsync("policies"))"><span>Feature policies</span><strong>@_policies.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="prompts"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to prompt registry" @onclick="@(()=>FocusSectionAsync("prompts"))"><span>Prompt versions</span><strong>@_prompts.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="legal-grounding"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to legal grounding settings" @onclick="@(()=>FocusSectionAsync("legal-grounding"))"><span>Legal grounding</span><strong>@_legalSettings.Count</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="epistemic"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to epistemic authority settings" @onclick="@(()=>FocusSectionAsync("epistemic"))"><span>Epistemic authority</span><strong>@_epistemicSettings.Count</strong></article>
     </section>
 
     <section id="intel-section-providers" class="intel-panel @(_focusSection=="providers"?"intel-panel-focus":null)">
@@ -96,7 +97,7 @@ else
 
     <section id="intel-section-legal-grounding" class="intel-panel @(_focusSection=="legal-grounding"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Legal grounding settings</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewLegalSetting">Add setting</button></div>
-        <div class="intel-state">CourtListener, GovInfo, and eCFR grounding values used when the Legal search context is selected. Encrypted API keys are masked.</div>
+        <div class="intel-note">CourtListener, GovInfo, and eCFR grounding values used when the Legal search context is selected. Encrypted API keys are masked.</div>
         @if(_legalSettings.Count==0){<div class="intel-state">No legal grounding settings are configured.</div>}
         @foreach(var setting in _legalSettings)
         {
@@ -112,9 +113,26 @@ else
         }
     </section>
 
+    <section id="intel-section-epistemic" class="intel-panel @(_focusSection=="epistemic"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>Epistemic authority settings</h2></div>
+        <div class="intel-note">POLOXI Epistemic Authority (EA) feature flags, override mode, and thresholds. Values resolve tenant override → platform default → code default and take effect on the next decision. Editing here saves a tenant override for your tenant.</div>
+        @if(_epistemicSettings.Count==0){<div class="intel-state">No epistemic authority settings are configured.</div>}
+        @foreach(var setting in _epistemicSettings)
+        {
+            <div class="intel-row">
+                <div><strong>@ShortEpistemicKey(setting.SettingKey)</strong><small>@setting.SettingKey · @setting.DataTypeCode · platform default @setting.PlatformValue</small><span>@setting.Description</span></div>
+                <div>
+                    <span>@setting.EffectiveValue</span>
+                    @if(setting.HasTenantOverride){<AppStatusBadge Status="TENANT" />}
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditEpistemicSetting(setting)">Edit</button>
+                </div>
+            </div>
+        }
+    </section>
+
     <section id="intel-section-search-display" class="intel-panel @(_focusSection=="search-display"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Search result display</h2></div>
-        <div class="intel-state">Controls what optional diagnostics appear on the Wide search result page (/legal/search).</div>
+        <div class="intel-note">Controls what optional diagnostics appear on the Wide search result page (/legal/search).</div>
         <div class="intel-row">
             <div>
                 <strong>Show End-to-end POLOXI pipeline</strong>
@@ -279,6 +297,39 @@ else
         </EditForm>
     </div></div>
 }
+@if(_editingEpistemicSetting)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-shield-check"></i><span>Edit epistemic authority setting</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingEpistemicSetting=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_epistemicForm" OnValidSubmit="SaveEpistemicSettingAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field" style="grid-column:1/-1"><label>Setting</label><InputText @bind-Value="_epistemicForm.SettingKey" disabled /><small>Platform default: @_epistemicForm.PlatformValue · @_epistemicForm.DataTypeCode</small></div>
+                    @if(_epistemicForm.DataTypeCode=="Boolean")
+                    {
+                        <div class="intel-field"><label>Value</label><InputSelect @bind-Value="_epistemicForm.SettingValue"><option value="true">true</option><option value="false">false</option></InputSelect><ValidationMessage For="() => _epistemicForm.SettingValue" class="text-danger" /></div>
+                    }
+                    else if(_epistemicForm.SettingKey.EndsWith("OverrideMode",StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div class="intel-field"><label>Value</label><InputSelect @bind-Value="_epistemicForm.SettingValue"><option value="Advisory">Advisory</option><option value="SoftGate">SoftGate</option><option value="HardGate">HardGate</option></InputSelect><ValidationMessage For="() => _epistemicForm.SettingValue" class="text-danger" /></div>
+                    }
+                    else
+                    {
+                        <div class="intel-field"><label>Value</label><InputText @bind-Value="_epistemicForm.SettingValue" /><ValidationMessage For="() => _epistemicForm.SettingValue" class="text-danger" /><small>@(_epistemicForm.DataTypeCode=="Integer"?"Whole number.":_epistemicForm.DataTypeCode=="Decimal"?"Decimal (invariant, e.g. 0.75).":"")</small></div>
+                    }
+                    <div class="intel-field" style="grid-column:1/-1"><label>Scope</label><InputSelect @bind-Value="_epistemicForm.Scope"><option value="Tenant">Tenant override (this tenant only)</option><option value="Platform">Platform default (all tenants)</option></InputSelect></div>
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingEpistemicSetting=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save setting</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
 @if(_confirm is not null)
 {
     <div class="um-modal-backdrop"><div class="um-modal um-modal-confirm">
@@ -303,9 +354,11 @@ private readonly List<AiFeaturePolicyDto> _policies=[];
 private readonly List<IntelligencePromptDefinitionDto> _prompts=[];
 private readonly List<IntelligenceCapabilityDto> _capabilities=[];
 private readonly List<LegalGroundingSettingDto> _legalSettings=[];
+private readonly List<EpistemicSettingDto> _epistemicSettings=[];
 private bool _showPipeline;
 private bool _loading=true,_editing,_editingPrompt,_editingProvider,_editingModel,_saving;
 private bool _editingLegalSetting;
+private bool _editingEpistemicSetting;
 private string? _error;
 private string? _focusSection;
 private PolicyForm _form=new();
@@ -313,6 +366,7 @@ private PromptForm _promptForm=new();
 private ProviderForm _providerForm=new();
 private ModelForm _modelForm=new();
 private LegalSettingForm _legalForm=new();
+private EpistemicSettingForm _epistemicForm=new();
 private ConfirmRequest? _confirm;
 private TaskCompletionSource<bool>? _confirmSource;
 
@@ -335,6 +389,7 @@ private async Task LoadAsync()
         _prompts.Clear();_prompts.AddRange(await prompts);
         _capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);
         _legalSettings.Clear();_legalSettings.AddRange(await Api.GetLegalGroundingSettingsAsync());
+        _epistemicSettings.Clear();_epistemicSettings.AddRange(await Api.GetEpistemicSettingsAsync());
         _showPipeline=await Api.GetShowPipelineAsync();
     }
     catch(Exception ex){_error=ex.Message;}
@@ -418,6 +473,33 @@ private async Task DeleteLegalSettingAsync(LegalGroundingSettingDto item)
     if(!await ConfirmDeleteAsync($"legal grounding setting '{ShortLegalKey(item.SettingKey)}'"))return;
     _saving=true;_error=null;
     try{await Api.DeleteLegalGroundingSettingAsync(item.SettingKey);await LoadAsync();}
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private static string ShortEpistemicKey(string key)=>key.StartsWith("Intelligence.Epistemic.",StringComparison.OrdinalIgnoreCase)?key["Intelligence.Epistemic.".Length..]:key;
+private void EditEpistemicSetting(EpistemicSettingDto item)
+{
+    _error=null;
+    _epistemicForm=new()
+    {
+        SettingKey=item.SettingKey,
+        SettingValue=item.EffectiveValue,
+        PlatformValue=item.PlatformValue,
+        DataTypeCode=item.DataTypeCode,
+        Scope=item.HasTenantOverride?"Tenant":"Tenant"
+    };
+    _editingEpistemicSetting=true;
+}
+private async Task SaveEpistemicSettingAsync()
+{
+    if(!await ConfirmUpdateAsync($"epistemic authority setting '{ShortEpistemicKey(_epistemicForm.SettingKey)}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveEpistemicSettingRequest(_epistemicForm.SettingKey,_epistemicForm.SettingValue??string.Empty,_epistemicForm.Scope);
+        await Api.SaveEpistemicSettingAsync(_epistemicForm.SettingKey,request);
+        _editingEpistemicSetting=false;await LoadAsync();
+    }
     catch(Exception ex){_error=ex.Message;}
     finally{_saving=false;}
 }
@@ -598,5 +680,13 @@ private sealed class LegalSettingForm
     [Required,StringLength(50)]public string DataTypeCode{get;set;}="String";
     [StringLength(1000)]public string? Description{get;set;}
     public bool IsEncrypted{get;set;}
+}
+private sealed class EpistemicSettingForm
+{
+    [Required,StringLength(200)]public string SettingKey{get;set;}="";
+    [Required,StringLength(2000)]public string? SettingValue{get;set;}="";
+    public string PlatformValue{get;set;}="";
+    [Required,StringLength(50)]public string DataTypeCode{get;set;}="String";
+    [Required]public string Scope{get;set;}="Tenant";
 }
 }

@@ -11,6 +11,7 @@ using Legal.Infrastructure.Persistence.Repositories;
 using Legal.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Legal.Infrastructure.DependencyInjection;
 
@@ -33,7 +34,19 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDecisionGovernanceRepository, DecisionGovernanceRepository>();
 
         // POLOXI Epistemic Authority Layer (EA-1/EA-2): deterministic, stateless governance services.
-        services.AddSingleton<EpistemicAuthoritySettings>();
+        // Settings are DB-backed and runtime-effective: resolved per scope from Core.ConfigurationSetting
+        // (tenant override -> platform default -> code default). A default tenant accessor returns null so
+        // non-HTTP scopes (workers, migrations, tests) safely fall back to platform/code defaults; hosts
+        // register an IEpistemicTenantAccessor that reads the authenticated tenant.
+        services.TryAddScoped<IEpistemicTenantAccessor, NullEpistemicTenantAccessor>();
+        services.AddScoped(sp =>
+        {
+            var tenantId = sp.GetRequiredService<IEpistemicTenantAccessor>().TenantId;
+            if (tenantId is null || tenantId == Guid.Empty)
+                return new EpistemicAuthoritySettings();
+            var repo = sp.GetRequiredService<IIntelligenceWideRepository>();
+            return repo.ResolveEpistemicSettingsAsync(tenantId.Value).GetAwaiter().GetResult();
+        });
         services.AddSingleton<IClaimAuthorityGate, ClaimAuthorityGate>();
         services.AddSingleton<IClaimIdentityResolver, ClaimIdentityResolver>();
         services.AddSingleton<IClaimVerificationPrioritizer, ClaimVerificationPrioritizer>();
@@ -108,4 +121,11 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+}
+
+// Default ambient-tenant accessor for non-HTTP scopes (workers, migrations, tests): no tenant, so
+// EpistemicAuthoritySettings resolution falls back to Platform + code defaults. Hosts override this.
+internal sealed class NullEpistemicTenantAccessor : IEpistemicTenantAccessor
+{
+    public Guid? TenantId => null;
 }
