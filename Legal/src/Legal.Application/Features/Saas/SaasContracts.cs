@@ -90,7 +90,8 @@ public sealed record SignupRequest(
     string FirstName,
     string LastName,
     string Email,
-    string Password);
+    string Password,
+    bool AcceptedAgreements = false);
 
 public sealed record VerifyEmailRequest(string Email, string Code);
 
@@ -318,3 +319,109 @@ public sealed record UpdateGroupRequest(
     string StatusCode,
     IReadOnlyList<string>? RoleCodes = null);
 
+// ── Activity (audit events, usage, login history) ─────────────────────────────
+
+/// <summary>Login attempt outcome codes (DB-authoritative text values).</summary>
+public static class LoginOutcome
+{
+    public const string Success = "Success";
+    public const string InvalidCredentials = "InvalidCredentials";
+    public const string EmailNotVerified = "EmailNotVerified";
+    public const string LockedOut = "LockedOut";
+}
+
+/// <summary>A tenant-scoped audit event row for the Activity surface.</summary>
+public sealed record AuditEventDto(
+    Guid AuditEventId,
+    Guid? TenantId,
+    Guid? UserId,
+    string EventType,
+    string? ResourceType,
+    Guid? ResourceId,
+    string? CorrelationId,
+    DateTime OccurredAtUtc);
+
+/// <summary>Aggregated usage totals for a meter over the requested window.</summary>
+public sealed record UsageSummaryDto(
+    string MeterCode,
+    string UsageClass,
+    decimal TotalQuantity,
+    int EventCount,
+    DateTime? LastOccurredAtUtc);
+
+/// <summary>A single authentication attempt (success or failure) for review.</summary>
+public sealed record LoginHistoryDto(
+    Guid LoginHistoryId,
+    Guid? UserId,
+    Guid? TenantId,
+    string? Email,
+    string OutcomeCode,
+    bool IsSuccess,
+    string? IpAddress,
+    string? UserAgent,
+    DateTime OccurredAtUtc);
+
+/// <summary>Best-effort input used to append a login attempt to the history.</summary>
+public sealed record RecordLoginRequest(
+    Guid? UserId,
+    Guid? TenantId,
+    string? Email,
+    string OutcomeCode,
+    bool IsSuccess,
+    string? IpAddress,
+    string? UserAgent);
+
+// ── Legal clickwrap consent (Terms of Service + Privacy Policy) ───────────────
+
+/// <summary>Legal agreement type codes (DB-authoritative text values).</summary>
+public static class AgreementType
+{
+    public const string TermsOfService = "TermsOfService";
+    public const string PrivacyPolicy = "PrivacyPolicy";
+}
+
+/// <summary>How consent was captured (DB-authoritative text values).</summary>
+public static class ConsentAcceptanceMethod
+{
+    public const string ClickwrapCheckbox = "ClickwrapCheckbox";
+}
+
+/// <summary>A versioned legal agreement (Terms / Privacy) sourced from the DB.</summary>
+public sealed record LegalAgreementDto(
+    Guid AgreementId,
+    string AgreementType,
+    string Version,
+    string Title,
+    string Body,
+    string ContentHash,
+    DateTime EffectiveAtUtc,
+    bool RequiresConsent,
+    int SortOrder);
+
+/// <summary>Full legal evidence captured when a user accepts an agreement.</summary>
+public sealed record RecordConsentRequest(
+    Guid? UserId,
+    Guid? TenantId,
+    string? Email,
+    Guid AgreementId,
+    string AgreementType,
+    string AgreementVersion,
+    string ContentHash,
+    string AcceptanceMethod,
+    string? IpAddress,
+    string? UserAgent,
+    string? CorrelationId);
+
+/// <summary>A single recorded consent (clickwrap acceptance) for a user — read-only evidence.</summary>
+public sealed record ConsentRecordDto(
+    Guid ConsentId,
+    Guid? UserId,
+    string? Email,
+    string AgreementType,
+    string AgreementVersion,
+    string ContentHash,
+    string AcceptanceMethod,
+    string? IpAddress,
+    string? UserAgent,
+    string? CorrelationId,
+    DateTime AcceptedAtUtc);

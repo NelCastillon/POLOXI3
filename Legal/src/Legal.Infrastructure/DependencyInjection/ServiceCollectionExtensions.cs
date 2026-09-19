@@ -169,6 +169,12 @@ public static class ServiceCollectionExtensions
         // Tenant groups (Phase C).
         services.AddScoped<IGroupService, Legal.Application.Features.Saas.GroupService>();
 
+        // Activity read surface: audit events, usage, login history.
+        services.AddScoped<IActivityService, Legal.Application.Features.Saas.ActivityService>();
+
+        // Legal clickwrap consent: agreements + consent evidence.
+        services.AddScoped<IConsentService, Legal.Application.Features.Saas.ConsentService>();
+
         return services;
     }
 }

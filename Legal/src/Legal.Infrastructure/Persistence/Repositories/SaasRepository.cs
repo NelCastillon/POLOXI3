@@ -704,7 +704,122 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, UserId = userId, EventType = eventType, ExecutionId = executionId, ResourceType = resourceType, ResourceId = resourceId, DataJson = dataJson, CorrelationId = correlationId }, cancellationToken: ct));
     }
 
-    // ── Groups (Phase C) ─────────────────────────────────────────────────────────
+    // ── Activity read surface (audit + usage + login history) ────────────────────
+    public async Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT TOP (@Take) AuditEventId, TenantId, UserId, EventType, ResourceType, ResourceId, CorrelationId, OccurredAtUtc
+            FROM SaaS.Platform_AuditEvent
+            WHERE TenantId = @TenantId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+            ORDER BY OccurredAtUtc DESC;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<AuditEventDto>(new CommandDefinition(sql, new { TenantId = tenantId, SinceUtc = sinceUtc, Take = take }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT MeterCode, UsageClass,
+                   SUM(Quantity) AS TotalQuantity,
+                   COUNT(*) AS EventCount,
+                   MAX(OccurredAtUtc) AS LastOccurredAtUtc
+            FROM SaaS.Commerce_UsageLedger
+            WHERE TenantId = @TenantId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+            GROUP BY MeterCode, UsageClass
+            ORDER BY MeterCode, UsageClass;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<UsageSummaryDto>(new CommandDefinition(sql, new { TenantId = tenantId, SinceUtc = sinceUtc }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    public async Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default)
+    {
+        const string sql = """
+            INSERT SaaS.Identity_LoginHistory (UserId, TenantId, Email, OutcomeCode, IsSuccess, IpAddress, UserAgent, CreatedByUserId)
+            VALUES (@UserId, @TenantId, @Email, @OutcomeCode, @IsSuccess, @IpAddress, @UserAgent, @UserId);
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.UserId,
+            request.TenantId,
+            request.Email,
+            request.OutcomeCode,
+            request.IsSuccess,
+            request.IpAddress,
+            request.UserAgent
+        }, cancellationToken: ct));
+    }
+
+    public async Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT TOP (@Take) LoginHistoryId, UserId, TenantId, Email, OutcomeCode, IsSuccess, IpAddress, UserAgent, OccurredAtUtc
+            FROM SaaS.Identity_LoginHistory
+            WHERE TenantId = @TenantId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+            ORDER BY OccurredAtUtc DESC;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<LoginHistoryDto>(new CommandDefinition(sql, new { TenantId = tenantId, SinceUtc = sinceUtc, Take = take }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    // ── Legal clickwrap consent (Terms of Service + Privacy Policy) ─────────────
+    public async Task<IReadOnlyList<LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT AgreementId, AgreementType, Version, Title, Body, ContentHash, EffectiveAtUtc, RequiresConsent, SortOrder
+            FROM SaaS.Legal_Agreement
+            WHERE IsActive = 1 AND IsDeleted = 0
+            ORDER BY SortOrder, AgreementType;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<LegalAgreementDto>(new CommandDefinition(sql, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    public async Task RecordConsentAsync(RecordConsentRequest request, CancellationToken ct = default)
+    {
+        const string sql = """
+            INSERT SaaS.Legal_ConsentRecord
+                (UserId, TenantId, Email, AgreementId, AgreementType, AgreementVersion, ContentHash, AcceptanceMethod, IpAddress, UserAgent, CorrelationId, CreatedByUserId)
+            VALUES
+                (@UserId, @TenantId, @Email, @AgreementId, @AgreementType, @AgreementVersion, @ContentHash, @AcceptanceMethod, @IpAddress, @UserAgent, @CorrelationId, @UserId);
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            request.UserId,
+            request.TenantId,
+            request.Email,
+            request.AgreementId,
+            request.AgreementType,
+            request.AgreementVersion,
+            request.ContentHash,
+            request.AcceptanceMethod,
+            request.IpAddress,
+            request.UserAgent,
+            request.CorrelationId
+        }, cancellationToken: ct));
+    }
+
+    public async Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid tenantId, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT ConsentId, UserId, Email, AgreementType, AgreementVersion, ContentHash, AcceptanceMethod, IpAddress, UserAgent, CorrelationId, AcceptedAtUtc
+            FROM SaaS.Legal_ConsentRecord
+            WHERE UserId = @UserId AND TenantId = @TenantId AND IsDeleted = 0
+            ORDER BY AcceptedAtUtc DESC;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<ConsentRecordDto>(new CommandDefinition(sql, new { UserId = userId, TenantId = tenantId }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    // ── Groups (Phase C) ──────────────────────────────────────────────────────
     private const string GroupSelect = """
         SELECT g.GroupId, g.TenantId, g.Name, g.Description, g.StatusCode, g.SortOrder,
                (SELECT COUNT(*) FROM SaaS.SaaS_TenantGroupRole gr WHERE gr.GroupId = g.GroupId AND gr.IsDeleted = 0) AS RoleCount,

@@ -149,3 +149,35 @@ public interface IGroupService
     Task AddGroupMemberAsync(Guid tenantId, Guid? actorUserId, Guid groupId, Guid userId, CancellationToken ct = default);
     Task RemoveGroupMemberAsync(Guid tenantId, Guid? actorUserId, Guid groupId, Guid userId, CancellationToken ct = default);
 }
+
+/// <summary>Tenant-scoped read surface over audit events, usage totals, and login history.</summary>
+public interface IActivityService
+{
+    Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, int days, int take, CancellationToken ct = default);
+    Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, int days, CancellationToken ct = default);
+    Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, int days, int take, CancellationToken ct = default);
+
+    /// <summary>Best-effort append of a login attempt; never throws to the caller.</summary>
+    Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default);
+}
+
+/// <summary>Serves DB-backed legal agreements and records clickwrap consent evidence.</summary>
+public interface IConsentService
+{
+    /// <summary>Returns the currently active agreements (Terms, Privacy) users must accept.</summary>
+    Task<IReadOnlyList<LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken ct = default);
+
+    /// <summary>Records acceptance of every active agreement for a user as legal evidence.</summary>
+    Task RecordConsentForActiveAgreementsAsync(
+        Guid? userId,
+        Guid? tenantId,
+        string? email,
+        string acceptanceMethod,
+        string? ipAddress,
+        string? userAgent,
+        string? correlationId,
+        CancellationToken ct = default);
+
+    /// <summary>Returns the recorded consent evidence for a user within a tenant.</summary>
+    Task<IReadOnlyList<ConsentRecordDto>> GetConsentHistoryAsync(Guid userId, Guid tenantId, CancellationToken ct = default);
+}

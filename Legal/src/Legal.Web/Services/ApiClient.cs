@@ -153,9 +153,7 @@ public sealed class ApiClient(HttpClient httpClient)
     // Calls the anonymous api/auth/* endpoints. The API returns loosely-typed JSON
     // envelopes ({ message, errors, outcome, ... }); AuthResult normalises them.
     public Task<AuthResult> SignupAsync(Legal.Application.Features.Saas.SignupRequest request,CancellationToken token=default)
-        =>PostAuthAsync("api/auth/signup",request,token);
-
-    public Task<AuthResult> VerifyEmailAsync(Legal.Application.Features.Saas.VerifyEmailRequest request,CancellationToken token=default)
+        =>PostAuthAsync("api/auth/signup",request,token);    public Task<AuthResult> VerifyEmailAsync(Legal.Application.Features.Saas.VerifyEmailRequest request,CancellationToken token=default)
         =>PostAuthAsync("api/auth/verify-email",request,token);
 
     public Task<AuthResult> ResendVerificationAsync(Legal.Application.Features.Saas.ResendVerificationRequest request,CancellationToken token=default)
@@ -185,6 +183,10 @@ public sealed class ApiClient(HttpClient httpClient)
 
     private sealed record AuthEnvelope(string? Message,List<string>? Errors,string? Outcome,Guid? TenantId,bool? RequiresVerification,Guid? UserId,string? Email,string? DisplayName,List<string>? Permissions);
 
+    // Anonymous legal agreements for the signup clickwrap surface.
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.LegalAgreementDto>>("api/auth/agreements",token)??[];
+
     // Tenant Configuration control plane (/admin/configuration).
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.TenantConfigurationCategoryDto>> GetTenantConfigurationAsync(CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.TenantConfigurationCategoryDto>>("api/tenant_configuration",token)??[];
@@ -213,6 +215,10 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.AssignableRoleDto>> GetTenantAssignableRolesAsync(CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AssignableRoleDto>>("api/tenant_users/roles",token)??[];
+
+    // Legal clickwrap consent evidence for a member.
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.ConsentRecordDto>> GetTenantMemberConsentAsync(Guid userId,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.ConsentRecordDto>>($"api/tenant_users/{userId}/consent",token)??[];
 
     public async Task<Legal.Application.Features.Saas.ProvisionMemberResult> InviteTenantMemberAsync(Legal.Application.Features.Saas.InviteMemberRequest request,CancellationToken token=default)
         =>await PostForResultAsync<Legal.Application.Features.Saas.InviteMemberRequest,Legal.Application.Features.Saas.ProvisionMemberResult>("api/tenant_users/invite",request,token);
@@ -293,6 +299,16 @@ public sealed class ApiClient(HttpClient httpClient)
         using var response=await _httpClient.DeleteAsync($"api/tenant_groups/{groupId}/members/{userId}",token);
         await EnsureSuccessWithDetailAsync(response,token);
     }
+
+    // Tenant Activity (Phase C) — read-only audit/usage/login history for own tenant.
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetActivityAuditEventsAsync(int days=30,int take=100,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/audit?days={days}&take={take}",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetActivityUsageAsync(int days=30,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/usage?days={days}",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.LoginHistoryDto>> GetActivityLoginHistoryAsync(int days=30,int take=100,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.LoginHistoryDto>>($"api/tenant_activity/logins?days={days}&take={take}",token)??[];
 
     // Public invitation acceptance (/invitations/{token}) — anonymous, token-only.
     public async Task<Legal.Application.Features.Saas.InvitationLookupDto?> LookupInvitationAsync(string invitationToken,CancellationToken token=default)

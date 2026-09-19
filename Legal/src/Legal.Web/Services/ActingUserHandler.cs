@@ -20,7 +20,30 @@ public sealed class ActingUserHandler(IHttpContextAccessor httpContextAccessor, 
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var user = httpContextAccessor.HttpContext?.User;
+        var httpContext = httpContextAccessor.HttpContext;
+
+        // Forward the real browser IP / User-Agent to the API so login history and
+        // audit rows record the end user, not this server-side HttpClient. This must
+        // run even for anonymous requests (e.g. the login POST) where no principal exists.
+        if (httpContext is not null)
+        {
+            var clientIp = httpContext.Connection.RemoteIpAddress;
+            if (clientIp is not null)
+            {
+                if (clientIp.IsIPv4MappedToIPv6)
+                    clientIp = clientIp.MapToIPv4();
+                SetHeader(request, "X-Forwarded-For", clientIp.ToString());
+            }
+
+            var browserUserAgent = httpContext.Request.Headers.UserAgent.ToString();
+            if (!string.IsNullOrWhiteSpace(browserUserAgent))
+            {
+                request.Headers.Remove("User-Agent");
+                request.Headers.TryAddWithoutValidation("User-Agent", browserUserAgent);
+            }
+        }
+
+        var user = httpContext?.User;
         if (user?.Identity?.IsAuthenticated == true)
         {
             var userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("sub");

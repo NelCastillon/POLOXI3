@@ -20,7 +20,8 @@ namespace Legal.Api.Controllers;
 [Authorize]
 public sealed class TenantUserManagementController(
     IUserManagementService service,
-    IInvitationService invitationService) : ControllerBase
+    IInvitationService invitationService,
+    IConsentService consentService) : ControllerBase
 {
     private const string ManagePermission = "Members.Manage";
 
@@ -70,6 +71,15 @@ public sealed class TenantUserManagementController(
     [HttpDelete("{membershipId:guid}")]
     public async Task<IActionResult> Remove(Guid membershipId, CancellationToken cancellationToken)
         => await ExecuteAsync(() => service.RemoveMemberAsync(TenantId, false, ActorUserId, membershipId, cancellationToken));
+
+    // ── Legal clickwrap consent (read-only evidence) ────────────────────────────
+    [HttpGet("{userId:guid}/consent")]
+    public async Task<IActionResult> GetConsent(Guid userId, CancellationToken cancellationToken)
+    {
+        if (!CanManage()) return Forbid();
+        var records = await consentService.GetConsentHistoryAsync(userId, TenantId, cancellationToken);
+        return Ok(records);
+    }
 
     // ── Invitations (Phase B) ───────────────────────────────────────────────
     [HttpGet("invitations")]

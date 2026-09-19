@@ -87,6 +87,7 @@
                                     {
                                         <button class="um-btn um-btn-ghost um-btn-sm" title="Activate" @onclick="@(() => ChangeStatus(m, "Active"))"><i class="bi bi-play-circle"></i></button>
                                     }
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="View legal consent" @onclick="@(() => OpenConsent(m))"><i class="bi bi-file-earmark-check"></i></button>
                                     <button class="um-btn um-btn-ghost um-btn-sm" title="Remove" @onclick="() => AskRemove(m)" disabled="@(m.RoleCode == "SUPERADMIN")"><i class="bi bi-trash"></i></button>
                                 </td>
                             </tr>
@@ -226,6 +227,61 @@
     </div>
 }
 
+@if (_consentTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal um-modal--wide">
+            <div class="um-modal-header">
+                <i class="bi bi-file-earmark-check"></i>
+                <span>Legal consent — @($"{_consentTarget.FirstName} {_consentTarget.LastName}".Trim())</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _consentTarget = null"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <p class="um-consent-note">
+                    Append-only clickwrap evidence: the exact agreement version and content hash the member accepted,
+                    with the acceptance method, IP address, and user-agent captured at signup.
+                </p>
+                @if (_consentLoading)
+                {
+                    <div class="intel-state">Loading consent records…</div>
+                }
+                else if (_consentError is not null)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_consentError</div>
+                }
+                else if (_consentRecords.Count == 0)
+                {
+                    <div class="intel-state">No consent records found for this member.</div>
+                }
+                else
+                {
+                    <table class="um-table">
+                        <thead>
+                            <tr><th>Agreement</th><th>Version</th><th>Accepted</th><th>Method</th><th>IP address</th><th>Hash</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in _consentRecords)
+                            {
+                                <tr>
+                                    <td>@c.AgreementType</td>
+                                    <td><code>@c.AgreementVersion</code></td>
+                                    <td>@c.AcceptedAtUtc.ToString("yyyy-MM-dd HH:mm 'UTC'")</td>
+                                    <td>@c.AcceptanceMethod</td>
+                                    <td>@(string.IsNullOrWhiteSpace(c.IpAddress) ? "—" : c.IpAddress)</td>
+                                    <td class="um-consent-hash" title="@c.ContentHash">@c.ContentHash</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _consentTarget = null">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
 @if (_showInvite)
 {
     <div class="um-modal-backdrop">
@@ -302,6 +358,11 @@
     private TenantInvitationDto? _revokeTarget;
     private IReadOnlyList<TenantInvitationDto> _invitations = [];
     private readonly InviteForm _inviteForm = new();
+
+    private ManagedMemberDto? _consentTarget;
+    private bool _consentLoading;
+    private string? _consentError;
+    private IReadOnlyList<ConsentRecordDto> _consentRecords = [];
 
     private IReadOnlyList<ManagedMemberDto> _filtered =>
         _statusFilter is null ? _members : _members.Where(m => m.StatusCode == _statusFilter).ToList();
@@ -389,6 +450,26 @@
     }
 
     private void AskRemove(ManagedMemberDto member) => _removeTarget = member;
+
+    private async Task OpenConsent(ManagedMemberDto member)
+    {
+        _consentTarget = member;
+        _consentLoading = true;
+        _consentError = null;
+        _consentRecords = [];
+        try
+        {
+            _consentRecords = await Api.GetTenantMemberConsentAsync(member.UserId);
+        }
+        catch (Exception ex)
+        {
+            _consentError = $"Failed to load consent records: {ex.Message}";
+        }
+        finally
+        {
+            _consentLoading = false;
+        }
+    }
 
     private async Task ConfirmRemove()
     {

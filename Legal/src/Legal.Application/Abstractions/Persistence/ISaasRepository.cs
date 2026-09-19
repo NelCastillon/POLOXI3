@@ -103,6 +103,17 @@ public interface ISaasRepository
 
     // Audit -----------------------------------------------------------------------
     Task WriteAuditAsync(Guid? tenantId, Guid? userId, string eventType, Guid? executionId, string? resourceType, Guid? resourceId, string? dataJson, string? correlationId, CancellationToken ct = default);
+
+    // Activity read surface (audit + usage + login history) -----------------------
+    Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default);
+    Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default);
+    Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default);
+    Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default);
+
+    // Legal clickwrap consent -----------------------------------------------------
+    Task<IReadOnlyList<LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken ct = default);
+    Task RecordConsentAsync(RecordConsentRequest request, CancellationToken ct = default);
+    Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid tenantId, CancellationToken ct = default);
 }
 
 public sealed record VerificationChallengeRow(
