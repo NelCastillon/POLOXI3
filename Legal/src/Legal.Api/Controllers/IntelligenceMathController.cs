@@ -2,6 +2,7 @@ using Legal.Api.Security;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Science;
+using Legal.Application.Features.Saas;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,15 +13,19 @@ namespace Legal.Api.Controllers;
 // by deterministic C# verification, not the LLM.
 [ApiController]
 [Route("api/intelligence_math")]
-public sealed class IntelligenceMathController(IMathReasoningService service, IMathReasoningRepository repository) : ControllerBase
+public sealed class IntelligenceMathController(IMathReasoningService service, IMathReasoningRepository repository, IIntelligenceExecutionService executionService) : ControllerBase
 {
+    private const string CapabilityCode = JudzCapabilities.MathSolver;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
     private Guid ActorUserId => AuthenticatedRequestContext.GetUserId(User) ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
 
     [HttpPost("solve")]
     [Authorize(Policy = IntelligencePolicies.Search)]
-    public async Task<IActionResult> Solve([FromBody] MathSolveRequest request, CancellationToken cancellationToken) =>
-        Ok(await service.SolveAsync(
+    public async Task<IActionResult> Solve([FromBody] MathSolveRequest request, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, null, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await service.SolveAsync(
             request with
             {
                 TenantId = TenantId,
@@ -28,6 +33,7 @@ public sealed class IntelligenceMathController(IMathReasoningService service, IM
                 GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User),
             },
             cancellationToken));
+    }
 
     // Lists recent persisted Math solve runs for the tenant (most recent first) for the audit history view.
     [HttpGet("runs")]

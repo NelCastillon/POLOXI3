@@ -1,0 +1,442 @@
+@page "/admin/groups"
+@using Legal.Application.Features.Saas
+@inject ApiClient Api
+
+<LegalWorkspace>
+<div class="intel-page">
+    <header class="intel-header">
+        <div>
+            <span>Administration · Groups</span>
+            <h1>Group Management</h1>
+            <p>Create tenant groups that carry one or more platform roles. Adding a member to a group grants that group's roles additively — each member keeps their own primary role.</p>
+        </div>
+        <div class="um-header-actions">
+            <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-people-fill"></i> Add group</button>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </header>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+    }
+
+    @if (_loading)
+    {
+        <div class="intel-state">Loading groups…</div>
+    }
+    else
+    {
+        <section class="intel-kpis">
+            <article class="intel-kpi-link @(_statusFilter is null ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show all groups" @onclick="() => SetStatus(null)">
+                <span>All groups</span><strong>@_groups.Count</strong>
+            </article>
+            <article class="intel-kpi-link @(_statusFilter == "Active" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show active groups" @onclick="@(() => SetStatus("Active"))">
+                <span>Active</span><strong>@_groups.Count(g => g.StatusCode == "Active")</strong>
+            </article>
+            <article class="intel-kpi-link @(_statusFilter == "Inactive" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show inactive groups" @onclick="@(() => SetStatus("Inactive"))">
+                <span>Inactive</span><strong>@_groups.Count(g => g.StatusCode == "Inactive")</strong>
+            </article>
+        </section>
+
+        @if (_filtered.Count == 0)
+        {
+            <div class="intel-state">No groups match this view.</div>
+        }
+        else
+        {
+            <section class="intel-panel">
+                <table class="um-table">
+                    <thead>
+                        <tr><th>Name</th><th>Description</th><th>Roles</th><th>Members</th><th>Status</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _filtered)
+                        {
+                            <tr class="um-row-clickable" @onclick="() => OpenEdit(g)">
+                                <td>@g.Name</td>
+                                <td>@g.Description</td>
+                                <td>@g.RoleCount</td>
+                                <td>@g.MemberCount</td>
+                                <td>@g.StatusCode</td>
+                                <td>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Manage members"
+                                            @onclick="() => OpenMembers(g)" @onclick:stopPropagation="true">
+                                        <i class="bi bi-people"></i>
+                                    </button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Delete group"
+                                            @onclick="() => AskDelete(g)" @onclick:stopPropagation="true">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+</div>
+
+@if (_showForm)
+{
+    <div class="um-modal-backdrop">
+        <EditForm Model="_form" OnValidSubmit="SubmitForm" class="um-modal">
+            <DataAnnotationsValidator />
+            <div class="um-modal-header">
+                <i class="bi bi-people-fill"></i>
+                <span>@(_form.Mode == "Create" ? "Add group" : "Edit group")</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <label>Name
+                        <InputText @bind-Value="_form.Name" class="um-input" />
+                        <ValidationMessage For="() => _form.Name" class="text-danger" />
+                    </label>
+                    <label>Description
+                        <InputTextArea @bind-Value="_form.Description" class="um-input" />
+                        <ValidationMessage For="() => _form.Description" class="text-danger" />
+                    </label>
+                    @if (_form.Mode == "Edit")
+                    {
+                        <label>Status
+                            <InputSelect @bind-Value="_form.StatusCode" class="um-input">
+                                <option value="Active">Active</option>
+                                <option value="Inactive">Inactive</option>
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.StatusCode" class="text-danger" />
+                        </label>
+                    }
+                    <fieldset class="um-form-grid">
+                        <legend>Roles carried by this group</legend>
+                        @foreach (var role in _roles)
+                        {
+                            <label class="um-check">
+                                <input type="checkbox" checked="@_form.RoleCodes.Contains(role.Code)"
+                                       @onchange="e => ToggleRole(role.Code, e)" />
+                                @role.DisplayName
+                            </label>
+                        }
+                    </fieldset>
+                </div>
+                @if (_formError is not null)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_formError</div>
+                }
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save")</button>
+            </div>
+        </EditForm>
+    </div>
+}
+
+@if (_showMembers && _membersTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal">
+            <div class="um-modal-header">
+                <i class="bi bi-people"></i>
+                <span>Members · @_membersTarget.Name</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showMembers = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-form-grid">
+                    <label>Add member
+                        <div class="um-inline">
+                            <InputSelect @bind-Value="_addMemberUserId" class="um-input">
+                                <option value="">Select a member…</option>
+                                @foreach (var m in AvailableUsers())
+                                {
+                                    <option value="@m.UserId">@m.FirstName @m.LastName (@m.Email)</option>
+                                }
+                            </InputSelect>
+                            <button type="button" class="um-btn um-btn-primary" disabled="@(_saving || _addMemberUserId is null)" @onclick="AddMember">Add</button>
+                        </div>
+                    </label>
+                </div>
+                @if (_groupMembers.Count == 0)
+                {
+                    <div class="intel-state">This group has no members yet.</div>
+                }
+                else
+                {
+                    <table class="um-table">
+                        <thead><tr><th>Name</th><th>Email</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var gm in _groupMembers)
+                            {
+                                <tr>
+                                    <td>@gm.FirstName @gm.LastName</td>
+                                    <td>@gm.Email</td>
+                                    <td>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Remove from group" @onclick="() => RemoveMember(gm)">
+                                            <i class="bi bi-x-circle"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                @if (_membersError is not null)
+                {
+                    <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_membersError</div>
+                }
+            </div>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showMembers = false">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+            <h3>Delete group</h3>
+            <p>Are you sure you want to delete <strong>@_deleteTarget.Name</strong>? Members will lose the roles granted by this group. This action cannot be undone.</p>
+            <div class="um-modal-footer">
+                <button type="button" class="um-btn um-btn-ghost" @onclick="() => _deleteTarget = null">Cancel</button>
+                <button type="button" class="um-btn um-btn-danger" disabled="@_saving" @onclick="ConfirmDelete">@(_saving ? "Deleting…" : "Delete")</button>
+            </div>
+        </div>
+    </div>
+}
+</LegalWorkspace>
+
+@code {
+    private bool _loading;
+    private bool _saving;
+    private string? _error;
+    private string? _formError;
+    private string? _statusFilter;
+    private bool _showForm;
+
+    private IReadOnlyList<TenantGroupDto> _groups = [];
+    private IReadOnlyList<AssignableRoleDto> _roles = [];
+    private IReadOnlyList<ManagedMemberDto> _members = [];
+    private readonly GroupForm _form = new();
+
+    private bool _showMembers;
+    private TenantGroupDto? _membersTarget;
+    private string? _membersError;
+    private IReadOnlyList<GroupMemberDto> _groupMembers = [];
+    private Guid? _addMemberUserId;
+
+    private TenantGroupDto? _deleteTarget;
+
+    private IReadOnlyList<TenantGroupDto> _filtered =>
+        _statusFilter is null ? _groups : _groups.Where(g => g.StatusCode == _statusFilter).ToList();
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _roles = await Api.GetTenantAssignableRolesAsync();
+            _members = await Api.GetTenantMembersAsync();
+            _groups = await Api.GetTenantGroupsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load groups: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetStatus(string? status) => _statusFilter = status;
+
+    private void OpenCreate()
+    {
+        _formError = null;
+        _form.ResetCreate();
+        _showForm = true;
+    }
+
+    private async Task OpenEdit(TenantGroupDto group)
+    {
+        _formError = null;
+        try
+        {
+            var detail = await Api.GetTenantGroupAsync(group.GroupId);
+            _form.LoadFrom(detail ?? new TenantGroupDetailDto(group.GroupId, group.TenantId, group.Name, group.Description, group.StatusCode, group.SortOrder, [], group.MemberCount, group.CreatedDateUtc));
+            _showForm = true;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to open group: {ex.Message}";
+        }
+    }
+
+    private void ToggleRole(string code, ChangeEventArgs e)
+    {
+        var on = e.Value is bool b && b;
+        if (on) _form.RoleCodes.Add(code);
+        else _form.RoleCodes.Remove(code);
+    }
+
+    private async Task SubmitForm()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (_form.Mode == "Create")
+                await Api.CreateTenantGroupAsync(new CreateGroupRequest(_form.Name.Trim(), _form.Description?.Trim(), _form.RoleCodes.ToList()));
+            else
+                await Api.UpdateTenantGroupAsync(new UpdateGroupRequest(_form.GroupId, _form.Name.Trim(), _form.Description?.Trim(), _form.StatusCode, _form.RoleCodes.ToList()));
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void AskDelete(TenantGroupDto group) => _deleteTarget = group;
+
+    private async Task ConfirmDelete()
+    {
+        if (_deleteTarget is null) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Api.DeleteTenantGroupAsync(_deleteTarget.GroupId);
+            _deleteTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to delete group: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task OpenMembers(TenantGroupDto group)
+    {
+        _membersTarget = group;
+        _membersError = null;
+        _addMemberUserId = null;
+        _showMembers = true;
+        await ReloadMembers();
+    }
+
+    private async Task ReloadMembers()
+    {
+        if (_membersTarget is null) return;
+        try
+        {
+            _groupMembers = await Api.GetTenantGroupMembersAsync(_membersTarget.GroupId);
+        }
+        catch (Exception ex)
+        {
+            _membersError = $"Failed to load members: {ex.Message}";
+        }
+    }
+
+    private IEnumerable<ManagedMemberDto> AvailableUsers()
+    {
+        var existing = _groupMembers.Select(m => m.UserId).ToHashSet();
+        return _members.Where(m => !existing.Contains(m.UserId));
+    }
+
+    private async Task AddMember()
+    {
+        if (_membersTarget is null || _addMemberUserId is null) return;
+        _saving = true;
+        _membersError = null;
+        try
+        {
+            await Api.AddTenantGroupMemberAsync(_membersTarget.GroupId, _addMemberUserId.Value);
+            _addMemberUserId = null;
+            await ReloadMembers();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _membersError = $"Failed to add member: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task RemoveMember(GroupMemberDto gm)
+    {
+        if (_membersTarget is null) return;
+        _saving = true;
+        _membersError = null;
+        try
+        {
+            await Api.RemoveTenantGroupMemberAsync(_membersTarget.GroupId, gm.UserId);
+            await ReloadMembers();
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _membersError = $"Failed to remove member: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class GroupForm
+    {
+        public string Mode { get; set; } = "Create";
+        public Guid GroupId { get; set; }
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(160)]
+        public string Name { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.StringLength(400)]
+        public string? Description { get; set; }
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(40)]
+        public string StatusCode { get; set; } = "Active";
+        public HashSet<string> RoleCodes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public void ResetCreate()
+        {
+            Mode = "Create";
+            GroupId = Guid.Empty;
+            Name = string.Empty;
+            Description = null;
+            StatusCode = "Active";
+            RoleCodes.Clear();
+        }
+
+        public void LoadFrom(TenantGroupDetailDto detail)
+        {
+            Mode = "Edit";
+            GroupId = detail.GroupId;
+            Name = detail.Name;
+            Description = detail.Description;
+            StatusCode = detail.StatusCode;
+            RoleCodes.Clear();
+            foreach (var r in detail.Roles) RoleCodes.Add(r.Code);
+        }
+    }
+}

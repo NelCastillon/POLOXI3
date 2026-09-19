@@ -1,0 +1,354 @@
+@page "/platform/users"
+@using Legal.Application.Features.Saas
+@inject ApiClient Api
+
+<LegalWorkspace>
+<div class="intel-page">
+    <header class="intel-header">
+        <div>
+            <span>Platform · Super Admin</span>
+            <h1>Platform User Management</h1>
+            <p>Manage members across every tenant. Invite or create users, assign any role including Super Admin, and activate, suspend, or remove access. Use the tenant filter to scope the list.</p>
+        </div>
+        <div class="um-header-actions">
+            <button class="um-btn um-btn-primary" @onclick="OpenForm"><i class="bi bi-person-plus"></i> Add member</button>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </header>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+    }
+
+    @if (_loading)
+    {
+        <div class="intel-state">Loading members…</div>
+    }
+    else
+    {
+        <section class="intel-panel">
+            <div class="intel-toolbar um-toolbar">
+                <label>Tenant
+                    <select class="um-input" value="@(_tenantFilter?.ToString() ?? "")" @onchange="OnTenantFilterChange">
+                        <option value="">All tenants</option>
+                        @foreach (var t in _tenants)
+                        {
+                            <option value="@t.TenantId">@t.Name</option>
+                        }
+                    </select>
+                </label>
+            </div>
+        </section>
+
+        <section class="intel-kpis">
+            <article class="intel-kpi-link @(_statusFilter is null ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show all members" @onclick="() => SetStatus(null)">
+                <span>All members</span><strong>@_members.Count</strong>
+            </article>
+            <article class="intel-kpi-link @(_statusFilter == "Active" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show active members" @onclick="@(() => SetStatus("Active"))">
+                <span>Active</span><strong>@_members.Count(m => m.StatusCode == "Active")</strong>
+            </article>
+            <article class="intel-kpi-link @(_statusFilter == "Suspended" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show suspended members" @onclick="@(() => SetStatus("Suspended"))">
+                <span>Suspended</span><strong>@_members.Count(m => m.StatusCode == "Suspended")</strong>
+            </article>
+        </section>
+
+        @if (_filtered.Count == 0)
+        {
+            <div class="intel-state">No members match this view.</div>
+        }
+        else
+        {
+            <section class="intel-panel">
+                <table class="um-table">
+                    <thead>
+                        <tr><th>Name</th><th>Email</th><th>Tenant</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var m in _filtered)
+                        {
+                            <tr>
+                                <td>@($"{m.FirstName} {m.LastName}".Trim())</td>
+                                <td>@m.Email @if (!m.EmailConfirmed) { <span class="um-tag">unverified</span> }</td>
+                                <td>@m.TenantName</td>
+                                <td>
+                                    <select class="form-control um-input-sm" value="@m.RoleCode" @onchange="@(e => ChangeRole(m, e))">
+                                        @foreach (var r in _roles)
+                                        {
+                                            <option value="@r.Code">@r.DisplayName</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td><AppStatusBadge Status="@m.StatusCode" /></td>
+                                <td>@m.JoinedAtUtc.ToString("yyyy-MM-dd")</td>
+                                <td class="um-row-actions">
+                                    @if (m.StatusCode == "Active")
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Suspend" @onclick="@(() => ChangeStatus(m, "Suspended"))"><i class="bi bi-pause-circle"></i></button>
+                                    }
+                                    else
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Activate" @onclick="@(() => ChangeStatus(m, "Active"))"><i class="bi bi-play-circle"></i></button>
+                                    }
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Remove" @onclick="() => AskRemove(m)"><i class="bi bi-trash"></i></button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+</div>
+
+@if (_showForm)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal">
+            <div class="um-modal-header">
+                <i class="bi bi-person-plus"></i>
+                <span>Add member</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showForm = false"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_form" OnValidSubmit="SubmitForm">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <div class="um-form-grid">
+                        <label class="um-field um-field--full">
+                            <span class="um-field-label">Tenant</span>
+                            <InputSelect class="form-control" @bind-Value="_form.TenantId">
+                                <option value="@Guid.Empty">Select a tenant…</option>
+                                @foreach (var t in _tenants)
+                                {
+                                    <option value="@t.TenantId">@t.Name</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.TenantId" class="text-danger" />
+                        </label>
+                        <label class="um-field um-field--full">
+                            <span class="um-field-label">Provisioning</span>
+                            <select class="form-control" @bind="_form.Mode">
+                                <option value="Invite">Invite by email (user verifies)</option>
+                                <option value="Create">Create with temporary password</option>
+                            </select>
+                        </label>
+                        <label class="um-field">
+                            <span class="um-field-label">First name</span>
+                            <InputText class="form-control" @bind-Value="_form.FirstName" placeholder="e.g. Jordan" />
+                            <ValidationMessage For="() => _form.FirstName" class="text-danger" />
+                        </label>
+                        <label class="um-field">
+                            <span class="um-field-label">Last name</span>
+                            <InputText class="form-control" @bind-Value="_form.LastName" placeholder="e.g. Rivera" />
+                            <ValidationMessage For="() => _form.LastName" class="text-danger" />
+                        </label>
+                        <label class="um-field um-field--full">
+                            <span class="um-field-label">Email</span>
+                            <InputText class="form-control" @bind-Value="_form.Email" placeholder="name@company.com" />
+                            <ValidationMessage For="() => _form.Email" class="text-danger" />
+                        </label>
+                        <label class="um-field">
+                            <span class="um-field-label">Role</span>
+                            <InputSelect class="form-control" @bind-Value="_form.RoleCode">
+                                @foreach (var r in _roles)
+                                {
+                                    <option value="@r.Code">@r.DisplayName</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _form.RoleCode" class="text-danger" />
+                        </label>
+                        @if (_form.Mode == "Create")
+                        {
+                            <label class="um-field">
+                                <span class="um-field-label">Temporary password</span>
+                                <InputText type="password" class="form-control" @bind-Value="_form.TemporaryPassword" placeholder="Minimum 8 characters" />
+                                <ValidationMessage For="() => _form.TemporaryPassword" class="text-danger" />
+                            </label>
+                        }
+                    </div>
+                    @if (_formError is not null)
+                    {
+                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_formError</div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showForm = false">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Save")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+
+@if (_removeTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-confirm-dialog">
+            <div class="um-confirm-icon um-confirm-icon--danger"><i class="bi bi-exclamation-triangle"></i></div>
+            <h3>Remove member?</h3>
+            <p>Remove <strong>@_removeTarget.Email</strong> from <strong>@_removeTarget.TenantName</strong>? Their access to this tenant will be revoked. This does not delete their account.</p>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="() => _removeTarget = null">Cancel</button>
+                <button class="um-btn um-btn-danger" @onclick="ConfirmRemove" disabled="@_saving">Remove</button>
+            </div>
+        </div>
+    </div>
+}
+</LegalWorkspace>
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private string? _error;
+    private string? _formError;
+    private string? _statusFilter;
+    private Guid? _tenantFilter;
+    private bool _showForm;
+    private ManagedMemberDto? _removeTarget;
+    private IReadOnlyList<ManagedMemberDto> _members = [];
+    private IReadOnlyList<AssignableRoleDto> _roles = [];
+    private IReadOnlyList<TenantOptionDto> _tenants = [];
+    private readonly MemberForm _form = new();
+
+    private IReadOnlyList<ManagedMemberDto> _filtered =>
+        _statusFilter is null ? _members : _members.Where(m => m.StatusCode == _statusFilter).ToList();
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _roles = await Api.GetPlatformAssignableRolesAsync();
+            _tenants = await Api.GetPlatformTenantsAsync();
+            _members = await Api.GetPlatformMembersAsync(_tenantFilter);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load members: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnTenantFilterChange(ChangeEventArgs e)
+    {
+        _tenantFilter = Guid.TryParse(e.Value?.ToString(), out var id) ? id : null;
+        await LoadAsync();
+    }
+
+    private void SetStatus(string? status) => _statusFilter = status;
+
+    private void OpenForm()
+    {
+        _formError = null;
+        _form.Reset(_roles.FirstOrDefault()?.Code ?? "MEMBER", _tenantFilter ?? Guid.Empty);
+        _showForm = true;
+    }
+
+    private async Task SubmitForm()
+    {
+        _saving = true;
+        _formError = null;
+        try
+        {
+            if (_form.Mode == "Create")
+                await Api.CreatePlatformMemberAsync(new CreateMemberRequest(_form.TenantId, _form.Email.Trim(), _form.FirstName.Trim(), _form.LastName.Trim(), _form.RoleCode, _form.TemporaryPassword?.Trim() ?? string.Empty));
+            else
+                await Api.InvitePlatformMemberAsync(new InviteMemberRequest(_form.TenantId, _form.Email.Trim(), _form.FirstName.Trim(), _form.LastName.Trim(), _form.RoleCode));
+            _showForm = false;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _formError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ChangeRole(ManagedMemberDto member, ChangeEventArgs e)
+    {
+        var roleCode = e.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(roleCode) || roleCode == member.RoleCode) return;
+        try
+        {
+            await Api.ChangePlatformMemberRoleAsync(new ChangeMemberRoleRequest(member.MembershipId, roleCode));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to change role: {ex.Message}";
+        }
+    }
+
+    private async Task ChangeStatus(ManagedMemberDto member, string status)
+    {
+        try
+        {
+            await Api.ChangePlatformMemberStatusAsync(new ChangeMemberStatusRequest(member.MembershipId, status));
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to change status: {ex.Message}";
+        }
+    }
+
+    private void AskRemove(ManagedMemberDto member) => _removeTarget = member;
+
+    private async Task ConfirmRemove()
+    {
+        if (_removeTarget is null) return;
+        _saving = true;
+        try
+        {
+            await Api.RemovePlatformMemberAsync(_removeTarget.MembershipId);
+            _removeTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to remove member: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class MemberForm
+    {
+        public string Mode { get; set; } = "Invite";
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "A tenant is required.")]
+        public Guid TenantId { get; set; }
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
+        public string FirstName { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(100)]
+        public string LastName { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.EmailAddress, System.ComponentModel.DataAnnotations.StringLength(256)]
+        public string Email { get; set; } = string.Empty;
+        [System.ComponentModel.DataAnnotations.Required]
+        public string RoleCode { get; set; } = "MEMBER";
+        [System.ComponentModel.DataAnnotations.StringLength(128, MinimumLength = 8)]
+        public string? TemporaryPassword { get; set; }
+
+        public void Reset(string roleCode, Guid tenantId)
+        {
+            Mode = "Invite";
+            TenantId = tenantId;
+            FirstName = LastName = Email = string.Empty;
+            RoleCode = roleCode;
+            TemporaryPassword = null;
+        }
+    }
+}

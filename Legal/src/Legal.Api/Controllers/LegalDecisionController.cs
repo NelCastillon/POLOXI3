@@ -1,6 +1,7 @@
 using Legal.Api.Security;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Saas;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,15 +11,19 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService) : ControllerBase
 {
+    private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
     private Guid ActorUserId => AuthenticatedRequestContext.GetUserId(User) ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
 
     [HttpPost("decide")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Decide([FromBody] DecisionSearchRequest request, CancellationToken cancellationToken)
-        => Ok(await service.DecideAsync(
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await service.DecideAsync(
             request with
             {
                 TenantId = TenantId,
@@ -26,6 +31,7 @@ public sealed class LegalDecisionController(ILegalDecisionService service) : Con
                 GrantedPermissions = AuthenticatedRequestContext.GetGrantedPermissions(User)
             },
             cancellationToken));
+    }
 
     // Database-backed model options for the decision Model dropdown.
     [HttpGet("models")]

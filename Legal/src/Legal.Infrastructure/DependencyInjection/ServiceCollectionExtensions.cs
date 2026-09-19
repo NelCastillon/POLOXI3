@@ -9,6 +9,7 @@ using Legal.Infrastructure.Persistence;
 using Legal.Infrastructure.Persistence.ConnectionFactory;
 using Legal.Infrastructure.Persistence.Repositories;
 using Legal.Infrastructure.Services;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -131,6 +132,42 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.IDependencyPropagationService, Legal.Application.Features.Intelligence.Decision.Core.DependencyPropagationService>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.ILegalDecisionImpactMapper, Legal.Application.Features.Intelligence.Decision.Core.LegalDecisionImpactMapper>();
         services.AddScoped<ILegalDecisionService, LegalDecisionService>();
+
+        // ── Judz.ai Early Access SaaS layer ──────────────────────────────────
+        // ASP.NET Core Identity EF Core store DbContext over the AspNet* tables (migration 0246).
+        // The Identity builder (AddIdentityCore/token providers/sign-in) is configured by the API host
+        // which has the ASP.NET Core framework reference; here we only register the store DbContext.
+        var connectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
+        services.AddDbContext<Legal.Infrastructure.Identity.JudzIdentityDbContext>(options =>
+            options.UseSqlServer(connectionString));
+
+        // SaaS data access + provider-agnostic services.
+        services.AddScoped<ISaasRepository, Legal.Infrastructure.Persistence.Repositories.SaasRepository>();
+        services.AddScoped<IJudzEmailSender, Legal.Infrastructure.Identity.SmtpEmailSender>();
+        services.AddScoped<IEmailVerificationService, Legal.Application.Features.Saas.EmailVerificationService>();
+        services.AddScoped<IWorkspaceProvisioningService, Legal.Application.Features.Saas.WorkspaceProvisioningService>();
+        services.AddScoped<ITenantContextService, Legal.Application.Features.Saas.TenantContextService>();
+        services.AddScoped<IEntitlementService, Legal.Application.Features.Saas.EntitlementService>();
+        services.AddScoped<ICapabilityAuthorizationService, Legal.Application.Features.Saas.CapabilityAuthorizationService>();
+        services.AddScoped<IUsageService, Legal.Application.Features.Saas.UsageService>();
+        services.AddScoped<IIntelligenceExecutionService, Legal.Application.Features.Saas.IntelligenceExecutionService>();
+
+        // Configuration control plane (migration 0248).
+        services.AddScoped<IConfigurationRepository, Legal.Infrastructure.Persistence.Repositories.ConfigurationRepository>();
+        services.AddScoped<IConfigurationResolver, Legal.Application.Features.Saas.ConfigurationResolver>();
+        services.AddScoped<ITenantConfigurationService, Legal.Application.Features.Saas.TenantConfigurationService>();
+        services.AddScoped<IPlatformConfigurationService, Legal.Application.Features.Saas.PlatformConfigurationService>();
+
+        // User management (Super Admin /platform/users, Tenant Admin /admin/users).
+        services.AddScoped<IUserAccountCreator, Legal.Infrastructure.Identity.IdentityUserAccountCreator>();
+        services.AddScoped<IUserManagementService, Legal.Application.Features.Saas.UserManagementService>();
+
+        // Invitations + transactional outbox (Phase B).
+        services.AddScoped<IInvitationService, Legal.Application.Features.Saas.InvitationService>();
+        services.AddScoped<IOutboxDispatcher, Legal.Infrastructure.Services.OutboxDispatcher>();
+
+        // Tenant groups (Phase C).
+        services.AddScoped<IGroupService, Legal.Application.Features.Saas.GroupService>();
 
         return services;
     }

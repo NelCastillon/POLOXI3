@@ -1,0 +1,175 @@
+@page "/invitations/{Token}"
+@attribute [AllowAnonymous]
+@inject ApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Accept your Judz.ai invitation</PageTitle>
+
+<div class="auth-shell">
+    <div class="auth-card">
+        <div class="auth-brand">
+            <img src="image/JudzLogo.png" alt="judz.ai" class="auth-logo" />
+            <span class="auth-word"><strong>judz<span>.ai</span></strong><small>EARLY ACCESS</small></span>
+        </div>
+
+        @if (_loading)
+        {
+            <h1 class="auth-title">Loading your invitation…</h1>
+            <p class="auth-subtitle">Please wait while we verify your invitation link.</p>
+        }
+        else if (_invalid)
+        {
+            <h1 class="auth-title">Invitation unavailable</h1>
+            <div class="auth-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_statusMessage</div>
+            <p class="auth-foot">Need access? <a href="/login">Sign in</a> or contact your workspace administrator.</p>
+        }
+        else if (_accepted)
+        {
+            <h1 class="auth-title">You're in! 🎉</h1>
+            <p class="auth-subtitle">Your membership to <strong>@_lookup!.TenantName</strong> is active. You can sign in to get started.</p>
+            <a href="/login" class="auth-btn" style="display:block;text-align:center;text-decoration:none;">Continue to sign in</a>
+        }
+        else
+        {
+            <h1 class="auth-title">Join @_lookup!.TenantName</h1>
+            <p class="auth-subtitle">
+                You've been invited to <strong>@_lookup.TenantName</strong> as <strong>@_lookup.RoleName</strong>
+                (@_lookup.Email).
+            </p>
+
+            @if (_error is not null)
+            {
+                <div class="auth-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_error</div>
+            }
+
+            <EditForm Model="_form" OnValidSubmit="AcceptAsync">
+                <DataAnnotationsValidator />
+                @if (_lookup.RequiresAccountCreation)
+                {
+                    <div class="auth-row">
+                        <div class="auth-field">
+                            <label>First name</label>
+                            <InputText @bind-Value="_form.FirstName" class="auth-input" autocomplete="given-name" />
+                        </div>
+                        <div class="auth-field">
+                            <label>Last name</label>
+                            <InputText @bind-Value="_form.LastName" class="auth-input" autocomplete="family-name" />
+                        </div>
+                    </div>
+                    <div class="auth-field">
+                        <label>Create a password</label>
+                        <InputText @bind-Value="_form.Password" class="auth-input" type="password" autocomplete="new-password" />
+                    </div>
+                }
+                else
+                {
+                    <p class="auth-subtitle">Accept below to add this workspace to your existing Judz.ai account.</p>
+                }
+                <button type="submit" class="auth-btn" disabled="@_busy">
+                    @(_busy ? "Accepting…" : "Accept invitation")
+                </button>
+            </EditForm>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Token { get; set; } = string.Empty;
+
+    private readonly AcceptForm _form = new();
+    private Legal.Application.Features.Saas.InvitationLookupDto? _lookup;
+    private bool _loading = true;
+    private bool _invalid;
+    private bool _accepted;
+    private bool _busy;
+    private string? _error;
+    private string _statusMessage = "This invitation link is invalid or has expired.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _lookup = await Api.LookupInvitationAsync(Token);
+            if (_lookup is null)
+            {
+                _invalid = true;
+            }
+            else if (!string.Equals(_lookup.StatusCode, Legal.Application.Features.Saas.InvitationStatus.Pending, StringComparison.OrdinalIgnoreCase))
+            {
+                _invalid = true;
+                _statusMessage = _lookup.StatusCode switch
+                {
+                    "Accepted" => "This invitation has already been accepted. Please sign in.",
+                    "Revoked" => "This invitation has been revoked by an administrator.",
+                    "Expired" => "This invitation has expired. Ask your administrator to send a new one.",
+                    _ => _statusMessage
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _invalid = true;
+            _statusMessage = $"We couldn't load this invitation: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task AcceptAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var request = new Legal.Application.Features.Saas.AcceptInvitationRequest(
+                Token,
+                string.IsNullOrWhiteSpace(_form.FirstName) ? null : _form.FirstName,
+                string.IsNullOrWhiteSpace(_form.LastName) ? null : _form.LastName,
+                string.IsNullOrWhiteSpace(_form.Password) ? null : _form.Password);
+
+            var result = await Api.AcceptInvitationAsync(request);
+            if (result is null)
+            {
+                _error = "The server did not return a result. Please try again.";
+                return;
+            }
+
+            switch (result.Outcome)
+            {
+                case Legal.Application.Features.Saas.InvitationAcceptOutcome.Success:
+                case Legal.Application.Features.Saas.InvitationAcceptOutcome.AlreadyMember:
+                    _accepted = true;
+                    break;
+                case Legal.Application.Features.Saas.InvitationAcceptOutcome.AccountDetailsRequired:
+                    _error = result.Message ?? "Please provide your name and a password to create your account.";
+                    break;
+                default:
+                    _invalid = true;
+                    _statusMessage = result.Message ?? _statusMessage;
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Accept failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class AcceptForm
+    {
+        [StringLength(100)]
+        public string FirstName { get; set; } = string.Empty;
+
+        [StringLength(100)]
+        public string LastName { get; set; } = string.Empty;
+
+        [StringLength(128, MinimumLength = 8)]
+        public string Password { get; set; } = string.Empty;
+    }
+}
