@@ -57,7 +57,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             D("Decision.V2.Readiness.MinAuthorityVerified", 1.00),
             D("Decision.V2.Readiness.LosingSideMargin", 0.05),
             I("Decision.V2.Propagation.MaxDepth", 6),
-            I("Decision.V2.Readiness.MaxHighImpactFrontier", 0));
+            I("Decision.V2.Readiness.MaxHighImpactFrontier", 0),
+            B("Decision.V2.ApplyVerifiedSignalsToRanking", false));
     }
 
     public async Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(CancellationToken cancellationToken = default)
@@ -218,6 +219,42 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 transaction, cancellationToken: cancellationToken));
 
         transaction.Commit();
+    }
+
+    public async Task AppendSessionEventsAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEventPersistence> events, CancellationToken cancellationToken = default)
+    {
+        if (events.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        // Continue the sequence from the last persisted event for this session so the B3 solver's
+        // post-persistence stages sort after the original run in the timeline.
+        var baseSequence = await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
+            "SELECT MAX(SequenceNumber) FROM POLOXI.Legal_DecisionEvent WHERE DecisionSessionId = @DecisionSessionId;",
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken)) ?? -1;
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_DecisionEvent
+                (DecisionEventId, DecisionSessionId, ParentDecisionEventId, SequenceNumber, EventType, StageCode, PayloadJson, ProvenanceJson, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionEventId, @DecisionSessionId, @ParentDecisionEventId, @SequenceNumber, @EventType, @StageCode, @PayloadJson, @ProvenanceJson, @TenantId, @ActorUserId);
+            """,
+            events.Select((ev, i) => new
+            {
+                DecisionEventId = ev.DecisionEventId,
+                DecisionSessionId = decisionSessionId,
+                ev.ParentDecisionEventId,
+                SequenceNumber = baseSequence + 1 + i,
+                ev.EventType,
+                ev.StageCode,
+                ev.PayloadJson,
+                ev.ProvenanceJson,
+                TenantId = tenantId,
+                ActorUserId = userId
+            }),
+            cancellationToken: cancellationToken));
     }
 
     public async Task<DecisionSessionPersistence?> GetSessionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
@@ -673,6 +710,12 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 _ => null
             };
             if (sql is null)
+                continue;
+
+            // Persistence-boundary backstop for bounded local failure: a Burden rule requires a
+            // BurdenedParty (NOT NULL). If a malformed node slipped past the proposal validator,
+            // skip just this node instead of throwing and aborting the whole graph transaction.
+            if (n.NodeKind == DecisionGraphNodeKinds.Burden && string.IsNullOrWhiteSpace(n.BurdenedParty))
                 continue;
 
             await connection.ExecuteAsync(new CommandDefinition(sql, new

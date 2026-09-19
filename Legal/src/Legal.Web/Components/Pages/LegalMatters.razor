@@ -19,6 +19,9 @@
                 <button class="um-btn um-btn-light um-btn-sm" @onclick="LoadAsync" disabled="@_loading" title="Refresh">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
                 </button>
+                <button class="um-btn um-btn-light um-btn-sm" @onclick="GenerateTestMatterAsync" disabled="@(_generating || _loading)" title="Generate a random test matter">
+                    <i class="bi @(_generating ? "bi-hourglass-split" : "bi-shuffle")"></i> @(_generating ? "Generating…" : "Generate Test Matter")
+                </button>
                 <button class="um-btn um-btn-primary" @onclick="OpenCreate">
                     <i class="bi bi-plus-lg"></i> New matter
                 </button>
@@ -320,6 +323,7 @@
     private bool _showGuide;
     private bool _showCreate;
     private bool _saving;
+    private bool _generating;
     private string? _loadError;
     private string? _createError;
     private string _search = string.Empty;
@@ -439,6 +443,139 @@
             StateHasChanged();
         }
     }
+
+    // Generates a random, fully-populated test matter and persists it through the normal
+    // create pipeline (same API/service/repository as "New matter"), then opens its cockpit.
+    private async Task GenerateTestMatterAsync()
+    {
+        _generating = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            var request = BuildRandomTestMatter();
+            var id = await Api.CreateLegalDecisionMatterAsync(request);
+            if (id != Guid.Empty)
+                Navigation.NavigateTo($"/legal/matters/{id}");
+            else
+                await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Generate test matter failed: {ex.Message}";
+        }
+        finally
+        {
+            _generating = false;
+            StateHasChanged();
+        }
+    }
+
+    private static readonly Random _rng = new();
+
+    private static T Pick<T>(IReadOnlyList<T> items) => items[_rng.Next(items.Count)];
+
+    private DecisionMatterCreateRequest BuildRandomTestMatter()
+    {
+        // Prefer DB-backed option lists (facets) when available; fall back to representative pools.
+        string PickFacet(IReadOnlyCollection<string> facet, IReadOnlyList<string> fallback)
+            => facet is { Count: > 0 } ? Pick(facet.ToList()) : Pick(fallback);
+
+        var movant = Pick(_companies);
+        string respondent;
+        do { respondent = Pick(_companies); } while (respondent == movant);
+
+        var matterType = PickFacet(_facets.MatterTypeCodes, _matterTypes);
+        var subtype = PickFacet(_facets.Subtypes, _subtypes);
+        var state = PickFacet(_facets.States, _states);
+        var courtSystem = PickFacet(_facets.CourtSystems, _courtSystems);
+        var courtLevel = PickFacet(_facets.CourtLevels, _courtLevels);
+        var county = Pick(_counties);
+        var governingLaw = PickFacet(_facets.GoverningLaws, _states);
+        var motionTarget = Pick(_motionTargets);
+        var disposition = Pick(_dispositions);
+        var jurisdiction = $"United States - {state} - {courtLevel} - {county} - Governing law: {governingLaw}";
+        var posture = $"{matterType} - Movant: {movant} - Target: {motionTarget} - Requested disposition: {disposition}";
+        var title = $"{movant} v. {respondent} - {matterType}";
+
+        var description =
+            $"Type: {subtype}. Jurisdiction: {jurisdiction}. " +
+            $"Posture: {matterType}. Moving party: {movant}. Responding party: {respondent}. " +
+            $"Motion target: {motionTarget}. Requested disposition: {disposition}. " +
+            "Auto-generated test matter for validating the decision cockpit, dashboard, and ranking panels.";
+
+        return new DecisionMatterCreateRequest(
+            title.Length > 300 ? title[..300] : title,
+            matterType,
+            jurisdiction.Length > 120 ? jurisdiction[..120] : jurisdiction,
+            posture.Length > 200 ? posture[..200] : posture,
+            description)
+        {
+            Subtype = subtype,
+            CourtSystem = courtSystem,
+            State = state,
+            CourtLevel = courtLevel,
+            County = county,
+            GoverningLaw = governingLaw,
+            MovingParty = movant,
+            RespondingParty = respondent,
+            MotionTarget = motionTarget,
+            RequestedDisposition = disposition
+        };
+    }
+
+    private static readonly string[] _companies =
+    {
+        "Acme Corp", "Contoso Ltd", "Globex Industries", "Meridian Insurance", "Northwind Foods",
+        "Halcyon Labs", "Orion Dynamics", "Cascade Packaging", "Redwood Instruments", "Basalt Components",
+        "Aspen Textiles", "Birchwood Supply", "Vertex Robotics", "Riverside Logistics", "Delta Warehousing",
+        "Summit Financial", "Pioneer Health", "Cedar Ridge Holdings", "Ironclad Manufacturing", "Blue Harbor Shipping"
+    };
+
+    private static readonly string[] _matterTypes =
+    {
+        "Summary Judgment", "Motion to Dismiss", "Coverage Dispute", "Contract Dispute", "Breach of Contract",
+        "Insurance Claim", "Bad Faith", "Employment", "Personal Injury", "Product Liability",
+        "Intellectual Property", "Regulatory / Compliance", "Class Action", "Arbitration", "Appeal"
+    };
+
+    private static readonly string[] _subtypes =
+    {
+        "Contract", "Tort", "Insurance", "Employment", "Commercial", "Statutory", "Regulatory"
+    };
+
+    private static readonly string[] _states =
+    {
+        "California", "New York", "Texas", "Illinois", "Delaware", "Oregon", "Washington", "Florida", "Massachusetts"
+    };
+
+    private static readonly string[] _courtSystems =
+    {
+        "United States - Federal", "United States - State"
+    };
+
+    private static readonly string[] _courtLevels =
+    {
+        "District Court", "Circuit Court", "Superior Court", "Court of Appeals", "Supreme Court"
+    };
+
+    private static readonly string[] _counties =
+    {
+        "Northern District", "Southern District", "Multnomah County", "Cook County", "Harris County",
+        "Los Angeles County", "New Castle County", "King County", "Suffolk County"
+    };
+
+    private static readonly string[] _motionTargets =
+    {
+        "all claims", "the breach-of-contract claim", "the bad-faith claim", "the negligence claim",
+        "the coverage question", "the statute-of-limitations defense", "the class certification"
+    };
+
+    private static readonly string[] _dispositions =
+    {
+        "judgment as a matter of law", "dismissal with prejudice", "dismissal without prejudice",
+        "summary judgment for the movant", "denial of the motion", "partial summary judgment"
+    };
 
     private sealed class MatterForm
     {

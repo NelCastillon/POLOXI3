@@ -27,6 +27,9 @@ public sealed class LegalDecisionService(
     ILegalDecisionImpactMapper impactMapper,
     Features.Intelligence.Epistemic.IEpistemicDecisionBridge epistemicBridge,
     Abstractions.Persistence.IDecisionGovernanceRepository governanceRepository,
+    Features.Intelligence.Epistemic.IMaterialSignalExtractor materialSignalExtractor,
+    Features.Intelligence.Epistemic.IVerifiedDecisionSignalService verifiedSignalService,
+    Abstractions.Persistence.IDecisionSupportSignalRepository decisionSupportSignalRepository,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -178,6 +181,29 @@ public sealed class LegalDecisionService(
                 clarificationQuestion = string.IsNullOrWhiteSpace(pivot.Interpretation)
                     ? $"To decide between the leading outcomes, can you clarify '{pivot.DisplayName}'?"
                     : $"To decide between the leading outcomes, can you clarify '{pivot.DisplayName}'? {pivot.Interpretation}";
+
+                // Gate diagnostics (§7): records WHY the clarification gate fired so a genuine tie can be
+                // told apart from thin/unverified evidence at a glance in the timeline. The gate itself is
+                // correct either way; these signals point at the upstream cause (evidence vs discrimination).
+                var verifiedSourceCount = evidence.Count(e => string.Equals(e.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase));
+                var topTwo = candidates.OrderBy(c => c.RankOrder).Take(2).ToArray();
+                var pairwiseGap = topTwo.Length == 2 ? Math.Abs((double)(topTwo[0].CompositeScore - topTwo[1].CompositeScore)) : 0d;
+                var cause = verifiedSourceCount == 0
+                    ? "THIN_EVIDENCE_NO_VERIFIED_SOURCES"
+                    : pairwiseGap < 0.01
+                        ? "LOW_CANDIDATE_DISCRIMINATION"
+                        : "GENUINE_TIE";
+                Record("CLARIFICATION_GATED", "CLARIFICATION_REQUIRED", new
+                {
+                    cause,
+                    pivot = pivot.DisplayName,
+                    entropy,
+                    margin,
+                    pairwiseGap,
+                    verifiedSourceCount,
+                    evidenceCount = evidence.Count,
+                    candidateCount = candidates.Count
+                });
             }
         }
         // The run always terminates here, but that is NOT the same as the decision converging. A run
@@ -231,7 +257,9 @@ public sealed class LegalDecisionService(
         // invalidation deterministically, runs the strongest-losing-side gate, and computes the
         // dependency-constrained readiness verdict. Persisted after the session row (FK dependency). ──
         DecisionV2Result? v2 = null;
+        string? graphDiagnostic = null;
         Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null;
+        Features.Intelligence.Decision.DecisionSolverShadowDto? solverShadow = null;
         if (useGraph)
         {
             try
@@ -274,19 +302,183 @@ public sealed class LegalDecisionService(
                 {
                     logger.LogWarning(epistemicEx, "EA-7 epistemic governance failed for session {SessionId}; decision unaffected.", sessionId);
                 }
+
+                // Verified Decision Signals (advisory): extract material support signals from the V2
+                // graph, persist them, and project into domain-neutral branch deltas via the verified
+                // signal service. Strictly non-blocking — it never changes the V1/V2 verdict.
+                try
+                {
+                    var extractionContext = new Features.Intelligence.Epistemic.MaterialSignalExtractionContext
+                    {
+                        SessionId = sessionId,
+                        TenantId = request.TenantId,
+                        MatterId = request.MatterId,
+                        ActorUserId = request.UserId,
+                        ProposedByModel = route.ModelCode,
+                        PromptRunId = request.CorrelationId,
+                        Nodes = v2.Nodes.ToArray(),
+                        Edges = v2.Edges.ToArray(),
+                    };
+                    var supportSignals = materialSignalExtractor.Extract(extractionContext);
+                    foreach (var signal in supportSignals)
+                    {
+                        await decisionSupportSignalRepository.UpsertAsync(
+                            new Features.Intelligence.Epistemic.DecisionSupportSignalPersistence(
+                                signal.SignalId, signal.DecisionSessionId, signal.MatterId,
+                                signal.Statement, signal.NormalizedStatement,
+                                Features.Intelligence.Epistemic.DecisionSupportSignalCodes.ToCode(signal.Origin),
+                                Features.Intelligence.Epistemic.DecisionSupportSignalCodes.ToCode(signal.VerificationState),
+                                signal.RequiresVerification, signal.VerificationStrength, signal.DecisionImpact,
+                                signal.SourceBranchId, signal.SourceCandidateId, signal.ProposedByModel,
+                                signal.PromptRunId, signal.VerificationReason, request.TenantId, request.UserId),
+                            cancellationToken);
+                    }
+
+                    var projected = verifiedSignalService.Project(supportSignals);
+                    logger.LogInformation(
+                        "Verified Decision Signals for session {SessionId}: {Extracted} signal(s) extracted, {Projected} branch delta(s) projected.",
+                        sessionId, supportSignals.Count, projected.Count);
+
+                    // ── B3 Hallucination Solver ─────────────────────────────────────────────────
+                    // When the DB-backed toggle is ON, feed the projected verified-signal deltas into
+                    // the authoritative Candidate × Branch recompetition engine so unsupported material
+                    // propositions contribute zero positive support and the ranking recompetes on
+                    // verified evidence only. POLOXI stays the sole scorer — the graph only supplies
+                    // deltas. Strictly non-blocking and gated OFF by default to preserve ASPEN_B2.
+                    // Non-destructive by design: the recompeted result is ALWAYS produced as a shadow
+                    // "what-if" snapshot (SolverShadow) so the cockpit can show BOTH the original (B2)
+                    // decision and the verified-evidence-only recompetition side by side. The DB-backed
+                    // toggle decides which one is authoritative: ON = Enforced (recompeted result replaces
+                    // the returned/persisted decision); OFF = Advisory (original stays authoritative, the
+                    // shadow is annotation-only, reproducing ASPEN_B2).
+                    if (projected.Count > 0)
+                    {
+                        var enforced = v2Settings.ApplyVerifiedSignalsToRanking;
+                        var modeCode = enforced ? "Enforced" : "Advisory";
+                        var b3Events = new List<DecisionEventPersistence>();
+                        var b3Sequence = 0;
+                        void RecordB3(string type, string stage, object? payload = null) =>
+                            b3Events.Add(new DecisionEventPersistence(Guid.NewGuid(), null, b3Sequence++, type, stage,
+                                payload is null ? null : JsonSerializer.Serialize(payload), null));
+
+                        var materialCount = supportSignals.Count;
+                        var verifiedCount = supportSignals.Count(s => s.VerificationState == Features.Intelligence.Epistemic.DecisionSupportVerificationState.Supported);
+                        var contradictedCount = supportSignals.Count(s => s.VerificationState == Features.Intelligence.Epistemic.DecisionSupportVerificationState.Contradicted);
+                        RecordB3("MATERIAL_SUPPORT_IDENTIFIED", "SOLVER", new { materialCount, projectedDeltaCount = projected.Count });
+                        RecordB3("SUPPORT_VERIFIED", "SOLVER", new { verifiedCount, contradictedCount, unverifiedCount = materialCount - verifiedCount - contradictedCount });
+
+                        // Loop-safety: only frontier branches may be reopened by the solver pass.
+                        var reopenAllowed = new HashSet<Guid>(branches.Where(b => b.IsOnFrontier).Select(b => b.DecisionBranchId));
+
+                        var recompete = Features.Intelligence.Decision.Core.DecisionRecompetition.Run(
+                            candidates, branches, projected, settings, reopenAllowed);
+
+                        RecordB3("VERIFIED_SIGNALS_APPLIED", "SOLVER", new
+                        {
+                            mode = modeCode,
+                            appliedDeltaCount = projected.Count,
+                            reopenedBranchCount = recompete.ReopenedBranchCount
+                        });
+
+                        // Recompute terminal state + winner from the recompeted result.
+                        var b3FrontierOpen = recompete.Branches.Any(b => b.IsOnFrontier);
+                        var b3MaxAdv = recompete.Branches.Count == 0 ? 0d : recompete.Branches.Max(b => (double)b.AdvScore);
+                        var (b3Status, b3TerminalState, b3Reason) = ResolveTerminalState(settings, recompete.CurrentMargin, recompete.CurrentEntropy, b3FrontierOpen, b3MaxAdv);
+                        var b3ReasonCode = recompete.WinnerChanged ? "WINNER_FLIP" : "SUPPORT_CHANGED";
+
+                        // Always build the shadow "what-if" snapshot so both outcomes are visible.
+                        solverShadow = new Features.Intelligence.Decision.DecisionSolverShadowDto(
+                            modeCode, enforced, b3Status, b3TerminalState,
+                            recompete.PreviousWinnerId, recompete.CurrentWinnerId, recompete.WinnerChanged,
+                            (decimal)recompete.PreviousEntropy, (decimal)recompete.CurrentEntropy,
+                            (decimal)recompete.PreviousMargin, (decimal)recompete.CurrentMargin,
+                            projected.Count, recompete.ReopenedBranchCount,
+                            recompete.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
+                            recompete.Branches.Select(b => new DecisionBranchDto(b.DecisionBranchId, b.ParentDecisionBranchId, b.LevelNumber, b.BranchCode, b.DisplayName, b.Interpretation, b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, b.AdvScore, b.IsOnFrontier, b.StopReason, b.SortOrder)).ToArray());
+
+                        // The shadow snapshot is always built (above) so both rankings are visible.
+                        // The authoritative Legal_DecisionRecompetition row is written ONLY in Enforced
+                        // mode (below), because that table is the closed-loop source of truth that the
+                        // read-back (GetLatestRecompetitionAsync -> LastRecompetition) projects on reload.
+                        // Advisory mode must NOT write it, or a reload would show a closed-loop flip that
+                        // never actually changed the returned decision. Advisory keeps its full audit via
+                        // the SOLVER session events recorded here.
+                        RecordB3("CANDIDATES_RECOMPETED", "SOLVER", new
+                        {
+                            mode = modeCode,
+                            winnerChanged = recompete.WinnerChanged,
+                            previousEntropy = recompete.PreviousEntropy,
+                            currentEntropy = recompete.CurrentEntropy,
+                            previousMargin = recompete.PreviousMargin,
+                            currentMargin = recompete.CurrentMargin,
+                            reasonCode = b3ReasonCode
+                        });
+
+                        if (enforced)
+                        {
+                            // Enforced mode: promote the recompeted result to the authoritative decision.
+                            // Persist the recompeted state and refresh the in-memory response so DB and
+                            // response never diverge (BuildResponse reads persistence/readiness/nextAction).
+                            await repository.ReplaceCandidatesAsync(request.TenantId, request.UserId, sessionId, recompete.Candidates, cancellationToken);
+                            await repository.ReplaceBranchesAsync(request.TenantId, request.UserId, sessionId, recompete.Branches, cancellationToken);
+                            await repository.UpdateSessionOutcomeAsync(request.TenantId, request.UserId, sessionId, b3Status,
+                                (decimal)recompete.CurrentEntropy, (decimal)recompete.CurrentMargin, recompete.CurrentWinnerId, cancellationToken);
+
+                            await repository.PersistRecompetitionAsync(new Features.Intelligence.Decision.DecisionRecompetitionPersistence(
+                                Guid.NewGuid(), sessionId, request.TenantId, request.UserId, null,
+                                recompete.PreviousWinnerId, recompete.CurrentWinnerId, recompete.WinnerChanged,
+                                (decimal)recompete.PreviousEntropy, (decimal)recompete.CurrentEntropy,
+                                (decimal)recompete.PreviousMargin, (decimal)recompete.CurrentMargin, recompete.ReopenedBranchCount,
+                                JsonSerializer.Serialize(candidates.Select(c => new { c.CandidateCode, c.RankOrder, c.CompositeScore })),
+                                JsonSerializer.Serialize(recompete.Candidates.Select(c => new { c.CandidateCode, c.RankOrder, c.CompositeScore })),
+                                b3ReasonCode), cancellationToken);
+
+                            nextAction = BuildNextBestAction(recompete.Branches, b3Status);
+                            readiness = BuildReadiness(recompete.Candidates, recompete.Branches, evidence, recompete.CurrentMargin, recompete.CurrentEntropy, b3Status);
+                            persistence = persistence with
+                            {
+                                StatusCode = b3Status,
+                                TerminalStateCode = b3TerminalState,
+                                TerminationReason = b3Reason,
+                                WinnerCandidateId = recompete.CurrentWinnerId,
+                                CandidateEntropy = (decimal)recompete.CurrentEntropy,
+                                DecisionMargin = (decimal)recompete.CurrentMargin,
+                                Candidates = recompete.Candidates,
+                                Branches = recompete.Branches,
+                                NextBestActionText = nextAction?.Title,
+                                NextBestActionImpactCode = nextAction?.ImpactCode,
+                                NextBestActionRationale = nextAction?.Rationale
+                            };
+                        }
+
+                        await repository.AppendSessionEventsAsync(request.TenantId, request.UserId, sessionId, b3Events, cancellationToken);
+
+                        logger.LogInformation(
+                            "B3 solver ({Mode}) for session {SessionId}: applied {Applied} delta(s), winnerChanged={WinnerChanged}, entropy {PrevEntropy:F3}->{CurEntropy:F3}, margin {PrevMargin:F3}->{CurMargin:F3}.",
+                            modeCode, sessionId, projected.Count, recompete.WinnerChanged,
+                            recompete.PreviousEntropy, recompete.CurrentEntropy, recompete.PreviousMargin, recompete.CurrentMargin);
+                    }
+                }
+                catch (Exception signalEx)
+                {
+                    logger.LogWarning(signalEx, "Verified Decision Signals failed for session {SessionId}; decision unaffected.", sessionId);
+                }
             }
             catch (Exception ex)
             {
                 // V2 is advisory; a graph/verifier failure must never block the V1 decision (§ optional).
                 logger.LogWarning(ex, "V2 dependency graph failed for session {SessionId}; returning V1 result.", sessionId);
                 v2 = null;
+                graphDiagnostic = ex.Message;
             }
         }
 
-        return BuildResponse(persistence, nextAction, readiness, useGraph, v2, governanceVerdict);
+        return await HydrateVerifiedSignalsAsync(
+            BuildResponse(persistence, nextAction, readiness, useGraph, v2, governanceVerdict, graphDiagnostic, solverShadow),
+            request.TenantId, sessionId, cancellationToken);
     }
 
-    // ── Direct LLM answer path (POLOXI Engine off) ──────────────────────────────────────────────
+    // ── Direct LLM answer path (POLOXI Engine off) ──
     private async Task<Features.Intelligence.Decision.DecisionGovernanceVerdictDto?> PersistGovernanceVerdictAsync(
         DecisionSearchRequest request,
         Guid sessionId,
@@ -367,7 +559,9 @@ public sealed class LegalDecisionService(
 
         var graph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken);
         if (graph is null)
-            return await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness), tenantId, decisionSessionId, cancellationToken);
+            return await HydrateVerifiedSignalsAsync(
+                await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness), tenantId, decisionSessionId, cancellationToken),
+                tenantId, decisionSessionId, cancellationToken);
 
         var nodeDtos = graph.Nodes
             .Select(n => new DecisionGraphNodeDto(n.NodeId, n.NodeKind, n.NodeCode, n.DisplayName, n.Statement, n.Support, n.IsEssential, n.IsSatisfied, n.VerificationStatus, n.SortOrder))
@@ -389,7 +583,9 @@ public sealed class LegalDecisionService(
         var verdict = new DecisionReadinessVerdictDto(graph.ReadinessSatisfied, blockers, predicate);
 
         var v2 = new DecisionV2Result(graph, nodeDtos, edgeDtos, losingDto, verdict);
-        return await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2), tenantId, decisionSessionId, cancellationToken);
+        return await HydrateVerifiedSignalsAsync(
+            await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2), tenantId, decisionSessionId, cancellationToken),
+            tenantId, decisionSessionId, cancellationToken);
     }
 
     // Hydrate the persisted V2.1 closed-loop readback (last recompetition + latest open research
@@ -416,7 +612,33 @@ public sealed class LegalDecisionService(
         return response with { LastRecompetition = recompetitionDto, PendingResearchNeed = researchNeedDto };
     }
 
-    // ── POLOXI Legal V2.1 — synchronous closed loop ─────────────────────────────────────────────
+    // Hydrate the advisory Verified Decision Signals for a session (read-only). Non-blocking: any
+    // failure returns the response unchanged so the decision surface is never affected.
+    private async Task<DecisionSearchResponse> HydrateVerifiedSignalsAsync(
+        DecisionSearchResponse response, Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var signals = await decisionSupportSignalRepository.GetBySessionAsync(decisionSessionId, tenantId, cancellationToken);
+            if (signals.Count == 0)
+                return response;
+
+            var dtos = signals
+                .Select(s => new DecisionSupportSignalDto(
+                    s.SignalId, s.Statement, s.OriginCode, s.VerificationStateCode, s.RequiresVerification,
+                    s.VerificationStrength, s.DecisionImpact, s.SourceBranchId, s.SourceCandidateId, s.VerificationReason))
+                .ToArray();
+
+            return response with { VerifiedSignals = dtos };
+        }
+        catch (Exception signalEx)
+        {
+            logger.LogWarning(signalEx, "Verified Decision Signals readback failed for session {SessionId}; decision unaffected.", decisionSessionId);
+            return response;
+        }
+    }
+
+    // ── POLOXI Legal V2.1 — synchronous closed loop
     // verification change → dependency propagation → domain-neutral signals → Candidate×Branch
     // recompetition → frontier/IV recalculation → ResearchNeed → readiness/audit. POLOXI stays the
     // sole scorer: the graph only supplies signals; DecisionRecompetition + DecisionCoreMath re-rank.
@@ -768,9 +990,15 @@ public sealed class LegalDecisionService(
                 // the winner can never be a winner flip regardless of how high its flip potential is.
                 var winnerChanges = !belongsToWinner && b.FlipPotential >= 0.5m;
                 var rankDelta = winnerChanges ? 1 : 0;
+                // Reserve "could change the outcome" for modeled winner flips. When the ranking does
+                // not move (RankDelta 0), the honest statement is that resolving the branch reinforces
+                // the current winner rather than overturning it — never claim an outcome change.
+                var description = winnerChanges
+                    ? $"Resolving '{b.DisplayName}' could change the outcome."
+                    : $"Resolving '{b.DisplayName}' strengthens the current winner but does not change candidate ranking.";
                 return new DecisionFlipPointPersistence(
                     Guid.NewGuid(), b.DecisionBranchId,
-                    $"Resolving '{b.DisplayName}' could change the outcome.",
+                    description,
                     b.Cost, winnerChanges, rankDelta);
             })
             .ToList();
@@ -839,7 +1067,7 @@ public sealed class LegalDecisionService(
     }
 
     private static DecisionSearchResponse BuildResponse(DecisionSessionPersistence p, DecisionNextActionDto? nextAction, IReadOnlyCollection<DecisionReadinessItemDto> readiness,
-        bool usedDependencyGraph = false, DecisionV2Result? v2 = null, Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null)
+        bool usedDependencyGraph = false, DecisionV2Result? v2 = null, Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null, string? graphDiagnostic = null, Features.Intelligence.Decision.DecisionSolverShadowDto? solverShadow = null)
         => new(
             p.DecisionSessionId, p.QueryText, p.StatusCode, p.TerminalStateCode, p.TerminationReason,
             p.DepthReached, p.LlmCallCount, p.CandidateEntropy, p.DecisionMargin, p.ContractCompleteness,
@@ -857,11 +1085,13 @@ public sealed class LegalDecisionService(
             NextBestAction = nextAction,
             Readiness = readiness,
             UsedDependencyGraph = usedDependencyGraph,
+            GraphDiagnostic = graphDiagnostic,
             GraphNodes = v2?.Nodes ?? [],
             GraphEdges = v2?.Edges ?? [],
             LosingSideTest = v2?.LosingSideTest,
             ReadinessVerdict = v2?.ReadinessVerdict,
-            GovernanceVerdict = governanceVerdict
+            GovernanceVerdict = governanceVerdict,
+            SolverShadow = solverShadow
         };
 
     // ── Next Best Action: pick the open (frontier / active) branch with the highest information value.
@@ -1051,7 +1281,10 @@ public sealed class LegalDecisionService(
                 n.Id, n.Kind, n.Code, n.DisplayName, n.Statement, (decimal)n.Support,
                 n.IsEssential, n.IsSatisfied, n.VerificationStatus, n.SortOrder)
             {
-                CandidateId = n.Kind == DecisionGraphNodeKinds.Strategy ? ResolveStrategyCandidate(n, candidates) : null
+                CandidateId = n.Kind == DecisionGraphNodeKinds.Strategy ? ResolveStrategyCandidate(n, candidates) : null,
+                AuthorityRef = n.AuthorityRef,
+                BurdenedParty = n.BurdenedParty,
+                StandardOfProof = n.StandardOfProof
             })
             .ToArray();
         var edgeSnapshots = model.Edges
@@ -1121,7 +1354,7 @@ public sealed class LegalDecisionService(
                     if (kind is null)
                         continue;
                     var id = Guid.NewGuid();
-                    model.Nodes[id] = new DecisionGraph.Node
+                    var node = new DecisionGraph.Node
                     {
                         Id = id,
                         Kind = kind,
@@ -1131,8 +1364,22 @@ public sealed class LegalDecisionService(
                         Support = DecisionCoreMath.Clamp01(GetNumber(n, "support")),
                         IsEssential = GetBool(n, "isEssential"),
                         VerificationStatus = DecisionVerificationStates.Unverified,
-                        SortOrder = sort++
+                        SortOrder = sort++,
+                        AuthorityRef = NullIfBlank(GetString(n, "authorityRef")),
+                        BurdenedParty = NullIfBlank(GetString(n, "burdenedParty")),
+                        StandardOfProof = NullIfBlank(GetString(n, "standardOfProof"))
                     };
+
+                    // Normalize → validate → repair-if-bounded → drop-invalid. The LLM proposes; POLOXI
+                    // governs: a malformed node must never reach SQL as a constraint violation. A burden
+                    // rule requires a BurdenedParty; recover it from an obvious source or drop the node.
+                    if (!TryNormalizeAndValidateNode(node))
+                    {
+                        sort--;
+                        continue;
+                    }
+
+                    model.Nodes[id] = node;
                     nodeCodeToId[code] = id;
                 }
 
@@ -1223,6 +1470,37 @@ public sealed class LegalDecisionService(
 
     private static Guid? ResolveStrategyCandidate(DecisionGraph.Node strategy, IReadOnlyList<DecisionCandidatePersistence> candidates)
         => null;
+
+    // Trims blank strings to null so optional attributes never persist as empty-but-not-null noise.
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    // Governance boundary for a single proposed node: normalize its kind-specific attributes, then
+    // validate/repair. Returns false when the node cannot be made valid and must be dropped so it
+    // never reaches SQL as a NOT NULL constraint violation (bounded local failure — the rest of the
+    // graph is unaffected). Today the only hard requirement is Burden.BurdenedParty.
+    private static bool TryNormalizeAndValidateNode(DecisionGraph.Node node)
+    {
+        if (node.Kind != DecisionGraphNodeKinds.Burden)
+            return true;
+
+        node.StandardOfProof = NullIfBlank(node.StandardOfProof);
+        node.BurdenedParty = NullIfBlank(node.BurdenedParty);
+        if (!string.IsNullOrWhiteSpace(node.BurdenedParty))
+            return true;
+
+        // Bounded repair: a burden rule's burdened party is often stated in the display name
+        // ("Movant bears the burden…") or the statement. Recover it from an obvious source.
+        var recovered = NullIfBlank(node.DisplayName);
+        if (recovered is null && !string.IsNullOrWhiteSpace(node.Statement))
+            recovered = NullIfBlank(node.Statement);
+
+        if (recovered is null)
+            return false; // still invalid → drop the node rather than persist a NULL burdened party.
+
+        // BurdenedParty is NVARCHAR(120); truncate the recovered value to fit the column.
+        node.BurdenedParty = recovered.Length > 120 ? recovered[..120] : recovered;
+        return true;
+    }
 
     private static string? MapNodeKind(string kind) => kind.Trim().ToLowerInvariant() switch
     {

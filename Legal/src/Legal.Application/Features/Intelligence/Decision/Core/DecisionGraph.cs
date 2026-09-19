@@ -32,6 +32,12 @@ public static class DecisionGraph
         public string VerificationStatus { get; set; } = DecisionVerificationStates.Unverified;
         public int SortOrder { get; set; }
 
+        // Kind-specific attributes carried through to the node's persistence table. For Burden nodes
+        // BurdenedParty is mandatory at the DB boundary; the proposal validator guarantees it is set.
+        public string? AuthorityRef { get; set; }
+        public string? BurdenedParty { get; set; }
+        public string? StandardOfProof { get; set; }
+
         // V2.1 lineage: which authoritative POLOXI object this node derives from (no string matching).
         public Guid? SourceBranchId { get; set; }
         public Guid? SourceCandidateId { get; set; }

@@ -32,6 +32,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
         services.AddScoped<IEpistemicClaimRepository, EpistemicClaimRepository>();
         services.AddScoped<IDecisionGovernanceRepository, DecisionGovernanceRepository>();
+        services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
 
         // POLOXI Epistemic Authority Layer (EA-1/EA-2): deterministic, stateless governance services.
         // Settings are DB-backed and runtime-effective: resolved per scope from Core.ConfigurationSetting
@@ -50,6 +51,18 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IClaimAuthorityGate, ClaimAuthorityGate>();
         services.AddSingleton<IClaimIdentityResolver, ClaimIdentityResolver>();
         services.AddSingleton<IClaimVerificationPrioritizer, ClaimVerificationPrioritizer>();
+
+        // EA→Decision signal mapper (§12/§13): projects governed claim authority into domain-neutral
+        // DecisionBranchSignal deltas for Candidate × Branch recompetition. Pure/deterministic.
+        services.AddSingleton<IEpistemicDecisionSignalMapper, EpistemicDecisionSignalMapper>();
+
+        // POLOXI Verified Decision Signals: deterministic projection of verified support signals into
+        // domain-neutral DecisionBranchSignal deltas. Pure/stateless; reuses the recompetition engine.
+        services.AddSingleton<IVerifiedDecisionSignalService, VerifiedDecisionSignalService>();
+
+        // Material-signal extraction behind an interface (deterministic graph-based default; an
+        // LLM-backed extractor can replace it later without touching the orchestrator).
+        services.AddSingleton<IMaterialSignalExtractor, GraphMaterialSignalExtractor>();
 
         // EA-3: material-claim verification bridge into the V2.1 dependency-propagation loop (scoped:
         // depends on the scoped IEpistemicClaimRepository).

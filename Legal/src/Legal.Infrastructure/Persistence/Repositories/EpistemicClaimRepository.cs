@@ -115,7 +115,7 @@ public sealed class EpistemicClaimRepository(ISqlConnectionFactory connectionFac
             SELECT ClaimId, DecisionSessionId, MatterId, [Text], NormalizedText, ClaimTypeCode, ClaimOriginCode,
                    VerificationStateCode, DecisionAuthorityCode, VerificationStrength, Materiality, DecisionImpact,
                    Discrimination, Uncertainty, IsEssential, SourceBranchId, SourceCandidateId, ProposedByModel,
-                   PromptRunId, VerificationReason, [Version], TenantId, NULL AS ActorUserId
+                   PromptRunId, VerificationReason, [Version], TenantId, CAST(NULL AS UNIQUEIDENTIFIER) AS ActorUserId
             FROM POLOXI.Legal_ClaimProposition
             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IsDeleted = 0
             ORDER BY CreatedDateUtc;
@@ -135,7 +135,7 @@ public sealed class EpistemicClaimRepository(ISqlConnectionFactory connectionFac
             SELECT ClaimId, DecisionSessionId, MatterId, [Text], NormalizedText, ClaimTypeCode, ClaimOriginCode,
                    VerificationStateCode, DecisionAuthorityCode, VerificationStrength, Materiality, DecisionImpact,
                    Discrimination, Uncertainty, IsEssential, SourceBranchId, SourceCandidateId, ProposedByModel,
-                   PromptRunId, VerificationReason, [Version], TenantId, NULL AS ActorUserId
+                   PromptRunId, VerificationReason, [Version], TenantId, CAST(NULL AS UNIQUEIDENTIFIER) AS ActorUserId
             FROM POLOXI.Legal_ClaimProposition
             WHERE ClaimId = @ClaimId AND TenantId = @TenantId AND IsDeleted = 0;
             """;
@@ -152,7 +152,7 @@ public sealed class EpistemicClaimRepository(ISqlConnectionFactory connectionFac
     {
         const string sql = """
             SELECT ClaimSupportId, ClaimId, EvidenceId, AuthorityId, RelationshipCode, Strength, IndependentlyVerified,
-                   SourceLocation, VerificationReason, TenantId, NULL AS ActorUserId
+                   SourceLocation, VerificationReason, TenantId, CAST(NULL AS UNIQUEIDENTIFIER) AS ActorUserId
             FROM POLOXI.Legal_ClaimSupport
             WHERE ClaimId = @ClaimId AND TenantId = @TenantId AND IsDeleted = 0
             ORDER BY CreatedDateUtc;

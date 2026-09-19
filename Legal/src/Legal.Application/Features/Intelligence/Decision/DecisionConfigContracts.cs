@@ -52,7 +52,13 @@ public sealed record DecisionV2Settings(
     double ReadinessMinAuthorityVerified,
     double ReadinessLosingSideMargin,
     int PropagationMaxDepth,
-    int ReadinessMaxHighImpactFrontier);
+    int ReadinessMaxHighImpactFrontier,
+    // B3 Hallucination Solver AUTHORITY mode. The solver always recompetes and surfaces a
+    // non-destructive shadow "what-if" snapshot so both rankings are visible. This flag only decides
+    // which one is authoritative: false = Advisory (original decision stays authoritative; recomputed
+    // shown as what-if) — the default; true = Enforced (recomputed ranking replaces the returned
+    // decision). Advisory reproduces the frozen ASPEN_B2 returned baseline while still exposing B3.
+    bool ApplyVerifiedSignalsToRanking = false);
 
 // Full authoritative snapshot persisted at the end of a session (§35,§39).
 public sealed record DecisionSessionPersistence(

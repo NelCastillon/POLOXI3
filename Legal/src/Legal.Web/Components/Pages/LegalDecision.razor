@@ -122,7 +122,7 @@
                         <span class="decision-verdict-eyebrow">Current leading outcome</span>
                         <h2 class="decision-verdict-title">@(Winner.Outcome ?? Winner.DisplayName)</h2>
                         <div class="decision-verdict-meta">
-                            <span class="decision-verdict-support" title="Composite support score of the leading candidate.">Composite support: @support</span>
+                            <span class="decision-verdict-support" title="Model decision-support score (L/F/E/A/V/U) of the leading candidate. This is not external evidence verification — see evidence verification below.">Current decision support: @support</span>
                             <span class="decision-verdict-state" title="Overall decision reliability after uncertainty, verification and open dependencies.">Decision state: @StatusLabel(_response.StatusCode)</span>
                             @if (!string.IsNullOrWhiteSpace(_response.CounterfactualAssumption))
                             {
@@ -131,7 +131,7 @@
                         </div>
                     </div>
                     <div class="decision-verdict-scores">
-                        <div class="decision-verdict-score"><span>Composite support</span><strong>@Winner.CompositeScore.ToString("0%")</strong></div>
+                        <div class="decision-verdict-score"><span>Current decision score</span><strong>@Winner.CompositeScore.ToString("0%")</strong></div>
                         <div class="decision-verdict-score"><span>Margin over #2</span><strong>@_response.DecisionMargin.ToString("0.###")</strong></div>
                         @if (RunnerUp is not null)
                         {
@@ -302,6 +302,86 @@
                     </section>
                 }
 
+                @* ── Verified Decision Signals (advisory · read-only) ──────────────────────────
+                   Surfaces persisted material support signals ("this fact/authority, if verified,
+                   moves the outcome by this much"). Annotation-only; never changes the verdicts. *@
+                @if (_response.VerifiedSignals.Count > 0)
+                {
+                    <section class="decision-panel decision-readiness">
+                        <div class="decision-panel-header">
+                            <div>
+                                <span>Verified decision signals (advisory)</span>
+                                <h2>@_response.VerifiedSignals.Count material support signal@(_response.VerifiedSignals.Count == 1 ? "" : "s")</h2>
+                            </div>
+                        </div>
+                        <p class="decision-readiness-detail">
+                            Read-only material facts and authorities that, if verified, move the outcome. These annotate the decision and never change the verdicts above.
+                        </p>
+                        <ul class="decision-readiness-list">
+                            @foreach (var signal in _response.VerifiedSignals)
+                            {
+                                var verified = string.Equals(signal.VerificationStateCode, "Supported", StringComparison.OrdinalIgnoreCase);
+                                <li class="@(verified ? "readiness-ok" : "readiness-attention")">
+                                    <i class="bi @(verified ? "bi-patch-check-fill" : "bi-hourglass-split")"></i>
+                                    <div>
+                                        <strong>@signal.Statement</strong>
+                                        <span class="decision-readiness-detail">
+                                            @signal.VerificationStateCode · impact @signal.DecisionImpact.ToString("0.000") · strength @signal.VerificationStrength.ToString("0.000")@(signal.RequiresVerification ? " · verification required" : "")
+                                        </span>
+                                        @if (!string.IsNullOrWhiteSpace(signal.VerificationReason))
+                                        {
+                                            <span class="decision-readiness-detail">@signal.VerificationReason</span>
+                                        }
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                }
+
+                @* POLOXI Hallucination Solver (B3) - original vs recomputed.
+                   Shows BOTH the original decision and the verified-evidence-only recompetition. In
+                   Advisory mode the recomputed ranking is a non-destructive "what-if"; in Enforced
+                   mode it is the authoritative returned decision. *@
+                @if (_response.SolverShadow is not null)
+                {
+                    var shadow = _response.SolverShadow;
+                    var enforced = shadow.IsAuthoritative;
+                    <section class="decision-panel decision-readiness">
+                        <div class="decision-panel-header">
+                            <div>
+                                <span>POLOXI Hallucination Solver: @shadow.ModeCode</span>
+                                <h2>@(enforced ? "Recomputed ranking is authoritative" : "Original decision kept · recomputed shown as what-if")</h2>
+                            </div>
+                        </div>
+                        <p class="decision-readiness-detail">
+                            @(enforced
+                                ? "Enforced mode: unsupported material propositions contributed zero positive support and the ranking recompeted on verified evidence only. The recomputed result below is the returned decision."
+                                : "Advisory mode: the returned decision above is unchanged. The recomputed column shows what the ranking would become if unsupported material support were removed.")
+                        </p>
+                        <div class="decision-readiness-detail">
+                            Winner @(shadow.WinnerChanged ? "changes" : "unchanged") ·
+                            entropy @shadow.PreviousEntropy.ToString("0.000") &rarr; @shadow.CurrentEntropy.ToString("0.000") ·
+                            margin @shadow.PreviousMargin.ToString("0.000") &rarr; @shadow.CurrentMargin.ToString("0.000") ·
+                            @shadow.AppliedDeltaCount verified delta@(shadow.AppliedDeltaCount == 1 ? "" : "s")@(shadow.ReopenedBranchCount > 0 ? $" · {shadow.ReopenedBranchCount} branch(es) reopened" : "")
+                        </div>
+                        <ul class="decision-readiness-list">
+                            @foreach (var c in shadow.Candidates.OrderBy(c => c.RankOrder))
+                            {
+                                <li class="@(c.IsWinner ? "readiness-ok" : "readiness-attention")">
+                                    <i class="bi @(c.IsWinner ? "bi-trophy-fill" : "bi-dot")"></i>
+                                    <div>
+                                        <strong>#@c.RankOrder · @c.DisplayName</strong>
+                                        <span class="decision-readiness-detail">
+                                            recomputed score @c.CompositeScore.ToString("0.000")@(c.IsEliminated ? " · eliminated" : "")
+                                        </span>
+                                    </div>
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                }
+
                 @if (_response.LosingSideTest is not null)
                 {
                     var lst = _response.LosingSideTest;
@@ -328,18 +408,25 @@
                             {
                                 var invalidated = string.Equals(edge.VerificationStatus, "INVALIDATED", StringComparison.OrdinalIgnoreCase);
                                 var verified = string.Equals(edge.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase);
+                                // The graph carries STRUCTURAL edge validity, which is distinct from external
+                                // evidential verification of the underlying proposition (see "verified source(s)"
+                                // in readiness). Relabel the display so the two meanings never collide; the
+                                // backend action codes below stay as-is.
+                                var structuralLabel = verified ? "STRUCTURALLY VALID"
+                                    : invalidated ? "STRUCTURALLY INVALID"
+                                    : edge.VerificationStatus;
                                 <li class="@(invalidated ? "readiness-attention" : verified ? "readiness-ok" : "")">
                                     <i class="bi @(invalidated ? "bi-x-circle-fill" : verified ? "bi-check-circle-fill" : "bi-dash-circle")"></i>
                                     <div>
                                         <strong>@edge.SourceNodeKind @edge.RelationCode @edge.TargetNodeKind</strong>
                                         <span class="decision-readiness-detail">
-                                            @edge.VerificationStatus · materiality @edge.Materiality.ToString("0.00")@(edge.IsEssential ? " · essential" : "")@(edge.IsDispositive ? " · dispositive" : "")@(string.IsNullOrWhiteSpace(edge.PropagatedStateCode) ? "" : $" · {edge.PropagatedStateCode}")
+                                            @structuralLabel · materiality @edge.Materiality.ToString("0.00")@(edge.IsEssential ? " · essential" : "")@(edge.IsDispositive ? " · dispositive" : "")@(string.IsNullOrWhiteSpace(edge.PropagatedStateCode) ? "" : $" · {edge.PropagatedStateCode}")
                                         </span>
                                     </div>
                                     <div class="decision-edge-actions">
                                         @if (!verified)
                                         {
-                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@_loopBusy" @onclick='() => ApplyVerificationAsync(edge.EdgeId, "VERIFIED")'>Mark verified</button>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" disabled="@_loopBusy" @onclick='() => ApplyVerificationAsync(edge.EdgeId, "VERIFIED")'>Mark structurally valid</button>
                                         }
                                         @if (!invalidated)
                                         {
@@ -362,6 +449,13 @@
                             <i class="bi bi-diagram-3"></i>
                             Dependency Graph (V2) was enabled for this run, but no dependency graph was generated for this matter, so the typed graph, adversarial gate, and dependency-constrained readiness are unavailable. This is an empty graph, not a disabled one.
                         </p>
+                        @if (!string.IsNullOrWhiteSpace(_response.GraphDiagnostic))
+                        {
+                            <p class="decision-readiness-detail">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                Reason: @_response.GraphDiagnostic
+                            </p>
+                        }
                     </section>
                 }
 

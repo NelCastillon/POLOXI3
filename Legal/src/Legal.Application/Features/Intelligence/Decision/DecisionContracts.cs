@@ -179,6 +179,10 @@ public sealed record DecisionSearchResponse(
 
     // ── POLOXI Legal V2 (dependency-aware) additions. Empty/null on the V1 path. ──
     public bool UsedDependencyGraph { get; init; }
+    // When the graph was enabled but no typed graph was produced, this carries the deterministic
+    // reason (e.g. "proposal returned no nodes", missing prompt, or parse failure) so the cockpit
+    // can distinguish GraphEnabledButEmpty causes instead of showing a generic empty-graph notice.
+    public string? GraphDiagnostic { get; init; }
     public IReadOnlyCollection<DecisionGraphNodeDto> GraphNodes { get; init; } = [];
     public IReadOnlyCollection<DecisionGraphEdgeDto> GraphEdges { get; init; } = [];
     public DecisionLosingSideTestDto? LosingSideTest { get; init; }
@@ -191,7 +195,52 @@ public sealed record DecisionSearchResponse(
     // ── POLOXI Legal EA-7 (epistemic governance overlay). Null unless the bridge ran. Advisory by
     // default: annotation-only and never changes the verdicts above; all claims stay visible. ──
     public DecisionGovernanceVerdictDto? GovernanceVerdict { get; init; }
+
+    // ── POLOXI Verified Decision Signals (advisory). Empty unless material support signals were
+    // extracted/persisted for this session. Read-only projection for the cockpit; never scores. ──
+    public IReadOnlyCollection<DecisionSupportSignalDto> VerifiedSignals { get; init; } = [];
+
+    // ── POLOXI Legal B3 (Hallucination Solver) shadow/what-if snapshot. Populated when the solver
+    // ran and recompeted the ranking on verified evidence. In ADVISORY mode this is a NON-DESTRUCTIVE
+    // "what-if": the returned decision above is the original (B2) result, and this snapshot shows what
+    // the ranking WOULD become if unsupported material support were removed. In ENFORCED mode the
+    // returned decision equals this snapshot and IsAuthoritative is true. Null when the solver is off. ──
+    public DecisionSolverShadowDto? SolverShadow { get; init; }
 }
+
+// The B3 solver's recompeted "what-if" ranking, kept alongside the original decision so the cockpit
+// can show BOTH the baseline and the verified-evidence-only recompetition. The candidate/branch
+// collections are the recompeted state; the scalar fields summarize the before/after transition.
+public sealed record DecisionSolverShadowDto(
+    string ModeCode,                    // Advisory | Enforced (Off never emits a shadow)
+    bool IsAuthoritative,               // true only in Enforced mode (the returned decision equals this)
+    string StatusCode,
+    string? TerminalStateCode,
+    Guid? PreviousWinnerCandidateId,
+    Guid? CurrentWinnerCandidateId,
+    bool WinnerChanged,
+    decimal PreviousEntropy,
+    decimal CurrentEntropy,
+    decimal PreviousMargin,
+    decimal CurrentMargin,
+    int AppliedDeltaCount,
+    int ReopenedBranchCount,
+    IReadOnlyCollection<DecisionCandidateDto> Candidates,
+    IReadOnlyCollection<DecisionBranchDto> Branches);
+
+// A persisted material support signal ("this fact/authority, if verified, moves the outcome by this
+// much"), surfaced read-only in the cockpit. Advisory: it annotates, it never rescoring the verdict.
+public sealed record DecisionSupportSignalDto(
+    Guid SignalId,
+    string Statement,
+    string OriginCode,
+    string VerificationStateCode,
+    bool RequiresVerification,
+    decimal VerificationStrength,
+    decimal DecisionImpact,
+    Guid? SourceBranchId,
+    Guid? SourceCandidateId,
+    string? VerificationReason);
 
 // The single highest-impact recommended investigation, derived from the decision frontier.
 public sealed record DecisionNextActionDto(
