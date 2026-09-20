@@ -24,6 +24,9 @@ public sealed class TenantActivityController(IActivityService service) : Control
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User)
         ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
 
+    private Guid UserId => AuthenticatedRequestContext.GetUserId(User)
+        ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
+
     private bool CanManage()
     {
         var granted = AuthenticatedRequestContext.GetGrantedPermissions(User);
@@ -53,5 +56,35 @@ public sealed class TenantActivityController(IActivityService service) : Control
         if (!CanManage()) return Forbid();
         var logins = await service.ListLoginHistoryAsync(TenantId, days, take, cancellationToken);
         return Ok(logins);
+    }
+
+    [HttpGet("me/audit")]
+    public async Task<IActionResult> GetMyAuditEvents([FromQuery] int days = 30, [FromQuery] int take = 100, CancellationToken cancellationToken = default)
+    {
+        var events = await service.ListAuditEventsForUserAsync(TenantId, UserId, days, take, cancellationToken);
+        return Ok(events);
+    }
+
+    [HttpGet("me/usage")]
+    public async Task<IActionResult> GetMyUsage([FromQuery] int days = 30, CancellationToken cancellationToken = default)
+    {
+        var usage = await service.SummarizeUsageForUserAsync(TenantId, UserId, days, cancellationToken);
+        return Ok(usage);
+    }
+
+    [HttpGet("users/{userId:guid}/audit")]
+    public async Task<IActionResult> GetUserAuditEvents(Guid userId, [FromQuery] int days = 30, [FromQuery] int take = 100, CancellationToken cancellationToken = default)
+    {
+        if (!CanManage()) return Forbid();
+        var events = await service.ListAuditEventsForUserAsync(TenantId, userId, days, take, cancellationToken);
+        return Ok(events);
+    }
+
+    [HttpGet("users/{userId:guid}/usage")]
+    public async Task<IActionResult> GetUserUsage(Guid userId, [FromQuery] int days = 30, CancellationToken cancellationToken = default)
+    {
+        if (!CanManage()) return Forbid();
+        var usage = await service.SummarizeUsageForUserAsync(TenantId, userId, days, cancellationToken);
+        return Ok(usage);
     }
 }

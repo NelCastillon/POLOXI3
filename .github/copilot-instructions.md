@@ -135,3 +135,10 @@
 ## Troubleshooting Guidelines
 - When troubleshooting, provide direct instructions tied to the exact current log/state; avoid mixing alternative paths or unnecessary background details.
 - **Do not use profiling tools; keep diagnostic work tightly scoped and avoid new paid model calls.**
+- For focused UI bug reports, inspect and modify only the directly affected page/component unless evidence requires broader investigation.
+
+## Landing Page Guidelines
+- For the landing page mobile hero, keep the background image centered rather than top-aligned, and use a moderate overlay instead of heavy darkening.
+
+## Legal and Admin Pages
+- In user-facing content under all `/legal/*` and `/admin/*` pages, capitalize the product name as "Judz" rather than "judz".

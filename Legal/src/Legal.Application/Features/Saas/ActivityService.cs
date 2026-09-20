@@ -25,10 +25,24 @@ public sealed class ActivityService(ISaasRepository repository, ILogger<Activity
         return repository.ListAuditEventsAsync(tenantId, SinceUtc(days), ClampTake(take), ct);
     }
 
+    public Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, int days, int take, CancellationToken ct = default)
+    {
+        EnsureTenant(tenantId);
+        EnsureUser(userId);
+        return repository.ListAuditEventsForUserAsync(tenantId, userId, SinceUtc(days), ClampTake(take), ct);
+    }
+
     public Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, int days, CancellationToken ct = default)
     {
         EnsureTenant(tenantId);
         return repository.SummarizeUsageAsync(tenantId, SinceUtc(days), ct);
+    }
+
+    public Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, int days, CancellationToken ct = default)
+    {
+        EnsureTenant(tenantId);
+        EnsureUser(userId);
+        return repository.SummarizeUsageForUserAsync(tenantId, userId, SinceUtc(days), ct);
     }
 
     public Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, int days, int take, CancellationToken ct = default)
@@ -58,5 +72,11 @@ public sealed class ActivityService(ISaasRepository repository, ILogger<Activity
     {
         if (tenantId == Guid.Empty)
             throw new UserManagementForbiddenException("A tenant scope is required.");
+    }
+
+    private static void EnsureUser(Guid userId)
+    {
+        if (userId == Guid.Empty)
+            throw new UserManagementForbiddenException("A user scope is required.");
     }
 }

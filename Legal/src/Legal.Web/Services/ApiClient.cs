@@ -111,6 +111,10 @@ public sealed class ApiClient(HttpClient httpClient)
         return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Science.FormalizationResponse>(cancellationToken:token);
     }
 
+    // ── Owner-only Account Settings (organization/tenant profile)
+    public Task<Legal.Application.Features.Saas.TenantProfileDto?> GetTenantProfileAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Saas.TenantProfileDto>("api/account_settings/profile",token);
+    public async Task<Legal.Application.Features.Saas.TenantProfileDto?> UpdateTenantProfileAsync(Legal.Application.Features.Saas.UpdateTenantProfileRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync("api/account_settings/profile",request,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Saas.TenantProfileDto>(cancellationToken:token);}
+
     // ── Configuration center
     public Task<IntelligencePlatformSummaryDto?> GetIntelligencePlatformAsync(CancellationToken token=default)=>_httpClient.GetFromJsonAsync<IntelligencePlatformSummaryDto>("api/intelligence/platform",token);
     public async Task<IReadOnlyCollection<AiProviderDto>> GetIntelligenceProvidersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<AiProviderDto>>("api/intelligence/providers",token)??[];
@@ -174,14 +178,14 @@ public sealed class ApiClient(HttpClient httpClient)
         AuthEnvelope? envelope=null;
         try{envelope=await response.Content.ReadFromJsonAsync<AuthEnvelope>(cancellationToken:token);}catch{/* non-JSON body */}
         if(response.IsSuccessStatusCode)
-            return new AuthResult(true,envelope?.Message,null,envelope?.Outcome,envelope?.TenantId,envelope?.RequiresVerification??false,envelope?.UserId,envelope?.Email,envelope?.DisplayName,envelope?.Permissions??[]);
+            return new AuthResult(true,envelope?.Message,null,envelope?.Outcome,envelope?.TenantId,envelope?.RequiresVerification??false,envelope?.UserId,envelope?.Email,envelope?.DisplayName,envelope?.Permissions??[],envelope?.RoleCode);
 
         var errors=envelope?.Errors is{Count:>0}?string.Join(" ",envelope.Errors):null;
         var message=envelope?.Message??errors??$"Request failed with status {(int)response.StatusCode}.";
-        return new AuthResult(false,message,errors,envelope?.Outcome,envelope?.TenantId,envelope?.RequiresVerification??false,envelope?.UserId,envelope?.Email,envelope?.DisplayName,envelope?.Permissions??[]);
+        return new AuthResult(false,message,errors,envelope?.Outcome,envelope?.TenantId,envelope?.RequiresVerification??false,envelope?.UserId,envelope?.Email,envelope?.DisplayName,envelope?.Permissions??[],envelope?.RoleCode);
     }
 
-    private sealed record AuthEnvelope(string? Message,List<string>? Errors,string? Outcome,Guid? TenantId,bool? RequiresVerification,Guid? UserId,string? Email,string? DisplayName,List<string>? Permissions);
+    private sealed record AuthEnvelope(string? Message,List<string>? Errors,string? Outcome,Guid? TenantId,bool? RequiresVerification,Guid? UserId,string? Email,string? DisplayName,List<string>? Permissions,string? RoleCode);
 
     // Anonymous legal agreements for the signup clickwrap surface.
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken token=default)
@@ -241,6 +245,18 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task RemoveTenantMemberAsync(Guid membershipId,CancellationToken token=default)
     {
         using var response=await _httpClient.DeleteAsync($"api/tenant_users/{membershipId}",token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
+
+    public async Task ResetTenantMemberLockoutAsync(Guid membershipId,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsync($"api/tenant_users/{membershipId}/reset-lockout",null,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
+
+    public async Task SetTenantMemberPasswordAsync(Legal.Application.Features.Saas.SetMemberPasswordRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync("api/tenant_users/set-password",request,token);
         await EnsureSuccessWithDetailAsync(response,token);
     }
 
@@ -310,6 +326,18 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.LoginHistoryDto>> GetActivityLoginHistoryAsync(int days=30,int take=100,CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.LoginHistoryDto>>($"api/tenant_activity/logins?days={days}&take={take}",token)??[];
 
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetMyAuditEventsAsync(int days=30,int take=100,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/me/audit?days={days}&take={take}",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetMyUsageAsync(int days=30,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/me/usage?days={days}",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetUserAuditEventsAsync(Guid userId,int days=30,int take=100,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/users/{userId}/audit?days={days}&take={take}",token)??[];
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetUserUsageAsync(Guid userId,int days=30,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/users/{userId}/usage?days={days}",token)??[];
+
     // Public invitation acceptance (/invitations/{token}) — anonymous, token-only.
     public async Task<Legal.Application.Features.Saas.InvitationLookupDto?> LookupInvitationAsync(string invitationToken,CancellationToken token=default)
     {
@@ -359,6 +387,18 @@ public sealed class ApiClient(HttpClient httpClient)
         await EnsureSuccessWithDetailAsync(response,token);
     }
 
+    public async Task ResetPlatformMemberLockoutAsync(Guid membershipId,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsync($"api/platform_users/{membershipId}/reset-lockout",null,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
+
+    public async Task SetPlatformMemberPasswordAsync(Legal.Application.Features.Saas.SetMemberPasswordRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PostAsJsonAsync("api/platform_users/set-password",request,token);
+        await EnsureSuccessWithDetailAsync(response,token);
+    }
+
     private async Task<TResult> PostForResultAsync<TRequest,TResult>(string uri,TRequest request,CancellationToken token)
     {
         using var response=await _httpClient.PostAsJsonAsync(uri,request,token);
@@ -380,4 +420,5 @@ public sealed record AuthResult(
     Guid? UserId = null,
     string? Email = null,
     string? DisplayName = null,
-    IReadOnlyList<string>? Permissions = null);
+    IReadOnlyList<string>? Permissions = null,
+    string? RoleCode = null);

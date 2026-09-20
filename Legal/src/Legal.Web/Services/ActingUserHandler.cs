@@ -50,12 +50,14 @@ public sealed class ActingUserHandler(IHttpContextAccessor httpContextAccessor, 
             var userName = user.FindFirstValue(ClaimTypes.Name);
             var email = user.FindFirstValue(ClaimTypes.Email);
             var tenantId = user.FindFirstValue("tenant_id");
+            var role = Escape(user.FindFirstValue(ClaimTypes.Role));
             var permissions = string.Join(',', user.FindAll("permission").Select(c => c.Value).Where(v => !string.IsNullOrWhiteSpace(v)));
 
             SetHeader(request, "X-Acting-User-Id", userId);
             SetHeader(request, "X-Acting-User-Name", Escape(userName));
             SetHeader(request, "X-Acting-User-Email", Escape(email));
             SetHeader(request, "X-Acting-Tenant-Id", tenantId);
+            SetHeader(request, "X-Acting-Role", role);
             SetHeader(request, "X-Acting-Permissions", permissions);
 
             // Sign the forwarded identity so the API can reject spoofed headers.
@@ -64,7 +66,7 @@ public sealed class ActingUserHandler(IHttpContextAccessor httpContextAccessor, 
             {
                 var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var payload = ActingIdentitySignature.BuildPayload(
-                    timestamp, userId, Escape(userName), Escape(email), tenantId, permissions);
+                    timestamp, userId, Escape(userName), Escape(email), tenantId, role, permissions);
                 SetHeader(request, ActingIdentitySignature.TimestampHeader, timestamp.ToString());
                 SetHeader(request, ActingIdentitySignature.SignatureHeader, ActingIdentitySignature.Sign(payload, secret));
             }

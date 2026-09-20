@@ -29,6 +29,7 @@ public static class ActingIdentitySignature
         string? userName,
         string? userEmail,
         string? tenantId,
+        string? role,
         string? permissions)
         => string.Join('\n',
             unixTimeSeconds.ToString(CultureInfo.InvariantCulture),
@@ -36,6 +37,7 @@ public static class ActingIdentitySignature
             userName ?? string.Empty,
             userEmail ?? string.Empty,
             tenantId ?? string.Empty,
+            role ?? string.Empty,
             permissions ?? string.Empty);
 
     public static string Sign(string payload, string secret)

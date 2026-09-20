@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Legal.Application.Features.Saas;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,11 +89,11 @@ public sealed record IntelligenceExecutionDto(
 // ── Request contracts ────────────────────────────────────────────────────────
 
 public sealed record SignupRequest(
-    string FirstName,
-    string LastName,
-    string Email,
-    string Password,
-    bool AcceptedAgreements = false);
+    [property: Required, StringLength(100)] string FirstName,
+    [property: Required, StringLength(100)] string LastName,
+    [property: Required, EmailAddress, StringLength(256)] string Email,
+    [property: Required, StringLength(128, MinimumLength = 6)] string Password,
+    [property: Range(typeof(bool), "true", "true", ErrorMessage = "You must accept the Terms of Service and Privacy Policy.")] bool AcceptedAgreements = false);
 
 public sealed record VerifyEmailRequest(string Email, string Code);
 
@@ -127,7 +129,8 @@ public sealed record ManagedMemberDto(
     string StatusCode,
     DateTime JoinedAtUtc,
     int AuthorizationVersion,
-    string ProvisioningSource);
+    string ProvisioningSource,
+    bool IsLockedOut = false);
 
 /// <summary>An assignable role from the platform (TenantId NULL) catalog.</summary>
 public sealed record AssignableRoleDto(
@@ -142,6 +145,18 @@ public sealed record TenantOptionDto(
     string Name,
     string Slug,
     string StatusCode);
+
+/// <summary>Owner-only organization/tenant profile (view &amp; edit name/slug).</summary>
+public sealed record TenantProfileDto(
+    Guid TenantId,
+    string Name,
+    string Slug,
+    string StatusCode);
+
+/// <summary>Owner-only request to update the tenant profile (name/slug).</summary>
+public sealed record UpdateTenantProfileRequest(
+    string Name,
+    string Slug);
 
 // ── User management request contracts ────────────────────────────────────────
 
@@ -167,6 +182,9 @@ public sealed record ChangeMemberRoleRequest(
 public sealed record ChangeMemberStatusRequest(
     Guid MembershipId,
     string StatusCode);
+public sealed record SetMemberPasswordRequest(
+    Guid MembershipId,
+    string TemporaryPassword);
 
 /// <summary>Result of an invite/create provisioning action.</summary>
 public sealed record ProvisionMemberResult(

@@ -54,6 +54,10 @@
                      title="Show suspended members" @onclick="@(() => SetStatus("Suspended"))">
                 <span>Suspended</span><strong>@_members.Count(m => m.StatusCode == "Suspended")</strong>
             </article>
+            <article class="intel-kpi-link @(_statusFilter == "Disabled" ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show locked members" @onclick="@(() => SetStatus("Disabled"))">
+                <span>Locked</span><strong>@_members.Count(m => m.StatusCode == "Disabled")</strong>
+            </article>
         </section>
 
         @if (_filtered.Count == 0)
@@ -82,17 +86,34 @@
                                         }
                                     </select>
                                 </td>
-                                <td><AppStatusBadge Status="@m.StatusCode" /></td>
+                                <td>
+                                    <AppStatusBadge Status="@m.StatusCode" />
+                                    @if (m.IsLockedOut)
+                                    {
+                                        <span class="um-lock-badge" title="Account is temporarily locked from sign-in after too many failed attempts"><i class="bi bi-lock-fill"></i> Locked</span>
+                                    }
+                                </td>
                                 <td>@m.JoinedAtUtc.ToString("yyyy-MM-dd")</td>
                                 <td class="um-row-actions">
+                                    @if (m.IsLockedOut)
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Clear sign-in lockout" @onclick="@(() => ResetLockout(m))"><i class="bi bi-unlock-fill"></i></button>
+                                    }
                                     @if (m.StatusCode == "Active")
                                     {
                                         <button class="um-btn um-btn-ghost um-btn-sm" title="Suspend" @onclick="@(() => ChangeStatus(m, "Suspended"))"><i class="bi bi-pause-circle"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Lock account" @onclick="@(() => ChangeStatus(m, "Disabled"))"><i class="bi bi-lock"></i></button>
+                                    }
+                                    else if (m.StatusCode == "Disabled")
+                                    {
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Unlock account" @onclick="@(() => ChangeStatus(m, "Active"))"><i class="bi bi-unlock"></i></button>
                                     }
                                     else
                                     {
                                         <button class="um-btn um-btn-ghost um-btn-sm" title="Activate" @onclick="@(() => ChangeStatus(m, "Active"))"><i class="bi bi-play-circle"></i></button>
+                                        <button class="um-btn um-btn-ghost um-btn-sm" title="Lock account" @onclick="@(() => ChangeStatus(m, "Disabled"))"><i class="bi bi-lock"></i></button>
                                     }
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Set temporary password" @onclick="@(() => AskSetPassword(m))"><i class="bi bi-key"></i></button>
                                     <button class="um-btn um-btn-ghost um-btn-sm" title="Remove" @onclick="() => AskRemove(m)"><i class="bi bi-trash"></i></button>
                                 </td>
                             </tr>
@@ -197,6 +218,40 @@
         </div>
     </div>
 }
+
+@if (_passwordTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal">
+            <div class="um-modal-header">
+                <i class="bi bi-key"></i>
+                <span>Set temporary password</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _passwordTarget = null"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_passwordForm" OnValidSubmit="ConfirmSetPassword">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <p>Set a new temporary password for <strong>@_passwordTarget.Email</strong>. This replaces their current password and clears any sign-in lockout. Share it securely; the member should change it after signing in.</p>
+                    <div class="um-form-grid">
+                        <label class="um-field um-field--full">
+                            <span class="um-field-label">Temporary password</span>
+                            <InputText type="password" class="form-control" @bind-Value="_passwordForm.TemporaryPassword" placeholder="Minimum 8 characters" />
+                            <ValidationMessage For="() => _passwordForm.TemporaryPassword" class="text-danger" />
+                        </label>
+                    </div>
+                    @if (_passwordError is not null)
+                    {
+                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_passwordError</div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _passwordTarget = null">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Set password")</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
 </LegalWorkspace>
 
 @code {
@@ -208,6 +263,9 @@
     private Guid? _tenantFilter;
     private bool _showForm;
     private ManagedMemberDto? _removeTarget;
+    private ManagedMemberDto? _passwordTarget;
+    private string? _passwordError;
+    private readonly PasswordForm _passwordForm = new();
     private IReadOnlyList<ManagedMemberDto> _members = [];
     private IReadOnlyList<AssignableRoleDto> _roles = [];
     private IReadOnlyList<TenantOptionDto> _tenants = [];
@@ -304,6 +362,47 @@
         }
     }
 
+    private async Task ResetLockout(ManagedMemberDto member)
+    {
+        try
+        {
+            await Api.ResetPlatformMemberLockoutAsync(member.MembershipId);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to clear lockout: {ex.Message}";
+        }
+    }
+
+    private void AskSetPassword(ManagedMemberDto member)
+    {
+        _passwordError = null;
+        _passwordForm.TemporaryPassword = string.Empty;
+        _passwordTarget = member;
+    }
+
+    private async Task ConfirmSetPassword()
+    {
+        if (_passwordTarget is null) return;
+        _saving = true;
+        _passwordError = null;
+        try
+        {
+            await Api.SetPlatformMemberPasswordAsync(new SetMemberPasswordRequest(_passwordTarget.MembershipId, _passwordForm.TemporaryPassword.Trim()));
+            _passwordTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _passwordError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
     private void AskRemove(ManagedMemberDto member) => _removeTarget = member;
 
     private async Task ConfirmRemove()
@@ -350,5 +449,11 @@
             RoleCode = roleCode;
             TemporaryPassword = null;
         }
+    }
+
+    private sealed class PasswordForm
+    {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(128, MinimumLength = 8)]
+        public string TemporaryPassword { get; set; } = string.Empty;
     }
 }

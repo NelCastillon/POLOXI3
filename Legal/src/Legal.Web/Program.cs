@@ -90,6 +90,11 @@ app.MapPost("/auth/login", async (HttpContext http, ApiClient apiClient) =>
         claims.Add(new Claim(ClaimTypes.Email, login.Email!));
     if (login.TenantId is { } tenantId && tenantId != Guid.Empty)
         claims.Add(new Claim("tenant_id", tenantId.ToString()));
+    // Persist the user's tenant role so role-gated UI (e.g. the Administration
+    // menu) can distinguish SUPERADMIN / ADMIN from OWNER / MEMBER, which the
+    // permission claims alone cannot express.
+    if (!string.IsNullOrWhiteSpace(login.RoleCode))
+        claims.Add(new Claim(ClaimTypes.Role, login.RoleCode!));
     // Persist the user's real, role-derived permissions so the API can enforce
     // per-capability access on forwarded claims instead of an open dev bypass.
     if (login.Permissions is { Count: > 0 } permissions)

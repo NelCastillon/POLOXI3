@@ -147,6 +147,7 @@ public sealed class AuthController(
             user.Email,
             DisplayName = $"{user.FirstName} {user.LastName}".Trim(),
             TenantId = membership?.TenantId,
+            RoleCode = membership?.RoleCode,
             Permissions = permissions
         });
     }

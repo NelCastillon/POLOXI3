@@ -90,6 +90,9 @@ public interface IUserAccountCreator
 
     /// <summary>Create an invited identity user (unusable password) and issue a verification code. Returns the new user id.</summary>
     Task<Guid> InviteAsync(string email, string firstName, string lastName, CancellationToken ct = default);
+
+    /// <summary>Admin-set a new (temporary) password for an existing identity user, replacing any current password.</summary>
+    Task SetPasswordAsync(Guid userId, string newPassword, CancellationToken ct = default);
 }
 
 /// <summary>Scope-aware member administration for Super Admin (platform) and Tenant Admin surfaces.</summary>
@@ -109,10 +112,17 @@ public interface IUserManagementService
     Task ChangeRoleAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, ChangeMemberRoleRequest request, CancellationToken ct = default);
     Task ChangeStatusAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, ChangeMemberStatusRequest request, CancellationToken ct = default);
     Task RemoveMemberAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, Guid membershipId, CancellationToken ct = default);
+    Task ResetLockoutAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, Guid membershipId, CancellationToken ct = default);
+    Task SetMemberPasswordAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, SetMemberPasswordRequest request, CancellationToken ct = default);
 }
-
-/// <summary>Thrown when a requested user-management action violates scope or role-grant rules.</summary>
 public sealed class UserManagementForbiddenException(string reason) : Exception(reason);
+
+/// <summary>Owner-only organization/tenant profile management (view &amp; edit name/slug).</summary>
+public interface ITenantProfileService
+{
+    Task<TenantProfileDto?> GetProfileAsync(Guid tenantId, CancellationToken ct = default);
+    Task<TenantProfileDto> UpdateProfileAsync(Guid tenantId, Guid? actorUserId, UpdateTenantProfileRequest request, CancellationToken ct = default);
+}
 
 /// <summary>Tenant invitation lifecycle: create (with pending roles) + email via outbox, list, resend, revoke, accept.</summary>
 public interface IInvitationService
@@ -154,7 +164,9 @@ public interface IGroupService
 public interface IActivityService
 {
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, int days, int take, CancellationToken ct = default);
+    Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, int days, int take, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, int days, CancellationToken ct = default);
+    Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, int days, CancellationToken ct = default);
     Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, int days, int take, CancellationToken ct = default);
 
     /// <summary>Best-effort append of a login attempt; never throws to the caller.</summary>
@@ -179,5 +191,5 @@ public interface IConsentService
         CancellationToken ct = default);
 
     /// <summary>Returns the recorded consent evidence for a user within a tenant.</summary>
-    Task<IReadOnlyList<ConsentRecordDto>> GetConsentHistoryAsync(Guid userId, Guid tenantId, CancellationToken ct = default);
+    Task<IReadOnlyList<ConsentRecordDto>> GetConsentHistoryAsync(Guid userId, Guid? tenantId, CancellationToken ct = default);
 }

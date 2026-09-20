@@ -36,11 +36,24 @@ public sealed class TenantUserManagementController(
             || granted.Contains(ManagePermission, StringComparer.OrdinalIgnoreCase);
     }
 
+    // A Super Admin (platform.users.manage) may view members across ALL tenants,
+    // even from this tenant-scoped surface. Tenant admins remain scoped to their tenant.
+    private bool IsSuperAdmin()
+        => AuthenticatedRequestContext.GetGrantedPermissions(User)
+            .Contains("platform.users.manage", StringComparer.OrdinalIgnoreCase)
+            || User.IsInRole("SUPERADMIN");
+
+    // Super Admin operates platform-wide (any tenant, any role); tenant admins stay
+    // scoped to their own tenant with only the non-privileged tenant roles.
+    private bool PlatformScope => IsSuperAdmin();
+    private Guid? Scope => IsSuperAdmin() ? null : TenantId;
+
     [HttpGet]
     public async Task<IActionResult> GetMembers(CancellationToken cancellationToken)
     {
         if (!CanManage()) return Forbid();
-        var members = await service.ListMembersAsync(TenantId, cancellationToken);
+        // Super Admin sees every tenant's members; tenant admins see only their own tenant.
+        var members = await service.ListMembersAsync(Scope, cancellationToken);
         return Ok(members);
     }
 
@@ -48,36 +61,44 @@ public sealed class TenantUserManagementController(
     public async Task<IActionResult> GetRoles(CancellationToken cancellationToken)
     {
         if (!CanManage()) return Forbid();
-        var roles = await service.ListAssignableRolesAsync(platformScope: false, cancellationToken);
+        var roles = await service.ListAssignableRolesAsync(platformScope: PlatformScope, cancellationToken);
         return Ok(roles);
     }
 
     [HttpPost("invite")]
     public async Task<IActionResult> Invite([FromBody] InviteMemberRequest request, CancellationToken cancellationToken)
-        => await ExecuteAsync(() => service.InviteMemberAsync(TenantId, false, ActorUserId, request, cancellationToken));
+        => await ExecuteAsync(() => service.InviteMemberAsync(Scope, PlatformScope, ActorUserId, request, cancellationToken));
 
     [HttpPost("create")]
     public async Task<IActionResult> Create([FromBody] CreateMemberRequest request, CancellationToken cancellationToken)
-        => await ExecuteAsync(() => service.CreateMemberAsync(TenantId, false, ActorUserId, request, cancellationToken));
+        => await ExecuteAsync(() => service.CreateMemberAsync(Scope, PlatformScope, ActorUserId, request, cancellationToken));
 
     [HttpPut("role")]
     public async Task<IActionResult> ChangeRole([FromBody] ChangeMemberRoleRequest request, CancellationToken cancellationToken)
-        => await ExecuteAsync(() => service.ChangeRoleAsync(TenantId, false, ActorUserId, request, cancellationToken));
+        => await ExecuteAsync(() => service.ChangeRoleAsync(Scope, PlatformScope, ActorUserId, request, cancellationToken));
 
     [HttpPut("status")]
     public async Task<IActionResult> ChangeStatus([FromBody] ChangeMemberStatusRequest request, CancellationToken cancellationToken)
-        => await ExecuteAsync(() => service.ChangeStatusAsync(TenantId, false, ActorUserId, request, cancellationToken));
+        => await ExecuteAsync(() => service.ChangeStatusAsync(Scope, PlatformScope, ActorUserId, request, cancellationToken));
 
     [HttpDelete("{membershipId:guid}")]
     public async Task<IActionResult> Remove(Guid membershipId, CancellationToken cancellationToken)
-        => await ExecuteAsync(() => service.RemoveMemberAsync(TenantId, false, ActorUserId, membershipId, cancellationToken));
+        => await ExecuteAsync(() => service.RemoveMemberAsync(Scope, PlatformScope, ActorUserId, membershipId, cancellationToken));
+
+    [HttpPost("{membershipId:guid}/reset-lockout")]
+    public async Task<IActionResult> ResetLockout(Guid membershipId, CancellationToken cancellationToken)
+        => await ExecuteAsync(() => service.ResetLockoutAsync(Scope, PlatformScope, ActorUserId, membershipId, cancellationToken));
+
+    [HttpPost("set-password")]
+    public async Task<IActionResult> SetPassword([FromBody] SetMemberPasswordRequest request, CancellationToken cancellationToken)
+        => await ExecuteAsync(() => service.SetMemberPasswordAsync(Scope, PlatformScope, ActorUserId, request, cancellationToken));
 
     // ── Legal clickwrap consent (read-only evidence) ────────────────────────────
     [HttpGet("{userId:guid}/consent")]
     public async Task<IActionResult> GetConsent(Guid userId, CancellationToken cancellationToken)
     {
         if (!CanManage()) return Forbid();
-        var records = await consentService.GetConsentHistoryAsync(userId, TenantId, cancellationToken);
+        var records = await consentService.GetConsentHistoryAsync(userId, Scope, cancellationToken);
         return Ok(records);
     }
 

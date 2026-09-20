@@ -186,7 +186,8 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
                ISNULL(u.FirstName, N'') AS FirstName, ISNULL(u.LastName, N'') AS LastName,
                ISNULL(u.Email, N'') AS Email, u.EmailConfirmed,
                m.RoleId, r.Code AS RoleCode, r.DisplayName AS RoleName,
-               m.StatusCode, m.JoinedAtUtc, m.AuthorizationVersion, m.ProvisioningSource
+               m.StatusCode, m.JoinedAtUtc, m.AuthorizationVersion, m.ProvisioningSource,
+               CAST(CASE WHEN u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET() THEN 1 ELSE 0 END AS bit) AS IsLockedOut
         FROM SaaS.SaaS_TenantMembership m
         JOIN SaaS.SaaS_Tenant t ON t.TenantId = m.TenantId AND t.IsDeleted = 0
         JOIN SaaS.SaaS_Role r ON r.RoleId = m.RoleId AND r.IsDeleted = 0
@@ -244,6 +245,43 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         const string sql = "SELECT TOP 1 Name FROM SaaS.SaaS_Tenant WHERE TenantId = @TenantId AND IsDeleted = 0;";
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         return await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+    }
+
+    public async Task<TenantProfileDto?> GetTenantProfileAsync(Guid tenantId, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT TOP 1 TenantId, Name, Slug, StatusCode
+            FROM SaaS.SaaS_Tenant
+            WHERE TenantId = @TenantId AND IsDeleted = 0;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        return await connection.QuerySingleOrDefaultAsync<TenantProfileDto?>(new CommandDefinition(sql, new { TenantId = tenantId }, cancellationToken: ct));
+    }
+
+    public async Task<bool> TenantSlugExistsAsync(string slug, Guid excludeTenantId, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM SaaS.SaaS_Tenant
+                WHERE Slug = @Slug AND TenantId <> @ExcludeTenantId AND IsDeleted = 0)
+            THEN 1 ELSE 0 END;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        return await connection.ExecuteScalarAsync<bool>(new CommandDefinition(sql, new { Slug = slug, ExcludeTenantId = excludeTenantId }, cancellationToken: ct));
+    }
+
+    public async Task UpdateTenantProfileAsync(Guid tenantId, string name, string slug, Guid? actorUserId, CancellationToken ct = default)
+    {
+        const string sql = """
+            UPDATE SaaS.SaaS_Tenant
+            SET Name = @Name,
+                Slug = @Slug,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ActorUserId
+            WHERE TenantId = @TenantId AND IsDeleted = 0;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { TenantId = tenantId, Name = name, Slug = slug, ActorUserId = actorUserId }, cancellationToken: ct));
     }
 
     public async Task<Guid?> FindUserIdByEmailAsync(string normalizedEmail, CancellationToken ct = default)
@@ -333,6 +371,21 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
             SET IsDeleted = 1, StatusCode = N'Removed', AuthorizationVersion = AuthorizationVersion + 1,
                 ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
             WHERE MembershipId = @MembershipId AND IsDeleted = 0;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        await connection.ExecuteAsync(new CommandDefinition(sql, new { MembershipId = membershipId, ActorUserId = actorUserId }, cancellationToken: ct));
+    }
+
+    public async Task ResetLockoutAsync(Guid membershipId, Guid? actorUserId, CancellationToken ct = default)
+    {
+        // Clears the ASP.NET Identity sign-in lockout (LockoutEnd/AccessFailedCount) for the
+        // user behind this membership. This is independent of the membership StatusCode.
+        const string sql = """
+            UPDATE u
+            SET u.LockoutEnd = NULL, u.AccessFailedCount = 0
+            FROM dbo.AspNetUsers u
+            JOIN SaaS.SaaS_TenantMembership m ON m.UserId = u.Id
+            WHERE m.MembershipId = @MembershipId AND m.IsDeleted = 0;
             """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         await connection.ExecuteAsync(new CommandDefinition(sql, new { MembershipId = membershipId, ActorUserId = actorUserId }, cancellationToken: ct));
@@ -718,6 +771,19 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         return rows.AsList();
     }
 
+    public async Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, int take, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT TOP (@Take) AuditEventId, TenantId, UserId, EventType, ResourceType, ResourceId, CorrelationId, OccurredAtUtc
+            FROM SaaS.Platform_AuditEvent
+            WHERE TenantId = @TenantId AND UserId = @UserId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+            ORDER BY OccurredAtUtc DESC;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<AuditEventDto>(new CommandDefinition(sql, new { TenantId = tenantId, UserId = userId, SinceUtc = sinceUtc, Take = take }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
     public async Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default)
     {
         const string sql = """
@@ -732,6 +798,23 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
             """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         var rows = await connection.QueryAsync<UsageSummaryDto>(new CommandDefinition(sql, new { TenantId = tenantId, SinceUtc = sinceUtc }, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    public async Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT MeterCode, UsageClass,
+                   SUM(Quantity) AS TotalQuantity,
+                   COUNT(*) AS EventCount,
+                   MAX(OccurredAtUtc) AS LastOccurredAtUtc
+            FROM SaaS.Commerce_UsageLedger
+            WHERE TenantId = @TenantId AND UserId = @UserId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+            GROUP BY MeterCode, UsageClass
+            ORDER BY MeterCode, UsageClass;
+            """;
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        var rows = await connection.QueryAsync<UsageSummaryDto>(new CommandDefinition(sql, new { TenantId = tenantId, UserId = userId, SinceUtc = sinceUtc }, cancellationToken: ct));
         return rows.AsList();
     }
 
@@ -806,12 +889,12 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         }, cancellationToken: ct));
     }
 
-    public async Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid tenantId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid? tenantId, CancellationToken ct = default)
     {
         const string sql = """
             SELECT ConsentId, UserId, Email, AgreementType, AgreementVersion, ContentHash, AcceptanceMethod, IpAddress, UserAgent, CorrelationId, AcceptedAtUtc
             FROM SaaS.Legal_ConsentRecord
-            WHERE UserId = @UserId AND TenantId = @TenantId AND IsDeleted = 0
+            WHERE UserId = @UserId AND (@TenantId IS NULL OR TenantId = @TenantId) AND IsDeleted = 0
             ORDER BY AcceptedAtUtc DESC;
             """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);

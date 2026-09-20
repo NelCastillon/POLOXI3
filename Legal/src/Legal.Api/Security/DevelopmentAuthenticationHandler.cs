@@ -33,6 +33,7 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
         var actingUserName = Unescape(Request.Headers["X-Acting-User-Name"].ToString());
         var actingUserEmail = Unescape(Request.Headers["X-Acting-User-Email"].ToString());
         var actingTenantId = Request.Headers["X-Acting-Tenant-Id"].ToString();
+        var actingRole = Unescape(Request.Headers["X-Acting-Role"].ToString());
         var actingPermissions = Request.Headers["X-Acting-Permissions"].ToString();
 
         var userId = Guid.TryParse(actingUserId, out var forwardedId) && forwardedId != Guid.Empty
@@ -45,7 +46,9 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
         // keep the "Development" demo identity for local development.
         var forwardedPermissions = actingPermissions
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var authenticationType = forwardedPermissions.Length > 0 ? ForwardedAuthenticationType : SchemeName;
+        var authenticationType = forwardedPermissions.Length > 0 || !string.IsNullOrWhiteSpace(actingRole)
+            ? ForwardedAuthenticationType
+            : SchemeName;
 
         var claims = new List<Claim>
         {
@@ -62,6 +65,11 @@ public sealed class DevelopmentAuthenticationHandler : AuthenticationHandler<Aut
         if (!string.IsNullOrWhiteSpace(actingUserEmail))
         {
             claims.Add(new Claim(ClaimTypes.Email, actingUserEmail));
+        }
+
+        if (!string.IsNullOrWhiteSpace(actingRole))
+        {
+            claims.Add(new Claim(ClaimTypes.Role, actingRole));
         }
 
         var effectiveTenantId = Guid.TryParse(actingTenantId, out var tenantId) && tenantId != Guid.Empty

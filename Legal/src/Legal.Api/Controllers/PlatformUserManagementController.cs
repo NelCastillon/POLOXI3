@@ -75,6 +75,14 @@ public sealed class PlatformUserManagementController(IUserManagementService serv
     public async Task<IActionResult> Remove(Guid membershipId, CancellationToken cancellationToken)
         => await ExecuteAsync(() => service.RemoveMemberAsync(null, true, ActorUserId, membershipId, cancellationToken));
 
+    [HttpPost("{membershipId:guid}/reset-lockout")]
+    public async Task<IActionResult> ResetLockout(Guid membershipId, CancellationToken cancellationToken)
+        => await ExecuteAsync(() => service.ResetLockoutAsync(null, true, ActorUserId, membershipId, cancellationToken));
+
+    [HttpPost("set-password")]
+    public async Task<IActionResult> SetPassword([FromBody] SetMemberPasswordRequest request, CancellationToken cancellationToken)
+        => await ExecuteAsync(() => service.SetMemberPasswordAsync(null, true, ActorUserId, request, cancellationToken));
+
     private async Task<IActionResult> ExecuteAsync(Func<Task> action)
     {
         if (!CanManage()) return Forbid();

@@ -162,6 +162,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IUserAccountCreator, Legal.Infrastructure.Identity.IdentityUserAccountCreator>();
         services.AddScoped<IUserManagementService, Legal.Application.Features.Saas.UserManagementService>();
 
+        // Owner-only organization/tenant profile (Account Settings /account/settings).
+        services.AddScoped<ITenantProfileService, Legal.Application.Features.Saas.TenantProfileService>();
+
         // Invitations + transactional outbox (Phase B).
         services.AddScoped<IInvitationService, Legal.Application.Features.Saas.InvitationService>();
         services.AddScoped<IOutboxDispatcher, Legal.Infrastructure.Services.OutboxDispatcher>();

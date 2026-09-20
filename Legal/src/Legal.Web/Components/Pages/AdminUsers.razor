@@ -87,11 +87,90 @@
                                     {
                                         <button class="um-btn um-btn-ghost um-btn-sm" title="Activate" @onclick="@(() => ChangeStatus(m, "Active"))"><i class="bi bi-play-circle"></i></button>
                                     }
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="View usage and audit events" @onclick="@(() => OpenActivity(m))"><i class="bi bi-activity"></i></button>
                                     <button class="um-btn um-btn-ghost um-btn-sm" title="View legal consent" @onclick="@(() => OpenConsent(m))"><i class="bi bi-file-earmark-check"></i></button>
+                                    <button class="um-btn um-btn-ghost um-btn-sm" title="Set temporary password" @onclick="@(() => AskSetPassword(m))" disabled="@(m.RoleCode == "SUPERADMIN")"><i class="bi bi-key"></i></button>
                                     <button class="um-btn um-btn-ghost um-btn-sm" title="Remove" @onclick="() => AskRemove(m)" disabled="@(m.RoleCode == "SUPERADMIN")"><i class="bi bi-trash"></i></button>
                                 </td>
                             </tr>
                         }
+
+@if (_activityTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal um-modal--wide">
+            <div class="um-modal-header">
+                <i class="bi bi-activity"></i>
+                <span>Usage &amp; audit — @($"{_activityTarget.FirstName} {_activityTarget.LastName}".Trim())</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivity"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-activity-toolbar">
+                    <p>Metered feature consumption and audit events attributed to this member within your tenant.</p>
+                    <select class="form-control um-input-sm" @bind="_activityDays" @bind:after="ReloadActivityAsync">
+                        <option value="7">Last 7 days</option>
+                        <option value="30">Last 30 days</option>
+                        <option value="90">Last 90 days</option>
+                        <option value="365">Last 365 days</option>
+                    </select>
+                </div>
+                @if (_activityLoading)
+                {
+                    <div class="intel-state">Loading member activity…</div>
+                }
+                else if (_activityError is not null)
+                {
+                    <div class="alert alert-danger">@_activityError</div>
+                }
+                else
+                {
+                    <h3 class="um-activity-title">Metered feature usage</h3>
+                    @if (_activityUsage.Count == 0)
+                    {
+                        <div class="intel-state">No metered usage recorded in this window.</div>
+                    }
+                    else
+                    {
+                        <div class="um-table-scroll">
+                            <table class="um-table">
+                                <thead><tr><th>Meter</th><th>Class</th><th>Quantity</th><th>Events</th><th>Last used (UTC)</th></tr></thead>
+                                <tbody>
+                                    @foreach (var usage in _activityUsage)
+                                    {
+                                        <tr><td>@usage.MeterCode</td><td>@usage.UsageClass</td><td>@usage.TotalQuantity</td><td>@usage.EventCount</td><td>@FormatUtc(usage.LastOccurredAtUtc)</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+
+                    <h3 class="um-activity-title">Audit events</h3>
+                    @if (_activityAudit.Count == 0)
+                    {
+                        <div class="intel-state">No audit events recorded in this window.</div>
+                    }
+                    else
+                    {
+                        <div class="um-table-scroll">
+                            <table class="um-table">
+                                <thead><tr><th>When (UTC)</th><th>Event</th><th>Resource</th><th>Resource ID</th><th>Correlation</th></tr></thead>
+                                <tbody>
+                                    @foreach (var audit in _activityAudit)
+                                    {
+                                        <tr><td>@FormatUtc(audit.OccurredAtUtc)</td><td>@audit.EventType</td><td>@Display(audit.ResourceType)</td><td>@Display(audit.ResourceId?.ToString())</td><td>@Display(audit.CorrelationId)</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                }
+            </div>
+            <div class="um-modal-footer">
+                <button class="um-btn um-btn-ghost" @onclick="CloseActivity">Close</button>
+            </div>
+        </div>
+    </div>
+}
                     </tbody>
                 </table>
             </section>
@@ -179,7 +258,7 @@
                             <InputText class="form-control" @bind-Value="_form.Email" placeholder="name@company.com" />
                             <ValidationMessage For="() => _form.Email" class="text-danger" />
                         </label>
-                        <label class="um-field">
+                        <label class="um-field um-field--full">
                             <span class="um-field-label">Role</span>
                             <InputSelect class="form-control" @bind-Value="_form.RoleCode">
                                 @foreach (var r in _roles)
@@ -191,7 +270,7 @@
                         </label>
                         @if (_form.Mode == "Create")
                         {
-                            <label class="um-field">
+                            <label class="um-field um-field--full">
                                 <span class="um-field-label">Temporary password</span>
                                 <InputText type="password" class="form-control" @bind-Value="_form.TemporaryPassword" placeholder="Minimum 8 characters" />
                                 <ValidationMessage For="() => _form.TemporaryPassword" class="text-danger" />
@@ -223,6 +302,40 @@
                 <button class="um-btn um-btn-ghost" @onclick="() => _removeTarget = null">Cancel</button>
                 <button class="um-btn um-btn-danger" @onclick="ConfirmRemove" disabled="@_saving">Remove</button>
             </div>
+        </div>
+    </div>
+}
+
+@if (_passwordTarget is not null)
+{
+    <div class="um-modal-backdrop">
+        <div class="um-modal">
+            <div class="um-modal-header">
+                <i class="bi bi-key"></i>
+                <span>Set temporary password</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _passwordTarget = null"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <EditForm Model="_passwordForm" OnValidSubmit="ConfirmSetPassword">
+                <DataAnnotationsValidator />
+                <div class="um-modal-body">
+                    <p>Set a new temporary password for <strong>@_passwordTarget.Email</strong>. This replaces their current password and clears any sign-in lockout. Share it securely; the member should change it after signing in.</p>
+                    <div class="um-form-grid">
+                        <label class="um-field um-field--full">
+                            <span class="um-field-label">Temporary password</span>
+                            <InputText type="password" class="form-control" @bind-Value="_passwordForm.TemporaryPassword" placeholder="Minimum 8 characters" />
+                            <ValidationMessage For="() => _passwordForm.TemporaryPassword" class="text-danger" />
+                        </label>
+                    </div>
+                    @if (_passwordError is not null)
+                    {
+                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_passwordError</div>
+                    }
+                </div>
+                <div class="um-modal-footer">
+                    <button type="button" class="um-btn um-btn-ghost" @onclick="() => _passwordTarget = null">Cancel</button>
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">@(_saving ? "Saving…" : "Set password")</button>
+                </div>
+            </EditForm>
         </div>
     </div>
 }
@@ -349,6 +462,9 @@
     private string? _statusFilter;
     private bool _showForm;
     private ManagedMemberDto? _removeTarget;
+    private ManagedMemberDto? _passwordTarget;
+    private string? _passwordError;
+    private readonly PasswordForm _passwordForm = new();
     private IReadOnlyList<ManagedMemberDto> _members = [];
     private IReadOnlyList<AssignableRoleDto> _roles = [];
     private readonly MemberForm _form = new();
@@ -363,6 +479,13 @@
     private bool _consentLoading;
     private string? _consentError;
     private IReadOnlyList<ConsentRecordDto> _consentRecords = [];
+
+    private ManagedMemberDto? _activityTarget;
+    private bool _activityLoading;
+    private string? _activityError;
+    private int _activityDays = 30;
+    private IReadOnlyList<AuditEventDto> _activityAudit = [];
+    private IReadOnlyList<UsageSummaryDto> _activityUsage = [];
 
     private IReadOnlyList<ManagedMemberDto> _filtered =>
         _statusFilter is null ? _members : _members.Where(m => m.StatusCode == _statusFilter).ToList();
@@ -388,6 +511,44 @@
             _loading = false;
         }
     }
+
+    private async Task OpenActivity(ManagedMemberDto member)
+    {
+        _activityTarget = member;
+        await ReloadActivityAsync();
+    }
+
+    private async Task ReloadActivityAsync()
+    {
+        if (_activityTarget is null) return;
+
+        _activityLoading = true;
+        _activityError = null;
+        _activityAudit = [];
+        _activityUsage = [];
+        try
+        {
+            var auditTask = Api.GetUserAuditEventsAsync(_activityTarget.UserId, _activityDays);
+            var usageTask = Api.GetUserUsageAsync(_activityTarget.UserId, _activityDays);
+            await Task.WhenAll(auditTask, usageTask);
+            _activityAudit = await auditTask;
+            _activityUsage = await usageTask;
+        }
+        catch (Exception ex)
+        {
+            _activityError = $"Failed to load member activity: {ex.Message}";
+        }
+        finally
+        {
+            _activityLoading = false;
+        }
+    }
+
+    private void CloseActivity() => _activityTarget = null;
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    private static string FormatUtc(DateTime? value) => value is { } utc ? $"{utc:yyyy-MM-dd HH:mm:ss} UTC" : "—";
 
     private void SetStatus(string? status) => _statusFilter = status;
 
@@ -450,6 +611,34 @@
     }
 
     private void AskRemove(ManagedMemberDto member) => _removeTarget = member;
+
+    private void AskSetPassword(ManagedMemberDto member)
+    {
+        _passwordError = null;
+        _passwordForm.TemporaryPassword = string.Empty;
+        _passwordTarget = member;
+    }
+
+    private async Task ConfirmSetPassword()
+    {
+        if (_passwordTarget is null) return;
+        _saving = true;
+        _passwordError = null;
+        try
+        {
+            await Api.SetTenantMemberPasswordAsync(new SetMemberPasswordRequest(_passwordTarget.MembershipId, _passwordForm.TemporaryPassword.Trim()));
+            _passwordTarget = null;
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _passwordError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
 
     private async Task OpenConsent(ManagedMemberDto member)
     {
@@ -595,5 +784,11 @@
             RoleCode = roleCode;
             TemporaryPassword = null;
         }
+    }
+
+    private sealed class PasswordForm
+    {
+        [System.ComponentModel.DataAnnotations.Required, System.ComponentModel.DataAnnotations.StringLength(128, MinimumLength = 8)]
+        public string TemporaryPassword { get; set; } = string.Empty;
     }
 }

@@ -34,6 +34,18 @@ public sealed class IdentityUserAccountCreator(
         return user.Id;
     }
 
+    public async Task SetPasswordAsync(Guid userId, string newPassword, CancellationToken ct = default)
+    {
+        var user = await userManager.FindByIdAsync(userId.ToString())
+            ?? throw new InvalidOperationException("The identity account for this member was not found.");
+
+        // Replace any existing password: remove first (if present), then add the new one.
+        if (await userManager.HasPasswordAsync(user))
+            EnsureSucceeded(await userManager.RemovePasswordAsync(user));
+
+        EnsureSucceeded(await userManager.AddPasswordAsync(user, newPassword));
+    }
+
     private static ApplicationUser BuildUser(string email, string firstName, string lastName, bool emailConfirmed)
         => new()
         {

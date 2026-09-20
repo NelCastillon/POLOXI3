@@ -1,0 +1,304 @@
+@page "/account/settings"
+@inject ApiClient Api
+
+<PageTitle>Account Settings</PageTitle>
+
+<LegalWorkspace>
+    <div class="intel-page account-settings-page">
+        <header class="intel-header">
+            <div>
+                <span>Account · Activity &amp; Organization</span>
+                <h1>Account Settings</h1>
+                <p>Review your metered feature usage and audit history. Tenant owners can also manage the organization profile.</p>
+            </div>
+            <button type="button" class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@(_loading || _saving)">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
+            </button>
+        </header>
+
+        @if (_loading)
+        {
+            <div class="intel-state" role="status">Loading account settings…</div>
+        }
+        else
+        {
+            @if (_error is not null)
+            {
+                <div class="alert alert-danger" role="alert">
+                    <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> @_error
+                </div>
+            }
+
+            @if (_success is not null)
+            {
+                <div class="alert alert-success" role="status">
+                    <i class="bi bi-check-circle" aria-hidden="true"></i> @_success
+                </div>
+            }
+
+            <section class="intel-panel account-settings-panel account-activity-panel" aria-labelledby="account-activity-title">
+                <div class="intel-toolbar">
+                    <div>
+                        <h2 id="account-activity-title">My usage &amp; audit</h2>
+                        <p>Only activity attributed to your authenticated user account is shown.</p>
+                    </div>
+                    <select class="account-activity-range" @bind="_activityDays" @bind:after="LoadActivityAsync">
+                        <option value="7">Last 7 days</option>
+                        <option value="30">Last 30 days</option>
+                        <option value="90">Last 90 days</option>
+                        <option value="365">Last 365 days</option>
+                    </select>
+                </div>
+
+                <h3>Metered feature usage</h3>
+                @if (_usage.Count == 0)
+                {
+                    <div class="intel-state">No metered usage recorded in this window.</div>
+                }
+                else
+                {
+                    <div class="account-activity-table-wrap">
+                        <table class="account-activity-table">
+                            <thead><tr><th>Meter</th><th>Class</th><th>Quantity</th><th>Events</th><th>Last used (UTC)</th></tr></thead>
+                            <tbody>
+                                @foreach (var usage in _usage)
+                                {
+                                    <tr><td>@usage.MeterCode</td><td>@usage.UsageClass</td><td>@usage.TotalQuantity</td><td>@usage.EventCount</td><td>@FormatUtc(usage.LastOccurredAtUtc)</td></tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+
+                <h3>Audit events</h3>
+                @if (_audit.Count == 0)
+                {
+                    <div class="intel-state">No audit events recorded in this window.</div>
+                }
+                else
+                {
+                    <div class="account-activity-table-wrap">
+                        <table class="account-activity-table">
+                            <thead><tr><th>When (UTC)</th><th>Event</th><th>Resource</th><th>Resource ID</th><th>Correlation</th></tr></thead>
+                            <tbody>
+                                @foreach (var audit in _audit)
+                                {
+                                    <tr><td>@FormatUtc(audit.OccurredAtUtc)</td><td>@audit.EventType</td><td>@Display(audit.ResourceType)</td><td>@Display(audit.ResourceId?.ToString())</td><td>@Display(audit.CorrelationId)</td></tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            @if (_isOwner && _profile is not null)
+            {
+                <section class="intel-panel account-settings-panel" aria-labelledby="organization-profile-title">
+                    <div class="intel-toolbar">
+                        <div>
+                            <h2 id="organization-profile-title">Organization profile</h2>
+                            <p>The name is shown throughout Judz. The workspace slug is a stable, URL-friendly identifier.</p>
+                        </div>
+                        <AppStatusBadge Status="@_profile.StatusCode" />
+                    </div>
+
+                    <EditForm Model="_form" OnValidSubmit="SaveAsync" FormName="account-settings">
+                    <DataAnnotationsValidator />
+
+                    <div class="account-settings-grid">
+                        <div class="intel-field account-settings-field-wide">
+                            <label for="organization-name">Organization name</label>
+                            <InputText id="organization-name"
+                                       @bind-Value="_form.Name"
+                                       disabled="@_saving"
+                                       maxlength="200"
+                                       autocomplete="organization" />
+                            <ValidationMessage For="() => _form.Name" class="text-danger" />
+                            <small>The legal or operating name displayed to members of this workspace.</small>
+                        </div>
+
+                        <div class="intel-field account-settings-field-wide">
+                            <label for="workspace-slug">Workspace slug</label>
+                            <InputText id="workspace-slug"
+                                       @bind-Value="_form.Slug"
+                                       disabled="@_saving"
+                                       maxlength="100"
+                                       autocomplete="off" />
+                            <ValidationMessage For="() => _form.Slug" class="text-danger" />
+                            <small>Use lowercase letters, numbers, and single hyphens only, for example <code>acme-legal</code>.</small>
+                        </div>
+
+                        <div class="intel-field">
+                            <label>Tenant ID</label>
+                            <output class="account-settings-readonly">@_profile.TenantId</output>
+                            <small>Immutable identifier used for tenant isolation.</small>
+                        </div>
+
+                        <div class="intel-field">
+                            <label>Status</label>
+                            <output class="account-settings-readonly">@_profile.StatusCode</output>
+                            <small>Organization lifecycle status.</small>
+                        </div>
+                    </div>
+
+                    <div class="account-settings-actions">
+                        <button type="submit" class="um-btn um-btn-primary" disabled="@(_saving || IsUnchanged)">
+                            @if (_saving)
+                            {
+                                <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                                <span>Saving…</span>
+                            }
+                            else
+                            {
+                                <i class="bi bi-check-lg" aria-hidden="true"></i>
+                                <span>Save changes</span>
+                            }
+                        </button>
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="ResetForm" disabled="@(_saving || IsUnchanged)">
+                            Reset
+                        </button>
+                    </div>
+                    </EditForm>
+                </section>
+            }
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthenticationStateTask { get; set; } = default!;
+
+    private bool _loading = true;
+    private bool _saving;
+    private string? _error;
+    private string? _success;
+    private TenantProfileDto? _profile;
+    private AccountSettingsForm _form = new();
+    private bool _isOwner;
+    private int _activityDays = 30;
+    private IReadOnlyList<AuditEventDto> _audit = [];
+    private IReadOnlyList<UsageSummaryDto> _usage = [];
+
+    private bool IsUnchanged => _profile is not null
+        && string.Equals(_form.Name?.Trim(), _profile.Name, StringComparison.Ordinal)
+        && string.Equals(_form.Slug?.Trim().ToLowerInvariant(), _profile.Slug, StringComparison.Ordinal);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        _success = null;
+
+        try
+        {
+            var authenticationState = await AuthenticationStateTask;
+            _isOwner = authenticationState.User.IsInRole("OWNER") || authenticationState.User.IsInRole("SYSTEM_ADMIN") || authenticationState.User.IsInRole("TENANT_ADMIN");
+
+            await LoadActivityAsync();
+
+            if (_isOwner)
+            {
+                _profile = await Api.GetTenantProfileAsync();
+                if (_profile is null)
+                {
+                    _error = "The organization profile could not be found.";
+                    return;
+                }
+
+                ResetForm();
+            }
+        }
+        catch (Exception ex)
+        {
+            _profile = null;
+            _error = $"Failed to load account settings: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadActivityAsync()
+    {
+        try
+        {
+            var auditTask = Api.GetMyAuditEventsAsync(_activityDays);
+            var usageTask = Api.GetMyUsageAsync(_activityDays);
+            await Task.WhenAll(auditTask, usageTask);
+            _audit = await auditTask;
+            _usage = await usageTask;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load account activity: {ex.Message}";
+        }
+    }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    private static string FormatUtc(DateTime? value) => value is { } utc ? $"{utc:yyyy-MM-dd HH:mm:ss} UTC" : "—";
+
+    private async Task SaveAsync()
+    {
+        if (_profile is null)
+            return;
+
+        _saving = true;
+        _error = null;
+        _success = null;
+
+        try
+        {
+            var request = new UpdateTenantProfileRequest(
+                _form.Name.Trim(),
+                _form.Slug.Trim().ToLowerInvariant());
+
+            _profile = await Api.UpdateTenantProfileAsync(request);
+            if (_profile is null)
+            {
+                _error = "The organization profile was updated, but the server returned no profile.";
+                return;
+            }
+
+            ResetForm();
+            _success = "Account settings saved successfully.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to save account settings: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void ResetForm()
+    {
+        if (_profile is null)
+            return;
+
+        _form = new AccountSettingsForm
+        {
+            Name = _profile.Name,
+            Slug = _profile.Slug
+        };
+        _error = null;
+        _success = null;
+    }
+
+    private sealed class AccountSettingsForm
+    {
+        [Required(ErrorMessage = "Organization name is required.")]
+        [StringLength(200, ErrorMessage = "Organization name must be 200 characters or fewer.")]
+        public string Name { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Workspace slug is required.")]
+        [StringLength(100, ErrorMessage = "Workspace slug must be 100 characters or fewer.")]
+        [RegularExpression("^[a-z0-9]+(?:-[a-z0-9]+)*$", ErrorMessage = "Use lowercase letters, numbers, and single hyphens only.")]
+        public string Slug { get; set; } = string.Empty;
+    }
+}

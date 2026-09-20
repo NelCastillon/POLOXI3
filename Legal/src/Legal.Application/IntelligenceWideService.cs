@@ -2244,7 +2244,7 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
             // explicitly classified the branch as a DIMENSION (jointly valid evaluation criterion).
             var semanticType=string.Equals(branch.SemanticType?.Trim(),WideBranchSemanticTypes.Dimension,StringComparison.OrdinalIgnoreCase)?WideBranchSemanticTypes.Dimension:WideBranchSemanticTypes.Alternative;
             var branchRole=NormalizeBranchRole(branch.BranchRole);
-            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120),Truncate(branch.DisplayName.Trim(),300),Truncate(branch.Interpretation.Trim(),1000),Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1){SemanticTypeCode=semanticType,BranchRoleCode=branchRole};
+            return new WideBranchRecord(Guid.NewGuid(),executionId,parentId,tenantId,levelNumber,Truncate(NormalizeCode(branch.BranchCode),120)??string.Empty,Truncate(branch.DisplayName?.Trim(),300)??string.Empty,Truncate(branch.Interpretation?.Trim(),1000)??string.Empty,Truncate(branch.CapabilityCode?.Trim(),100),Truncate(branch.SearchText?.Trim(),400),"PENDING",0,confidence,branch.ContinueNarrowing,Truncate(branch.StopReason?.Trim(),50),false,null,index+1){SemanticTypeCode=semanticType,BranchRoleCode=branchRole};
         }).ToArray();
 
     private static string NormalizeBranchRole(string? branchRole)=>branchRole?.Trim().ToUpperInvariant() switch
@@ -2273,8 +2273,9 @@ public sealed partial class IntelligenceWideService(IIntelligenceRepository repo
 
     // V2.8.4: clarification option labels are recognition prompts, not paragraphs — first sentence,
     // capped, so choices scan like "Business banking / fintech for startups" rather than an essay.
-    private static string TrimDescription(string detail)
+    private static string TrimDescription(string? detail)
     {
+        if(string.IsNullOrWhiteSpace(detail))return string.Empty;
         var firstSentence=detail.Split(['.','!','?'],2)[0].Trim();
         return firstSentence.Length<=120?firstSentence:firstSentence[..117]+"...";
     }

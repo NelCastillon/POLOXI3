@@ -114,6 +114,27 @@ public sealed class UserManagementService(
         await repository.WriteAuditAsync(member.TenantId, actorUserId, "MEMBER_REMOVED", null, "TenantMembership", member.MembershipId, null, null, ct);
     }
 
+    public async Task ResetLockoutAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, Guid membershipId, CancellationToken ct = default)
+    {
+        var member = await LoadMemberInScopeAsync(scopeTenantId, platformScope, membershipId, ct);
+        GuardPrivilegedTarget(platformScope, member);
+        await repository.ResetLockoutAsync(member.MembershipId, actorUserId, ct);
+        await repository.WriteAuditAsync(member.TenantId, actorUserId, "MEMBER_LOCKOUT_RESET", null, "TenantMembership", member.MembershipId, null, null, ct);
+    }
+
+    public async Task SetMemberPasswordAsync(Guid? scopeTenantId, bool platformScope, Guid? actorUserId, SetMemberPasswordRequest request, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.TemporaryPassword))
+            throw new InvalidOperationException("A temporary password is required.");
+
+        var member = await LoadMemberInScopeAsync(scopeTenantId, platformScope, request.MembershipId, ct);
+        GuardPrivilegedTarget(platformScope, member);
+        await accountCreator.SetPasswordAsync(member.UserId, request.TemporaryPassword, ct);
+        // Clear any lockout so the member can sign in immediately with the new credential.
+        await repository.ResetLockoutAsync(member.MembershipId, actorUserId, ct);
+        await repository.WriteAuditAsync(member.TenantId, actorUserId, "MEMBER_PASSWORD_RESET", null, "TenantMembership", member.MembershipId, null, null, ct);
+    }
+
     // Prevents orphaning a tenant by deactivating/removing its only remaining active Owner.
     private async Task GuardLastOwnerAsync(ManagedMemberDto member, CancellationToken ct)
     {

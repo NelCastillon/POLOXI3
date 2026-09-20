@@ -37,6 +37,10 @@ public interface ISaasRepository
     Task<IReadOnlyList<AssignableRoleDto>> ListAssignableRolesAsync(bool includeSystemRoles, CancellationToken ct = default);
     Task<IReadOnlyList<TenantOptionDto>> ListTenantsAsync(CancellationToken ct = default);
     Task<string?> GetTenantNameAsync(Guid tenantId, CancellationToken ct = default);
+    // Owner-only organization/tenant profile (view & edit name/slug).
+    Task<TenantProfileDto?> GetTenantProfileAsync(Guid tenantId, CancellationToken ct = default);
+    Task<bool> TenantSlugExistsAsync(string slug, Guid excludeTenantId, CancellationToken ct = default);
+    Task UpdateTenantProfileAsync(Guid tenantId, string name, string slug, Guid? actorUserId, CancellationToken ct = default);
     Task<Guid?> FindUserIdByEmailAsync(string normalizedEmail, CancellationToken ct = default);
     Task<Guid?> FindActiveMembershipIdAsync(Guid tenantId, Guid userId, CancellationToken ct = default);
     Task<int> CountActiveOwnersAsync(Guid tenantId, Guid excludeMembershipId, CancellationToken ct = default);
@@ -44,6 +48,7 @@ public interface ISaasRepository
     Task UpdateMembershipRoleAsync(Guid membershipId, Guid roleId, Guid? actorUserId, CancellationToken ct = default);
     Task UpdateMembershipStatusAsync(Guid membershipId, string statusCode, Guid? actorUserId, CancellationToken ct = default);
     Task RemoveMembershipAsync(Guid membershipId, Guid? actorUserId, CancellationToken ct = default);
+    Task ResetLockoutAsync(Guid membershipId, Guid? actorUserId, CancellationToken ct = default);
 
     // Invitations (Phase B) -------------------------------------------------------
     Task<Guid> CreateInvitationAsync(Guid tenantId, string normalizedEmail, Guid roleId, byte[] tokenHash, DateTime expiresAtUtc, Guid? invitedByUserId, IReadOnlyList<Guid> additionalRoleIds, CancellationToken ct = default);
@@ -106,14 +111,16 @@ public interface ISaasRepository
 
     // Activity read surface (audit + usage + login history) -----------------------
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default);
+    Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, int take, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default);
+    Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, CancellationToken ct = default);
     Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default);
     Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default);
 
     // Legal clickwrap consent -----------------------------------------------------
     Task<IReadOnlyList<LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken ct = default);
     Task RecordConsentAsync(RecordConsentRequest request, CancellationToken ct = default);
-    Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid tenantId, CancellationToken ct = default);
+    Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid? tenantId, CancellationToken ct = default);
 }
 
 public sealed record VerificationChallengeRow(

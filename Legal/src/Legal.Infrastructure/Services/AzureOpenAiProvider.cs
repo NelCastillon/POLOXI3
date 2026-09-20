@@ -19,7 +19,7 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
     // Managed identity is only attempted when the host exposes an identity endpoint; otherwise IMDS probes (169.254.169.254) time out locally and abort the request.
     // Locally the Azure CLI session is used. Token is cached until shortly before expiry to avoid re-invoking az per request.
     private static readonly bool UseManagedIdentity=!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("IDENTITY_ENDPOINT"))||!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MSI_ENDPOINT"))||!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AZURE_CLIENT_ID"));
-    private readonly TokenCredential _managedIdentity=UseManagedIdentity?new ManagedIdentityCredential():new AzureCliCredential();
+    private readonly TokenCredential _managedIdentity=CreateCredential();
     private AccessToken _cachedToken;
     private readonly SemaphoreSlim _tokenLock=new(1,1);
     public string ProviderTypeCode=>"AZURE_OPENAI";
@@ -107,7 +107,17 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
             throw new HttpRequestException($"Azure OpenAI generation failed with HTTP {(int)statusCode}: {json}",null,statusCode);
         }
         using var envelope=JsonDocument.Parse(json);var choice=envelope.RootElement.GetProperty("choices")[0];if(choice.TryGetProperty("finish_reason",out var finishReasonNode)&&finishReasonNode.GetString()=="length")throw new InvalidOperationException($"Azure OpenAI output was truncated because the completion hit the configured maximum output tokens ({request.MaximumOutputTokens}); increase MaximumOutputTokens for feature '{request.FeatureCode}' in AI.Legal_FeaturePolicy.");var content=choice.GetProperty("message").GetProperty("content").GetString()??throw new InvalidOperationException("Azure OpenAI returned no content.");var usage=envelope.RootElement.TryGetProperty("usage",out var usageNode)?usageNode:default;decimal? confidence=null;if(content.Length>0&&content[0]=='{'){using var output=JsonDocument.Parse(content);if(output.RootElement.TryGetProperty("confidence",out var confidenceNode)&&confidenceNode.TryGetDecimal(out var parsed))confidence=Math.Clamp(parsed>1m?parsed/100m:parsed,0m,1m);}
-        return new(content,string.IsNullOrWhiteSpace(request.OutputSchemaJson)?null:content,Token(usage,"prompt_tokens"),Token(usage,"completion_tokens"),confidence,requestId,timer.Elapsed,request.Context.ProviderCode,request.Context.ModelCode);
+        return new(content,string.IsNullOrWhiteSpace(request.OutputSchemaJson)?null:content,Token(usage,"prompt_tokens"),Token(usage,"completion_tokens"),confidence,requestId,timer.Elapsed,request.Context.ProviderCode,request.Context.ModelCode??string.Empty);
+    }
+
+    private static TokenCredential CreateCredential()
+    {
+        if(!UseManagedIdentity)return new AzureCliCredential();
+        var clientId=Environment.GetEnvironmentVariable("AZURE_CLIENT_ID");
+        var identityId=string.IsNullOrWhiteSpace(clientId)
+            ?ManagedIdentityId.SystemAssigned
+            :ManagedIdentityId.FromUserAssignedClientId(clientId);
+        return new ManagedIdentityCredential(identityId);
     }
 
     // Extracts the offending parameter name from an Azure OpenAI 400 unsupported_parameter or

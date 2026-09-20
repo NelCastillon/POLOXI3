@@ -334,6 +334,9 @@ public sealed class InvitationServiceTests
 
         public Task<Guid> InviteAsync(string email, string firstName, string lastName, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task SetPasswordAsync(Guid userId, string newPassword, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class StubConfiguration : IConfiguration
@@ -458,6 +461,9 @@ public sealed class InvitationServiceTests
         }
 
         // ── Unused members (throw to surface accidental dependencies) ─────────
+        public Task<TenantProfileDto?> GetTenantProfileAsync(Guid tenantId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> TenantSlugExistsAsync(string slug, Guid excludeTenantId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task UpdateTenantProfileAsync(Guid tenantId, string name, string slug, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<TenantGroupDto>> ListGroupsAsync(Guid tenantId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<TenantGroupDto?> GetGroupAsync(Guid tenantId, Guid groupId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<AssignableRoleDto>> GetGroupRolesAsync(Guid groupId, CancellationToken ct = default) => throw new NotSupportedException();
@@ -498,6 +504,8 @@ public sealed class InvitationServiceTests
         public Task UpdateMembershipRoleAsync(Guid membershipId, Guid roleId, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task UpdateMembershipStatusAsync(Guid membershipId, string statusCode, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task RemoveMembershipAsync(Guid membershipId, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task ResetLockoutAsync(Guid membershipId, Guid? actorUserId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<OutboxMessageDto>> DequeueOutboxBatchAsync(int batchSize, CancellationToken ct = default) => throw new NotSupportedException();
         public Task MarkOutboxSentAsync(Guid outboxId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task MarkOutboxFailedAsync(Guid outboxId, string error, DateTime nextAttemptUtc, CancellationToken ct = default) => throw new NotSupportedException();
@@ -518,11 +526,13 @@ public sealed class InvitationServiceTests
         public Task CreateIdempotencyRecordAsync(Guid tenantId, string operation, string idempotencyKey, Guid executionId, DateTime expiresAtUtc, CancellationToken ct = default) => throw new NotSupportedException();
         public Task WriteAuditAsync(Guid? tenantId, Guid? userId, string eventType, Guid? executionId, string? resourceType, Guid? resourceId, string? dataJson, string? correlationId, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<AuditEventDto>>([]);
+        public Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, int take, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<AuditEventDto>>([]);
         public Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<UsageSummaryDto>>([]);
+        public Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<UsageSummaryDto>>([]);
         public Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LoginHistoryDto>>([]);
         public Task<IReadOnlyList<LegalAgreementDto>> GetActiveAgreementsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LegalAgreementDto>>([]);
         public Task RecordConsentAsync(RecordConsentRequest request, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid tenantId, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ConsentRecordDto>>([]);
+        public Task<IReadOnlyList<ConsentRecordDto>> ListConsentRecordsForUserAsync(Guid userId, Guid? tenantId, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ConsentRecordDto>>([]);
     }
 }

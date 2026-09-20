@@ -49,6 +49,6 @@ public sealed class ConsentService(ISaasRepository repository) : IConsentService
         }
     }
 
-    public Task<IReadOnlyList<ConsentRecordDto>> GetConsentHistoryAsync(Guid userId, Guid tenantId, CancellationToken ct = default)
+    public Task<IReadOnlyList<ConsentRecordDto>> GetConsentHistoryAsync(Guid userId, Guid? tenantId, CancellationToken ct = default)
         => repository.ListConsentRecordsForUserAsync(userId, tenantId, ct);
 }

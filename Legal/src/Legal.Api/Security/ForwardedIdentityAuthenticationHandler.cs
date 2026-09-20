@@ -42,6 +42,7 @@ public sealed class ForwardedIdentityAuthenticationHandler : AuthenticationHandl
         var actingUserName = Request.Headers["X-Acting-User-Name"].ToString();
         var actingUserEmail = Request.Headers["X-Acting-User-Email"].ToString();
         var actingTenantId = Request.Headers["X-Acting-Tenant-Id"].ToString();
+        var actingRole = Request.Headers["X-Acting-Role"].ToString();
         var actingPermissions = Request.Headers["X-Acting-Permissions"].ToString();
         var timestampHeader = Request.Headers[ActingIdentitySignature.TimestampHeader].ToString();
         var signature = Request.Headers[ActingIdentitySignature.SignatureHeader].ToString();
@@ -51,7 +52,7 @@ public sealed class ForwardedIdentityAuthenticationHandler : AuthenticationHandl
 
         // Payload must be reconstructed from the exact (escaped) header values the Web tier signed.
         var payload = ActingIdentitySignature.BuildPayload(
-            unixTimeSeconds, actingUserId, actingUserName, actingUserEmail, actingTenantId, actingPermissions);
+            unixTimeSeconds, actingUserId, actingUserName, actingUserEmail, actingTenantId, actingRole, actingPermissions);
 
         if (!ActingIdentitySignature.Verify(payload, signature, _sharedSecret, unixTimeSeconds, DateTimeOffset.UtcNow))
             return Task.FromResult(AuthenticateResult.Fail("Invalid or expired acting-identity signature."));
@@ -63,6 +64,7 @@ public sealed class ForwardedIdentityAuthenticationHandler : AuthenticationHandl
 
         var userName = Unescape(actingUserName);
         var userEmail = Unescape(actingUserEmail);
+        var role = Unescape(actingRole);
 
         var claims = new List<Claim>
         {
@@ -74,6 +76,9 @@ public sealed class ForwardedIdentityAuthenticationHandler : AuthenticationHandl
 
         if (!string.IsNullOrWhiteSpace(userEmail))
             claims.Add(new Claim(ClaimTypes.Email, userEmail));
+
+        if (!string.IsNullOrWhiteSpace(role))
+            claims.Add(new Claim(ClaimTypes.Role, role));
 
         foreach (var permission in actingPermissions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             claims.Add(new Claim("permission", permission));
