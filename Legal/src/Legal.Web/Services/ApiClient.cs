@@ -217,6 +217,15 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.ManagedMemberDto>> GetTenantMembersAsync(CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.ManagedMemberDto>>("api/tenant_users",token)??[];
 
+    public async Task<Legal.Application.Features.Saas.MemberPageDto> GetTenantMembersPageAsync(string? search=null,string? status=null,int page=1,int pageSize=25,CancellationToken token=default)
+    {
+        var query=$"api/tenant_users/page?page={page}&pageSize={pageSize}";
+        if(!string.IsNullOrWhiteSpace(search))query+=$"&search={Uri.EscapeDataString(search.Trim())}";
+        if(!string.IsNullOrWhiteSpace(status))query+=$"&status={Uri.EscapeDataString(status.Trim())}";
+        return await _httpClient.GetFromJsonAsync<Legal.Application.Features.Saas.MemberPageDto>(query,token)
+            ??new Legal.Application.Features.Saas.MemberPageDto([],0,0,0,0,page,pageSize);
+    }
+
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.AssignableRoleDto>> GetTenantAssignableRolesAsync(CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AssignableRoleDto>>("api/tenant_users/roles",token)??[];
 
@@ -329,14 +338,28 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetMyAuditEventsAsync(int days=30,int take=100,CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/me/audit?days={days}&take={take}",token)??[];
 
+    public Task<Legal.Application.Features.Saas.PagedResultDto<Legal.Application.Features.Saas.AuditEventDto>> GetMyAuditEventsPageAsync(int days=30,string? search=null,int page=1,int pageSize=25,CancellationToken token=default)
+        =>GetAuditPageAsync($"api/tenant_activity/me/audit/page?days={days}",search,page,pageSize,token);
+
     public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetMyUsageAsync(int days=30,CancellationToken token=default)
         =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/me/usage?days={days}",token)??[];
 
-    public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetUserAuditEventsAsync(Guid userId,int days=30,int take=100,CancellationToken token=default)
-        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/users/{userId}/audit?days={days}&take={take}",token)??[];
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>> GetUserAuditEventsAsync(Guid userId,Guid? tenantId=null,int days=30,int take=100,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.AuditEventDto>>($"api/tenant_activity/users/{userId}/audit?tenantId={tenantId}&days={days}&take={take}",token)??[];
 
-    public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetUserUsageAsync(Guid userId,int days=30,CancellationToken token=default)
-        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/users/{userId}/usage?days={days}",token)??[];
+    public Task<Legal.Application.Features.Saas.PagedResultDto<Legal.Application.Features.Saas.AuditEventDto>> GetUserAuditEventsPageAsync(Guid userId,Guid? tenantId=null,int days=30,string? search=null,int page=1,int pageSize=25,CancellationToken token=default)
+        =>GetAuditPageAsync($"api/tenant_activity/users/{userId}/audit/page?tenantId={tenantId}&days={days}",search,page,pageSize,token);
+
+    private async Task<Legal.Application.Features.Saas.PagedResultDto<Legal.Application.Features.Saas.AuditEventDto>> GetAuditPageAsync(string endpoint,string? search,int page,int pageSize,CancellationToken token)
+    {
+        var query=$"{endpoint}&page={page}&pageSize={pageSize}";
+        if(!string.IsNullOrWhiteSpace(search))query+=$"&search={Uri.EscapeDataString(search.Trim())}";
+        return await _httpClient.GetFromJsonAsync<Legal.Application.Features.Saas.PagedResultDto<Legal.Application.Features.Saas.AuditEventDto>>(query,token)
+            ??new Legal.Application.Features.Saas.PagedResultDto<Legal.Application.Features.Saas.AuditEventDto>([],0,page,pageSize);
+    }
+
+    public async Task<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>> GetUserUsageAsync(Guid userId,Guid? tenantId=null,int days=30,CancellationToken token=default)
+        =>await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Features.Saas.UsageSummaryDto>>($"api/tenant_activity/users/{userId}/usage?tenantId={tenantId}&days={days}",token)??[];
 
     // Public invitation acceptance (/invitations/{token}) — anonymous, token-only.
     public async Task<Legal.Application.Features.Saas.InvitationLookupDto?> LookupInvitationAsync(string invitationToken,CancellationToken token=default)

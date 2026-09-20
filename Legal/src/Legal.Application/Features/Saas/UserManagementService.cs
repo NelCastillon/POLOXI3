@@ -34,6 +34,9 @@ public sealed class UserManagementService(
     public Task<IReadOnlyList<ManagedMemberDto>> ListMembersAsync(Guid? scopeTenantId, CancellationToken ct = default)
         => repository.ListMembersAsync(scopeTenantId, ct);
 
+    public Task<MemberPageDto> PageMembersAsync(Guid? scopeTenantId, string? search, string? status, int page, int pageSize, CancellationToken ct = default)
+        => repository.PageMembersAsync(scopeTenantId, search, status, Math.Max(1, page), Math.Clamp(pageSize, 10, 100), ct);
+
     public Task<IReadOnlyList<AssignableRoleDto>> ListAssignableRolesAsync(bool platformScope, CancellationToken ct = default)
         => repository.ListAssignableRolesAsync(includeSystemRoles: platformScope, ct);
 

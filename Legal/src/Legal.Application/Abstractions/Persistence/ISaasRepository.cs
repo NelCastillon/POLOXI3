@@ -33,6 +33,7 @@ public interface ISaasRepository
 
     // User management -------------------------------------------------------------
     Task<IReadOnlyList<ManagedMemberDto>> ListMembersAsync(Guid? tenantId, CancellationToken ct = default);
+    Task<MemberPageDto> PageMembersAsync(Guid? tenantId, string? search, string? status, int page, int pageSize, CancellationToken ct = default);
     Task<ManagedMemberDto?> GetMemberAsync(Guid membershipId, CancellationToken ct = default);
     Task<IReadOnlyList<AssignableRoleDto>> ListAssignableRolesAsync(bool includeSystemRoles, CancellationToken ct = default);
     Task<IReadOnlyList<TenantOptionDto>> ListTenantsAsync(CancellationToken ct = default);
@@ -112,6 +113,7 @@ public interface ISaasRepository
     // Activity read surface (audit + usage + login history) -----------------------
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, DateTime sinceUtc, int take, CancellationToken ct = default);
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, int take, CancellationToken ct = default);
+    Task<PagedResultDto<AuditEventDto>> PageAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, string? search, int page, int pageSize, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, DateTime sinceUtc, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, CancellationToken ct = default);
     Task RecordLoginAsync(RecordLoginRequest request, CancellationToken ct = default);

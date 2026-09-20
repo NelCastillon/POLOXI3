@@ -30,23 +30,36 @@
         <section class="intel-kpis">
             <article class="intel-kpi-link @(_statusFilter is null ? "intel-kpi-active" : null)" role="button" tabindex="0"
                      title="Show all members" @onclick="() => SetStatus(null)">
-                <span>All members</span><strong>@_members.Count</strong>
+                <span>All members</span><strong>@_memberTotalCount</strong>
             </article>
             <article class="intel-kpi-link @(_statusFilter == "Active" ? "intel-kpi-active" : null)" role="button" tabindex="0"
                      title="Show active members" @onclick="@(() => SetStatus("Active"))">
-                <span>Active</span><strong>@_members.Count(m => m.StatusCode == "Active")</strong>
+                <span>Active</span><strong>@_activeCount</strong>
             </article>
             <article class="intel-kpi-link @(_statusFilter == "Suspended" ? "intel-kpi-active" : null)" role="button" tabindex="0"
                      title="Show suspended members" @onclick="@(() => SetStatus("Suspended"))">
-                <span>Suspended</span><strong>@_members.Count(m => m.StatusCode == "Suspended")</strong>
+                <span>Suspended</span><strong>@_suspendedCount</strong>
             </article>
             <article class="intel-kpi-link @(_statusFilter == "Disabled" ? "intel-kpi-active" : null)" role="button" tabindex="0"
                      title="Show disabled members" @onclick="@(() => SetStatus("Disabled"))">
-                <span>Disabled</span><strong>@_members.Count(m => m.StatusCode == "Disabled")</strong>
+                <span>Disabled</span><strong>@_disabledCount</strong>
             </article>
         </section>
 
-        @if (_filtered.Count == 0)
+        <div class="um-list-controls">
+            <form @onsubmit="SearchMembersAsync" @onsubmit:preventDefault>
+                <label class="visually-hidden" for="member-search">Search members</label>
+                <input id="member-search" class="form-control" type="search" @bind="_memberSearch" placeholder="Search name, email, or organization…" />
+                <button type="submit" class="um-btn um-btn-ghost" disabled="@_loading"><i class="bi bi-search"></i> Search</button>
+            </form>
+            <select class="form-control um-input-sm" aria-label="Members per page" @bind="_memberPageSize" @bind:after="ChangeMemberPageSizeAsync">
+                <option value="10">10 per page</option>
+                <option value="25">25 per page</option>
+                <option value="50">50 per page</option>
+            </select>
+        </div>
+
+        @if (_members.Count == 0)
         {
             <div class="intel-state">No members match this view.</div>
         }
@@ -58,7 +71,7 @@
                         <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr>
                     </thead>
                     <tbody>
-                        @foreach (var m in _filtered)
+                        @foreach (var m in _members)
                         {
                             <tr>
                                 <td>@($"{m.FirstName} {m.LastName}".Trim())</td>
@@ -95,84 +108,16 @@
                             </tr>
                         }
 
-@if (_activityTarget is not null)
-{
-    <div class="um-modal-backdrop">
-        <div class="um-modal um-modal--wide">
-            <div class="um-modal-header">
-                <i class="bi bi-activity"></i>
-                <span>Usage &amp; audit — @($"{_activityTarget.FirstName} {_activityTarget.LastName}".Trim())</span>
-                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="CloseActivity"><i class="bi bi-x-lg"></i></button>
-            </div>
-            <div class="um-modal-body">
-                <div class="um-activity-toolbar">
-                    <p>Metered feature consumption and audit events attributed to this member within your tenant.</p>
-                    <select class="form-control um-input-sm" @bind="_activityDays" @bind:after="ReloadActivityAsync">
-                        <option value="7">Last 7 days</option>
-                        <option value="30">Last 30 days</option>
-                        <option value="90">Last 90 days</option>
-                        <option value="365">Last 365 days</option>
-                    </select>
-                </div>
-                @if (_activityLoading)
-                {
-                    <div class="intel-state">Loading member activity…</div>
-                }
-                else if (_activityError is not null)
-                {
-                    <div class="alert alert-danger">@_activityError</div>
-                }
-                else
-                {
-                    <h3 class="um-activity-title">Metered feature usage</h3>
-                    @if (_activityUsage.Count == 0)
-                    {
-                        <div class="intel-state">No metered usage recorded in this window.</div>
-                    }
-                    else
-                    {
-                        <div class="um-table-scroll">
-                            <table class="um-table">
-                                <thead><tr><th>Meter</th><th>Class</th><th>Quantity</th><th>Events</th><th>Last used (UTC)</th></tr></thead>
-                                <tbody>
-                                    @foreach (var usage in _activityUsage)
-                                    {
-                                        <tr><td>@usage.MeterCode</td><td>@usage.UsageClass</td><td>@usage.TotalQuantity</td><td>@usage.EventCount</td><td>@FormatUtc(usage.LastOccurredAtUtc)</td></tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </div>
-                    }
-
-                    <h3 class="um-activity-title">Audit events</h3>
-                    @if (_activityAudit.Count == 0)
-                    {
-                        <div class="intel-state">No audit events recorded in this window.</div>
-                    }
-                    else
-                    {
-                        <div class="um-table-scroll">
-                            <table class="um-table">
-                                <thead><tr><th>When (UTC)</th><th>Event</th><th>Resource</th><th>Resource ID</th><th>Correlation</th></tr></thead>
-                                <tbody>
-                                    @foreach (var audit in _activityAudit)
-                                    {
-                                        <tr><td>@FormatUtc(audit.OccurredAtUtc)</td><td>@audit.EventType</td><td>@Display(audit.ResourceType)</td><td>@Display(audit.ResourceId?.ToString())</td><td>@Display(audit.CorrelationId)</td></tr>
-                                    }
-                                </tbody>
-                            </table>
-                        </div>
-                    }
-                }
-            </div>
-            <div class="um-modal-footer">
-                <button class="um-btn um-btn-ghost" @onclick="CloseActivity">Close</button>
-            </div>
-        </div>
-    </div>
-}
                     </tbody>
                 </table>
+                <div class="um-pager">
+                    <span>@MemberResultSummary</span>
+                    <div>
+                        <button class="um-btn um-btn-ghost" @onclick="PreviousMemberPageAsync" disabled="@(_loading || _memberPage <= 1)">Previous</button>
+                        <span>Page @_memberPage of @MemberPageCount</span>
+                        <button class="um-btn um-btn-ghost" @onclick="NextMemberPageAsync" disabled="@(_loading || _memberPage >= MemberPageCount)">Next</button>
+                    </div>
+                </div>
             </section>
         }
 
@@ -222,6 +167,59 @@
     }
 </div>
 
+@if (_activityTarget is not null)
+{
+    <div class="um-modal-backdrop" role="presentation" @onclick="CloseActivity">
+        <div class="um-modal um-modal--wide" role="dialog" aria-modal="true" aria-labelledby="member-activity-title" @onclick:stopPropagation>
+            <div class="um-modal-header">
+                <i class="bi bi-activity"></i>
+                <span id="member-activity-title">Usage &amp; audit — @($"{_activityTarget.FirstName} {_activityTarget.LastName}".Trim())</span>
+                <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" aria-label="Close member activity" @onclick="CloseActivity"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="um-modal-body">
+                <div class="um-activity-toolbar">
+                    <p>Metered feature consumption and audit events attributed to this member within your tenant.</p>
+                    <select class="form-control um-input-sm" @bind="_activityDays" @bind:after="ResetAndReloadActivityAsync">
+                        <option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last 365 days</option>
+                    </select>
+                </div>
+                @if (_activityLoading) { <div class="intel-state">Loading member activity…</div> }
+                else if (_activityError is not null) { <div class="alert alert-danger">@_activityError</div> }
+                else
+                {
+                    <h3 class="um-activity-title">Metered feature usage</h3>
+                    @if (_activityUsage.Count == 0) { <div class="intel-state">No metered usage recorded in this window.</div> }
+                    else
+                    {
+                        <div class="um-table-scroll"><table class="um-table"><thead><tr><th>Meter</th><th>Class</th><th>Quantity</th><th>Events</th><th>Last used (UTC)</th></tr></thead><tbody>
+                            @foreach (var usage in _activityUsage) { <tr><td>@usage.MeterCode</td><td>@usage.UsageClass</td><td>@usage.TotalQuantity</td><td>@usage.EventCount</td><td>@FormatUtc(usage.LastOccurredAtUtc)</td></tr> }
+                        </tbody></table></div>
+                    }
+                    <div class="um-activity-heading">
+                        <h3 class="um-activity-title">Audit events</h3>
+                        <form @onsubmit="SearchActivityAsync" @onsubmit:preventDefault>
+                            <input class="form-control" type="search" aria-label="Search member audit events" @bind="_activitySearch" placeholder="Search audit events…" />
+                            <button class="um-btn um-btn-ghost" type="submit"><i class="bi bi-search"></i> Search</button>
+                        </form>
+                    </div>
+                    @if (_activityAudit.Count == 0) { <div class="intel-state">No audit events match this view.</div> }
+                    else
+                    {
+                        <div class="um-table-scroll"><table class="um-table"><thead><tr><th>When (UTC)</th><th>Event</th><th>Resource</th><th>Resource ID</th><th>Correlation</th></tr></thead><tbody>
+                            @foreach (var audit in _activityAudit) { <tr><td>@FormatUtc(audit.OccurredAtUtc)</td><td>@audit.EventType</td><td>@Display(audit.ResourceType)</td><td>@Display(audit.ResourceId?.ToString())</td><td>@Display(audit.CorrelationId)</td></tr> }
+                        </tbody></table></div>
+                        <div class="um-pager"><span>@ActivityResultSummary</span><div>
+                            <button class="um-btn um-btn-ghost" @onclick="PreviousActivityPageAsync" disabled="@(_activityPage <= 1)">Previous</button>
+                            <span>Page @_activityPage of @ActivityPageCount</span>
+                            <button class="um-btn um-btn-ghost" @onclick="NextActivityPageAsync" disabled="@(_activityPage >= ActivityPageCount)">Next</button>
+                        </div></div>
+                    }
+                }
+            </div>
+            <div class="um-modal-footer"><button class="um-btn um-btn-ghost" @onclick="CloseActivity">Close</button></div>
+        </div>
+    </div>
+}
 
 @if (_showForm)
 {
@@ -466,6 +464,13 @@
     private string? _passwordError;
     private readonly PasswordForm _passwordForm = new();
     private IReadOnlyList<ManagedMemberDto> _members = [];
+    private string _memberSearch = string.Empty;
+    private int _memberPage = 1;
+    private int _memberPageSize = 25;
+    private int _memberTotalCount;
+    private int _activeCount;
+    private int _suspendedCount;
+    private int _disabledCount;
     private IReadOnlyList<AssignableRoleDto> _roles = [];
     private readonly MemberForm _form = new();
 
@@ -486,9 +491,15 @@
     private int _activityDays = 30;
     private IReadOnlyList<AuditEventDto> _activityAudit = [];
     private IReadOnlyList<UsageSummaryDto> _activityUsage = [];
+    private string _activitySearch = string.Empty;
+    private int _activityPage = 1;
+    private const int ActivityPageSize = 25;
+    private int _activityTotalCount;
 
-    private IReadOnlyList<ManagedMemberDto> _filtered =>
-        _statusFilter is null ? _members : _members.Where(m => m.StatusCode == _statusFilter).ToList();
+    private int MemberPageCount => Math.Max(1, (int)Math.Ceiling(_memberTotalCount / (double)_memberPageSize));
+    private int ActivityPageCount => Math.Max(1, (int)Math.Ceiling(_activityTotalCount / (double)ActivityPageSize));
+    private string MemberResultSummary => ResultSummary(_memberPage, _memberPageSize, _memberTotalCount);
+    private string ActivityResultSummary => ResultSummary(_activityPage, ActivityPageSize, _activityTotalCount);
 
     protected override Task OnInitializedAsync() => LoadAsync();
 
@@ -499,7 +510,12 @@
         try
         {
             _roles = await Api.GetTenantAssignableRolesAsync();
-            _members = await Api.GetTenantMembersAsync();
+            var memberPage = await Api.GetTenantMembersPageAsync(_memberSearch, _statusFilter, _memberPage, _memberPageSize);
+            _members = memberPage.Items;
+            _memberTotalCount = memberPage.TotalCount;
+            _activeCount = memberPage.ActiveCount;
+            _suspendedCount = memberPage.SuspendedCount;
+            _disabledCount = memberPage.DisabledCount;
             _invitations = await Api.GetTenantInvitationsAsync();
         }
         catch (Exception ex)
@@ -515,6 +531,8 @@
     private async Task OpenActivity(ManagedMemberDto member)
     {
         _activityTarget = member;
+        _activityPage = 1;
+        _activitySearch = string.Empty;
         await ReloadActivityAsync();
     }
 
@@ -528,10 +546,12 @@
         _activityUsage = [];
         try
         {
-            var auditTask = Api.GetUserAuditEventsAsync(_activityTarget.UserId, _activityDays);
-            var usageTask = Api.GetUserUsageAsync(_activityTarget.UserId, _activityDays);
+            var auditTask = Api.GetUserAuditEventsPageAsync(_activityTarget.UserId, _activityTarget.TenantId, _activityDays, _activitySearch, _activityPage, ActivityPageSize);
+            var usageTask = Api.GetUserUsageAsync(_activityTarget.UserId, _activityTarget.TenantId, _activityDays);
             await Task.WhenAll(auditTask, usageTask);
-            _activityAudit = await auditTask;
+            var auditPage = await auditTask;
+            _activityAudit = auditPage.Items;
+            _activityTotalCount = auditPage.TotalCount;
             _activityUsage = await usageTask;
         }
         catch (Exception ex)
@@ -550,7 +570,25 @@
 
     private static string FormatUtc(DateTime? value) => value is { } utc ? $"{utc:yyyy-MM-dd HH:mm:ss} UTC" : "—";
 
-    private void SetStatus(string? status) => _statusFilter = status;
+    private async Task SetStatus(string? status)
+    {
+        _statusFilter = status;
+        _memberPage = 1;
+        await LoadAsync();
+    }
+
+    private async Task SearchMembersAsync() { _memberPage = 1; await LoadAsync(); }
+    private async Task ChangeMemberPageSizeAsync() { _memberPage = 1; await LoadAsync(); }
+    private async Task PreviousMemberPageAsync() { if (_memberPage > 1) { _memberPage--; await LoadAsync(); } }
+    private async Task NextMemberPageAsync() { if (_memberPage < MemberPageCount) { _memberPage++; await LoadAsync(); } }
+    private async Task ResetAndReloadActivityAsync() { _activityPage = 1; await ReloadActivityAsync(); }
+    private async Task SearchActivityAsync() { _activityPage = 1; await ReloadActivityAsync(); }
+    private async Task PreviousActivityPageAsync() { if (_activityPage > 1) { _activityPage--; await ReloadActivityAsync(); } }
+    private async Task NextActivityPageAsync() { if (_activityPage < ActivityPageCount) { _activityPage++; await ReloadActivityAsync(); } }
+
+    private static string ResultSummary(int page, int pageSize, int totalCount) => totalCount == 0
+        ? "No results"
+        : $"Showing {((page - 1) * pageSize) + 1}–{Math.Min(page * pageSize, totalCount)} of {totalCount}";
 
     private void OpenForm(bool _)
     {

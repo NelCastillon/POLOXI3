@@ -32,6 +32,13 @@ public sealed class ActivityService(ISaasRepository repository, ILogger<Activity
         return repository.ListAuditEventsForUserAsync(tenantId, userId, SinceUtc(days), ClampTake(take), ct);
     }
 
+    public Task<PagedResultDto<AuditEventDto>> PageAuditEventsForUserAsync(Guid tenantId, Guid userId, int days, string? search, int page, int pageSize, CancellationToken ct = default)
+    {
+        EnsureTenant(tenantId);
+        EnsureUser(userId);
+        return repository.PageAuditEventsForUserAsync(tenantId, userId, SinceUtc(days), search, Math.Max(1, page), Math.Clamp(pageSize, 10, 100), ct);
+    }
+
     public Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, int days, CancellationToken ct = default)
     {
         EnsureTenant(tenantId);

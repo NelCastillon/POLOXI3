@@ -71,6 +71,18 @@
                 }
 
                 <h3>Audit events</h3>
+                <div class="account-activity-controls">
+                    <form @onsubmit="SearchAuditAsync" @onsubmit:preventDefault>
+                        <label class="visually-hidden" for="account-audit-search">Search audit events</label>
+                        <input id="account-audit-search" type="search" @bind="_auditSearch" placeholder="Search event, resource, ID, or correlation…" />
+                        <button type="submit" class="um-btn um-btn-ghost" disabled="@_activityLoading"><i class="bi bi-search"></i> Search</button>
+                    </form>
+                    <select aria-label="Audit results per page" @bind="_auditPageSize" @bind:after="ChangeAuditPageSizeAsync">
+                        <option value="10">10 per page</option>
+                        <option value="25">25 per page</option>
+                        <option value="50">50 per page</option>
+                    </select>
+                </div>
                 @if (_audit.Count == 0)
                 {
                     <div class="intel-state">No audit events recorded in this window.</div>
@@ -87,6 +99,14 @@
                                 }
                             </tbody>
                         </table>
+                    </div>
+                    <div class="account-pager">
+                        <span>@AuditResultSummary</span>
+                        <div>
+                            <button class="um-btn um-btn-ghost" @onclick="PreviousAuditPageAsync" disabled="@(_activityLoading || _auditPage <= 1)">Previous</button>
+                            <span>Page @_auditPage of @AuditPageCount</span>
+                            <button class="um-btn um-btn-ghost" @onclick="NextAuditPageAsync" disabled="@(_activityLoading || _auditPage >= AuditPageCount)">Next</button>
+                        </div>
                     </div>
                 }
             </section>
@@ -178,6 +198,16 @@
     private int _activityDays = 30;
     private IReadOnlyList<AuditEventDto> _audit = [];
     private IReadOnlyList<UsageSummaryDto> _usage = [];
+    private bool _activityLoading;
+    private string _auditSearch = string.Empty;
+    private int _auditPage = 1;
+    private int _auditPageSize = 25;
+    private int _auditTotalCount;
+
+    private int AuditPageCount => Math.Max(1, (int)Math.Ceiling(_auditTotalCount / (double)_auditPageSize));
+    private string AuditResultSummary => _auditTotalCount == 0
+        ? "No results"
+        : $"Showing {((_auditPage - 1) * _auditPageSize) + 1}–{Math.Min(_auditPage * _auditPageSize, _auditTotalCount)} of {_auditTotalCount}";
 
     private bool IsUnchanged => _profile is not null
         && string.Equals(_form.Name?.Trim(), _profile.Name, StringComparison.Ordinal)
@@ -223,18 +253,51 @@
 
     private async Task LoadActivityAsync()
     {
+        _activityLoading = true;
         try
         {
-            var auditTask = Api.GetMyAuditEventsAsync(_activityDays);
+            var auditTask = Api.GetMyAuditEventsPageAsync(_activityDays, _auditSearch, _auditPage, _auditPageSize);
             var usageTask = Api.GetMyUsageAsync(_activityDays);
             await Task.WhenAll(auditTask, usageTask);
-            _audit = await auditTask;
+            var auditPage = await auditTask;
+            _audit = auditPage.Items;
+            _auditTotalCount = auditPage.TotalCount;
             _usage = await usageTask;
         }
         catch (Exception ex)
         {
             _error = $"Failed to load account activity: {ex.Message}";
         }
+        finally
+        {
+            _activityLoading = false;
+        }
+    }
+
+    private async Task SearchAuditAsync()
+    {
+        _auditPage = 1;
+        await LoadActivityAsync();
+    }
+
+    private async Task ChangeAuditPageSizeAsync()
+    {
+        _auditPage = 1;
+        await LoadActivityAsync();
+    }
+
+    private async Task PreviousAuditPageAsync()
+    {
+        if (_auditPage <= 1) return;
+        _auditPage--;
+        await LoadActivityAsync();
+    }
+
+    private async Task NextAuditPageAsync()
+    {
+        if (_auditPage >= AuditPageCount) return;
+        _auditPage++;
+        await LoadActivityAsync();
     }
 
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;

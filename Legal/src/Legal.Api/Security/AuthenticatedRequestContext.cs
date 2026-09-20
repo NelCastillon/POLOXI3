@@ -46,6 +46,12 @@ public static class AuthenticatedRequestContext
         return permissions;
     }
 
+    public static bool IsSystemAdmin(ClaimsPrincipal user)
+        => user.Identity?.AuthenticationType == "Development"
+            || user.IsInRole("SYSTEM_ADMIN")
+            || user.IsInRole("SUPERADMIN")
+            || GetGrantedPermissions(user).Contains("platform.users.manage", StringComparer.OrdinalIgnoreCase);
+
     public static Guid? GetUserId(ClaimsPrincipal user)
     {
         var claim = user.FindFirstValue(ClaimTypes.NameIdentifier)

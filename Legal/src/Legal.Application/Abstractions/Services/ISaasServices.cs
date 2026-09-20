@@ -100,6 +100,7 @@ public interface IUserManagementService
 {
     /// <summary>List members. When <paramref name="scopeTenantId"/> is null the caller must be platform scope (all tenants).</summary>
     Task<IReadOnlyList<ManagedMemberDto>> ListMembersAsync(Guid? scopeTenantId, CancellationToken ct = default);
+    Task<MemberPageDto> PageMembersAsync(Guid? scopeTenantId, string? search, string? status, int page, int pageSize, CancellationToken ct = default);
 
     /// <summary>Assignable roles for the given scope (platform includes SUPERADMIN; tenant excludes it).</summary>
     Task<IReadOnlyList<AssignableRoleDto>> ListAssignableRolesAsync(bool platformScope, CancellationToken ct = default);
@@ -165,6 +166,7 @@ public interface IActivityService
 {
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsAsync(Guid tenantId, int days, int take, CancellationToken ct = default);
     Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, int days, int take, CancellationToken ct = default);
+    Task<PagedResultDto<AuditEventDto>> PageAuditEventsForUserAsync(Guid tenantId, Guid userId, int days, string? search, int page, int pageSize, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageAsync(Guid tenantId, int days, CancellationToken ct = default);
     Task<IReadOnlyList<UsageSummaryDto>> SummarizeUsageForUserAsync(Guid tenantId, Guid userId, int days, CancellationToken ct = default);
     Task<IReadOnlyList<LoginHistoryDto>> ListLoginHistoryAsync(Guid tenantId, int days, int take, CancellationToken ct = default);

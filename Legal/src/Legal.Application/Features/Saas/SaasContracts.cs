@@ -89,11 +89,11 @@ public sealed record IntelligenceExecutionDto(
 // ── Request contracts ────────────────────────────────────────────────────────
 
 public sealed record SignupRequest(
-    [property: Required, StringLength(100)] string FirstName,
-    [property: Required, StringLength(100)] string LastName,
-    [property: Required, EmailAddress, StringLength(256)] string Email,
-    [property: Required, StringLength(128, MinimumLength = 6)] string Password,
-    [property: Range(typeof(bool), "true", "true", ErrorMessage = "You must accept the Terms of Service and Privacy Policy.")] bool AcceptedAgreements = false);
+    [param: Required, StringLength(100)] string FirstName,
+    [param: Required, StringLength(100)] string LastName,
+    [param: Required, EmailAddress, StringLength(256)] string Email,
+    [param: Required, StringLength(128, MinimumLength = 6)] string Password,
+    [param: Range(typeof(bool), "true", "true", ErrorMessage = "You must accept the Terms of Service and Privacy Policy.")] bool AcceptedAgreements = false);
 
 public sealed record VerifyEmailRequest(string Email, string Code);
 
@@ -131,6 +131,23 @@ public sealed record ManagedMemberDto(
     int AuthorizationVersion,
     string ProvisioningSource,
     bool IsLockedOut = false);
+
+/// <summary>A bounded page of results plus the total number matching the query.</summary>
+public sealed record PagedResultDto<T>(
+    IReadOnlyList<T> Items,
+    int TotalCount,
+    int Page,
+    int PageSize);
+
+/// <summary>Member totals remain tenant-wide so status KPI cards do not reflect only the current page.</summary>
+public sealed record MemberPageDto(
+    IReadOnlyList<ManagedMemberDto> Items,
+    int TotalCount,
+    int ActiveCount,
+    int SuspendedCount,
+    int DisabledCount,
+    int Page,
+    int PageSize);
 
 /// <summary>An assignable role from the platform (TenantId NULL) catalog.</summary>
 public sealed record AssignableRoleDto(

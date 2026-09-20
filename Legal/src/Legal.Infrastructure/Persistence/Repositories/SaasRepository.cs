@@ -10,6 +10,7 @@ namespace Legal.Infrastructure.Persistence.Repositories;
 // ─────────────────────────────────────────────────────────────────────────────
 public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : ISaasRepository
 {
+    private sealed record MemberStatusTotals(int TotalCount, int ActiveCount, int SuspendedCount, int DisabledCount);
     // ── Email verification challenge ──────────────────────────────────────────
     public async Task CreateVerificationChallengeAsync(Guid userId, string purpose, byte[] codeHash, DateTime expiresAtUtc, int maxAttempts, CancellationToken ct = default)
     {
@@ -88,9 +89,79 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
     public async Task<Guid> CreateTenantAsync(string name, string slug, Guid ownerUserId, CancellationToken ct = default)
     {
         const string sql = """
+            SET XACT_ABORT ON;
+            BEGIN TRANSACTION;
             DECLARE @TenantId UNIQUEIDENTIFIER = NEWID();
             INSERT SaaS.SaaS_Tenant (TenantId, Name, Slug, StatusCode, CreatedByUserId)
             VALUES (@TenantId, @Name, @Slug, N'Active', @OwnerUserId);
+
+            ;WITH TemplatePolicies AS
+            (
+                SELECT policy.*,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY policy.FeatureCode
+                           ORDER BY policy.ModifiedDateUtc DESC, policy.CreatedDateUtc DESC
+                       ) AS Choice
+                FROM AI.Legal_FeaturePolicy policy
+                WHERE policy.IsEnabled = 1 AND policy.IsDeleted = 0
+            ),
+            ActiveChatModels AS
+            (
+                SELECT model.ModelDeploymentId, model.ModelCode, model.TenantId,
+                       model.IsFallback, model.Priority, model.CreatedDateUtc
+                FROM AI.Legal_ModelDeployment model
+                JOIN AI.Legal_Provider provider
+                  ON provider.ProviderId = model.ProviderId
+                 AND provider.IsActive = 1 AND provider.IsDeleted = 0
+                WHERE model.CapabilityCode = N'CHAT'
+                  AND model.IsActive = 1 AND model.IsDeleted = 0
+            )
+            INSERT AI.Legal_FeaturePolicy
+            (
+                FeaturePolicyId, TenantId, FeatureCode, ModuleCode,
+                PrimaryModelDeploymentId, FallbackModelDeploymentId,
+                Temperature, MaximumInputTokens, MaximumOutputTokens, TimeoutSeconds,
+                DailyCostLimit, MonthlyCostLimit, MinimumConfidence,
+                RequiresHumanReview, IsEnabled, CreatedByUserId, CreatedDateUtc, IsDeleted
+            )
+            SELECT NEWID(), @TenantId, template.FeatureCode, template.ModuleCode,
+                   primaryRoute.ModelDeploymentId,
+                   CASE WHEN fallbackRoute.ModelDeploymentId = primaryRoute.ModelDeploymentId
+                        THEN NULL ELSE fallbackRoute.ModelDeploymentId END,
+                   template.Temperature, template.MaximumInputTokens,
+                   template.MaximumOutputTokens, template.TimeoutSeconds,
+                   template.DailyCostLimit, template.MonthlyCostLimit,
+                   template.MinimumConfidence, template.RequiresHumanReview,
+                   1, @OwnerUserId, SYSUTCDATETIME(), 0
+            FROM TemplatePolicies template
+            OUTER APPLY
+            (
+                SELECT TOP (1) model.ModelDeploymentId
+                FROM ActiveChatModels model
+                LEFT JOIN AI.Legal_ModelDeployment configured
+                  ON configured.ModelDeploymentId = template.PrimaryModelDeploymentId
+                WHERE model.TenantId = @TenantId OR model.TenantId IS NULL
+                ORDER BY CASE WHEN configured.ModelCode = model.ModelCode THEN 0 ELSE 1 END,
+                         CASE WHEN model.TenantId = @TenantId THEN 0 ELSE 1 END,
+                         model.IsFallback, model.Priority, model.CreatedDateUtc
+            ) primaryRoute
+            OUTER APPLY
+            (
+                SELECT TOP (1) model.ModelDeploymentId
+                FROM ActiveChatModels model
+                LEFT JOIN AI.Legal_ModelDeployment configured
+                  ON configured.ModelDeploymentId = template.FallbackModelDeploymentId
+                WHERE model.TenantId = @TenantId OR model.TenantId IS NULL
+                ORDER BY CASE WHEN configured.ModelCode = model.ModelCode THEN 0 ELSE 1 END,
+                         CASE WHEN model.TenantId = @TenantId THEN 0 ELSE 1 END,
+                         CASE WHEN model.IsFallback = 1 THEN 0 ELSE 1 END,
+                         model.Priority, model.CreatedDateUtc
+            ) fallbackRoute
+            WHERE template.Choice = 1
+              AND primaryRoute.ModelDeploymentId IS NOT NULL;
+
+            COMMIT TRANSACTION;
             SELECT @TenantId;
             """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
@@ -150,6 +221,52 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         var rows = await connection.QueryAsync<string>(new CommandDefinition(sql, new { RoleId = roleId }, cancellationToken: ct));
         return rows.ToList();
+    }
+
+    public async Task<MemberPageDto> PageMembersAsync(Guid? tenantId, string? search, string? status, int page, int pageSize, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT COUNT(*)
+            FROM SaaS.SaaS_TenantMembership m
+            JOIN SaaS.SaaS_Tenant t ON t.TenantId = m.TenantId AND t.IsDeleted = 0
+            JOIN dbo.AspNetUsers u ON u.Id = m.UserId
+            WHERE m.IsDeleted = 0
+              AND (@TenantId IS NULL OR m.TenantId = @TenantId)
+              AND (@Status IS NULL OR m.StatusCode = @Status)
+              AND (@Search IS NULL OR u.Email LIKE @Pattern OR u.FirstName LIKE @Pattern OR u.LastName LIKE @Pattern OR t.Name LIKE @Pattern);
+
+            SELECT
+                COUNT(*) AS TotalCount,
+                SUM(CASE WHEN m.StatusCode = N'Active' THEN 1 ELSE 0 END) AS ActiveCount,
+                SUM(CASE WHEN m.StatusCode = N'Suspended' THEN 1 ELSE 0 END) AS SuspendedCount,
+                SUM(CASE WHEN m.StatusCode = N'Disabled' THEN 1 ELSE 0 END) AS DisabledCount
+            FROM SaaS.SaaS_TenantMembership m
+            WHERE m.IsDeleted = 0 AND (@TenantId IS NULL OR m.TenantId = @TenantId);
+            """;
+        var pageSql = MemberSelect + """
+              AND (@TenantId IS NULL OR m.TenantId = @TenantId)
+              AND (@Status IS NULL OR m.StatusCode = @Status)
+              AND (@Search IS NULL OR u.Email LIKE @Pattern OR u.FirstName LIKE @Pattern OR u.LastName LIKE @Pattern OR t.Name LIKE @Pattern)
+            ORDER BY t.Name, u.Email, m.MembershipId
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            """;
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim();
+        var parameters = new
+        {
+            TenantId = tenantId,
+            Search = normalizedSearch,
+            Pattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
+            Status = normalizedStatus,
+            Offset = (page - 1) * pageSize,
+            PageSize = pageSize
+        };
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        using var results = await connection.QueryMultipleAsync(new CommandDefinition(sql + pageSql, parameters, cancellationToken: ct));
+        var totalCount = await results.ReadSingleAsync<int>();
+        var totals = await results.ReadSingleAsync<MemberStatusTotals>();
+        var items = (await results.ReadAsync<ManagedMemberDto>()).AsList();
+        return new MemberPageDto(items, totalCount, totals.ActiveCount, totals.SuspendedCount, totals.DisabledCount, page, pageSize);
     }
 
     public async Task<IReadOnlyList<string>> GetEffectivePermissionsAsync(Guid userId, Guid tenantId, CancellationToken ct = default)
@@ -716,7 +833,11 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
     public async Task<IntelligenceExecutionDto?> GetExecutionAsync(Guid tenantId, Guid executionId, CancellationToken ct = default)
     {
         const string sql = """
-            SELECT ExecutionId, TenantId, RequestedByUserId, MatterId, CapabilityCode, StatusCode, CorrelationId, FailureCode, CreatedDateUtc, StartedAtUtc, CompletedAtUtc, ParentExecutionId
+            SELECT ExecutionId, TenantId, RequestedByUserId, MatterId, CapabilityCode, StatusCode, CorrelationId, FailureCode,
+                   TODATETIMEOFFSET(CreatedDateUtc, '+00:00') AS CreatedDateUtc,
+                   TODATETIMEOFFSET(StartedAtUtc, '+00:00') AS StartedAtUtc,
+                   TODATETIMEOFFSET(CompletedAtUtc, '+00:00') AS CompletedAtUtc,
+                   ParentExecutionId
             FROM SaaS.Platform_IntelligenceExecution
             WHERE ExecutionId = @ExecutionId AND TenantId = @TenantId AND IsDeleted = 0;
             """;
@@ -769,6 +890,39 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
         var rows = await connection.QueryAsync<AuditEventDto>(new CommandDefinition(sql, new { TenantId = tenantId, SinceUtc = sinceUtc, Take = take }, cancellationToken: ct));
         return rows.AsList();
+    }
+
+    public async Task<PagedResultDto<AuditEventDto>> PageAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, string? search, int page, int pageSize, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT COUNT(*)
+            FROM SaaS.Platform_AuditEvent
+            WHERE TenantId = @TenantId AND UserId = @UserId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+              AND (@Search IS NULL OR EventType LIKE @Pattern OR ResourceType LIKE @Pattern OR CorrelationId LIKE @Pattern OR CONVERT(nvarchar(36), ResourceId) LIKE @Pattern);
+
+            SELECT AuditEventId, TenantId, UserId, EventType, ResourceType, ResourceId, CorrelationId, OccurredAtUtc
+            FROM SaaS.Platform_AuditEvent
+            WHERE TenantId = @TenantId AND UserId = @UserId AND IsDeleted = 0 AND OccurredAtUtc >= @SinceUtc
+              AND (@Search IS NULL OR EventType LIKE @Pattern OR ResourceType LIKE @Pattern OR CorrelationId LIKE @Pattern OR CONVERT(nvarchar(36), ResourceId) LIKE @Pattern)
+            ORDER BY OccurredAtUtc DESC, AuditEventId DESC
+            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;
+            """;
+        var normalizedSearch = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
+        var parameters = new
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            SinceUtc = sinceUtc,
+            Search = normalizedSearch,
+            Pattern = normalizedSearch is null ? null : $"%{normalizedSearch}%",
+            Offset = (page - 1) * pageSize,
+            PageSize = pageSize
+        };
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);
+        using var results = await connection.QueryMultipleAsync(new CommandDefinition(sql, parameters, cancellationToken: ct));
+        var totalCount = await results.ReadSingleAsync<int>();
+        var items = (await results.ReadAsync<AuditEventDto>()).AsList();
+        return new PagedResultDto<AuditEventDto>(items, totalCount, page, pageSize);
     }
 
     public async Task<IReadOnlyList<AuditEventDto>> ListAuditEventsForUserAsync(Guid tenantId, Guid userId, DateTime sinceUtc, int take, CancellationToken ct = default)

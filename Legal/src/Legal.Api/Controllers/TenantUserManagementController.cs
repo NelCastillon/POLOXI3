@@ -39,9 +39,7 @@ public sealed class TenantUserManagementController(
     // A Super Admin (platform.users.manage) may view members across ALL tenants,
     // even from this tenant-scoped surface. Tenant admins remain scoped to their tenant.
     private bool IsSuperAdmin()
-        => AuthenticatedRequestContext.GetGrantedPermissions(User)
-            .Contains("platform.users.manage", StringComparer.OrdinalIgnoreCase)
-            || User.IsInRole("SUPERADMIN");
+        => AuthenticatedRequestContext.IsSystemAdmin(User);
 
     // Super Admin operates platform-wide (any tenant, any role); tenant admins stay
     // scoped to their own tenant with only the non-privileged tenant roles.
@@ -54,6 +52,19 @@ public sealed class TenantUserManagementController(
         if (!CanManage()) return Forbid();
         // Super Admin sees every tenant's members; tenant admins see only their own tenant.
         var members = await service.ListMembersAsync(Scope, cancellationToken);
+        return Ok(members);
+    }
+
+    [HttpGet("page")]
+    public async Task<IActionResult> PageMembers(
+        [FromQuery] string? search = null,
+        [FromQuery] string? status = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanManage()) return Forbid();
+        var members = await service.PageMembersAsync(Scope, search, status, page, pageSize, cancellationToken);
         return Ok(members);
     }
 
