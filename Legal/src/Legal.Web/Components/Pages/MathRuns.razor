@@ -3,21 +3,17 @@
 @inject ApiClient Api
 
 <LegalWorkspace>
-    <div class="poloxi-page">
-        <header class="poloxi-hero">
-            <div class="poloxi-hero-icon"><i class="bi bi-calculator"></i></div>
+    <div class="intel-page math-runs-page">
+        <header class="intel-header">
             <div>
-                <span>POLOXI Scientific Reasoning — Mathematics V1 audit trail</span>
+                <span><i class="bi bi-calculator"></i> POLOXI Scientific Reasoning · Mathematics V1</span>
                 <h1>Math Run History</h1>
                 <p>Every solve run is persisted with the deterministic verification verdicts. Nothing is accepted on LLM confidence — select a run to inspect its obligations and ranked candidates exactly as the verifier decided them.</p>
             </div>
-        </header>
-
-        <section class="poloxi-composer" aria-label="Math run history controls">
-            <div class="poloxi-composer-footer">
-                <button class="um-btn um-btn-primary" @onclick="LoadRunsAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+            <div class="um-header-actions">
+                <button class="um-btn um-btn-ghost" @onclick="LoadRunsAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
             </div>
-        </section>
+        </header>
 
         @if (_loading)
         {
@@ -32,132 +28,181 @@
         }
         else
         {
-            <div class="poloxi-math-layout" style="display:flex; gap:1rem; align-items:flex-start;">
-                <section style="flex:1 1 420px; min-width:340px;">
-                    @if (_runs.Count == 0)
-                    {
-                        <div class="alert alert-info">No Math runs have been persisted yet.</div>
-                    }
-                    else
-                    {
-                        <table class="br-table" style="width:100%;">
+            <section class="intel-panel math-runs-grid-panel">
+                <div class="intel-toolbar math-runs-toolbar">
+                    <label class="math-runs-search">
+                        <span>Search runs</span>
+                        <span class="math-runs-search-input">
+                            <i class="bi bi-search" aria-hidden="true"></i>
+                            <input class="form-control" type="search" placeholder="Problem, outcome, verification, or answer" @bind="_search" @bind:event="oninput" />
+                        </span>
+                    </label>
+                    <span class="math-runs-count">@FilteredRuns.Count run@(FilteredRuns.Count == 1 ? null : "s")</span>
+                </div>
+
+                @if (_runs.Count == 0)
+                {
+                    <div class="intel-state">No Math runs have been persisted yet.</div>
+                }
+                else if (FilteredRuns.Count == 0)
+                {
+                    <div class="intel-state">No Math runs match the current search.</div>
+                }
+                else
+                {
+                    <div class="um-table-scroll math-runs-table-wrap">
+                        <table class="um-table math-runs-table">
                             <thead>
                                 <tr>
                                     <th>Problem</th>
                                     <th>Outcome</th>
                                     <th>Verification</th>
-                                    <th>Answer</th>
+                                    <th>Canonical answer</th>
                                     <th>When (UTC)</th>
+                                    <th><span class="visually-hidden">Actions</span></th>
                                 </tr>
                             </thead>
                             <tbody>
-                                @foreach (var run in _runs)
+                                @foreach (var run in FilteredRuns)
                                 {
-                                    <tr class="br-table-row @(_selected?.MathExecutionId == run.MathExecutionId ? "br-table-row--selected" : null)"
-                                        style="cursor:pointer;" @onclick="() => SelectRunAsync(run.MathExecutionId)">
-                                        <td>@Truncate(run.ProblemText, 80)</td>
-                                        <td><span class="poloxi-status">@run.OutcomeCode</span></td>
+                                    <tr class="math-runs-row" title="Open verification trail" @onclick="() => SelectRunAsync(run.MathExecutionId)">
+                                        <td class="math-runs-problem">@Truncate(run.ProblemText, 120)</td>
+                                        <td><span class="math-runs-status">@run.OutcomeCode</span></td>
                                         <td>@run.VerificationStatusCode</td>
-                                        <td>@(run.CanonicalAnswer ?? "—")</td>
-                                        <td>@run.CreatedDateUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                        <td class="math-runs-answer">@(run.CanonicalAnswer ?? "—")</td>
+                                        <td class="math-runs-date">@run.CreatedDateUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                        <td class="um-row-actions">
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="View verification trail" @onclick="() => SelectRunAsync(run.MathExecutionId)" @onclick:stopPropagation="true"><i class="bi bi-eye"></i> View</button>
+                                        </td>
                                     </tr>
                                 }
                             </tbody>
                         </table>
-                    }
-                </section>
+                    </div>
+                }
+            </section>
+        }
 
-                <section style="flex:1 1 480px; min-width:360px;">
-                    @if (_detailLoading)
-                    {
-                        <div class="poloxi-loading" role="status"><i class="bi bi-water poloxi-spinner"></i><div><strong>Loading run…</strong></div></div>
-                    }
-                    else if (_selected is not null)
-                    {
-                        <div class="poloxi-explanation">
-                            <div class="poloxi-explanation-body">
-                                <div class="poloxi-panel-header">
-                                    <div><span>Run @_selected.CorrelationId</span><h2>Verification Trail</h2></div>
-                                    <span class="poloxi-status">@_selected.OutcomeCode</span>
+        @if (_showDetail)
+        {
+            <div class="um-modal-backdrop">
+                <div class="um-modal math-run-modal" role="dialog" aria-modal="true" aria-labelledby="math-run-modal-title">
+                    <div class="um-modal-header">
+                        <i class="bi bi-clipboard-data"></i>
+                        <span id="math-run-modal-title">Verification Trail</span>
+                        <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" title="Close" @onclick="CloseDetail"><i class="bi bi-x-lg"></i></button>
+                    </div>
+                    <div class="um-modal-body math-run-modal-body">
+                        @if (_detailLoading)
+                        {
+                            <div class="intel-state" role="status">Loading verification trail…</div>
+                        }
+                        else if (_detailError is not null)
+                        {
+                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_detailError</div>
+                        }
+                        else if (_selected is not null)
+                        {
+                            <div class="math-run-title-row">
+                                <div>
+                                    <span>Run @_selected.CorrelationId</span>
+                                    <h2>@_selected.OutcomeCode</h2>
                                 </div>
-                                <p><strong>Problem:</strong> @_selected.ProblemText</p>
-                                <p>
-                                    <strong>Final answer:</strong> @(_selected.FinalAnswer ?? "—")
-                                    @if (!string.IsNullOrWhiteSpace(_selected.CanonicalAnswer))
-                                    {
-                                        <span> (canonical: @_selected.CanonicalAnswer)</span>
-                                    }
-                                </p>
-                                @if (!string.IsNullOrWhiteSpace(_selected.SolutionSummary))
-                                {
-                                    <p><strong>Summary:</strong> @_selected.SolutionSummary</p>
-                                }
-                                <p>
-                                    <strong>Discovery confidence:</strong> @_selected.DiscoveryConfidence.ToString("0.####")
-                                    &middot; <strong>Self-consistency:</strong> @_selected.SelfConsistencyAgreement.ToString("0.####")
-                                    @if (_selected.DurationMilliseconds is { } ms)
-                                    {
-                                        <span> &middot; <strong>Duration:</strong> @ms ms</span>
-                                    }
-                                </p>
-                                @if (!string.IsNullOrWhiteSpace(_selected.RemainingUncertainty))
-                                {
-                                    <p><strong>Remaining uncertainty:</strong> @_selected.RemainingUncertainty</p>
-                                }
+                                <span class="math-runs-status">@_selected.VerificationStatusCode</span>
+                            </div>
 
-                                <h3>Obligations</h3>
+                            <div class="math-run-metrics">
+                                <article><span>Discovery confidence</span><strong>@_selected.DiscoveryConfidence.ToString("0.####")</strong></article>
+                                <article><span>Self-consistency</span><strong>@_selected.SelfConsistencyAgreement.ToString("0.####")</strong></article>
+                                <article><span>Duration</span><strong>@(_selected.DurationMilliseconds is { } ms ? $"{ms} ms" : "—")</strong></article>
+                            </div>
+
+                            <section class="math-run-detail-section">
+                                <h3><i class="bi bi-question-circle"></i> Problem</h3>
+                                <p class="math-run-long-text">@_selected.ProblemText</p>
+                            </section>
+
+                            <section class="math-run-detail-section">
+                                <h3><i class="bi bi-check2-square"></i> Result</h3>
+                                <dl class="math-run-definition-list">
+                                    <div><dt>Final answer</dt><dd>@(_selected.FinalAnswer ?? "—")</dd></div>
+                                    <div><dt>Canonical answer</dt><dd>@(_selected.CanonicalAnswer ?? "—")</dd></div>
+                                    @if (!string.IsNullOrWhiteSpace(_selected.SolutionSummary))
+                                    {
+                                        <div><dt>Solution summary</dt><dd>@_selected.SolutionSummary</dd></div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(_selected.RemainingUncertainty))
+                                    {
+                                        <div><dt>Remaining uncertainty</dt><dd>@_selected.RemainingUncertainty</dd></div>
+                                    }
+                                </dl>
+                            </section>
+
+                            <section class="math-run-detail-section">
+                                <div class="math-run-section-heading">
+                                    <h3><i class="bi bi-list-check"></i> Obligations</h3>
+                                    <span>@_selected.Obligations.Count</span>
+                                </div>
                                 @if (_selected.Obligations.Count == 0)
                                 {
-                                    <p>No obligations recorded.</p>
+                                    <div class="intel-state">No obligations recorded.</div>
                                 }
                                 else
                                 {
-                                    <table class="br-table" style="width:100%;">
-                                        <thead><tr><th>Statement</th><th>Method</th><th>Status</th><th>Counterexample</th></tr></thead>
-                                        <tbody>
-                                            @foreach (var o in _selected.Obligations)
-                                            {
-                                                <tr>
-                                                    <td>@o.Statement</td>
-                                                    <td>@o.VerificationMethodCode</td>
-                                                    <td>@o.StatusCode</td>
-                                                    <td>@o.CounterexampleStatusCode</td>
-                                                </tr>
-                                            }
-                                        </tbody>
-                                    </table>
+                                    <div class="um-table-scroll">
+                                        <table class="um-table math-run-detail-table">
+                                            <thead><tr><th>Statement</th><th>Method</th><th>Status</th><th>Counterexample</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var obligation in _selected.Obligations)
+                                                {
+                                                    <tr>
+                                                        <td>@obligation.Statement</td>
+                                                        <td>@obligation.VerificationMethodCode</td>
+                                                        <td><span class="math-runs-status">@obligation.StatusCode</span></td>
+                                                        <td>@obligation.CounterexampleStatusCode</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 }
+                            </section>
 
-                                <h3>Candidates</h3>
+                            <section class="math-run-detail-section">
+                                <div class="math-run-section-heading">
+                                    <h3><i class="bi bi-trophy"></i> Ranked Candidates</h3>
+                                    <span>@_selected.Candidates.Count</span>
+                                </div>
                                 @if (_selected.Candidates.Count == 0)
                                 {
-                                    <p>No candidates recorded.</p>
+                                    <div class="intel-state">No candidates recorded.</div>
                                 }
                                 else
                                 {
-                                    <table class="br-table" style="width:100%;">
-                                        <thead><tr><th>Name</th><th>Type</th><th>Verification</th><th>Confidence</th></tr></thead>
-                                        <tbody>
-                                            @foreach (var c in _selected.Candidates)
-                                            {
-                                                <tr>
-                                                    <td>@c.Name</td>
-                                                    <td>@c.ObjectTypeCode</td>
-                                                    <td>@c.VerificationStatusCode</td>
-                                                    <td>@c.DiscoveryConfidence.ToString("0.####")</td>
-                                                </tr>
-                                            }
-                                        </tbody>
-                                    </table>
+                                    <div class="um-table-scroll">
+                                        <table class="um-table math-run-detail-table">
+                                            <thead><tr><th>Name</th><th>Type</th><th>Verification</th><th>Confidence</th></tr></thead>
+                                            <tbody>
+                                                @foreach (var candidate in _selected.Candidates)
+                                                {
+                                                    <tr>
+                                                        <td>@candidate.Name</td>
+                                                        <td>@candidate.ObjectTypeCode</td>
+                                                        <td><span class="math-runs-status">@candidate.VerificationStatusCode</span></td>
+                                                        <td>@candidate.DiscoveryConfidence.ToString("0.####")</td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
                                 }
-                            </div>
-                        </div>
-                    }
-                    else
-                    {
-                        <div class="alert alert-info">Select a run to view its verification trail.</div>
-                    }
-                </section>
+                            </section>
+                        }
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="CloseDetail">Close</button>
+                    </div>
+                </div>
             </div>
         }
     </div>
@@ -168,7 +213,19 @@
     private MathExecutionDetail? _selected;
     private bool _loading;
     private bool _detailLoading;
+    private bool _showDetail;
     private string? _error;
+    private string? _detailError;
+    private string _search = string.Empty;
+
+    private IReadOnlyList<MathExecutionSummary> FilteredRuns => string.IsNullOrWhiteSpace(_search)
+        ? _runs
+        : _runs.Where(run =>
+                run.ProblemText.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                || run.OutcomeCode.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                || run.VerificationStatusCode.Contains(_search, StringComparison.OrdinalIgnoreCase)
+                || (run.CanonicalAnswer?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToArray();
 
     protected override Task OnInitializedAsync() => LoadRunsAsync();
 
@@ -193,20 +250,29 @@
 
     private async Task SelectRunAsync(Guid mathExecutionId)
     {
+        _showDetail = true;
         _detailLoading = true;
-        _error = null;
+        _detailError = null;
+        _selected = null;
         try
         {
             _selected = await Api.GetMathRunAsync(mathExecutionId);
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _detailError = $"Failed to load run: {ex.Message}";
         }
         finally
         {
             _detailLoading = false;
         }
+    }
+
+    private void CloseDetail()
+    {
+        _showDetail = false;
+        _selected = null;
+        _detailError = null;
     }
 
     private static string Truncate(string value, int max) =>

@@ -103,7 +103,7 @@ app.MapPost("/auth/login", async (HttpContext http, ApiClient apiClient) =>
 
     var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
     await http.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
-    return Results.Redirect("/legal/search");
+    return Results.Redirect("/legal/matters");
 });
 
 app.MapPost("/auth/logout", async (HttpContext http) =>

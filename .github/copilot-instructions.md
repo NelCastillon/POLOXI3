@@ -143,3 +143,4 @@
 ## Legal and Admin Pages
 - In user-facing content under all `/legal/*` and `/admin/*` pages, capitalize the product name as "Judz" rather than "judz".
 - For the `/admin/users` member activity dialog, System Admins expect to see a selected member's complete relevant history, including actions performed on that member by administrators and that member's login activity—not only events where the member is the actor.
+- **Do not show the blue programmatic focus outline around page H1 headings after Blazor navigation; preserve focus indicators for interactive controls.**
