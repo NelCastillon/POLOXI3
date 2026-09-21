@@ -288,6 +288,54 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             cancellationToken: cancellationToken));
     }
 
+    public async Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<DecisionPromptConfigurationDto>(new CommandDefinition(
+            """
+            SELECT PromptCode, StageCode, SystemPrompt, UserPromptTemplate, OutputSchemaJson,
+                   IsActive, CreatedDateUtc, ModifiedDateUtc
+            FROM POLOXI.Legal_DecisionPrompt
+            WHERE IsDeleted = 0
+            ORDER BY StageCode, PromptCode;
+            """,
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task SavePromptConfigurationAsync(
+        Guid actorUserId,
+        SaveDecisionPromptConfigurationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionPrompt
+            SET StageCode = @StageCode,
+                SystemPrompt = @SystemPrompt,
+                UserPromptTemplate = @UserPromptTemplate,
+                OutputSchemaJson = @OutputSchemaJson,
+                IsActive = @IsActive,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ActorUserId
+            WHERE PromptCode = @PromptCode AND IsDeleted = 0;
+            """,
+            new
+            {
+                PromptCode = request.PromptCode.Trim(),
+                StageCode = request.StageCode.Trim(),
+                SystemPrompt = request.SystemPrompt.Trim(),
+                UserPromptTemplate = request.UserPromptTemplate.Trim(),
+                OutputSchemaJson = string.IsNullOrWhiteSpace(request.OutputSchemaJson) ? null : request.OutputSchemaJson.Trim(),
+                request.IsActive,
+                ActorUserId = actorUserId,
+            },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Decision prompt '{request.PromptCode}' was not found.");
+    }
+
     public async Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -1323,13 +1371,13 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 (DecisionResearchNeedId, DecisionSessionId, MatterId, DecisionBranchId, DecisionDependencyEventId, IssueLabel,
                  PropositionToResolve, ResearchNeedTypeCode, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant, ExpectedDiscrimination,
                  CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, TenantId, CreatedByUserId,
-                 SourceClassCode, IsResearchable, ParentResearchKey, RequiredResearchKeysJson,
+                 SourceClassCode, IsResearchable, ResearchKey, ParentResearchKey, RequiredResearchKeysJson,
                  CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode)
             VALUES
                 (@DecisionResearchNeedId, @DecisionSessionId, @MatterId, @DecisionBranchId, @DecisionDependencyEventId, @IssueLabel,
                  @PropositionToResolve, @ResearchNeedTypeCode, @AuthorityKind, @RequiredEvidenceKind, @WhyDecisionRelevant, @ExpectedDiscrimination,
                  @CurrentUncertainty, @InformationValue, @FalsificationCondition, @StatusCode, @TenantId, @ActorUserId,
-                 @SourceClassCode, @IsResearchable, @ParentResearchKey, @RequiredResearchKeysJson,
+                 @SourceClassCode, @IsResearchable, @ResearchKey, @ParentResearchKey, @RequiredResearchKeysJson,
                  @CandidateDiscriminationJson, @SemanticProposalStatusCode, @SemanticProposalReasonCode);
             """, researchNeed, cancellationToken: cancellationToken));
     }
@@ -1406,7 +1454,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         return await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
             SELECT COUNT(1) FROM POLOXI.Legal_DecisionResearchNeed
-            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IsDeleted = 0;
+            WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND StatusCode = N'OPEN' AND IsDeleted = 0;
             """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
     }
 
@@ -1430,7 +1478,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             SELECT TOP 1 DecisionResearchNeedId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, MatterId, DecisionBranchId,
                    DecisionDependencyEventId, IssueLabel, PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant,
                    ExpectedDiscrimination, CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, ResearchNeedTypeCode,
-                   SourceClassCode, IsResearchable, ParentResearchKey, RequiredResearchKeysJson,
+                   SourceClassCode, IsResearchable, ResearchKey, ParentResearchKey, RequiredResearchKeysJson,
                    CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode
             FROM POLOXI.Legal_DecisionResearchNeed
             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND StatusCode = N'OPEN' AND IsDeleted = 0
@@ -1449,6 +1497,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 ResearchNeedTypeCode = row.ResearchNeedTypeCode,
                 SourceClassCode = row.SourceClassCode,
                 IsResearchable = row.IsResearchable,
+                ResearchKey = row.ResearchKey,
                 ParentResearchKey = row.ParentResearchKey,
                 RequiredResearchKeysJson = row.RequiredResearchKeysJson,
                 CandidateDiscriminationJson = row.CandidateDiscriminationJson,
@@ -1636,6 +1685,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         public string ResearchNeedTypeCode { get; init; } = string.Empty;
         public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
         public bool IsResearchable { get; init; } = true;
+        public string? ResearchKey { get; init; }
         public string? ParentResearchKey { get; init; }
         public string? RequiredResearchKeysJson { get; init; }
         public string? CandidateDiscriminationJson { get; init; }

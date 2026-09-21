@@ -57,8 +57,8 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
         // Mechanical stages are therefore capped at 4000 completion tokens; the existing truncation
         // retry (doubled budget on finish_reason=length) remains the fail-soft safety net, and
         // answer/explanation stages keep the full configured budget.
-        var outputBudget=request.MaximumOutputTokens;
-        if(IsReasoningModel(request.Context.ModelCode)&&ResolveReasoningEffort(request.FeatureCode)=="minimal")outputBudget=Math.Min(outputBudget,4000);
+        var reasoningEffort=ResolveReasoningEffort(request.Context.ModelCode,request.FeatureCode);
+        var outputBudget=ResolveInitialOutputBudget(request.Context.ModelCode,request.FeatureCode,request.MaximumOutputTokens,reasoningEffort);
         if(useCompletionTokens)body["max_completion_tokens"]=outputBudget;else body["max_tokens"]=outputBudget;
         // Reasoning models spend most of their latency on hidden reasoning tokens. Mechanical extraction
         // stages (intent, hierarchy, information value, enumeration) are strict-JSON structured tasks that
@@ -66,7 +66,7 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
         // challenge, explanation) keep medium effort. This keeps every stage on the selected reasoning
         // model while cutting per-call latency substantially. Deployments that reject the parameter fall
         // back through the existing unsupported_parameter negotiation below.
-        if(IsReasoningModel(request.Context.ModelCode)&&!profile.DropReasoningEffort){var effort=ResolveReasoningEffort(request.FeatureCode);body["reasoning_effort"]=profile.MinimalEffortRejected&&effort=="minimal"?"low":effort;}
+        if(IsReasoningModel(request.Context.ModelCode)&&!profile.DropReasoningEffort)body["reasoning_effort"]=profile.MinimalEffortRejected&&reasoningEffort=="minimal"?"low":reasoningEffort;
         if(responseFormat is not null)body["response_format"]=JsonSerializer.SerializeToNode(responseFormat);
         string json;System.Net.HttpStatusCode statusCode;var requestId=string.Empty;var reasoningBudgetRaised=false;
         for(var attempt=0;;attempt++)
@@ -150,8 +150,18 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
     // call at ~35-40 output tok/s (hidden reasoning dominating a strict-JSON extraction task); "minimal"
     // suppresses nearly all hidden reasoning for these stages. Deployments that reject the value fall
     // back through the existing unsupported_value negotiation and drop the parameter.
-    private static string ResolveReasoningEffort(string featureCode)=>
-        featureCode.Contains("ANSWER",StringComparison.OrdinalIgnoreCase)||featureCode.Contains("EXPLANATION",StringComparison.OrdinalIgnoreCase)?"medium":"minimal";
+    public static string ResolveReasoningEffort(string? modelCode,string featureCode)
+    {
+        if(featureCode.Contains("ANSWER",StringComparison.OrdinalIgnoreCase)||featureCode.Contains("EXPLANATION",StringComparison.OrdinalIgnoreCase))return "medium";
+        return modelCode?.StartsWith("gpt-6-astra",StringComparison.OrdinalIgnoreCase)==true?"low":"minimal";
+    }
+
+    public static int ResolveInitialOutputBudget(string? modelCode,string featureCode,int configuredBudget,string reasoningEffort)
+    {
+        if(!IsReasoningModel(modelCode)||reasoningEffort is not ("minimal" or "low"))return configuredBudget;
+        var stageCap=featureCode.Equals("DECISION_GRAPH",StringComparison.OrdinalIgnoreCase)?8000:4000;
+        return Math.Min(configuredBudget,stageCap);
+    }
 
     // True when the successful completion envelope reports finish_reason=length (output truncated by token budget).
     private static bool IsTruncated(string json)

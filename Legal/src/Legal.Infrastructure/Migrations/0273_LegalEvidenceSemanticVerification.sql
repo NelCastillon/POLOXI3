@@ -35,7 +35,8 @@ END
 IF OBJECT_ID(N'POLOXI.CK_Legal_DecisionResearch_NeedType', N'C') IS NULL
 	EXEC sys.sp_executesql N'ALTER TABLE POLOXI.Legal_DecisionResearchNeed WITH CHECK
 		ADD CONSTRAINT CK_Legal_DecisionResearch_NeedType CHECK (ResearchNeedTypeCode IN
-			(N''LEGAL_AUTHORITY'', N''LEGAL_RULE'', N''MATTER_FACT'', N''MATTER_EVIDENCE'', N''MIXED''));';
+			(N''LEGAL_AUTHORITY'', N''LEGAL_RULE'', N''PROCEDURAL_STANDARD'', N''MATTER_FACT'',
+			 N''MATTER_EVIDENCE'', N''APPLICATION'', N''DERIVED'', N''MIXED''));';
 
 IF OBJECT_ID(N'POLOXI.Legal_DecisionEvidenceVerification', N'U') IS NOT NULL
 BEGIN

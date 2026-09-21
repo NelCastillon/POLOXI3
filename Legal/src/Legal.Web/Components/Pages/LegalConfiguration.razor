@@ -1,5 +1,6 @@
 ﻿@page "/legal/configuration"
 @using Legal.Application.Features.Intelligence
+@using Legal.Application.Features.Intelligence.Decision
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject IJSRuntime Js
@@ -19,8 +20,22 @@ else
         <article class="intel-kpi-link @(_focusSection=="models"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to model deployments" @onclick="@(()=>FocusSectionAsync("models"))"><span>Models</span><strong>@_models.Count(x=>x.IsActive)</strong></article>
         <article class="intel-kpi-link @(_focusSection=="policies"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to feature policies" @onclick="@(()=>FocusSectionAsync("policies"))"><span>Feature policies</span><strong>@_policies.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="prompts"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to prompt registry" @onclick="@(()=>FocusSectionAsync("prompts"))"><span>Prompt versions</span><strong>@_prompts.Count</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="decision-prompts"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to POLOXI decision prompts" @onclick="@(()=>FocusSectionAsync("decision-prompts"))"><span>Decision prompts</span><strong>@_decisionPrompts.Count(x=>x.IsActive)</strong></article>
+        <article class="intel-kpi-link @(_focusSection=="decision-routes"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to POLOXI decision model routes" @onclick="@(()=>FocusSectionAsync("decision-routes"))"><span>Decision routes</span><strong>@_decisionRoutes.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="legal-grounding"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to legal grounding settings" @onclick="@(()=>FocusSectionAsync("legal-grounding"))"><span>Legal grounding</span><strong>@_legalSettings.Count</strong></article>
         <article class="intel-kpi-link @(_focusSection=="epistemic"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to epistemic authority settings" @onclick="@(()=>FocusSectionAsync("epistemic"))"><span>Epistemic authority</span><strong>@_epistemicSettings.Count</strong></article>
+    </section>
+
+    <section id="intel-section-decision-routes" class="intel-panel @(_focusSection=="decision-routes"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>POLOXI decision model routes</h2><span>DB-backed task policy</span></div>
+        @if(_decisionRoutes.Count==0){<div class="intel-state">No POLOXI decision model routes are configured.</div>}
+        @foreach(var route in _decisionRoutes.OrderBy(r=>r.FeatureCode).ThenBy(r=>r.Priority))
+        {
+            <div class="intel-row">
+                <div><strong>@route.FeatureCode</strong><small>@route.ModelCode · @route.DeploymentName</small><span>@route.MaxOutputTokens.ToString("N0") output tokens · @route.TimeoutSeconds seconds · temperature @route.Temperature</span></div>
+                <div><AppStatusBadge Status="@(route.ModelCode.Contains("astra",StringComparison.OrdinalIgnoreCase)?"ASTRA":"MINI")" /></div>
+            </div>
+        }
     </section>
 
     <section id="intel-section-providers" class="intel-panel @(_focusSection=="providers"?"intel-panel-focus":null)">
@@ -95,6 +110,22 @@ else
         }
     </section>
 
+    <section id="intel-section-decision-prompts" class="intel-panel @(_focusSection=="decision-prompts"?"intel-panel-focus":null)">
+        <div class="intel-toolbar"><h2>POLOXI decision prompts</h2></div>
+        <div class="intel-state">Database-backed runtime prompts used by candidate discovery, dependency graphs, verification, answers, and Research Need semantic decomposition.</div>
+        @if(_decisionPrompts.Count==0){<div class="intel-state">No POLOXI decision prompts are configured.</div>}
+        @foreach(var prompt in _decisionPrompts.OrderBy(p=>p.StageCode).ThenBy(p=>p.PromptCode))
+        {
+            <div class="intel-row">
+                <div><strong>@prompt.PromptCode</strong><small>@prompt.StageCode · POLOXI.Legal_DecisionPrompt</small><span>Last updated @(prompt.ModifiedDateUtc??prompt.CreatedDateUtc).ToString("u")</span></div>
+                <div>
+                    <AppStatusBadge Status="@(prompt.IsActive?"ACTIVE":"INACTIVE")" />
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditDecisionPrompt(prompt)">Edit</button>
+                </div>
+            </div>
+        }
+    </section>
+
     <section id="intel-section-legal-grounding" class="intel-panel @(_focusSection=="legal-grounding"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Legal grounding settings</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewLegalSetting">Add setting</button></div>
         <div class="intel-note">CourtListener, GovInfo, and eCFR grounding values used when the Legal search context is selected. Encrypted API keys are masked.</div>
@@ -145,6 +176,28 @@ else
             </div>
         </div>
     </section>
+}
+@if(_editingDecisionPrompt)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-diagram-3"></i><span>Edit POLOXI decision prompt</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingDecisionPrompt=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_decisionPromptForm" OnValidSubmit="SaveDecisionPromptAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="intel-field"><label>Prompt code</label><InputText @bind-Value="_decisionPromptForm.PromptCode" disabled /></div>
+                <div class="intel-field"><label>Stage</label><InputText @bind-Value="_decisionPromptForm.StageCode" /><ValidationMessage For="() => _decisionPromptForm.StageCode" class="text-danger" /></div>
+                <div class="intel-field"><label><InputCheckbox @bind-Value="_decisionPromptForm.IsActive" /> Active</label></div>
+                <div class="intel-field" style="grid-column:1/-1"><label>System prompt</label><InputTextArea @bind-Value="_decisionPromptForm.SystemPrompt" /><ValidationMessage For="() => _decisionPromptForm.SystemPrompt" class="text-danger" /></div>
+                <div class="intel-field" style="grid-column:1/-1"><label>User prompt template</label><InputTextArea @bind-Value="_decisionPromptForm.UserPromptTemplate" /><ValidationMessage For="() => _decisionPromptForm.UserPromptTemplate" class="text-danger" /></div>
+                <div class="intel-field" style="grid-column:1/-1"><label>Output schema JSON</label><InputTextArea @bind-Value="_decisionPromptForm.OutputSchemaJson" /></div>
+            </div></div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingDecisionPrompt=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save decision prompt</button>
+            </div>
+        </EditForm>
+    </div></div>
 }
 
 @if(_editingProvider)
@@ -352,17 +405,20 @@ private readonly List<AiProviderDto> _providers=[];
 private readonly List<AiModelDeploymentDto> _models=[];
 private readonly List<AiFeaturePolicyDto> _policies=[];
 private readonly List<IntelligencePromptDefinitionDto> _prompts=[];
+private readonly List<DecisionPromptConfigurationDto> _decisionPrompts=[];
+private readonly List<DecisionModelRouteDto> _decisionRoutes=[];
 private readonly List<IntelligenceCapabilityDto> _capabilities=[];
 private readonly List<LegalGroundingSettingDto> _legalSettings=[];
 private readonly List<EpistemicSettingDto> _epistemicSettings=[];
 private bool _showPipeline;
-private bool _loading=true,_editing,_editingPrompt,_editingProvider,_editingModel,_saving;
+private bool _loading=true,_editing,_editingPrompt,_editingDecisionPrompt,_editingProvider,_editingModel,_saving;
 private bool _editingLegalSetting;
 private bool _editingEpistemicSetting;
 private string? _error;
 private string? _focusSection;
 private PolicyForm _form=new();
 private PromptForm _promptForm=new();
+private DecisionPromptForm _decisionPromptForm=new();
 private ProviderForm _providerForm=new();
 private ModelForm _modelForm=new();
 private LegalSettingForm _legalForm=new();
@@ -381,12 +437,16 @@ private async Task LoadAsync()
         var models=Api.GetIntelligenceModelsAsync();
         var policies=Api.GetIntelligenceFeaturePoliciesAsync();
         var prompts=Api.GetIntelligencePromptDefinitionsAsync();
+        var decisionPrompts=Api.GetDecisionPromptConfigurationsAsync();
+        var decisionRoutes=Api.GetDecisionModelRoutesAsync();
         var platform=Api.GetIntelligencePlatformAsync();
-        await Task.WhenAll(providers,models,policies,prompts,platform);
+        await Task.WhenAll(providers,models,policies,prompts,decisionPrompts,decisionRoutes,platform);
         _providers.Clear();_providers.AddRange(await providers);
         _models.Clear();_models.AddRange(await models);
         _policies.Clear();_policies.AddRange(await policies);
         _prompts.Clear();_prompts.AddRange(await prompts);
+        _decisionPrompts.Clear();_decisionPrompts.AddRange(await decisionPrompts);
+        _decisionRoutes.Clear();_decisionRoutes.AddRange(await decisionRoutes);
         _capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);
         _legalSettings.Clear();_legalSettings.AddRange(await Api.GetLegalGroundingSettingsAsync());
         _epistemicSettings.Clear();_epistemicSettings.AddRange(await Api.GetEpistemicSettingsAsync());
@@ -394,6 +454,32 @@ private async Task LoadAsync()
     }
     catch(Exception ex){_error=ex.Message;}
     finally{_loading=false;}
+}
+
+private void EditDecisionPrompt(DecisionPromptConfigurationDto item){_error=null;_decisionPromptForm=DecisionPromptForm.From(item);_editingDecisionPrompt=true;}
+private async Task SaveDecisionPromptAsync()
+{
+    if(!await ConfirmUpdateAsync($"POLOXI decision prompt '{_decisionPromptForm.PromptCode}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveDecisionPromptConfigurationRequest(_decisionPromptForm.PromptCode,_decisionPromptForm.StageCode,_decisionPromptForm.SystemPrompt,_decisionPromptForm.UserPromptTemplate,string.IsNullOrWhiteSpace(_decisionPromptForm.OutputSchemaJson)?null:_decisionPromptForm.OutputSchemaJson,_decisionPromptForm.IsActive);
+        await Api.SaveDecisionPromptConfigurationAsync(_decisionPromptForm.PromptCode,request);
+        _editingDecisionPrompt=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+    finally{_saving=false;}
+}
+
+private sealed class DecisionPromptForm
+{
+    [Required,StringLength(120)]public string PromptCode{get;set;}="";
+    [Required,StringLength(60)]public string StageCode{get;set;}="";
+    [Required]public string SystemPrompt{get;set;}="";
+    [Required]public string UserPromptTemplate{get;set;}="";
+    public string? OutputSchemaJson{get;set;}
+    public bool IsActive{get;set;}=true;
+    public static DecisionPromptForm From(DecisionPromptConfigurationDto item)=>new(){PromptCode=item.PromptCode,StageCode=item.StageCode,SystemPrompt=item.SystemPrompt,UserPromptTemplate=item.UserPromptTemplate,OutputSchemaJson=item.OutputSchemaJson,IsActive=item.IsActive};
 }
 
 private async Task SaveShowPipelineAsync()

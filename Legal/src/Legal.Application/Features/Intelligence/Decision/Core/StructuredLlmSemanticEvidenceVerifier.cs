@@ -33,8 +33,7 @@ public sealed class StructuredLlmSemanticEvidenceVerifier(
         var prompt = await repository.GetPromptAsync(PromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{PromptCode}' decision prompt is not configured.");
         var routes = await repository.GetModelRoutesAsync(cancellationToken);
-        var route = routes.OrderBy(r => r.Priority).FirstOrDefault()
-            ?? throw new InvalidOperationException("No active Legal Decision AI route is configured.");
+        var route = DecisionModelRouteSelector.Select(routes, PromptCode);
         route = route with { MaxOutputTokens = Math.Min(route.MaxOutputTokens, settings.MaxOutputTokensPerEvidence), Temperature = 0m };
 
         var sourceText = passage.SupportingPassage.Length <= MaxSourceCharacters
@@ -77,9 +76,15 @@ public sealed class StructuredLlmSemanticEvidenceVerifier(
         var callCount = 1;
         if (proposal is null && settings.AllowSchemaRepair && settings.MaxSchemaRepairAttempts > 0)
         {
+            var configuredRepairRoute = DecisionModelRouteSelector.Select(routes, DecisionModelRouteSelector.SchemaRepairFeatureCode);
+            var repairRoute = configuredRepairRoute with
+            {
+                MaxOutputTokens = Math.Min(configuredRepairRoute.MaxOutputTokens, settings.MaxOutputTokensPerEvidence),
+                Temperature = 0m,
+            };
             var repairPrompt = $"The previous response was invalid. Return only JSON matching the supplied schema. Do not add commentary.\n\n{userPrompt}";
             var repaired = await aiProvider.GenerateAsync(new DecisionAiRequest(
-                route, PromptCode, prompt.SystemPrompt, repairPrompt, prompt.OutputSchemaJson,
+                repairRoute, DecisionModelRouteSelector.SchemaRepairFeatureCode, prompt.SystemPrompt, repairPrompt, prompt.OutputSchemaJson,
                 $"{request.CorrelationId ?? request.DecisionEvidenceId.ToString("N")}:repair"), cancellationToken);
             proposal = Parse(repaired);
             totalInputTokens += repaired.InputTokenCount;

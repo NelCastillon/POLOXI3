@@ -211,6 +211,7 @@ public sealed record DecisionResearchNeedPersistence(
     public string ResearchNeedTypeCode { get; init; } = DecisionResearchNeedTypes.LegalAuthority;
     public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
     public bool IsResearchable { get; init; } = true;
+    public string? ResearchKey { get; init; }
     public string? ParentResearchKey { get; init; }
     public string? RequiredResearchKeysJson { get; init; }
     public string? CandidateDiscriminationJson { get; init; }

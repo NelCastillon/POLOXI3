@@ -11,6 +11,8 @@ public interface ILegalDecisionRepository
     Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionModelRouteDto>> GetModelRoutesAsync(CancellationToken cancellationToken = default);
     Task<DecisionPromptDefinition?> GetPromptAsync(string promptCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default);
+    Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default);
     Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default);
     // Appends additional timeline events to an already-persisted session (e.g. the B3 solver's
     // post-persistence recompetition stages). Sequence numbers continue from the session's events.

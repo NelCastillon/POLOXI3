@@ -47,7 +47,7 @@ public sealed class DecisionResearchRoundRollbackTests
         Assert.Equal(0, repo.ReplaceBranchesCount);
         Assert.Equal(0, repo.UpdateSessionOutcomeCount);
         Assert.Equal(0, repo.PersistRecompetitionCount);
-        Assert.Equal(1, repo.PersistResearchNeedCount);
+        Assert.Equal(3, repo.PersistResearchNeedCount);
 
         // Retrieval attempts and their evidence attachments are audit provenance, not authoritative
         // decision-state mutations. They remain recorded even though propagation failed.
@@ -291,10 +291,10 @@ internal sealed class AtomicResearchNeedAiProvider : ILegalDecisionAiProvider
     public Task<DecisionAiResult> GenerateAsync(DecisionAiRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(new DecisionAiResult(
             """
-            {"leaves":[{"researchKey":"LEGAL_RULE_1","researchNeedType":"LEGAL_RULE","proposition":"What governing rule resolves the frontier objective?","sourceClass":"LEGAL_AUTHORITY","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]}]}
+            {"leaves":[{"researchKey":"LEGAL_RULE_1","researchNeedType":"LEGAL_RULE","proposition":"What governing rule resolves the frontier objective?","sourceClass":"LEGAL_AUTHORITY","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]},{"researchKey":"MATTER_FACT_1","researchNeedType":"MATTER_FACT","proposition":"What matter fact bears on the frontier objective?","sourceClass":"MATTER_DOCUMENT","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]},{"researchKey":"APPLICATION_1","researchNeedType":"APPLICATION","proposition":"Does the established matter fact satisfy the governing rule?","sourceClass":"NONE","researchable":false,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":["LEGAL_RULE_1","MATTER_FACT_1"]}]}
             """,
             """
-            {"leaves":[{"researchKey":"LEGAL_RULE_1","researchNeedType":"LEGAL_RULE","proposition":"What governing rule resolves the frontier objective?","sourceClass":"LEGAL_AUTHORITY","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]}]}
+            {"leaves":[{"researchKey":"LEGAL_RULE_1","researchNeedType":"LEGAL_RULE","proposition":"What governing rule resolves the frontier objective?","sourceClass":"LEGAL_AUTHORITY","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]},{"researchKey":"MATTER_FACT_1","researchNeedType":"MATTER_FACT","proposition":"What matter fact bears on the frontier objective?","sourceClass":"MATTER_DOCUMENT","researchable":true,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":[]},{"researchKey":"APPLICATION_1","researchNeedType":"APPLICATION","proposition":"Does the established matter fact satisfy the governing rule?","sourceClass":"NONE","researchable":false,"candidateDiscrimination":["C1"],"parentResearchKey":null,"requires":["LEGAL_RULE_1","MATTER_FACT_1"]}]}
             """,
             10,
             10,

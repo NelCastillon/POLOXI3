@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Web.Services;
 
@@ -128,6 +129,9 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task DeleteIntelligenceFeaturePolicyAsync(string featureCode,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/intelligence/feature-policies/{Uri.EscapeDataString(featureCode)}",token);await EnsureSuccessWithDetailAsync(response,token);}
     public async Task<IReadOnlyCollection<IntelligencePromptDefinitionDto>> GetIntelligencePromptDefinitionsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<IntelligencePromptDefinitionDto>>("api/intelligence/prompts",token)??[];
     public async Task SaveIntelligencePromptDefinitionAsync(string promptCode,string versionLabel,SaveIntelligencePromptDefinitionRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/prompts/{Uri.EscapeDataString(promptCode)}/{Uri.EscapeDataString(versionLabel)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+    public async Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetDecisionPromptConfigurationsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionPromptConfigurationDto>>("api/intelligence/decision-prompts",token)??[];
+    public async Task<IReadOnlyCollection<DecisionModelRouteDto>> GetDecisionModelRoutesAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionModelRouteDto>>("api/intelligence/decision-model-routes",token)??[];
+    public async Task SaveDecisionPromptConfigurationAsync(string promptCode,SaveDecisionPromptConfigurationRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/decision-prompts/{Uri.EscapeDataString(promptCode)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
     public async Task DeleteIntelligencePromptDefinitionAsync(string promptCode,string versionLabel,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/intelligence/prompts/{Uri.EscapeDataString(promptCode)}/{Uri.EscapeDataString(versionLabel)}",token);await EnsureSuccessWithDetailAsync(response,token);}
 
     // Legal Grounding settings (CourtListener/GovInfo/eCFR) stored in Core.ConfigurationSetting.

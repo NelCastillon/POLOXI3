@@ -238,6 +238,12 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
             ? Prompt
             : null);
 
+    public Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionPromptConfigurationDto>>([]);
+
+    public Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 

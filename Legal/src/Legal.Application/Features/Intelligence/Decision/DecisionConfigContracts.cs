@@ -27,6 +27,30 @@ public sealed record DecisionPromptDefinition(
     string UserPromptTemplate,
     string? OutputSchemaJson);
 
+public sealed record DecisionPromptConfigurationDto(
+    string PromptCode,
+    string StageCode,
+    string SystemPrompt,
+    string UserPromptTemplate,
+    string? OutputSchemaJson,
+    bool IsActive,
+    DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc);
+
+public sealed record SaveDecisionPromptConfigurationRequest(
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(120)]
+    string PromptCode,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(60)]
+    string StageCode,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    string SystemPrompt,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    string UserPromptTemplate,
+    string? OutputSchemaJson,
+    bool IsActive);
+
 // The Core control weights/thresholds loaded from POLOXI.Legal_DecisionSetting (§11,§12,§34).
 public sealed record DecisionCoreSettings(
     double WeightUncertainty,

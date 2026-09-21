@@ -70,17 +70,21 @@ public static class DecisionResearchNeedFactory
         DecisionResearchNeedPersistence frontierNeed,
         DecisionResearchSemanticLeaf leaf,
         string proposalStatus,
-        string? proposalReason) => frontierNeed with
+        string? proposalReason,
+        string statusCode = "OPEN") => frontierNeed with
     {
+        DecisionResearchNeedId = Guid.NewGuid(),
         PropositionToResolve = leaf.Proposition.Trim(),
         ResearchNeedTypeCode = leaf.ResearchNeedType,
         SourceClassCode = leaf.SourceClass,
         IsResearchable = leaf.Researchable,
+        ResearchKey = leaf.ResearchKey,
         ParentResearchKey = leaf.ParentResearchKey,
         RequiredResearchKeysJson = System.Text.Json.JsonSerializer.Serialize(leaf.Requires),
         CandidateDiscriminationJson = System.Text.Json.JsonSerializer.Serialize(leaf.CandidateDiscrimination),
         SemanticProposalStatusCode = proposalStatus,
         SemanticProposalReasonCode = proposalReason,
+        StatusCode = statusCode,
         AuthorityKind = leaf.SourceClass == DecisionResearchSourceClasses.LegalAuthority
             ? frontierNeed.AuthorityKind
             : null,

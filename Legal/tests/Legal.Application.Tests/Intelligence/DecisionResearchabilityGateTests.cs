@@ -33,9 +33,9 @@ public sealed class DecisionResearchabilityGateTests
     }
 
     [Fact]
-    public void AtomicLegalRuleLeaf_IsAcceptedAsSourceResolvable()
+    public void SearchStyleHierarchy_IsAcceptedWithOnlyResolvableLeavesExecutable()
     {
-        var leaf = new DecisionResearchSemanticLeaf
+        var legalRule = new DecisionResearchSemanticLeaf
         {
             ResearchKey = "LEGAL_RULE_1",
             ResearchNeedType = DecisionResearchNeedTypes.LegalRule,
@@ -44,12 +44,31 @@ public sealed class DecisionResearchabilityGateTests
             Researchable = true,
             CandidateDiscrimination = ["C1", "C2"],
         };
-        var proposal = new DecisionResearchSemanticProposal { Leaves = [leaf] };
+        var matterFact = new DecisionResearchSemanticLeaf
+        {
+            ResearchKey = "MATTER_FACT_1",
+            ResearchNeedType = DecisionResearchNeedTypes.MatterFact,
+            Proposition = "What duties does the employee claim to have performed?",
+            SourceClass = DecisionResearchSourceClasses.MatterDocument,
+            Researchable = true,
+            CandidateDiscrimination = ["C1", "C2"],
+        };
+        var application = new DecisionResearchSemanticLeaf
+        {
+            ResearchKey = "APPLICATION_1",
+            ResearchNeedType = DecisionResearchNeedTypes.Application,
+            Proposition = "Do the established duties satisfy the verified exemption standard?",
+            SourceClass = DecisionResearchSourceClasses.None,
+            Researchable = false,
+            CandidateDiscrimination = ["C1", "C2"],
+            Requires = ["LEGAL_RULE_1", "MATTER_FACT_1"],
+        };
+        var proposal = new DecisionResearchSemanticProposal { Leaves = [legalRule, matterFact, application] };
 
         var result = new DecisionResearchabilityGate().Evaluate(proposal);
 
         Assert.True(result.IsAcceptable);
-        Assert.Same(leaf, Assert.Single(result.ResearchableLeaves));
+        Assert.Equal([legalRule, matterFact], result.ResearchableLeaves);
     }
 
     [Fact]
@@ -77,4 +96,77 @@ public sealed class DecisionResearchabilityGateTests
         Assert.Empty(result.ResearchableLeaves);
         Assert.Contains(result.Defects, defect => defect.EndsWith(":ASSUMED_APPLICATION_CONCLUSION", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void MatterSpecificConflict_IsRejectedAsPublicLegalResearch()
+    {
+        var proposal = ValidHierarchy() with
+        {
+            Leaves =
+            [
+                new DecisionResearchSemanticLeaf
+                {
+                    ResearchKey = "LEGAL_RULE_1",
+                    ResearchNeedType = DecisionResearchNeedTypes.LegalRule,
+                    Proposition = "Whether there is conflicting evidence about employees' job duties in this matter.",
+                    SourceClass = DecisionResearchSourceClasses.LegalAuthority,
+                    Researchable = true,
+                    CandidateDiscrimination = ["C1", "C2"],
+                },
+                .. ValidHierarchy().Leaves.Skip(1),
+            ],
+        };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains(result.Defects, defect => defect.EndsWith(":MATTER_FINDING_NOT_PUBLICLY_RESEARCHABLE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SingleResearchLeaf_IsRejectedAsShallowDecomposition()
+    {
+        var proposal = new DecisionResearchSemanticProposal { Leaves = [ValidHierarchy().Leaves[0]] };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains("SEMANTIC_HIERARCHY_TOO_SHALLOW", result.Defects);
+        Assert.Contains("APPLICATION_NODE_MISSING", result.Defects);
+    }
+
+    private static DecisionResearchSemanticProposal ValidHierarchy() => new()
+    {
+        Leaves =
+        [
+            new DecisionResearchSemanticLeaf
+            {
+                ResearchKey = "LEGAL_RULE_1",
+                ResearchNeedType = DecisionResearchNeedTypes.LegalRule,
+                Proposition = "What standard determines whether disputed duties are material at summary judgment?",
+                SourceClass = DecisionResearchSourceClasses.LegalAuthority,
+                Researchable = true,
+                CandidateDiscrimination = ["C1", "C2"],
+            },
+            new DecisionResearchSemanticLeaf
+            {
+                ResearchKey = "MATTER_FACT_1",
+                ResearchNeedType = DecisionResearchNeedTypes.MatterFact,
+                Proposition = "What duties does the employee claim to have performed?",
+                SourceClass = DecisionResearchSourceClasses.MatterDocument,
+                Researchable = true,
+                CandidateDiscrimination = ["C1", "C2"],
+            },
+            new DecisionResearchSemanticLeaf
+            {
+                ResearchKey = "APPLICATION_1",
+                ResearchNeedType = DecisionResearchNeedTypes.Application,
+                Proposition = "Do the established duties create a material dispute under the verified standard?",
+                SourceClass = DecisionResearchSourceClasses.None,
+                Researchable = false,
+                CandidateDiscrimination = ["C1", "C2"],
+                Requires = ["LEGAL_RULE_1", "MATTER_FACT_1"],
+            },
+        ],
+    };
 }

@@ -2,6 +2,7 @@ using Legal.Api.Security;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -67,6 +68,28 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     [HttpDelete("prompts/{promptCode}/{versionLabel}")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> DeletePrompt(string promptCode,string versionLabel,CancellationToken cancellationToken){await repository.DeletePromptDefinitionAsync(TenantId,promptCode,versionLabel,ActorUserId,cancellationToken);return NoContent();}
+
+    [HttpGet("decision-prompts")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DecisionPrompts([FromServices] ILegalDecisionRepository decisionRepository,CancellationToken cancellationToken)
+        =>Ok(await decisionRepository.GetPromptConfigurationsAsync(cancellationToken));
+
+    [HttpGet("decision-model-routes")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DecisionModelRoutes([FromServices] ILegalDecisionRepository decisionRepository,CancellationToken cancellationToken)
+        =>Ok(await decisionRepository.GetModelRoutesAsync(cancellationToken));
+
+    [HttpPut("decision-prompts/{promptCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDecisionPrompt(
+        string promptCode,
+        [FromBody] SaveDecisionPromptConfigurationRequest request,
+        [FromServices] ILegalDecisionRepository decisionRepository,
+        CancellationToken cancellationToken)
+    {
+        await decisionRepository.SavePromptConfigurationAsync(ActorUserId,request with{PromptCode=promptCode},cancellationToken);
+        return NoContent();
+    }
 
     // Legal Grounding settings (CourtListener/GovInfo/eCFR) stored in Core.ConfigurationSetting.
     [HttpGet("legal-grounding-settings")]

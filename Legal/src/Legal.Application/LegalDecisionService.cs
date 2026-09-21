@@ -98,7 +98,7 @@ public sealed class LegalDecisionService(
         var settings = await repository.GetCoreSettingsAsync(cancellationToken);
         var v2Settings = await repository.GetV2SettingsAsync(cancellationToken);
         var useGraph = request.UseDependencyGraph ?? v2Settings.UseDependencyGraphDefault;
-        var route = await ResolveRouteAsync(request.ModelCode, cancellationToken);
+        var route = await ResolveRouteAsync(DiscoveryPromptCode, request.ModelCode, cancellationToken);
         var contextCode = string.IsNullOrWhiteSpace(request.ContextCode) ? DecisionContexts.General : request.ContextCode!.Trim().ToUpperInvariant();
         var events = new List<DecisionEventPersistence>();
         var sequence = 0;
@@ -118,7 +118,7 @@ public sealed class LegalDecisionService(
         Record("SESSION_STARTED", "INTAKE", new { request.Query, contextCode, route.ModelCode, request.UsePoloxiEngine, hasClarification, hasCounterfactual });
 
         if (!request.UsePoloxiEngine)
-            return await ComposeDirectAnswerAsync(request, sessionId, route, contextCode, events, timer, cancellationToken);
+            return await ComposeDirectAnswerAsync(request, sessionId, contextCode, events, timer, cancellationToken);
 
         // ── Candidate Discovery (LLM proposal only) ─────────────────────────────────────────────
         var discoveryPrompt = await repository.GetPromptAsync(DiscoveryPromptCode, cancellationToken)
@@ -366,7 +366,7 @@ public sealed class LegalDecisionService(
         string? finalAnswer = null;
         if (statusCode == DecisionStatusCodes.DecisionReady || statusCode == DecisionStatusCodes.ResearchExhausted || statusCode == DecisionStatusCodes.ProvisionalDecision)
         {
-            finalAnswer = await ComposeAnswerAsync(request, route, candidates, branches, flipPoints, margin, entropy, cancellationToken);
+            finalAnswer = await ComposeAnswerAsync(request, candidates, branches, flipPoints, margin, entropy, cancellationToken);
             llmCalls++;
             Record("ANSWER_COMPOSED", "ANSWER", null);
         }
@@ -419,7 +419,7 @@ public sealed class LegalDecisionService(
         {
             try
             {
-                v2 = await RunDependencyGraphAsync(request, route, sessionId, contextCode, effectiveQuery,
+                v2 = await RunDependencyGraphAsync(request, sessionId, contextCode, effectiveQuery,
                     candidates, branches, v2Settings, winner, cancellationToken);
                 await repository.PersistGraphAsync(v2.Persistence, cancellationToken);
 
@@ -961,8 +961,9 @@ public sealed class LegalDecisionService(
             blockers, violations, claims, narrative);
     }
 
-    private async Task<DecisionSearchResponse> ComposeDirectAnswerAsync(DecisionSearchRequest request, Guid sessionId, DecisionModelRouteDto route, string contextCode, List<DecisionEventPersistence> events, Stopwatch timer, CancellationToken cancellationToken)
+    private async Task<DecisionSearchResponse> ComposeDirectAnswerAsync(DecisionSearchRequest request, Guid sessionId, string contextCode, List<DecisionEventPersistence> events, Stopwatch timer, CancellationToken cancellationToken)
     {
+        var route = await ResolveRouteAsync(AnswerPromptCode, request.ModelCode, cancellationToken);
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{AnswerPromptCode}' decision prompt is not configured.");
         var user = answerPrompt.UserPromptTemplate.Replace("{{ARTIFACT}}", "{}").Replace("{{QUERY}}", request.Query);
@@ -1284,14 +1285,15 @@ public sealed class LegalDecisionService(
                             targetBranch,
                             frontierNeed,
                             cancellationToken);
-                        var need = semanticNeed.Need;
+                        var need = semanticNeed.SelectedNeed;
                         if (need is null)
                         {
                             audit.Add($"Research semantic proposal unresolved; retrieval was not authorized: {semanticNeed.Reason}");
                         }
                         else
                         {
-                            await repository.PersistResearchNeedAsync(need, cancellationToken);
+                            foreach (var plannedNeed in semanticNeed.Needs)
+                                await repository.PersistResearchNeedAsync(plannedNeed, cancellationToken);
                             researchNeedDto = new DecisionResearchNeedDto(
                                 need.DecisionResearchNeedId, need.DecisionBranchId, need.IssueLabel, need.PropositionToResolve,
                                 need.AuthorityKind, need.RequiredEvidenceKind, need.WhyDecisionRelevant, need.ExpectedDiscrimination,
@@ -1462,13 +1464,14 @@ public sealed class LegalDecisionService(
                     userId, current.MatterId, dependencyEventId: null)
                     ?? throw new InvalidOperationException("The selected frontier did not produce a research need.");
                 var semanticNeed = await GenerateResearchNeedAsync(current, target, frontierNeed, cancellationToken);
-                if (semanticNeed.Need is null)
+                if (semanticNeed.SelectedNeed is null)
                     return await DoneAsync(roundNumber, totalRetrievals,
                         DecisionResearchLoopStopReasons.ResearchNeedUnresolved,
                         new DecisionResearchFailureDto(roundNumber, preRoundStage, "RESEARCHABILITY_GATE",
                             semanticNeed.Reason ?? "No source-resolvable research leaf passed the bounded researchability gate.", false));
-                researchNeed = semanticNeed.Need;
-                await repository.PersistResearchNeedAsync(researchNeed, cancellationToken);
+                researchNeed = semanticNeed.SelectedNeed;
+                foreach (var plannedNeed in semanticNeed.Needs)
+                    await repository.PersistResearchNeedAsync(plannedNeed, cancellationToken);
 
                 // Resolve causality independently from research eligibility. Missing typed lineage must not
                 // prevent retrieval; it only means a verified result cannot yet be propagated through V2.
@@ -1731,21 +1734,13 @@ public sealed class LegalDecisionService(
             .FirstOrDefault();
     }
 
-    private async Task<DecisionModelRouteDto> ResolveRouteAsync(string? modelCode, CancellationToken cancellationToken)
+    private async Task<DecisionModelRouteDto> ResolveRouteAsync(string featureCode, string? modelCode, CancellationToken cancellationToken)
     {
         var routes = await repository.GetModelRoutesAsync(cancellationToken);
-        if (routes.Count == 0)
-            throw new InvalidOperationException("No active AI routes are configured in POLOXI.Legal_DecisionModelRoute.");
-        if (!string.IsNullOrWhiteSpace(modelCode))
-        {
-            var match = routes.Where(r => string.Equals(r.ModelCode, modelCode, StringComparison.OrdinalIgnoreCase)).OrderBy(r => r.Priority).FirstOrDefault();
-            if (match is not null)
-                return match;
-        }
-        return routes.OrderBy(r => r.Priority).First();
+        return DecisionModelRouteSelector.Select(routes, featureCode, modelCode);
     }
 
-    private async Task<(DecisionResearchNeedPersistence? Need, string? Reason)> GenerateResearchNeedAsync(
+    private async Task<(IReadOnlyList<DecisionResearchNeedPersistence> Needs, DecisionResearchNeedPersistence? SelectedNeed, string? Reason)> GenerateResearchNeedAsync(
         DecisionSessionPersistence session,
         DecisionBranchPersistence frontier,
         DecisionResearchNeedPersistence frontierNeed,
@@ -1753,7 +1748,7 @@ public sealed class LegalDecisionService(
     {
         var prompt = await repository.GetPromptAsync(ResearchNeedPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{ResearchNeedPromptCode}' decision prompt is not configured.");
-        var route = await ResolveRouteAsync(session.ModelCode, cancellationToken);
+        var route = await ResolveRouteAsync(ResearchNeedPromptCode, session.ModelCode, cancellationToken);
         var candidates = JsonSerializer.Serialize(session.Candidates.Select(candidate => new
         {
             candidate.CandidateCode,
@@ -1785,13 +1780,25 @@ public sealed class LegalDecisionService(
             var evaluation = gate.Evaluate(proposal);
             if (evaluation.IsAcceptable)
             {
-                var leaf = evaluation.ResearchableLeaves
+                var selectedLeaf = evaluation.ResearchableLeaves
+                    .Where(item => item.SourceClass.Equals(DecisionResearchSourceClasses.LegalAuthority, StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(item => item.CandidateDiscrimination.Count)
                     .ThenBy(item => item.ResearchKey, StringComparer.OrdinalIgnoreCase)
-                    .First();
-                return (DecisionResearchNeedFactory.CreateFromLeaf(
-                    frontierNeed, leaf, attempt == 1 ? "ACCEPTED" : "REPAIRED",
-                    attempt == 1 ? null : "BOUNDED_RESEARCHABILITY_REPAIR_SUCCEEDED"), null);
+                    .FirstOrDefault()
+                    ?? evaluation.ResearchableLeaves
+                        .OrderByDescending(item => item.CandidateDiscrimination.Count)
+                        .ThenBy(item => item.ResearchKey, StringComparer.OrdinalIgnoreCase)
+                        .First();
+                var proposalStatus = attempt == 1 ? "ACCEPTED" : "REPAIRED";
+                var proposalReason = attempt == 1 ? null : "BOUNDED_RESEARCHABILITY_REPAIR_SUCCEEDED";
+                var needs = proposal.Leaves
+                    .Select(leaf => DecisionResearchNeedFactory.CreateFromLeaf(
+                        frontierNeed, leaf, proposalStatus, proposalReason,
+                        leaf.ResearchKey.Equals(selectedLeaf.ResearchKey, StringComparison.OrdinalIgnoreCase) ? "OPEN" : "PLANNED"))
+                    .ToArray();
+                var selectedNeed = needs.Single(need =>
+                    need.ResearchKey!.Equals(selectedLeaf.ResearchKey, StringComparison.OrdinalIgnoreCase));
+                return (needs, selectedNeed, null);
             }
 
             if (attempt == 1)
@@ -1802,10 +1809,10 @@ public sealed class LegalDecisionService(
                 continue;
             }
 
-            return (null, string.Join("; ", evaluation.Defects));
+            return ([], null, string.Join("; ", evaluation.Defects));
         }
 
-        return (null, "RESEARCHABILITY_GATE_UNRESOLVED");
+        return ([], null, "RESEARCHABILITY_GATE_UNRESOLVED");
     }
 
     private static DecisionResearchSemanticProposal ParseResearchSemanticProposal(string json)
@@ -2197,7 +2204,12 @@ public sealed class LegalDecisionService(
                     var evidenceId = Guid.NewGuid();
                     var verification = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
                         evidenceId, target.DecisionBranchId, objective, s.SourceRef, s.Title, s.Snippet,
-                        s.SourceType, s.Jurisdiction, s.AuthorityDate), cancellationToken);
+                        s.SourceType, s.Jurisdiction, s.AuthorityDate)
+                    {
+                        SourceProvider = s.SourceProvider,
+                        SourceVersion = s.SourceVersion,
+                        ProviderIdentityVerified = s.ProviderIdentityVerified,
+                    }, cancellationToken);
                     evidence.Add(ToEvidencePersistence(s, objective, target.DecisionBranchId, verification));
                     verifications.Add(verification);
                 }
@@ -2528,8 +2540,9 @@ public sealed class LegalDecisionService(
         return (DecisionStatusCodes.DecisionReady, DecisionStatusCodes.DecisionReady, "CONVERGED_SINGLE_PASS");
     }
 
-    private async Task<string?> ComposeAnswerAsync(DecisionSearchRequest request, DecisionModelRouteDto route, IReadOnlyList<DecisionCandidatePersistence> candidates, IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionFlipPointPersistence> flipPoints, double margin, double entropy, CancellationToken cancellationToken)
+    private async Task<string?> ComposeAnswerAsync(DecisionSearchRequest request, IReadOnlyList<DecisionCandidatePersistence> candidates, IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionFlipPointPersistence> flipPoints, double margin, double entropy, CancellationToken cancellationToken)
     {
+        var route = await ResolveRouteAsync(AnswerPromptCode, request.ModelCode, cancellationToken);
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken);
         if (answerPrompt is null)
             return null;
@@ -2802,7 +2815,6 @@ public sealed class LegalDecisionService(
 
     private async Task<DecisionV2Result> RunDependencyGraphAsync(
         DecisionSearchRequest request,
-        DecisionModelRouteDto route,
         Guid sessionId,
         string contextCode,
         string effectiveQuery,
@@ -2813,6 +2825,7 @@ public sealed class LegalDecisionService(
         CancellationToken cancellationToken)
     {
         // 1. Graph proposal (LLM proposes typed nodes/edges; Core assigns identity and owns state).
+        var graphRoute = await ResolveRouteAsync(GraphPromptCode, request.ModelCode, cancellationToken);
         var graphPrompt = await repository.GetPromptAsync(GraphPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{GraphPromptCode}' decision prompt is not configured.");
         var candidateArtifact = JsonSerializer.Serialize(new
@@ -2829,7 +2842,7 @@ public sealed class LegalDecisionService(
             .Replace("{{CONTEXT}}", contextCode)
             .Replace("{{ARTIFACT}}", candidateArtifact);
         var graphResult = await aiProvider.GenerateAsync(
-            new DecisionAiRequest(route, "DECISION_GRAPH", graphPrompt.SystemPrompt, graphUser, graphPrompt.OutputSchemaJson, request.CorrelationId),
+            new DecisionAiRequest(graphRoute, "DECISION_GRAPH", graphPrompt.SystemPrompt, graphUser, graphPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
 
         var (model, nodeCodeToId, edgeCodeToId) = ParseGraphProposal(graphResult.StructuredOutputJson ?? graphResult.Content, candidates);
@@ -2837,6 +2850,7 @@ public sealed class LegalDecisionService(
             throw new InvalidOperationException("The V2 graph proposal returned no nodes.");
 
         // 2. Independent verification: a distinct role assesses each edge; Core applies the verdicts.
+        var verifyRoute = await ResolveRouteAsync(VerifyPromptCode, request.ModelCode, cancellationToken);
         var verifyPrompt = await repository.GetPromptAsync(VerifyPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{VerifyPromptCode}' decision prompt is not configured.");
         var edgeArtifact = JsonSerializer.Serialize(new
@@ -2855,7 +2869,7 @@ public sealed class LegalDecisionService(
             .Replace("{{ARTIFACT}}", edgeArtifact)
             .Replace("{{QUERY}}", effectiveQuery);
         var verifyResult = await aiProvider.GenerateAsync(
-            new DecisionAiRequest(route, "DECISION_VERIFY", verifyPrompt.SystemPrompt, verifyUser, verifyPrompt.OutputSchemaJson, request.CorrelationId),
+            new DecisionAiRequest(verifyRoute, "DECISION_VERIFY", verifyPrompt.SystemPrompt, verifyUser, verifyPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
         ApplyVerification(verifyResult.StructuredOutputJson ?? verifyResult.Content, model, edgeCodeToId);
 
