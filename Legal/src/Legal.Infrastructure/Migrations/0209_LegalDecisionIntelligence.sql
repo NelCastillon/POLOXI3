@@ -350,8 +350,8 @@ WHEN NOT MATCHED BY TARGET THEN
 
 MERGE POLOXI.Legal_DecisionContext AS target
 USING (VALUES
-	(N'GENERAL', N'General',       N'Standard web/enterprise grounding for the decision engine.', 1, 0),
-	(N'LEGAL',   N'Legal',         N'Grounds candidate outcomes in case law and statutes/regulations.', 0, 1)
+	(N'GENERAL', N'General',       N'Standard web/enterprise grounding for the decision engine.', 0, 0),
+	(N'LEGAL',   N'Legal',         N'Grounds candidate outcomes in case law and statutes/regulations.', 1, 1)
 ) AS source (ContextCode, DisplayName, Description, IsDefault, SortOrder)
 ON target.ContextCode = source.ContextCode
 WHEN NOT MATCHED BY TARGET THEN

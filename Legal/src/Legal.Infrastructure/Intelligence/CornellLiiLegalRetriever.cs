@@ -75,7 +75,12 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
                 citation.Url,
                 text,
                 0m,
-                DateTime.UtcNow);
+                DateTime.UtcNow)
+            {
+                SourceProvider="CORNELL_LII",
+                SourceVersion="HTML_V1",
+                ProviderIdentityVerified=true,
+            };
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {

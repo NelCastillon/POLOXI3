@@ -913,6 +913,9 @@ public sealed record WideExternalKnowledgeSnippet
     // and legacy rows so non-legal scoring is unchanged.
     // AuthorityKind: which legal source class the snippet was verified against (Case/Statute/Regulation).
     public string? AuthorityKind{get;set;}
+    public string? SourceProvider{get;set;}
+    public string? SourceVersion{get;set;}
+    public bool ProviderIdentityVerified{get;set;}
     // AuthorityIdentityVerified: mandatory gate — did a retrieved source actually reference the proposed
     // authority? Proposition scoring can never rescue a snippet that failed this gate.
     public bool AuthorityIdentityVerified{get;set;}

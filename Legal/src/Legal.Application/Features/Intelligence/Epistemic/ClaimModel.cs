@@ -1,5 +1,37 @@
 namespace Legal.Application.Features.Intelligence.Epistemic;
 
+public enum ClaimMappingState
+{
+    Unmapped,
+    Mapped,
+    ScopeExceeded,
+    Ambiguous,
+}
+
+public sealed record ComposerClaimProvenance
+{
+    public required string ClaimKey { get; init; }
+    public Guid? SourcePropositionId { get; init; }
+    public IReadOnlyList<Guid> EvidenceAttachmentIds { get; init; } = [];
+    public IReadOnlyList<Guid> DecisionEvidenceIds { get; init; } = [];
+}
+
+public sealed record OutputClaimLedgerEntry
+{
+    public required Guid OutputClaimId { get; init; }
+    public required string ClaimText { get; init; }
+    public bool IsMaterial { get; init; }
+    public Guid? SourcePropositionId { get; init; }
+    public IReadOnlyList<Guid> EvidenceAttachmentIds { get; init; } = [];
+    public IReadOnlyList<Guid> DecisionEvidenceIds { get; init; } = [];
+    public IReadOnlyList<Guid> VerificationRunIds { get; init; } = [];
+    public IReadOnlyList<Guid> SourceSnapshotIds { get; init; } = [];
+    public IReadOnlyList<string> PassageRefs { get; init; } = [];
+    public ClaimMappingState MappingState { get; init; }
+    public OutputClaimDisposition Disposition { get; init; }
+    public required string ReasonCode { get; init; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // POLOXI Epistemic Authority Layer — EA-1 core domain model (domain-independent).
 //
@@ -113,6 +145,13 @@ public sealed record ClaimProposal
 
     public string? ProposedByModel { get; init; }
     public string? PromptRunId { get; init; }
+
+    public bool IsMaterial { get; init; } = true;
+    public Guid? SourcePropositionId { get; init; }
+    public IReadOnlyList<Guid> EvidenceAttachmentIds { get; init; } = [];
+    public IReadOnlyList<Guid> DecisionEvidenceIds { get; init; } = [];
+    public ClaimMappingState MappingState { get; init; } = ClaimMappingState.Unmapped;
+    public string? MappingReasonCode { get; init; }
 }
 
 // The authoritative, idempotent record of a verification-state transition. Feeds the existing V2.1

@@ -15,6 +15,15 @@ public interface ILegalDecisionService
     // ResearchNeed generation. POLOXI remains the sole scorer; the graph only emits signals.
     Task<DecisionClosedLoopResultDto> ApplyVerificationChangeAsync(
         Guid tenantId, Guid userId, Guid decisionSessionId, DecisionVerificationChangeRequest request, CancellationToken cancellationToken = default);
+
+    // POLOXI Bounded Research Loop (§13/§14/§18) — the AUTONOMOUS closed loop. Repeatedly selects the
+    // highest-Information-Value frontier item, retrieves + verifies external evidence for it, promotes
+    // only VERIFIED material, and drives the existing single-iteration closed loop (propagation →
+    // Candidate×Branch recompetition → frontier/IV/readiness recalculation) until an explicit STOP
+    // condition (DecisionReady, budget exhausted, frontier below threshold, or no material change).
+    // Bounded convergence engine, never "research until ready". Default OFF until validated end to end.
+    Task<DecisionResearchLoopResultDto> RunResearchLoopAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionModelOptionDto>> GetModelsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(Guid tenantId, CancellationToken cancellationToken = default);
 

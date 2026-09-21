@@ -69,7 +69,55 @@ public sealed record DecisionResearchNeedDto(
     decimal CurrentUncertainty,
     decimal InformationValue,
     string? FalsificationCondition,
-    string StatusCode);
+    string StatusCode)
+{
+    public string ResearchNeedTypeCode { get; init; } = DecisionResearchNeedTypes.LegalAuthority;
+}
+
+public static class DecisionResearchNeedTypes
+{
+    public const string LegalAuthority = "LEGAL_AUTHORITY";
+    public const string LegalRule = "LEGAL_RULE";
+    public const string ProceduralStandard = "PROCEDURAL_STANDARD";
+    public const string MatterFact = "MATTER_FACT";
+    public const string MatterEvidence = "MATTER_EVIDENCE";
+    public const string Application = "APPLICATION";
+    public const string Derived = "DERIVED";
+    public const string Mixed = "MIXED";
+
+    public static bool RequiresMatterSources(string? code) =>
+        string.Equals(code, MatterFact, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(code, MatterEvidence, StringComparison.OrdinalIgnoreCase);
+}
+
+public static class DecisionResearchSourceClasses
+{
+    public const string LegalAuthority = "LEGAL_AUTHORITY";
+    public const string MatterDocument = "MATTER_DOCUMENT";
+    public const string None = "NONE";
+}
+
+public sealed record DecisionResearchSemanticLeaf
+{
+    public required string ResearchKey { get; init; }
+    public required string ResearchNeedType { get; init; }
+    public required string Proposition { get; init; }
+    public required string SourceClass { get; init; }
+    public bool Researchable { get; init; }
+    public IReadOnlyList<string> CandidateDiscrimination { get; init; } = [];
+    public string? ParentResearchKey { get; init; }
+    public IReadOnlyList<string> Requires { get; init; } = [];
+}
+
+public sealed record DecisionResearchSemanticProposal
+{
+    public IReadOnlyList<DecisionResearchSemanticLeaf> Leaves { get; init; } = [];
+}
+
+public sealed record DecisionResearchabilityResult(
+    bool IsAcceptable,
+    IReadOnlyList<string> Defects,
+    IReadOnlyList<DecisionResearchSemanticLeaf> ResearchableLeaves);
 
 // The before/after audit of a Candidate×Branch recompetition triggered by a verification change.
 public sealed record DecisionRecompetitionDto(
@@ -158,7 +206,17 @@ public sealed record DecisionResearchNeedPersistence(
     decimal CurrentUncertainty,
     decimal InformationValue,
     string? FalsificationCondition,
-    string StatusCode);
+    string StatusCode)
+{
+    public string ResearchNeedTypeCode { get; init; } = DecisionResearchNeedTypes.LegalAuthority;
+    public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
+    public bool IsResearchable { get; init; } = true;
+    public string? ParentResearchKey { get; init; }
+    public string? RequiredResearchKeysJson { get; init; }
+    public string? CandidateDiscriminationJson { get; init; }
+    public string? SemanticProposalStatusCode { get; init; }
+    public string? SemanticProposalReasonCode { get; init; }
+}
 
 public sealed record DecisionFrontierSnapshotPersistence(
     Guid DecisionFrontierSnapshotId,
@@ -183,3 +241,92 @@ public sealed record DecisionV21Settings(
     int LoopMaxResearchActions,
     double LoopNoInformationGainEpsilon,
     bool BenchmarkEnabled);
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// POLOXI Bounded Research Loop control settings (loaded from POLOXI.Legal_DecisionSetting).
+//
+// Governs the AUTONOMOUS closed research loop: Retrieval → Verification → Evidence Promotion →
+// Verified Signal → Dependency Propagation → Candidate×Branch Recompetition → frontier/IV/readiness
+// recalculation, repeated until an explicit STOP condition. The loop is a bounded convergence engine,
+// never "research until ready": every round is budget-checked. Default OFF so the shadow baseline is
+// preserved until the loop is validated end to end.
+//
+// Stop conditions (any one halts the loop):
+//   • DecisionReady reached,
+//   • MaxRounds reached,
+//   • MaxRetrievals reached (cumulative retrieval operations),
+//   • no frontier item with information value ≥ MinFrontierInformationValue,
+//   • no material state change after a round (|Δentropy| < NoStateChangeEpsilon AND no winner flip),
+//   • all essential research needs exhausted.
+// UseSeedRetriever routes retrieval to a deterministic seed source (test/demo) instead of the live
+// provider, so the loop can be exercised end to end against seeded matters.
+public sealed record DecisionResearchLoopSettings(
+    bool Enabled,
+    int MaxRounds,
+    int MaxRetrievals,
+    double MinFrontierInformationValue,
+    double NoStateChangeEpsilon,
+    bool UseSeedRetriever);
+
+// Explicit STOP reasons for the bounded research loop. Every terminated loop carries exactly one,
+// so the caller can distinguish healthy convergence (DecisionReady) from budget/threshold cut-offs.
+public static class DecisionResearchLoopStopReasons
+{
+    public const string LoopDisabled          = "LOOP_DISABLED";            // feature flag OFF
+    public const string DecisionReady         = "DECISION_READY";           // converged
+    public const string MaxRounds             = "MAX_ROUNDS";               // round budget hit
+    public const string RetrievalBudget       = "RETRIEVAL_BUDGET";         // cumulative retrieval cap hit
+    public const string FrontierBelowThreshold= "FRONTIER_BELOW_THRESHOLD"; // no frontier item worth researching
+    public const string NoVerifiableEdge      = "NO_VERIFIABLE_EDGE";       // nothing left to verify for the frontier
+    public const string ResearchNeedUnresolved= "RESEARCH_NEED_UNRESOLVED"; // semantic proposal failed researchability after one repair
+    public const string NoStateChange         = "NO_STATE_CHANGE";          // round produced no material movement
+    public const string NoGraph               = "NO_GRAPH";                 // session has no dependency graph
+    public const string RoundFailed           = "RESEARCH_ROUND_FAILED";    // a round faulted before commit; prior state preserved
+    public const string AlreadyRunning        = "ALREADY_RUNNING";          // another loop is active for this session
+}
+
+// One iteration of the bounded loop: what was researched, what verification state resulted, and the
+// entropy/margin movement it produced. Purely an audit surface (no chain-of-thought).
+public sealed record DecisionResearchRoundDto(
+    int RoundNumber,
+    Guid? TargetBranchId,
+    string? TargetBranchLabel,
+    decimal TargetInformationValue,
+    Guid? VerifiedEdgeId,
+    string EdgeVerificationStatus,
+    string EvidenceLifecycleState,
+    int SourcesRetrieved,
+    bool WinnerChanged,
+    decimal EntropyBefore,
+    decimal EntropyAfter,
+    IReadOnlyCollection<string> Narrative)
+{
+    public string? PropositionToResolve { get; init; }
+    public int SourcesEvaluated { get; init; }
+    public IReadOnlyDictionary<string, int> VerificationDispositionCounts { get; init; }
+        = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyDictionary<string, int> AttachmentStateCounts { get; init; }
+        = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    public int AuthoritativeChanges { get; init; }
+}
+
+// Safe production diagnostic for a failed research round. Deliberately excludes stack traces,
+// source locations, prompts, and provider payloads.
+public sealed record DecisionResearchFailureDto(
+    int RoundNumber,
+    string Stage,
+    string ExceptionType,
+    string Reason,
+    bool AuthoritativeStateChanged);
+
+// The result of running the bounded autonomous research loop end to end: the ordered per-round audit,
+// the explicit stop reason, cumulative budget usage, and the final decision artifact.
+public sealed record DecisionResearchLoopResultDto(
+    Guid DecisionSessionId,
+    bool Enabled,
+    int RoundsExecuted,
+    int TotalRetrievals,
+    string StopReason,
+    IReadOnlyCollection<DecisionResearchRoundDto> Rounds,
+    DecisionSearchResponse Decision,
+    DecisionResearchFailureDto? Failure = null);

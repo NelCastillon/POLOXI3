@@ -130,7 +130,11 @@ public static class DecisionGraph
     // candidates. Returns a structured DependencyImpact whose affected ids + domain-neutral signals
     // are handed to POLOXI Core for authoritative recompetition. Alternative verified paths are
     // honored: a target does not fail if another VERIFIED, non-invalidated path establishes it.
-    public static DependencyImpact PropagateImpact(Model model, int maxDepth)
+    public static DependencyImpact PropagateImpact(
+        Model model,
+        int maxDepth,
+        Guid? changedEdgeId = null,
+        IReadOnlyDictionary<Guid, double>? supportBeforeOverride = null)
     {
         var changedNodes = new HashSet<Guid>();
         var changedEdges = new HashSet<Guid>();
@@ -141,7 +145,7 @@ public static class DecisionGraph
         var signals = new List<DecisionBranchSignal>();
 
         // Snapshot support before mutation so we can compute a signed per-node delta.
-        var supportBefore = model.Nodes.Values.ToDictionary(n => n.Id, n => n.Support);
+        var supportBefore = supportBeforeOverride ?? model.Nodes.Values.ToDictionary(n => n.Id, n => n.Support);
 
         var frontier = new Queue<(Guid NodeId, int Depth)>();
         foreach (var e in model.Edges)
@@ -153,6 +157,21 @@ public static class DecisionGraph
                 if (model.Nodes.ContainsKey(e.TargetId))
                     frontier.Enqueue((e.TargetId, 0));
             }
+
+        // A newly VERIFIED dependency can strengthen its target just as an INVALIDATED dependency can
+        // weaken it. Seed only the explicitly changed edge; structural verification of unrelated edges
+        // must not manufacture impact.
+        if (changedEdgeId is { } verifiedEdgeId)
+        {
+            var verifiedEdge = model.Edges.FirstOrDefault(e =>
+                e.Id == verifiedEdgeId && e.VerificationStatus == DecisionVerificationStates.Verified);
+            if (verifiedEdge is not null && model.Nodes.ContainsKey(verifiedEdge.TargetId))
+            {
+                changedEdges.Add(verifiedEdge.Id);
+                verifiedEdge.PropagatedStateCode = "VERIFIED_SOURCE";
+                frontier.Enqueue((verifiedEdge.TargetId, 0));
+            }
+        }
         }
 
         var visited = new HashSet<Guid>();

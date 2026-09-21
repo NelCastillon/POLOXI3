@@ -21,6 +21,18 @@ public sealed record ClaimExtractionContext
 
     public string? ModelName { get; init; }
     public string? PromptRunId { get; init; }
+
+    // Optional provenance proposed by the composer. Independent extraction still always runs;
+    // these values are inputs to reconciliation, never proof of authority.
+    public IReadOnlyList<ComposerClaimProvenance> ComposerProvenance { get; init; } = [];
+}
+
+public interface IOutputClaimProvenanceReconciler
+{
+    IReadOnlyList<ClaimProposal> Reconcile(
+        IReadOnlyList<ClaimProposal> extractedClaims,
+        IReadOnlyList<ClaimProposition> authoritativePropositions,
+        IReadOnlyList<ComposerClaimProvenance> composerProvenance);
 }
 
 public interface IClaimExtractor

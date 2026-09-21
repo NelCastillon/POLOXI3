@@ -1,4 +1,5 @@
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Intelligence.Decision.Core;
 
 namespace Legal.Application.Abstractions.Intelligence;
 
@@ -38,4 +39,12 @@ public interface ILegalDecisionRetriever
 
 public sealed record DecisionRetrievalRequest(string ContextCode, string Objective, int MaximumResults);
 
-public sealed record DecisionRetrievedSource(string SourceRef, string Title, string Snippet);
+public sealed record DecisionRetrievedSource(string SourceRef, string Title, string Snippet)
+{
+    public EvidenceSourceType? SourceType { get; init; }
+    public string? Jurisdiction { get; init; }
+    public DateOnly? AuthorityDate { get; init; }
+    public string? SourceProvider { get; init; }
+    public string? SourceVersion { get; init; }
+    public bool ProviderIdentityVerified { get; init; }
+}

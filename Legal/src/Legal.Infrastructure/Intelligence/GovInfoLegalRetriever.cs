@@ -64,7 +64,12 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
                     result.ResultLink??baseUrl,
                     string.IsNullOrWhiteSpace(result.Teaser)?result.Title!.Trim():result.Teaser!.Trim(),
                     0m,
-                    retrievedUtc))
+                    retrievedUtc)
+                {
+                    SourceProvider="GOVINFO",
+                    SourceVersion="SEARCH_API_V1",
+                    ProviderIdentityVerified=true,
+                })
                 .ToList();
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
@@ -102,7 +107,12 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
                     baseUrl,
                     result.FullTextExcerpt?.Trim()??string.Empty,
                     0m,
-                    retrievedUtc))
+                    retrievedUtc)
+                {
+                    SourceProvider="ECFR",
+                    SourceVersion="SEARCH_API_V1",
+                    ProviderIdentityVerified=true,
+                })
                 .Where(snippet=>!string.IsNullOrWhiteSpace(snippet.Snippet))
                 .ToList();
         }

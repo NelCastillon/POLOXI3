@@ -117,5 +117,63 @@ public static class DecisionCoreMath
             ? []
             : text.ToLowerInvariant().Split([' ', '\t', '\n', '\r', ',', '.', ';', ':', '(', ')', '-', '/'], StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
 
+    // English function words that carry no proposition-support signal. Raw Jaccard over these produces
+    // false overlap (e.g. an unrelated title sharing "that"/"for" with a legal objective), so they are
+    // removed before measuring whether a passage actually supports a proposition. Kept deliberately
+    // small and generic — this is stopword filtering, not domain modelling.
+    private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "for", "from",
+        "had", "has", "have", "he", "her", "his", "how", "i", "if", "in", "into", "is", "it", "its",
+        "may", "no", "nor", "not", "of", "on", "or", "over", "s", "she", "should", "so", "some",
+        "such", "than", "that", "the", "their", "them", "then", "there", "these", "they", "this",
+        "those", "to", "under", "up", "was", "we", "were", "what", "when", "where", "whether",
+        "which", "while", "who", "whom", "will", "with", "would", "you", "your",
+    };
+
+    private static HashSet<string> ContentTokens(string? text)
+    {
+        var tokens = Tokenize(text);
+        tokens.RemoveWhere(t => t.Length < 3 || StopWords.Contains(t));
+        return tokens;
+    }
+
+    // Proposition-support measure for the evidence verifier (§14). Unlike the generic candidate-diversity
+    // Similarity, this removes stopwords/short tokens (so incidental overlap on words like "that"/"for"
+    // cannot manufacture support) and requires a MINIMUM number of shared CONTENT tokens. A single
+    // incidental content match (e.g. "employees") is not enough to establish that a passage supports a
+    // proposition. Returns content-token Jaccard, or 0 when the shared-content-token floor is not met.
+    public const int MinSharedContentTokens = 2;
+
+    public static double PropositionSupport(string? objective, string? passage)
+    {
+        var to = ContentTokens(objective);
+        var tp = ContentTokens(passage);
+        if (to.Count == 0 || tp.Count == 0)
+            return 0d;
+        var intersect = to.Count(tp.Contains);
+        if (intersect < MinSharedContentTokens)
+            return 0d;   // too little genuine overlap to claim support — reject incidental single hits
+        var union = to.Count + tp.Count - intersect;
+        return union == 0 ? 0d : (double)intersect / union;
+    }
+
     public static double Clamp01(double value) => value < 0d ? 0d : value > 1d ? 1d : value;
+
+    // Passage-vs-identity guard (§14). A retrieved source's TITLE establishes IDENTITY, not PROPOSITION
+    // SUPPORT. When the "supporting passage" contributes no content tokens beyond the title itself (i.e.
+    // the snippet merely echoes the title, as with a bare "Proposed Rule on Overtime Pay" result), there
+    // is NO independently-located passage to support any proposition — topical relevance must never be
+    // mistaken for support. Returns true when the passage adds nothing beyond the title's content tokens.
+    public static bool PassageEchoesTitle(string? title, string? passage)
+    {
+        var passageTokens = ContentTokens(passage);
+        if (passageTokens.Count == 0)
+            return true;   // no content at all → certainly not an independent supporting passage
+        var titleTokens = ContentTokens(title);
+        // The passage carries independent substance only if it contributes at least one content token the
+        // title does not already carry. Otherwise it is a title echo (identity), not a located passage.
+        passageTokens.ExceptWith(titleTokens);
+        return passageTokens.Count == 0;
+    }
 }

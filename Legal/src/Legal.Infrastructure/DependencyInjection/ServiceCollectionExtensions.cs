@@ -3,6 +3,7 @@ using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Epistemic;
+using Legal.Application.Features.Intelligence.Decision.Core;
 using Legal.Infrastructure.Configuration;
 using Legal.Infrastructure.Intelligence;
 using Legal.Infrastructure.Persistence;
@@ -77,6 +78,8 @@ public static class ServiceCollectionExtensions
         // scoped IEpistemicClaimRepository.
         services.AddScoped<IDecisionReadinessEvaluator, DecisionReadinessEvaluator>();
         services.AddScoped<IOutputClaimAuditor, OutputClaimAuditor>();
+        services.AddSingleton<IClaimExtractor, DeterministicOutputClaimExtractor>();
+        services.AddSingleton<IOutputClaimProvenanceReconciler, OutputClaimProvenanceReconciler>();
 
         // EA-6: advisory bridge that projects the live V2 decision graph into authoritative EA claims
         // and runs readiness/output governance. Scoped: composes the scoped EA services.
@@ -95,6 +98,19 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IGovInfoLegalSource, GovInfoLegalRetriever>();
         services.AddHttpClient<ICornellLiiLegalSource, CornellLiiLegalRetriever>();
         services.AddScoped<ILegalRetriever, LegalRetriever>();
+        services.AddSingleton<IWebSourceInspector, PlaywrightWebSourceInspector>();
+        services.AddSingleton<IEvidenceSourceClassifier, DeterministicEvidenceSourceClassifier>();
+        services.AddSingleton<IVerificationProfileProvider, VerificationProfileProvider>();
+        services.AddSingleton<IIdentityEvidenceVerifier, PlaywrightIdentityEvidenceVerifier>();
+        services.AddSingleton<ICitationEvidenceVerifier, PlaywrightCitationEvidenceVerifier>();
+        services.AddSingleton<IPassageEvidenceVerifier, PlaywrightPassageEvidenceVerifier>();
+        services.AddSingleton<IVerificationCandidatePreScreen, DeterministicVerificationCandidatePreScreen>();
+        services.AddSingleton<ISemanticVerificationCache, SemanticVerificationCache>();
+        services.AddScoped<ISemanticEvidenceVerifier, StructuredLlmSemanticEvidenceVerifier>();
+        services.AddSingleton<IPoloxiVerificationDeepener, DisabledPoloxiVerificationDeepener>();
+        services.AddSingleton<IAuthorityEvidenceVerifier, DeterministicAuthorityEvidenceVerifier>();
+        services.AddSingleton<IEvidenceVerificationAggregator, EvidenceVerificationAggregator>();
+        services.AddScoped<IIndependentEvidenceVerificationPipeline, IndependentEvidenceVerificationPipeline>();
 
         services.AddScoped<IAdaptiveRetriever, StandardPoloxiRetriever>();
 

@@ -43,7 +43,33 @@ public sealed record DecisionCoreSettings(
     double ThresholdDeepeningFlip,
     int MaxDepth,
     int MaxLlmCalls,
-    int MaxCandidates);
+    int MaxCandidates,
+    // Proposal Integrity Gate recovery switch. Default false = SHADOW MODE: the gate computes a
+    // disposition and diagnostics for correlation analysis but never rejects or repairs a run. When
+    // true, a FAIL disposition triggers exactly ONE targeted, defect-diagnosed recovery attempt before
+    // the proposal is allowed to compete (or is declared UNRESOLVED). Kept off until shadow telemetry
+    // shows gate failures actually predict poor downstream results.
+    bool EnableProposalRecovery = false)
+{
+    public DecisionVerificationSettings Verification { get; init; } = new();
+}
+
+public sealed record DecisionVerificationSettings
+{
+    public bool Enabled { get; init; } = true;
+    public bool ShadowMode { get; init; } = true;
+    public bool MechanicalVerificationEnabled { get; init; } = true;
+    public bool SemanticVerificationEnabled { get; init; } = true;
+    public int MaxInputTokensPerEvidence { get; init; } = 2500;
+    public int MaxOutputTokensPerEvidence { get; init; } = 700;
+    public bool AllowSchemaRepair { get; init; } = true;
+    public int MaxSchemaRepairAttempts { get; init; } = 1;
+    public bool PoloxiDeepeningEnabled { get; init; }
+    public bool PoloxiDecisionMaterialOnly { get; init; } = true;
+    public int PoloxiMaxRounds { get; init; } = 1;
+    public bool EnforceVerifiedEvidenceOnly { get; init; }
+    public bool CacheEnabled { get; init; } = true;
+}
 
 // POLOXI Legal V2 dependency-graph control settings loaded from POLOXI.Legal_DecisionSetting.
 public sealed record DecisionV2Settings(
@@ -95,6 +121,68 @@ public sealed record DecisionSessionPersistence(
     public string? NextBestActionImpactCode { get; init; }
     public string? NextBestActionRationale { get; init; }
     public string? CounterfactualAssumption { get; init; }
+
+    // Research outcome additions (0262): explicit, durable retrieval state (§13) so a rehydrated
+    // decision can distinguish RETRIEVAL_FAILED / SEARCH_NO_RESULTS / RETRIEVED / NOT_NEEDED.
+    public string? ResearchStatusCode { get; init; }
+    public string? ResearchFailureDetail { get; init; }
+}
+
+public sealed record DecisionEvidenceVerificationFactorPersistence(
+    Guid DecisionEvidenceVerificationFactorId,
+    string FactorCode,
+    string StateCode,
+    string ReasonCode,
+    string? Reason,
+    string? VerifiedValue,
+    string? SourceRef,
+    string? SupportingPassage,
+    string VerificationMethod,
+    string? SupportedComponentsJson,
+    string? UnsupportedComponentsJson,
+    DateTime EvaluatedDateUtc)
+{
+    public string? PassageRef { get; init; }
+    public string? VerifierId { get; init; }
+    public string? VerifierVersion { get; init; }
+}
+
+public sealed record DecisionEvidenceVerificationPersistence(
+    Guid DecisionEvidenceVerificationId,
+    Guid DecisionEvidenceId,
+    Guid DecisionSessionId,
+    Guid? DecisionBranchId,
+    string SourceTypeCode,
+    string ProfileCode,
+    string DispositionCode,
+    bool IsVerified,
+    bool IsDecisionAuthorized,
+    string? BlockingReasonsJson,
+    Guid? MatterId,
+    Guid TenantId,
+    Guid? ActorUserId,
+    DateTime EvaluatedDateUtc,
+    IReadOnlyCollection<DecisionEvidenceVerificationFactorPersistence> Factors)
+{
+    public Guid? SourceSnapshotId { get; init; }
+    public string? SourceContentHash { get; init; }
+    public string? PassageHash { get; init; }
+    public string? SourceProvider { get; init; }
+    public string? SourceVersion { get; init; }
+    public string? SourceRef { get; init; }
+    public string? PassageRef { get; init; }
+    public string? ExtractionVersion { get; init; }
+    public int ProfileVersion { get; init; } = 1;
+    public int VerificationVersion { get; init; }
+    public int MechanicalVerificationCount { get; init; }
+    public int RetrievedCount { get; init; }
+    public int PreScreenRejectedCount { get; init; }
+    public int SemanticVerificationCount { get; init; }
+    public int PoloxiDeepeningCount { get; init; }
+    public int CacheHitCount { get; init; }
+    public int InputTokenCount { get; init; }
+    public int OutputTokenCount { get; init; }
+    public long LatencyMilliseconds { get; init; }
 }
 
 public sealed record DecisionCandidatePersistence(
@@ -148,7 +236,45 @@ public sealed record DecisionEvidencePersistence(
     decimal WeightFactor,
     decimal PropositionFit,
     decimal VerificationValue,
-    string VerificationStatus);
+    string VerificationStatus)
+{
+    // Verification provenance (0263, §14): traceable claim ↔ source ↔ passage ↔ verification chain.
+    public string? SupportedObjective { get; init; }
+    public string? SupportingPassage { get; init; }
+    public string? LifecycleState { get; init; }
+}
+
+// Evidence attachment authority is separate from both structural graph verification and the source's
+// verification lifecycle. Every retrieval attempt starts non-authoritative; only verified proposition
+// support may finalize as SUPPORTED_BY and influence the decision.
+public static class DecisionEvidenceAttachmentStates
+{
+    public const string ProposedSupportFor = "PROPOSED_SUPPORT_FOR";
+    public const string SupportedBy = "SUPPORTED_BY";
+    public const string PartiallySupportedBy = "PARTIALLY_SUPPORTED_BY";
+    public const string ContradictedBy = "CONTRADICTED_BY";
+    public const string Unsupported = "UNSUPPORTED";
+}
+
+public sealed record DecisionEvidenceAttachmentPersistence(
+    Guid DecisionEvidenceAttachmentId,
+    Guid DecisionSessionId,
+    Guid TenantId,
+    Guid? ActorUserId,
+    Guid? MatterId,
+    Guid DecisionResearchNeedId,
+    Guid DecisionBranchId,
+    Guid DecisionEvidenceId,
+    string PropositionToResolve,
+    string SupportStateCode,
+    Guid? AffectedGraphEdgeId,
+    bool IsAuthoritative,
+    string? AssessmentReason)
+{
+    public Guid? DecisionEvidenceVerificationId { get; init; }
+    public Guid? SourceSnapshotId { get; init; }
+    public string? PassageRef { get; init; }
+}
 
 public sealed record DecisionFlipPointPersistence(
     Guid DecisionFlipPointId,
@@ -166,6 +292,26 @@ public sealed record DecisionEventPersistence(
     string? StageCode,
     string? PayloadJson,
     string? ProvenanceJson);
+
+public sealed record DecisionOutputClaimProvenancePersistence(
+    Guid OutputClaimProvenanceId,
+    Guid DecisionSessionId,
+    Guid ClaimId,
+    Guid? SourceBranchId,
+    Guid? SourceCandidateId,
+    Guid? DecisionEvidenceId,
+    Guid? DecisionEvidenceAttachmentId,
+    Guid? DecisionEvidenceVerificationId,
+    Guid? SourceSnapshotId,
+    string? PassageRef,
+    string ClaimText,
+    bool IsMaterial,
+    string MappingStateCode,
+    Guid? SourcePropositionId,
+    string? MappingReasonCode,
+    string DispositionCode,
+    Guid TenantId,
+    Guid? ActorUserId);
 
 // ── POLOXI Legal V2 dependency-graph persistence snapshots ──────────────────────────────────────
 

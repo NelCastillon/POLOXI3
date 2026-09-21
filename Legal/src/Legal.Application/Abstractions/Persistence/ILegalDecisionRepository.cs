@@ -16,6 +16,11 @@ public interface ILegalDecisionRepository
     // post-persistence recompetition stages). Sequence numbers continue from the session's events.
     Task AppendSessionEventsAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEventPersistence> events, CancellationToken cancellationToken = default);
     Task<DecisionSessionPersistence?> GetSessionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
+    Task PersistResearchEvidenceAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEvidencePersistence> evidence, CancellationToken cancellationToken = default);
+    Task UpdateResearchEvidenceAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEvidencePersistence> evidence, CancellationToken cancellationToken = default);
+    Task PersistEvidenceVerificationsAsync(IReadOnlyCollection<DecisionEvidenceVerificationPersistence> verifications, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>> GetEvidenceVerificationsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
+    Task PersistOutputClaimProvenanceAsync(IReadOnlyCollection<DecisionOutputClaimProvenancePersistence> provenance, CancellationToken cancellationToken = default);
 
     // Matter aggregate + cockpit support.
     Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default);
@@ -35,16 +40,20 @@ public interface ILegalDecisionRepository
 
     // POLOXI Legal V2.1 — closed-loop persistence (verification events, recompetitions, research needs, frontier snapshots).
     Task<DecisionV21Settings> GetV21SettingsAsync(CancellationToken cancellationToken = default);
+    Task<DecisionResearchLoopSettings> GetResearchLoopSettingsAsync(CancellationToken cancellationToken = default);
     Task<DecisionDependencyEventPersistence?> GetDependencyEventAsync(Guid tenantId, Guid decisionSessionId, string idempotencyKey, CancellationToken cancellationToken = default);
     Task PersistDependencyEventAsync(DecisionDependencyEventPersistence dependencyEvent, CancellationToken cancellationToken = default);
     Task PersistRecompetitionAsync(DecisionRecompetitionPersistence recompetition, CancellationToken cancellationToken = default);
     Task PersistResearchNeedAsync(DecisionResearchNeedPersistence researchNeed, CancellationToken cancellationToken = default);
+    Task PersistEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default);
+    Task UpdateEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default);
     Task PersistFrontierSnapshotAsync(DecisionFrontierSnapshotPersistence snapshot, CancellationToken cancellationToken = default);
     Task<int> CountBranchReopensAsync(Guid tenantId, Guid decisionSessionId, Guid decisionBranchId, CancellationToken cancellationToken = default);
     Task<int> CountResearchNeedsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task<DecisionRecompetitionPersistence?> GetLatestRecompetitionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task<DecisionResearchNeedPersistence?> GetLatestOpenResearchNeedAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
     Task UpdateSessionOutcomeAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string statusCode, decimal entropy, decimal margin, Guid? winnerCandidateId, CancellationToken cancellationToken = default);
+    Task UpdateSessionAnswerAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string? finalAnswer, CancellationToken cancellationToken = default);
     Task ReplaceBranchesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionBranchPersistence> branches, CancellationToken cancellationToken = default);
     Task ReplaceCandidatesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionCandidatePersistence> candidates, CancellationToken cancellationToken = default);
 }

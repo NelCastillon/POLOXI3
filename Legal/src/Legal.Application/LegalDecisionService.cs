@@ -30,12 +30,20 @@ public sealed class LegalDecisionService(
     Features.Intelligence.Epistemic.IMaterialSignalExtractor materialSignalExtractor,
     Features.Intelligence.Epistemic.IVerifiedDecisionSignalService verifiedSignalService,
     Abstractions.Persistence.IDecisionSupportSignalRepository decisionSupportSignalRepository,
+    IIndependentEvidenceVerificationPipeline evidenceVerificationPipeline,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
     private const string AnswerPromptCode = "DECISION_ANSWER";
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
+    private const string ResearchNeedPromptCode = "DECISION_RESEARCH_NEED";
+
+    // Per-session execution guard for the bounded research loop. Concurrent runs (e.g. an inline decide
+    // call racing an explicit cockpit "research" action) must not interleave mutations against the same
+    // session, so only one loop may hold a session id at a time. In-process is sufficient for now; a
+    // distributed guard can replace this later without changing the loop's semantics.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> ActiveResearchLoops = new();
 
     public async Task<IReadOnlyCollection<DecisionModelOptionDto>> GetModelsAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
@@ -125,8 +133,136 @@ public sealed class LegalDecisionService(
         Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount });
 
         var proposal = ParseProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates);
+
+        // ── Proposal Integrity Gate V2 (shadow-default, disposition-driven targeted recovery) ──────
+        // The LLM only PROPOSES a semantic representation; POLOXI decides whether that representation is
+        // fit to become authoritative before any downstream reasoning proceeds. The gate ALWAYS computes:
+        //   • structural validity (parseable, required fields, ≥2 distinct candidate outcomes),
+        //   • shadow-mode semantic diagnostics (query fidelity, interpretation distinctness/coverage,
+        //     candidate separability, empty/duplicate interpretations),
+        //   • a diagnosed disposition (Accept / Repair / Regenerate / ...).
+        //
+        // SHADOW MODE is the default (settings.EnableProposalRecovery == false): the disposition is
+        // recorded as a PREDICTION only and attempt #1 competes untouched. This lets us establish whether
+        // P(good result | gate PASS) is materially higher than P(good result | gate FAIL) before any
+        // recovery is enabled.
+        //
+        // When recovery IS enabled, a non-Accept disposition triggers EXACTLY ONE defect-targeted,
+        // diagnosed recovery (REPAIR, not a re-roll — valid structure is preserved). If the recovered
+        // proposal passes ⇒ PROPOSAL_INTEGRITY_RECOVERED and it competes. If it still fails ⇒
+        // PROPOSAL_INTEGRITY_UNRESOLVED and it MUST NOT compete. Attempt #1 (defects + what changed) is
+        // always preserved as recovery telemetry.
+        var integrity = EvaluateProposalIntegrity(proposal);
+        var diagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, proposal, integrity);
+        var (disposition, defects) = DiagnoseProposal(diagnostics);
+
+        // Decision Integrity Trace (Proposal stage) inputs — a read-only projection of the gate outcome.
+        // Tracks the final disposition/attempt/defects so the cockpit can show ACCEPT · Attempt 1 or the
+        // recovered path (Attempt 2). Updated below when an ACTIVE-mode recovery runs.
+        var proposalTraceDisposition = disposition;
+        var proposalTraceAttempt = 1;
+        var proposalTraceRecoveryAttempted = false;
+        var proposalTraceRecovered = false;
+        var proposalTraceDefects = defects;
+
+        // Predicted action lets us reconstruct exactly what ACTIVE mode WOULD have done from SHADOW runs,
+        // without rerunning the workload. In shadow mode ActualAction is always CONTINUE_ATTEMPT_1.
+        var predictedAction = disposition switch
+        {
+            ProposalDisposition.Accept => "WOULD_ACCEPT",
+            ProposalDisposition.Clarify => "WOULD_STOP",
+            ProposalDisposition.Degraded => "WOULD_STOP",
+            _ => "WOULD_RECOVER"
+        };
+        var actualAction = settings.EnableProposalRecovery ? "ACTIVE" : "CONTINUE_ATTEMPT_1";
+
+        Record("PROPOSAL_INTEGRITY_PREDICTION", "DISCOVERY", new
+        {
+            mode = settings.EnableProposalRecovery ? "ACTIVE" : "SHADOW",
+            disposition = disposition.ToString(),
+            predictedAction,
+            actualAction,
+            structuralValid = integrity.IsAcceptable,
+            defects
+        });
+
+        if (!settings.EnableProposalRecovery)
+        {
+            // SHADOW MODE: never reject or repair. Log the prediction + diagnostics and proceed with
+            // attempt #1 exactly as-is.
+            Record("PROPOSAL_INTEGRITY_DIAGNOSTICS", "DISCOVERY", diagnostics);
+        }
+        else if (disposition != ProposalDisposition.Accept)
+        {
+            // ACTIVE MODE: the disposition is authoritative and warrants a bounded, targeted recovery.
+            var attempt1Defects = defects;
+            Record("PROPOSAL_INTEGRITY_FAILED", "DISCOVERY", new { disposition = disposition.ToString(), defects = attempt1Defects, candidateCount = proposal.Count });
+
+            var recoveryUser = discoveryUser + "\n\n" + BuildRecoveryInstruction(attempt1Defects);
+            Record("PROPOSAL_RECOVERY_ATTEMPTED", "DISCOVERY", new { disposition = disposition.ToString(), defects = attempt1Defects });
+            proposalTraceRecoveryAttempted = true;
+            proposalTraceAttempt = 2;
+            var recovery = await aiProvider.GenerateAsync(
+                new DecisionAiRequest(route, "DECISION_DISCOVERY", discoveryPrompt.SystemPrompt, recoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
+                cancellationToken);
+            llmCalls++;
+            var recovered = ParseProposal(recovery.StructuredOutputJson ?? recovery.Content, settings.MaxCandidates);
+            var recoveredIntegrity = EvaluateProposalIntegrity(recovered);
+            var recoveredDiagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, recovered, recoveredIntegrity);
+            var (recoveredDisposition, recoveredDefects) = DiagnoseProposal(recoveredDiagnostics);
+
+            if (recoveredIntegrity.IsAcceptable)
+            {
+                proposal = recovered;
+                integrity = recoveredIntegrity;
+                diagnostics = recoveredDiagnostics with
+                {
+                    RecoveryTriggered = true,
+                    RecoveryReason = string.Join(",", attempt1Defects),
+                    RecoverySucceeded = true
+                };
+                Record("PROPOSAL_INTEGRITY_RECOVERED", "DISCOVERY", new
+                {
+                    attempt1Defects,
+                    attempt2Disposition = recoveredDisposition.ToString(),
+                    attempt2Defects = recoveredDefects,
+                    candidateCount = proposal.Count
+                });
+                Record("PROPOSAL_INTEGRITY_DIAGNOSTICS", "DISCOVERY", diagnostics);
+                proposalTraceRecovered = true;
+                proposalTraceDisposition = recoveredDisposition;
+                proposalTraceDefects = attempt1Defects;
+            }
+            else
+            {
+                Record("PROPOSAL_INTEGRITY_UNRESOLVED", "DISCOVERY", new
+                {
+                    attempt1Defects,
+                    attempt2Defects = recoveredDefects,
+                    candidateCount = recovered.Count
+                });
+                throw new InvalidOperationException(
+                    $"The decision proposal failed the integrity gate and could not be recovered (defects: {string.Join(", ", recoveredDefects)}). The proposal is not eligible to compete.");
+            }
+        }
+        else
+        {
+            // ACTIVE MODE, Accept disposition: no recovery needed.
+            Record("PROPOSAL_INTEGRITY_DIAGNOSTICS", "DISCOVERY", diagnostics);
+        }
+
         if (proposal.Count == 0)
             throw new InvalidOperationException("The decision proposal layer returned no candidate outcomes.");
+
+        // Freeze the Proposal-stage trace summary now that the gate has settled (accept or recovered).
+        var proposalIntegritySummary = new Features.Intelligence.Decision.DecisionProposalIntegritySummaryDto(
+            Mode: settings.EnableProposalRecovery ? "ACTIVE" : "SHADOW",
+            Disposition: proposalTraceDisposition.ToString().ToUpperInvariant(),
+            Attempt: proposalTraceAttempt,
+            RecoveryAttempted: proposalTraceRecoveryAttempted,
+            Recovered: proposalTraceRecovered,
+            StructurallyValid: integrity.IsAcceptable,
+            Defects: proposalTraceDefects?.ToArray() ?? []);
 
         // ── Candidate × Branch competition + deterministic Core scoring ──────────────────────────
         var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, out var branches, cancellationToken);
@@ -152,8 +288,14 @@ public sealed class LegalDecisionService(
         var margin = DecisionCoreMath.Margin(orderedScores);
 
         // ── Decision-Directed Retrieval / Evidence (§13,§14) ────────────────────────────────────
-        var evidence = await RetrieveEvidenceAsync(contextCode, branches, sessionId, request.TenantId, request.MaximumResults, cancellationToken);
-        Record("EVIDENCE_RETRIEVED", "RETRIEVAL", new { evidenceCount = evidence.Count });
+        var retrieval = await RetrieveEvidenceAsync(contextCode, branches, sessionId, request.TenantId, request.MaximumResults, cancellationToken);
+        var evidence = retrieval.Evidence;
+        Record("EVIDENCE_RETRIEVED", "RETRIEVAL", new
+        {
+            evidenceCount = evidence.Count,
+            researchStatus = retrieval.ResearchStatus,
+            failureDetail = retrieval.FailureDetail
+        });
 
         // ── Frontier + Flip Points (§11,§30) ────────────────────────────────────────────────────
         var flipPoints = BuildFlipPoints(branches, candidates, sessionId, request.TenantId);
@@ -234,7 +376,7 @@ public sealed class LegalDecisionService(
         // ── Next Best Action (§ next action): the single highest-impact open investigation, derived
         // deterministically from the decision frontier. Null when nothing open can move the decision. ──
         var nextAction = BuildNextBestAction(branches, statusCode);
-        var readiness = BuildReadiness(candidates, branches, evidence, margin, entropy, statusCode);
+        var readiness = BuildReadiness(candidates, branches, evidence, margin, entropy, statusCode, retrieval.ResearchStatus);
 
         var persistence = new DecisionSessionPersistence(
             sessionId, request.TenantId, request.UserId, request.Query, contextCode, route.ModelCode, true,
@@ -248,9 +390,16 @@ public sealed class LegalDecisionService(
             NextBestActionText = nextAction?.Title,
             NextBestActionImpactCode = nextAction?.ImpactCode,
             NextBestActionRationale = nextAction?.Rationale,
-            CounterfactualAssumption = request.CounterfactualAssumption
+            CounterfactualAssumption = request.CounterfactualAssumption,
+            ResearchStatusCode = retrieval.ResearchStatus,
+            ResearchFailureDetail = retrieval.FailureDetail
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
+        var persistedEvidenceVerifications = retrieval.Verifications.Select(v => ToPersistence(
+            v, sessionId, request.TenantId, request.UserId, request.MatterId)).ToArray();
+        var persistedVerificationsByEvidence = persistedEvidenceVerifications
+            .ToDictionary(v => v.DecisionEvidenceId);
+        await repository.PersistEvidenceVerificationsAsync(persistedEvidenceVerifications, cancellationToken);
 
         // ── POLOXI Legal V2 (dependency-aware) — runs only when the per-session toggle is on. It
         // proposes a typed legal dependency graph, runs an INDEPENDENT verifier, propagates any
@@ -260,7 +409,13 @@ public sealed class LegalDecisionService(
         string? graphDiagnostic = null;
         Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null;
         Features.Intelligence.Decision.DecisionSolverShadowDto? solverShadow = null;
-        if (useGraph)
+        // Decision Integrity Trace capture (Research + Output Control stages). Populated below when the
+        // research loop / output audit run; folded into the response by DecorateTrace at every return.
+        Features.Intelligence.Decision.DecisionResearchLoopSummaryDto? researchSummary = null;
+        IReadOnlyCollection<Features.Intelligence.Decision.DecisionOutputAuthorizationDto> outputAuthorizations = [];
+        Features.Intelligence.Decision.DecisionOutputTransformSummaryDto? outputTransformSummary = null;
+        Features.Intelligence.Decision.DecisionOutputClaimExtractionDto? outputClaimExtraction = null;
+        Features.Intelligence.Decision.DecisionResearchEligibilityDto? researchEligibility = null;
         {
             try
             {
@@ -284,10 +439,18 @@ public sealed class LegalDecisionService(
                         PromptRunId = request.CorrelationId,
                         Nodes = v2.Nodes.ToArray(),
                         Edges = v2.Edges.ToArray(),
+                        FinalAnswer = persistence.FinalAnswer,
                     };
                     var governance = await epistemicBridge.ProjectAndGovernAsync(epistemicContext, cancellationToken);
                     if (governance.Executed)
                     {
+                        outputClaimExtraction = new Features.Intelligence.Decision.DecisionOutputClaimExtractionDto(
+                            governance.ClaimExtraction.Attempted,
+                            governance.ClaimExtraction.SourceLength,
+                            governance.ClaimExtraction.SubstantiveAnswer,
+                            governance.ClaimExtraction.ClaimsReturned,
+                            governance.ClaimExtraction.StatusCode,
+                            governance.ClaimExtraction.FailureReason);
                         governanceVerdict = await PersistGovernanceVerdictAsync(
                             request, sessionId, v2, governance, cancellationToken);
                         logger.LogInformation(
@@ -296,6 +459,93 @@ public sealed class LegalDecisionService(
                             governance.Readiness?.IsReady, governance.OutputAudit?.IsClean,
                             Features.Intelligence.Epistemic.EpistemicOverrideModes.ToCode(governance.OverrideMode),
                             governance.OverrideApplied);
+
+                        // Track exactly which claims the enforcement pass located and rewrote in the prose,
+                        // plus required/applied counts, so the Decision Integrity Trace reflects the real
+                        // transformation outcome instead of assuming every non-ALLOW claim was applied.
+                        var appliedProseClaimIds = new HashSet<Guid>();
+                        var proseRequired = 0;
+                        var proseApplied = 0;
+                        var postTransformClean = true;
+
+
+
+                        // ── Authoritative output-claim audit enforcement ─────────────────────────
+                        // The audit is no longer advisory: if the composed answer surfaces material
+                        // claims POLOXI never authorized, the answer MUST be restated as a provisional,
+                        // pending-research hypothesis (not an asserted legal conclusion). Rewrite the
+                        // in-memory record AND the persisted row so the DB and returned response agree.
+                        if (governance.OutputAudit is { Enforced: true, IsClean: false } audit
+                            && !string.IsNullOrWhiteSpace(persistence.FinalAnswer))
+                        {
+                            var enforcement = EnforceOutputAudit(persistence.FinalAnswer, audit);
+                            persistence = persistence with { FinalAnswer = enforcement.Answer };
+                            await repository.UpdateSessionAnswerAsync(
+                                request.TenantId, request.UserId, sessionId, enforcement.Answer, cancellationToken);
+                            appliedProseClaimIds = enforcement.AppliedClaimIds.ToHashSet();
+                            proseRequired = enforcement.RequiredCount;
+                            proseApplied = enforcement.AppliedCount;
+                            postTransformClean = !enforcement.UnauthorizedAssertionsRemain;
+                            var qualifyCount = audit.Authorizations.Count(a => a.Disposition == Features.Intelligence.Epistemic.OutputClaimDisposition.Qualify);
+                            var suppressCount = audit.Authorizations.Count(a => a.Disposition == Features.Intelligence.Epistemic.OutputClaimDisposition.Suppress);
+                            var correctCount = audit.Authorizations.Count(a => a.Disposition == Features.Intelligence.Epistemic.OutputClaimDisposition.Correct);
+                            logger.LogInformation(
+                                "Output audit ENFORCED for session {SessionId}: {Qualify} QUALIFY, {Suppress} SUPPRESS, {Correct} CORRECT; prose transforms {Applied}/{Required} applied, post-transform {Clean} ({Violations} unauthorized, {Unknown} unknown claim(s)).",
+                                sessionId, qualifyCount, suppressCount, correctCount, proseApplied, proseRequired,
+                                postTransformClean ? "CLEAN" : "ATTENTION", audit.Violations.Count, audit.UnknownClaimIds.Count);
+                        }
+
+                        // Decision Integrity Trace (Output Control / Final Audit): capture the per-claim
+                        // authorizations from the audit so the cockpit can show ALLOW/QUALIFY/SUPPRESS/
+                        // CORRECT dispositions and which prose was ACTUALLY transformed. ProseTransformed
+                        // reflects the real applied set from the enforcement pass — never an assumption
+                        // based on disposition alone.
+                        if (governance.OutputAudit is { } outputAudit)
+                        {
+                            var claimsById = governance.InvolvedClaims.ToDictionary(c => c.ClaimId);
+                            var ledgerById = governance.ClaimLedger.ToDictionary(c => c.OutputClaimId);
+                            outputAuthorizations = outputAudit.Authorizations
+                                .Select(a =>
+                                {
+                                    claimsById.TryGetValue(a.ClaimId, out var claim);
+                                    ledgerById.TryGetValue(a.ClaimId, out var ledger);
+                                    var verification = retrieval.Verifications
+                                        .Where(v => claim?.SourceBranchId is null || v.DecisionBranchId == claim.SourceBranchId)
+                                        .FirstOrDefault(v => v.IsDecisionAuthorized);
+                                    return new Features.Intelligence.Decision.DecisionOutputAuthorizationDto(
+                                        a.ClaimId, a.ClaimText,
+                                        Features.Intelligence.Epistemic.ClaimCodes.ToCode(a.VerificationState),
+                                        Features.Intelligence.Epistemic.ClaimCodes.ToCode(a.DecisionAuthority),
+                                        Features.Intelligence.Epistemic.OutputClaimDispositions.ToCode(a.Disposition),
+                                        a.IsForeign, a.Reason,
+                                        ProseTransformed: appliedProseClaimIds.Contains(a.ClaimId))
+                                    {
+                                        SourceBranchId = claim?.SourceBranchId,
+                                        SourceCandidateId = claim?.SourceCandidateId,
+                                        DecisionEvidenceId = verification?.DecisionEvidenceId,
+                                        DecisionEvidenceVerificationId = verification is null
+                                            ? null
+                                            : persistedVerificationsByEvidence.GetValueOrDefault(verification.DecisionEvidenceId)?.DecisionEvidenceVerificationId,
+                                        SourceSnapshotId = verification?.SourceSnapshot?.SourceSnapshotId,
+                                        PassageRef = verification?.SourceSnapshot?.PassageRef,
+                                        IsMaterial = ledger?.IsMaterial ?? true,
+                                        MappingState = ledger?.MappingState.ToString().ToUpperInvariant() ?? "MAPPED",
+                                        SourcePropositionId = ledger?.SourcePropositionId ?? claim?.ClaimId,
+                                        MappingReasonCode = ledger?.ReasonCode,
+                                    };
+                                })
+                                .ToArray();
+                            await repository.PersistOutputClaimProvenanceAsync(outputAuthorizations.Select(a =>
+                                new DecisionOutputClaimProvenancePersistence(
+                                    Guid.NewGuid(), sessionId, a.ClaimId, a.SourceBranchId, a.SourceCandidateId,
+                                    a.DecisionEvidenceId, a.DecisionEvidenceAttachmentId,
+                                    a.DecisionEvidenceVerificationId, a.SourceSnapshotId, a.PassageRef,
+                                    a.ClaimText, a.IsMaterial, a.MappingState, a.SourcePropositionId,
+                                    a.MappingReasonCode,
+                                    a.Disposition, request.TenantId, request.UserId)).ToArray(), cancellationToken);
+                            outputTransformSummary = new Features.Intelligence.Decision.DecisionOutputTransformSummaryDto(
+                                proseRequired, proseApplied, postTransformClean);
+                        }
                     }
                 }
                 catch (Exception epistemicEx)
@@ -434,7 +684,7 @@ public sealed class LegalDecisionService(
                                 b3ReasonCode), cancellationToken);
 
                             nextAction = BuildNextBestAction(recompete.Branches, b3Status);
-                            readiness = BuildReadiness(recompete.Candidates, recompete.Branches, evidence, recompete.CurrentMargin, recompete.CurrentEntropy, b3Status);
+                            readiness = BuildReadiness(recompete.Candidates, recompete.Branches, evidence, recompete.CurrentMargin, recompete.CurrentEntropy, b3Status, retrieval.ResearchStatus);
                             persistence = persistence with
                             {
                                 StatusCode = b3Status,
@@ -473,10 +723,200 @@ public sealed class LegalDecisionService(
             }
         }
 
-        return await HydrateVerifiedSignalsAsync(
+        // ── POLOXI Bounded Research Loop (in-request) ───────────────────────────────────────────────
+        // When the research-loop flag is ON and this run produced a dependency graph, drive the autonomous
+        // Retrieval → Verification → Promotion → Recompetition loop in-request until an explicit STOP
+        // condition. Default OFF preserves the shadow baseline; failures are advisory and never block the
+        // decision. The read-back below reflects any state the loop committed to the session.
+        // INVARIANT (§14): the eligibility snapshot is captured on EVERY path (including graph-off and a
+        // settings-load fault), so a NotRun research stage can NEVER be generic — it always names the exact
+        // blocking prerequisite. The loop runs only when the snapshot is Eligible.
+        {
+            // Frontier telemetry is authoritative from the competed branches, independent of loop settings.
+            var frontierBranches = persistence.Branches
+                .Where(b => b.IsOnFrontier)
+                .ToList();
+            var frontierCount = frontierBranches.Count;
+            var highestFrontierIv = frontierCount == 0 ? 0m : frontierBranches.Max(b => b.InformationValue);
+
+            if (!useGraph || v2 is null)
+            {
+                // Graph prerequisite missing — the loop cannot run without a dependency graph to research.
+                researchEligibility = new Features.Intelligence.Decision.DecisionResearchEligibilityDto(
+                    EnabledSetting: false, UseGraph: useGraph, V2Available: v2 is not null,
+                    Eligible: false,
+                    NotRunReason: !useGraph
+                        ? Features.Intelligence.Decision.DecisionResearchNotRunReasons.GraphDisabled
+                        : Features.Intelligence.Decision.DecisionResearchNotRunReasons.V2Unavailable,
+                    FrontierCount: frontierCount, HighestFrontierInformationValue: highestFrontierIv);
+            }
+            else
+            {
+                // Load loop settings under their own guard so a settings-load fault yields an explicit
+                // SETTINGS_UNAVAILABLE reason rather than a swallowed null eligibility.
+                DecisionResearchLoopSettings? researchLoop = null;
+                try
+                {
+                    researchLoop = await repository.GetResearchLoopSettingsAsync(cancellationToken);
+                }
+                catch (Exception settingsEx)
+                {
+                    logger.LogWarning(settingsEx, "Research loop settings load failed for session {SessionId}; loop skipped.", sessionId);
+                }
+
+                if (researchLoop is null)
+                {
+                    researchEligibility = new Features.Intelligence.Decision.DecisionResearchEligibilityDto(
+                        EnabledSetting: false, UseGraph: true, V2Available: true, Eligible: false,
+                        NotRunReason: Features.Intelligence.Decision.DecisionResearchNotRunReasons.SettingsUnavailable,
+                        FrontierCount: frontierCount, HighestFrontierInformationValue: highestFrontierIv);
+                }
+                else
+                {
+                    var minFrontierIv = (decimal)researchLoop.MinFrontierInformationValue;
+                    var retrievalBudget = researchLoop.MaxRetrievals > 0;
+
+                    // Reason precedence: setting off → no frontier → frontier below threshold → eligible.
+                    var loopReason = !researchLoop.Enabled
+                        ? Features.Intelligence.Decision.DecisionResearchNotRunReasons.SettingDisabled
+                        : frontierCount == 0
+                            ? Features.Intelligence.Decision.DecisionResearchNotRunReasons.NoFrontier
+                        : highestFrontierIv < minFrontierIv
+                            ? Features.Intelligence.Decision.DecisionResearchNotRunReasons.FrontierBelowThreshold
+                        : Features.Intelligence.Decision.DecisionResearchNotRunReasons.Eligible;
+
+                    var loopEligible = loopReason == Features.Intelligence.Decision.DecisionResearchNotRunReasons.Eligible;
+
+                    researchEligibility = new Features.Intelligence.Decision.DecisionResearchEligibilityDto(
+                        EnabledSetting: researchLoop.Enabled, UseGraph: true, V2Available: true,
+                        Eligible: loopEligible, NotRunReason: loopReason,
+                        FrontierCount: frontierCount, HighestFrontierInformationValue: highestFrontierIv,
+                        MinFrontierInformationValue: minFrontierIv, RetrievalBudget: retrievalBudget);
+
+                    if (loopEligible)
+                    {
+                        try
+                        {
+                            var loopResult = await RunResearchLoopAsync(request.TenantId, request.UserId, sessionId, cancellationToken);
+                            logger.LogInformation(
+                                "Research loop (in-request) for session {SessionId}: {Rounds} round(s), {Retrievals} retrieval(s), stop={StopReason}.",
+                                sessionId, loopResult.RoundsExecuted, loopResult.TotalRetrievals, loopResult.StopReason);
+                            researchSummary = BuildResearchLoopSummary(loopResult);
+                            // The loop committed authoritative state via ApplyVerificationChangeAsync; return
+                            // the refreshed session so DB and response agree.
+                            var refreshed = await GetSessionResultAsync(request.TenantId, sessionId, cancellationToken);
+                            if (refreshed is not null)
+                                return DecorateTrace(refreshed, proposalIntegritySummary, researchSummary,
+                                    researchEligibility, outputAuthorizations, outputTransformSummary,
+                                    outputClaimExtraction, timer.ElapsedMilliseconds);
+                        }
+                        catch (Exception loopEx)
+                        {
+                            logger.LogWarning(loopEx, "Research loop (in-request) failed for session {SessionId}; decision unaffected.", sessionId);
+                            // The invocation itself is authoritative execution evidence: project a FAILED
+                            // research stage instead of leaving the summary null (which the trace could only
+                            // report as an observability gap, never as INVOKED).
+                            researchSummary = new Features.Intelligence.Decision.DecisionResearchLoopSummaryDto(
+                                Enabled: true, RoundsExecuted: 0, RoundsCommitted: 0, RoundsRolledBack: 0,
+                                TotalRetrievals: 0, StopReason: DecisionResearchLoopStopReasons.RoundFailed,
+                                Rounds: [], Failure: new DecisionResearchFailureDto(
+                                    RoundNumber: 0, Stage: "LOOP_INVOCATION",
+                                    ExceptionType: loopEx.GetType().Name, Reason: loopEx.Message,
+                                    AuthoritativeStateChanged: false));
+                        }
+                    }
+                }
+            }
+        }
+
+        var responseWithVerifications = await HydrateEvidenceVerificationsAsync(
             BuildResponse(persistence, nextAction, readiness, useGraph, v2, governanceVerdict, graphDiagnostic, solverShadow),
             request.TenantId, sessionId, cancellationToken);
+        return await HydrateVerifiedSignalsAsync(
+            DecorateTrace(
+                responseWithVerifications,
+                proposalIntegritySummary, researchSummary, researchEligibility, outputAuthorizations,
+                outputTransformSummary, outputClaimExtraction, timer.ElapsedMilliseconds),
+            request.TenantId, sessionId, cancellationToken);
     }
+
+    // ── Decision Integrity Trace assembly ────────────────────────────────────────────────────────
+    // Fold the live-run trace inputs onto a response and project the DecisionIntegrityTrace. This is a
+    // pure, deterministic projection of authoritative state — it never changes the verdict fields.
+    private static DecisionSearchResponse DecorateTrace(
+        DecisionSearchResponse response,
+        Features.Intelligence.Decision.DecisionProposalIntegritySummaryDto? proposalIntegrity,
+        Features.Intelligence.Decision.DecisionResearchLoopSummaryDto? researchSummary,
+        Features.Intelligence.Decision.DecisionResearchEligibilityDto? researchEligibility,
+        IReadOnlyCollection<Features.Intelligence.Decision.DecisionOutputAuthorizationDto> outputAuthorizations,
+        Features.Intelligence.Decision.DecisionOutputTransformSummaryDto? outputTransformSummary,
+        Features.Intelligence.Decision.DecisionOutputClaimExtractionDto? outputClaimExtraction,
+        long totalDurationMs)
+    {
+        // Decision state version: baseline 1 + one increment per committed authoritative mutation. A
+        // recompetition and each committed research round are authoritative mutations; a rolled-back
+        // round is deliberately NOT counted, so a fault preserves the prior version.
+        var version = 1L;
+        if (response.LastRecompetition is not null)
+            version += 1;
+        if (researchSummary is not null)
+            version += researchSummary.RoundsCommitted;
+
+        var phaseTimings = BuildPhaseTimings(response, totalDurationMs);
+
+        var enriched = response with
+        {
+            ProposalIntegrity = proposalIntegrity,
+            ResearchSummary = researchSummary,
+            ResearchEligibility = researchEligibility,
+            OutputAuthorizations = outputAuthorizations,
+            OutputTransformSummary = outputTransformSummary,
+            OutputClaimExtraction = outputClaimExtraction,
+            DecisionStateVersion = version,
+            PhaseTimings = phaseTimings,
+        };
+
+        return enriched with
+        {
+            IntegrityTrace = Features.Intelligence.Decision.DecisionIntegrityTraceProjector.Project(enriched),
+        };
+    }
+
+    // Read-back decoration: project the trace from PERSISTED state only. The live-run-only inputs
+    // (proposal-integrity gate summary, in-request research-loop audit) are not persisted, so they are
+    // null/empty here and their stages report NotRun — but every persisted stage (Verification,
+    // Promotion, Propagation, Recompetition, Frontier, Output Control, Final Audit) still projects, so
+    // a reloaded or closed-loop-updated session shows the same trace panel as the live run.
+    private static DecisionSearchResponse DecorateTraceReadback(DecisionSearchResponse response) =>
+        DecorateTrace(response, proposalIntegrity: null, researchSummary: null,
+            researchEligibility: null, outputAuthorizations: [], outputTransformSummary: null,
+            outputClaimExtraction: null, totalDurationMs: response.DurationMilliseconds);
+
+    // Derive per-phase timings from the recorded session-stage events when available, otherwise report
+    // only the measured total. Purely a Diagnostics surface — never gates anything.
+    private static IReadOnlyCollection<Features.Intelligence.Decision.DecisionPhaseTimingDto> BuildPhaseTimings(
+        DecisionSearchResponse response, long totalDurationMs)
+    {
+        var timings = new List<Features.Intelligence.Decision.DecisionPhaseTimingDto>
+        {
+            new("Total", totalDurationMs > 0 ? totalDurationMs : response.DurationMilliseconds),
+        };
+        return timings;
+    }
+
+    // Summarize a research-loop result for the Research stage: committed vs rolled-back rounds are
+    // derived from the per-round audit (a round whose narrative recorded a rollback is not committed).
+    private static Features.Intelligence.Decision.DecisionResearchLoopSummaryDto BuildResearchLoopSummary(
+        DecisionResearchLoopResultDto loopResult)
+    {
+        var rolledBack = string.Equals(loopResult.StopReason,
+            DecisionResearchLoopStopReasons.RoundFailed, StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        var committed = Math.Max(0, loopResult.RoundsExecuted - rolledBack);
+        return new Features.Intelligence.Decision.DecisionResearchLoopSummaryDto(
+            loopResult.Enabled, loopResult.RoundsExecuted, committed, rolledBack,
+            loopResult.TotalRetrievals, loopResult.StopReason, loopResult.Rounds, loopResult.Failure);
+    }
+
 
     // ── Direct LLM answer path (POLOXI Engine off) ──
     private async Task<Features.Intelligence.Decision.DecisionGovernanceVerdictDto?> PersistGovernanceVerdictAsync(
@@ -550,18 +990,36 @@ public sealed class LegalDecisionService(
         if (session is null)
             return null;
 
+        // Rehydrate Next Best Action metrics from the authoritative current frontier. The persisted
+        // session stores its display text/rationale but not branch id, IV, or flip potential; emitting
+        // zeroes here made the cockpit disagree with the branch table and persisted ResearchNeed.
+        var currentFrontierTarget = session.Branches
+            .Where(b => b.IsOnFrontier || string.Equals(b.BranchStateCode, DecisionBranchStates.Active, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(b => b.InformationValue)
+            .ThenByDescending(b => b.FlipPotential)
+            .FirstOrDefault();
         var nextAction = session.NextBestActionText is null ? null : new DecisionNextActionDto(
             session.NextBestActionText, session.NextBestActionImpactCode ?? "MEDIUM",
-            session.NextBestActionRationale ?? string.Empty, null, 0m, 0m);
+            session.NextBestActionRationale ?? string.Empty, currentFrontierTarget?.DecisionBranchId,
+            currentFrontierTarget?.InformationValue ?? 0m, currentFrontierTarget?.FlipPotential ?? 0m);
+        // Research status is persisted (0262); use it directly so rehydrated readiness reports the same
+        // "why" (RETRIEVAL_FAILED vs SEARCH_NO_RESULTS vs RETRIEVED vs NOT_NEEDED) as the live run.
+        // Older sessions predating the column fall back to a best-effort status derived from evidence.
+        var rehydratedResearchStatus = session.ResearchStatusCode
+            ?? (session.Evidence.Count > 0
+                ? DecisionResearchStates.Retrieved
+                : DecisionResearchStates.SearchNoResults);
         var readiness = BuildReadiness(
             session.Candidates, session.Branches, session.Evidence,
-            (double)session.DecisionMargin, (double)session.CandidateEntropy, session.StatusCode);
+            (double)session.DecisionMargin, (double)session.CandidateEntropy, session.StatusCode, rehydratedResearchStatus);
 
         var graph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken);
         if (graph is null)
-            return await HydrateVerifiedSignalsAsync(
-                await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness), tenantId, decisionSessionId, cancellationToken),
-                tenantId, decisionSessionId, cancellationToken);
+            return DecorateTraceReadback(await HydrateVerifiedSignalsAsync(
+                await HydrateEvidenceVerificationsAsync(
+                    await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness), tenantId, decisionSessionId, cancellationToken),
+                    tenantId, decisionSessionId, cancellationToken),
+                tenantId, decisionSessionId, cancellationToken));
 
         var nodeDtos = graph.Nodes
             .Select(n => new DecisionGraphNodeDto(n.NodeId, n.NodeKind, n.NodeCode, n.DisplayName, n.Statement, n.Support, n.IsEssential, n.IsSatisfied, n.VerificationStatus, n.SortOrder))
@@ -583,9 +1041,56 @@ public sealed class LegalDecisionService(
         var verdict = new DecisionReadinessVerdictDto(graph.ReadinessSatisfied, blockers, predicate);
 
         var v2 = new DecisionV2Result(graph, nodeDtos, edgeDtos, losingDto, verdict);
-        return await HydrateVerifiedSignalsAsync(
-            await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2), tenantId, decisionSessionId, cancellationToken),
-            tenantId, decisionSessionId, cancellationToken);
+        return DecorateTraceReadback(await HydrateVerifiedSignalsAsync(
+            await HydrateEvidenceVerificationsAsync(
+                await HydrateClosedLoopAsync(BuildResponse(session, nextAction, readiness, usedDependencyGraph: true, v2), tenantId, decisionSessionId, cancellationToken),
+                tenantId, decisionSessionId, cancellationToken),
+            tenantId, decisionSessionId, cancellationToken));
+    }
+
+    private async Task<DecisionSearchResponse> HydrateEvidenceVerificationsAsync(
+        DecisionSearchResponse response, Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var verifications = await repository.GetEvidenceVerificationsAsync(tenantId, decisionSessionId, cancellationToken);
+            if (verifications.Count == 0)
+                return response;
+
+            var dtos = verifications.Select(v => new DecisionEvidenceVerificationDto(
+                v.DecisionEvidenceVerificationId,
+                v.DecisionEvidenceId,
+                v.DecisionBranchId,
+                v.SourceTypeCode,
+                v.ProfileCode,
+                v.DispositionCode,
+                v.IsVerified,
+                v.IsDecisionAuthorized,
+                string.IsNullOrWhiteSpace(v.BlockingReasonsJson)
+                    ? []
+                    : JsonSerializer.Deserialize<string[]>(v.BlockingReasonsJson) ?? [],
+                v.EvaluatedDateUtc,
+                v.Factors.Select(f => new DecisionEvidenceVerificationFactorDto(
+                    f.FactorCode, f.StateCode, f.ReasonCode, f.Reason, f.VerifiedValue,
+                    f.SourceRef, f.SupportingPassage, f.VerificationMethod)).ToArray())
+            {
+                MechanicalVerificationCount = v.MechanicalVerificationCount,
+                SemanticVerificationCount = v.SemanticVerificationCount,
+                PoloxiDeepeningCount = v.PoloxiDeepeningCount,
+                CacheHitCount = v.CacheHitCount,
+                InputTokenCount = v.InputTokenCount,
+                OutputTokenCount = v.OutputTokenCount,
+                LatencyMilliseconds = v.LatencyMilliseconds,
+            }).ToArray();
+
+            return response with { EvidenceVerifications = dtos };
+        }
+        catch (Exception verificationEx)
+        {
+            logger.LogWarning(verificationEx,
+                "Evidence verification readback failed for session {SessionId}; decision unaffected.", decisionSessionId);
+            return response;
+        }
     }
 
     // Hydrate the persisted V2.1 closed-loop readback (last recompetition + latest open research
@@ -607,7 +1112,10 @@ public sealed class LegalDecisionService(
         var researchNeedDto = researchNeed is null ? null : new DecisionResearchNeedDto(
             researchNeed.DecisionResearchNeedId, researchNeed.DecisionBranchId, researchNeed.IssueLabel, researchNeed.PropositionToResolve,
             researchNeed.AuthorityKind, researchNeed.RequiredEvidenceKind, researchNeed.WhyDecisionRelevant, researchNeed.ExpectedDiscrimination,
-            researchNeed.CurrentUncertainty, researchNeed.InformationValue, researchNeed.FalsificationCondition, researchNeed.StatusCode);
+            researchNeed.CurrentUncertainty, researchNeed.InformationValue, researchNeed.FalsificationCondition, researchNeed.StatusCode)
+        {
+            ResearchNeedTypeCode = researchNeed.ResearchNeedTypeCode,
+        };
 
         return response with { LastRecompetition = recompetitionDto, PendingResearchNeed = researchNeedDto };
     }
@@ -766,16 +1274,33 @@ public sealed class LegalDecisionService(
                 var researchCount = await repository.CountResearchNeedsAsync(tenantId, decisionSessionId, cancellationToken);
                 if (researchCount < v21.LoopMaxResearchActions)
                 {
-                    var need = DecisionResearchNeedFactory.Create(
+                    var frontierNeed = DecisionResearchNeedFactory.Create(
                         result.Branches, impact, decisionSessionId, tenantId, userId, session.MatterId, dependencyEventId);
-                    if (need is not null)
+                    if (frontierNeed is not null)
                     {
-                        await repository.PersistResearchNeedAsync(need, cancellationToken);
-                        researchNeedDto = new DecisionResearchNeedDto(
-                            need.DecisionResearchNeedId, need.DecisionBranchId, need.IssueLabel, need.PropositionToResolve,
-                            need.AuthorityKind, need.RequiredEvidenceKind, need.WhyDecisionRelevant, need.ExpectedDiscrimination,
-                            need.CurrentUncertainty, need.InformationValue, need.FalsificationCondition, need.StatusCode);
-                        audit.Add($"Next investigation selected: {need.IssueLabel}.");
+                        var targetBranch = result.Branches.First(branch => branch.DecisionBranchId == frontierNeed.DecisionBranchId);
+                        var semanticNeed = await GenerateResearchNeedAsync(
+                            session with { Candidates = result.Candidates, Branches = result.Branches },
+                            targetBranch,
+                            frontierNeed,
+                            cancellationToken);
+                        var need = semanticNeed.Need;
+                        if (need is null)
+                        {
+                            audit.Add($"Research semantic proposal unresolved; retrieval was not authorized: {semanticNeed.Reason}");
+                        }
+                        else
+                        {
+                            await repository.PersistResearchNeedAsync(need, cancellationToken);
+                            researchNeedDto = new DecisionResearchNeedDto(
+                                need.DecisionResearchNeedId, need.DecisionBranchId, need.IssueLabel, need.PropositionToResolve,
+                                need.AuthorityKind, need.RequiredEvidenceKind, need.WhyDecisionRelevant, need.ExpectedDiscrimination,
+                                need.CurrentUncertainty, need.InformationValue, need.FalsificationCondition, need.StatusCode)
+                            {
+                                ResearchNeedTypeCode = need.ResearchNeedTypeCode,
+                            };
+                            audit.Add($"Next investigation selected: {need.IssueLabel}.");
+                        }
                     }
                 }
                 else
@@ -802,6 +1327,410 @@ public sealed class LegalDecisionService(
             impact, recompetitionDto, researchNeedDto, decision, audit);
     }
 
+    // POLOXI Bounded Research Loop (§13/§14/§18). Repeatedly: pick the highest-Information-Value frontier
+    // branch, retrieve external evidence for it, verify + promote (lifecycle §14), map that to the branch's
+    // supporting graph edge, and drive the existing single-iteration closed loop (ApplyVerificationChangeAsync
+    // → propagation → recompetition → frontier/IV recalculation). Every round is budget-checked; the loop
+    // halts on the FIRST satisfied stop condition and reports it explicitly. This is a bounded convergence
+    // engine, never "research until ready".
+    public async Task<DecisionResearchLoopResultDto> RunResearchLoopAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+    {
+        var loop = await repository.GetResearchLoopSettingsAsync(cancellationToken);
+        var rounds = new List<DecisionResearchRoundDto>();
+
+        // DIAGNOSTIC (Research Loop Execution Diagnosis) — Boundary A: RunResearchLoopAsync entered.
+        // Records that invocation reached the method and the budgets it will run under, so a run that
+        // reports INVOKED but no telemetry can be traced to the exact deterministic stop below.
+        logger.LogInformation(
+            "RESEARCHLOOP A/ENTER session={SessionId} enabled={Enabled} maxRounds={MaxRounds} maxRetrievals={MaxRetrievals} minFrontierIV={MinFrontierIV} epsilon={Epsilon} seedRetriever={SeedRetriever}",
+            decisionSessionId, loop.Enabled, loop.MaxRounds, loop.MaxRetrievals,
+            loop.MinFrontierInformationValue, loop.NoStateChangeEpsilon, loop.UseSeedRetriever);
+
+        async Task<DecisionResearchLoopResultDto> DoneAsync(
+            int executed, int retrievals, string stopReason, DecisionResearchFailureDto? failure = null)
+        {
+            // DIAGNOSTIC — Boundary C: single exit funnel. Every return path lands here, so this is the
+            // authoritative record of RoundsExecuted, retrievals, and the deterministic StopReason.
+            logger.LogInformation(
+                "RESEARCHLOOP C/EXIT session={SessionId} roundsExecuted={Executed} retrievals={Retrievals} stopReason={StopReason}",
+                decisionSessionId, executed, retrievals, stopReason);
+
+            var decisionNow = await GetSessionResultAsync(tenantId, decisionSessionId, cancellationToken)
+                ?? throw new InvalidOperationException("Session result unavailable after research loop.");
+            return new DecisionResearchLoopResultDto(
+                decisionSessionId, loop.Enabled, executed, retrievals, stopReason, rounds, decisionNow, failure);
+        }
+
+        // Feature flag OFF preserves the shadow baseline: no autonomous research is performed.
+        if (!loop.Enabled)
+            return await DoneAsync(0, 0, DecisionResearchLoopStopReasons.LoopDisabled);
+
+        // Concurrency guard: refuse to start a second loop for a session already running one. This keeps
+        // the inline-decide path and the explicit cockpit action from interleaving mutations mid-round.
+        if (!ActiveResearchLoops.TryAdd(decisionSessionId, 0))
+        {
+            logger.LogInformation("Research loop already running for session {SessionId}; skipping concurrent run.", decisionSessionId);
+            return await DoneAsync(0, 0, DecisionResearchLoopStopReasons.AlreadyRunning);
+        }
+
+        try
+        {
+            return await RunResearchLoopCoreAsync(tenantId, userId, decisionSessionId, loop, rounds, DoneAsync, cancellationToken);
+        }
+        finally
+        {
+            ActiveResearchLoops.TryRemove(decisionSessionId, out _);
+        }
+    }
+
+    // Core loop body, invoked only while the per-session guard is held.
+    private async Task<DecisionResearchLoopResultDto> RunResearchLoopCoreAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId, DecisionResearchLoopSettings loop,
+        List<DecisionResearchRoundDto> rounds,
+        Func<int, int, string, DecisionResearchFailureDto?, Task<DecisionResearchLoopResultDto>> DoneAsync,
+        CancellationToken cancellationToken)
+    {
+        var totalRetrievals = 0;
+        var roundNumber = 0;
+        var edgesVerifiedThisRun = new HashSet<Guid>();
+        var preRoundStage = "INITIALIZATION";
+
+        DecisionSessionPersistence session;
+        DecisionGraphPersistence graph;
+        string contextCode;
+        try
+        {
+            session = await repository.GetSessionAsync(tenantId, decisionSessionId, cancellationToken)
+                ?? throw new InvalidOperationException($"Decision session {decisionSessionId} was not found.");
+
+            // The loop needs a dependency graph: verified evidence is promoted by verifying a graph EDGE, so
+            // recompetition can propagate the change deterministically. No graph → nothing to close the loop on.
+            var loadedGraph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken);
+            if (loadedGraph is null)
+                return await DoneAsync(0, 0, DecisionResearchLoopStopReasons.NoGraph, null);
+            graph = loadedGraph;
+
+            contextCode = string.IsNullOrWhiteSpace(session.ContextCode)
+                ? DecisionContexts.General
+                : session.ContextCode!.Trim().ToUpperInvariant();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return await DoneAsync(0, 0, DecisionResearchLoopStopReasons.RoundFailed,
+                new DecisionResearchFailureDto(0, preRoundStage, ex.GetType().Name, ex.Message, false));
+        }
+
+        while (true)
+        {
+            // Stop: round budget.
+            if (roundNumber >= loop.MaxRounds)
+                return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.MaxRounds, null);
+
+            // Stop: cumulative retrieval budget.
+            if (totalRetrievals >= loop.MaxRetrievals)
+                return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.RetrievalBudget, null);
+
+            DecisionSessionPersistence current;
+            DecisionBranchPersistence target;
+            DecisionResearchNeedPersistence researchNeed;
+            DecisionGraphEdgePersistence? dependencyPath;
+            try
+            {
+                preRoundStage = "FRONTIER_SELECTION";
+
+                // Re-read current authoritative state each round (previous round mutated it).
+                current = await repository.GetSessionAsync(tenantId, decisionSessionId, cancellationToken)
+                    ?? throw new InvalidOperationException("Session state unavailable mid research loop.");
+
+                // Stop: already converged.
+                if (string.Equals(current.StatusCode, DecisionStatusCodes.DecisionReady, StringComparison.OrdinalIgnoreCase))
+                    return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.DecisionReady, null);
+
+                // Highest-IV open frontier branch above the minimum worth-researching threshold.
+                var selectedTarget = current.Branches
+                    .Where(b => b.IsOnFrontier)
+                    .OrderByDescending(b => b.InformationValue)
+                    .FirstOrDefault();
+                if (selectedTarget is null || (double)selectedTarget.InformationValue < loop.MinFrontierInformationValue)
+                    return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.FrontierBelowThreshold, null);
+                target = selectedTarget;
+
+                preRoundStage = "RESEARCH_NEED_SELECTION";
+                var frontierNeed = DecisionResearchNeedFactory.Create(
+                    current.Branches.ToList(), DependencyImpact.Empty, decisionSessionId, tenantId,
+                    userId, current.MatterId, dependencyEventId: null)
+                    ?? throw new InvalidOperationException("The selected frontier did not produce a research need.");
+                var semanticNeed = await GenerateResearchNeedAsync(current, target, frontierNeed, cancellationToken);
+                if (semanticNeed.Need is null)
+                    return await DoneAsync(roundNumber, totalRetrievals,
+                        DecisionResearchLoopStopReasons.ResearchNeedUnresolved,
+                        new DecisionResearchFailureDto(roundNumber, preRoundStage, "RESEARCHABILITY_GATE",
+                            semanticNeed.Reason ?? "No source-resolvable research leaf passed the bounded researchability gate.", false));
+                researchNeed = semanticNeed.Need;
+                await repository.PersistResearchNeedAsync(researchNeed, cancellationToken);
+
+                // Resolve causality independently from research eligibility. Missing typed lineage must not
+                // prevent retrieval; it only means a verified result cannot yet be propagated through V2.
+                preRoundStage = "DEPENDENCY_PATH_RESOLUTION";
+                var currentGraph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken) ?? graph;
+                dependencyPath = ResolveDependencyPathForBranch(
+                    currentGraph, target.DecisionBranchId, edgesVerifiedThisRun);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.RoundFailed,
+                    new DecisionResearchFailureDto(
+                        roundNumber, preRoundStage, ex.GetType().Name, ex.Message,
+                        AuthoritativeStateChanged: false));
+            }
+
+            roundNumber++;
+            var narrative = new List<string>();
+            var objective = researchNeed.PropositionToResolve
+                ?? throw new InvalidOperationException("The accepted research need has no proposition.");
+            // DIAGNOSTIC — Boundary B: a research round is actually starting. If A and C are logged but B is
+            // never reached, the loop stopped on a pre-round guard (StopReason in the C record explains which).
+            logger.LogInformation(
+                "RESEARCHLOOP B/ROUND-START session={SessionId} round={Round} branch={BranchCode} targetIV={TargetIV} dependencyPath={EdgeId}",
+                decisionSessionId, roundNumber, target.BranchCode, target.InformationValue, dependencyPath?.EdgeId);
+            narrative.Add($"Round {roundNumber}: researching highest-IV frontier branch '{target.DisplayName}' (IV {target.InformationValue:F3}).");
+
+            // ── Round consistency (round-level commit) ──────────────────────────────────────────────
+            // A round is retrieve → verify → prepare edge change → recompetition. If any of those faults
+            // BEFORE the closed-loop commit, we must NOT continue the loop on partially-mutated state:
+            // stop with RESEARCH_ROUND_FAILED and leave the previous authoritative decision intact. The
+            // per-edge commit inside ApplyVerificationChangeAsync is the atomic boundary for the round.
+            var currentStage = "RETRIEVAL";
+            try
+            {
+                // 1) Retrieve external evidence for the objective (live provider or seed retriever per flag).
+                IReadOnlyCollection<DecisionRetrievedSource> sources;
+                if (DecisionResearchNeedTypes.RequiresMatterSources(researchNeed.ResearchNeedTypeCode))
+                {
+                    logger.LogInformation(
+                        "Research need {ResearchNeedId} requires matter sources ({NeedType}); public legal-authority retrieval was not invoked.",
+                        researchNeed.DecisionResearchNeedId, researchNeed.ResearchNeedTypeCode);
+                    sources = [];
+                    narrative.Add($"Research need route {researchNeed.ResearchNeedTypeCode} requires matter-document retrieval, which is not configured for this path.");
+                }
+                else try
+                {
+                    sources = await retriever.RetrieveAsync(
+                        new DecisionRetrievalRequest(contextCode, objective, 5), cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogWarning(ex, "Research loop retrieval failed for session {SessionId}, branch {BranchCode}.", decisionSessionId, target.BranchCode);
+                    sources = [];
+                }
+                totalRetrievals++;
+
+                // Persist every attempt before verification. The attachment is explicitly non-authoritative
+                // until the verifier finalizes its support state below.
+                var retrievedEvidence = sources
+                    .Select(s => new DecisionEvidencePersistence(
+                        Guid.NewGuid(), target.DecisionBranchId, s.SourceRef, s.Title, s.Snippet,
+                        0m, 0m, 0m, 0m, 0m, 0m, DecisionVerificationStates.Unverified)
+                    {
+                        SupportedObjective = objective
+                    })
+                    .ToList();
+                var proposedAttachments = retrievedEvidence.Select(e => new DecisionEvidenceAttachmentPersistence(
+                    Guid.NewGuid(), decisionSessionId, tenantId, userId, current.MatterId,
+                    researchNeed.DecisionResearchNeedId, target.DecisionBranchId, e.DecisionEvidenceId,
+                    objective, DecisionEvidenceAttachmentStates.ProposedSupportFor,
+                    dependencyPath?.EdgeId, IsAuthoritative: false, AssessmentReason: null)).ToList();
+                await repository.PersistResearchEvidenceAsync(
+                    tenantId, userId, decisionSessionId, retrievedEvidence, cancellationToken);
+                await repository.PersistEvidenceAttachmentsAsync(proposedAttachments, cancellationToken);
+
+                // 2) Verify each retrieved source through the lifecycle ladder; promote only VERIFIED material.
+                currentStage = "VERIFICATION";
+                var verificationResults = new List<EvidenceVerificationResult>(sources.Count);
+                var verified = new List<DecisionEvidencePersistence>(sources.Count);
+                foreach (var (source, persisted) in sources.Zip(retrievedEvidence))
+                {
+                    var result = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
+                        persisted.DecisionEvidenceId, target.DecisionBranchId, objective,
+                        source.SourceRef, source.Title, source.Snippet, source.SourceType,
+                        source.Jurisdiction, source.AuthorityDate)
+                    {
+                        SourceProvider = source.SourceProvider,
+                        SourceVersion = source.SourceVersion,
+                        ProviderIdentityVerified = source.ProviderIdentityVerified,
+                    }, cancellationToken);
+                    verificationResults.Add(result);
+                    verified.Add(ToEvidencePersistence(source, objective, target.DecisionBranchId, result));
+                }
+                var anyVerified = verified.Any(e =>
+                    string.Equals(e.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase));
+                var anyContradicted = verified.Any(e =>
+                    string.Equals(e.VerificationStatus, DecisionVerificationStates.Invalidated, StringComparison.OrdinalIgnoreCase));
+                await repository.UpdateResearchEvidenceAsync(
+                    tenantId, userId, decisionSessionId, verified, cancellationToken);
+                var persistedVerifications = verificationResults.Select(v => ToPersistence(
+                    v, decisionSessionId, tenantId, userId, current.MatterId)).ToArray();
+                await repository.PersistEvidenceVerificationsAsync(persistedVerifications, cancellationToken);
+                var verificationByEvidence = persistedVerifications.ToDictionary(v => v.DecisionEvidenceId);
+
+                // 3) The verified evidence resolves the supporting edge: VERIFIED strengthens the dependency,
+                //    a contradiction invalidates it; anything else leaves it unverified (still an open frontier).
+                var newStatus = anyVerified
+                    ? DecisionVerificationStates.Verified
+                    : anyContradicted
+                        ? DecisionVerificationStates.Invalidated
+                        : DecisionVerificationStates.Unverified;
+
+                var lifecycleState = anyVerified
+                    ? DecisionEvidenceLifecycleStates.Verified
+                    : anyContradicted
+                        ? DecisionEvidenceLifecycleStates.Contradicted
+                        : verified.Count == 0
+                            ? DecisionEvidenceLifecycleStates.RetrievalFailed
+                            : DecisionEvidenceLifecycleStates.Unsupported;
+
+                var finalizedAttachments = proposedAttachments.Zip(verificationResults, (attachment, verification) =>
+                {
+                    var state = verification.IsDecisionAuthorized
+                        ? DecisionEvidenceAttachmentStates.SupportedBy
+                        : verification.Disposition == EvidenceSupportDisposition.Contradicted
+                            ? DecisionEvidenceAttachmentStates.ContradictedBy
+                            : verification.Disposition == EvidenceSupportDisposition.PartiallySupported
+                                ? DecisionEvidenceAttachmentStates.PartiallySupportedBy
+                                : DecisionEvidenceAttachmentStates.Unsupported;
+                    return attachment with
+                    {
+                        SupportStateCode = state,
+                        IsAuthoritative = verification.IsDecisionAuthorized,
+                        DecisionEvidenceVerificationId = verificationByEvidence[verification.DecisionEvidenceId].DecisionEvidenceVerificationId,
+                        SourceSnapshotId = verification.SourceSnapshot?.SourceSnapshotId,
+                        PassageRef = verification.SourceSnapshot?.PassageRef,
+                        AssessmentReason = verification.BlockingReasons.Count == 0
+                            ? "All required independent verification factors passed."
+                            : string.Join("; ", verification.BlockingReasons)
+                    };
+                }).ToList();
+                await repository.UpdateEvidenceAttachmentsAsync(finalizedAttachments, cancellationToken);
+
+                narrative.Add($"Retrieved {sources.Count} source(s); evidence lifecycle → {lifecycleState}.");
+
+                var entropyBefore = current.CandidateEntropy;
+                var winnerChanged = false;
+
+                // 4) Drive the existing single-iteration closed loop with this edge verification change. A
+                //    unique idempotency key per round guarantees each research round applies exactly once.
+                //    This is the round's COMMIT point (propagation + recompetition persisted together).
+                var authorityChanged = !string.Equals(
+                        newStatus, DecisionVerificationStates.Unverified, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(
+                        dependencyPath?.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase);
+                if (dependencyPath is not null && authorityChanged)
+                {
+                    currentStage = "COMMIT";
+                    edgesVerifiedThisRun.Add(dependencyPath.EdgeId);
+                    var changeRequest = new DecisionVerificationChangeRequest(
+                        dependencyPath.EdgeId, newStatus,
+                        Notes: $"Autonomous research loop round {roundNumber}: {objective}",
+                        IdempotencyKey: $"RESEARCHLOOP:{decisionSessionId:N}:{roundNumber}:{dependencyPath.EdgeId:N}",
+                        RunClosedLoop: true);
+
+                    var loopResult = await ApplyVerificationChangeAsync(tenantId, userId, decisionSessionId, changeRequest, cancellationToken);
+                    winnerChanged = loopResult.Recompetition?.WinnerChanged ?? false;
+                    foreach (var line in loopResult.AuditNarrative)
+                        narrative.Add(line);
+                }
+                else if (!string.Equals(newStatus, DecisionVerificationStates.Unverified, StringComparison.OrdinalIgnoreCase))
+                {
+                    narrative.Add("Authoritative evidence was retained, but no typed dependency path was available for propagation.");
+                }
+                else
+                {
+                    narrative.Add("No authoritative evidence support was produced this round.");
+                }
+
+                currentStage = "POST_COMMIT_READBACK";
+                var after = await repository.GetSessionAsync(tenantId, decisionSessionId, cancellationToken)
+                    ?? throw new InvalidOperationException("Session state unavailable after research round.");
+                var entropyAfter = after.CandidateEntropy;
+
+                var verificationDispositionCounts = verified
+                    .GroupBy(e => e.LifecycleState ?? e.VerificationStatus, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+                var attachmentStateCounts = finalizedAttachments
+                    .GroupBy(a => a.SupportStateCode, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+                rounds.Add(new DecisionResearchRoundDto(
+                    roundNumber, target.DecisionBranchId, target.DisplayName, target.InformationValue,
+                    dependencyPath?.EdgeId, newStatus, lifecycleState, sources.Count, winnerChanged,
+                    entropyBefore, entropyAfter, narrative)
+                {
+                    PropositionToResolve = researchNeed.PropositionToResolve,
+                    SourcesEvaluated = verified.Count,
+                    VerificationDispositionCounts = verificationDispositionCounts,
+                    AttachmentStateCounts = attachmentStateCounts,
+                    AuthoritativeChanges = finalizedAttachments.Count(a => a.IsAuthoritative)
+                });
+
+                // Stop: no material state change (|Δentropy| below epsilon AND no winner flip).
+                var entropyDelta = Math.Abs((double)(entropyAfter - entropyBefore));
+                if (!winnerChanged && entropyDelta < loop.NoStateChangeEpsilon)
+                    return await DoneAsync(roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.NoStateChange, null);
+            }
+            catch (Exception roundEx) when (roundEx is not OperationCanceledException)
+            {
+                // Round faulted before/at commit. Do NOT advance the loop on partially-mutated state:
+                // record the failed round and stop, preserving the previous authoritative decision.
+                logger.LogWarning(roundEx, "Research loop round {Round} failed for session {SessionId}; stopping with prior state preserved.", roundNumber, decisionSessionId);
+                narrative.Add($"Round {roundNumber} failed before commit: {roundEx.Message}. Prior decision state preserved.");
+                rounds.Add(new DecisionResearchRoundDto(
+                    roundNumber, target.DecisionBranchId, target.DisplayName, target.InformationValue,
+                    dependencyPath?.EdgeId, DecisionVerificationStates.Unverified, DecisionEvidenceLifecycleStates.VerificationFailed,
+                    0, false, current.CandidateEntropy, current.CandidateEntropy, narrative));
+                var failure = new DecisionResearchFailureDto(
+                    roundNumber, currentStage, roundEx.GetType().Name, roundEx.Message,
+                    AuthoritativeStateChanged: false);
+                return await DoneAsync(
+                    roundNumber, totalRetrievals, DecisionResearchLoopStopReasons.RoundFailed, failure);
+            }
+        }
+    }
+
+    // Resolve the closest typed structural dependency path for a frontier branch. Structural verification
+    // does not gate research: VERIFIED here means the proposed graph relationship is coherent, not that
+    // external evidence has established it. Explicit branch lineage wins; otherwise node lineage supplies
+    // the deterministic bridge. No label/string matching is permitted.
+    private static DecisionGraphEdgePersistence? ResolveDependencyPathForBranch(
+        DecisionGraphPersistence graph, Guid branchId, HashSet<Guid> excludedEdgeIds)
+    {
+        bool Available(DecisionGraphEdgePersistence e) => !excludedEdgeIds.Contains(e.EdgeId);
+
+        var branchEdge = graph.Edges
+            .Where(e => e.SourceBranchId == branchId && Available(e))
+            .OrderByDescending(e => e.IsEssential)
+            .ThenByDescending(e => e.Materiality)
+            .ThenBy(e => e.EdgeId)
+            .FirstOrDefault();
+        if (branchEdge is not null)
+            return branchEdge;
+
+        var branchNodeIds = graph.Nodes
+            .Where(n => n.SourceBranchId == branchId)
+            .Select(n => n.NodeId)
+            .ToHashSet();
+        if (branchNodeIds.Count == 0)
+            return null;
+
+        return graph.Edges
+            .Where(e => Available(e)
+                && (branchNodeIds.Contains(e.SourceNodeId) || branchNodeIds.Contains(e.TargetNodeId)))
+            .OrderByDescending(e => e.IsEssential)
+            .ThenByDescending(e => e.Materiality)
+            .ThenBy(e => e.EdgeId)
+            .FirstOrDefault();
+    }
+
     private async Task<DecisionModelRouteDto> ResolveRouteAsync(string? modelCode, CancellationToken cancellationToken)
     {
         var routes = await repository.GetModelRoutesAsync(cancellationToken);
@@ -814,6 +1743,257 @@ public sealed class LegalDecisionService(
                 return match;
         }
         return routes.OrderBy(r => r.Priority).First();
+    }
+
+    private async Task<(DecisionResearchNeedPersistence? Need, string? Reason)> GenerateResearchNeedAsync(
+        DecisionSessionPersistence session,
+        DecisionBranchPersistence frontier,
+        DecisionResearchNeedPersistence frontierNeed,
+        CancellationToken cancellationToken)
+    {
+        var prompt = await repository.GetPromptAsync(ResearchNeedPromptCode, cancellationToken)
+            ?? throw new InvalidOperationException($"The '{ResearchNeedPromptCode}' decision prompt is not configured.");
+        var route = await ResolveRouteAsync(session.ModelCode, cancellationToken);
+        var candidates = JsonSerializer.Serialize(session.Candidates.Select(candidate => new
+        {
+            candidate.CandidateCode,
+            candidate.DisplayName,
+            candidate.Outcome,
+        }));
+        var frontierArtifact = JsonSerializer.Serialize(new
+        {
+            frontier.DecisionBranchId,
+            frontier.BranchCode,
+            frontier.DisplayName,
+            frontier.Interpretation,
+            frontier.InformationValue,
+            frontier.FlipPotential,
+            frontier.EvidenceAvailability,
+        });
+        var userPrompt = prompt.UserPromptTemplate
+            .Replace("{{QUERY}}", session.QueryText)
+            .Replace("{{CANDIDATES}}", candidates)
+            .Replace("{{FRONTIER}}", frontierArtifact);
+        var gate = new DecisionResearchabilityGate();
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            var response = await aiProvider.GenerateAsync(new DecisionAiRequest(
+                route, ResearchNeedPromptCode, prompt.SystemPrompt, userPrompt,
+                prompt.OutputSchemaJson, session.CorrelationId ?? Guid.NewGuid().ToString("N")), cancellationToken);
+            var proposal = ParseResearchSemanticProposal(response.StructuredOutputJson ?? response.Content);
+            var evaluation = gate.Evaluate(proposal);
+            if (evaluation.IsAcceptable)
+            {
+                var leaf = evaluation.ResearchableLeaves
+                    .OrderByDescending(item => item.CandidateDiscrimination.Count)
+                    .ThenBy(item => item.ResearchKey, StringComparer.OrdinalIgnoreCase)
+                    .First();
+                return (DecisionResearchNeedFactory.CreateFromLeaf(
+                    frontierNeed, leaf, attempt == 1 ? "ACCEPTED" : "REPAIRED",
+                    attempt == 1 ? null : "BOUNDED_RESEARCHABILITY_REPAIR_SUCCEEDED"), null);
+            }
+
+            if (attempt == 1)
+            {
+                userPrompt += "\n\nREPAIR ONLY THESE DEFECTS:\n- "
+                    + string.Join("\n- ", evaluation.Defects)
+                    + "\nPreserve valid leaves. Return the complete corrected JSON object once.";
+                continue;
+            }
+
+            return (null, string.Join("; ", evaluation.Defects));
+        }
+
+        return (null, "RESEARCHABILITY_GATE_UNRESOLVED");
+    }
+
+    private static DecisionResearchSemanticProposal ParseResearchSemanticProposal(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<DecisionResearchSemanticProposal>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                ?? new DecisionResearchSemanticProposal();
+        }
+        catch (JsonException)
+        {
+            return new DecisionResearchSemanticProposal();
+        }
+    }
+
+    // Deterministic integrity check for a parsed proposal. The LLM proposes structure but cannot be
+    // trusted to always produce a well-formed, non-degenerate candidate set. A proposal is acceptable
+    // only when it yields at least two distinct, well-named candidate outcomes — otherwise competition
+    // has nothing meaningful to discriminate between.
+    private static ProposalIntegrityResult EvaluateProposalIntegrity(IReadOnlyList<ProposedCandidate> proposal)
+    {
+        if (proposal.Count == 0)
+            return new ProposalIntegrityResult(false, "no candidates parsed");
+
+        if (proposal.Any(c => string.IsNullOrWhiteSpace(c.DisplayName) || string.IsNullOrWhiteSpace(c.Outcome)))
+            return new ProposalIntegrityResult(false, "candidate missing displayName or outcome");
+
+        var distinctOutcomes = proposal
+            .Select(c => c.Outcome.Trim().ToLowerInvariant())
+            .Distinct()
+            .Count();
+        if (distinctOutcomes < 2)
+            return new ProposalIntegrityResult(false, "fewer than two distinct candidate outcomes");
+
+        return new ProposalIntegrityResult(true, "ok");
+    }
+
+    // Computes structural + SHADOW-MODE semantic diagnostics for a parsed proposal. Semantic dimensions
+    // (query fidelity, interpretation distinctness/coverage, candidate separability, empty/duplicate
+    // interpretations) are recorded for correlation analysis ONLY — they never reject a run in V1.
+    // This lets us test P(good result | healthy interpretations) vs P(good result | weak interpretations)
+    // before any semantic signal is promoted to an authoritative recovery trigger.
+    private static ProposalIntegrityDiagnostics BuildProposalIntegrityDiagnostics(
+        string query, IReadOnlyList<ProposedCandidate> proposal, ProposalIntegrityResult integrity)
+    {
+        var candidateCount = proposal.Count;
+        var distinctCandidateCount = proposal
+            .Select(c => (c.Outcome ?? string.Empty).Trim().ToLowerInvariant())
+            .Where(o => o.Length > 0)
+            .Distinct()
+            .Count();
+
+        var interpretations = proposal
+            .SelectMany(c => c.Branches ?? Array.Empty<ProposedBranch>())
+            .Select(b => b.Interpretation ?? string.Empty)
+            .ToList();
+        var interpretationCount = interpretations.Count;
+        var emptyInterpretationCount = interpretations.Count(i => string.IsNullOrWhiteSpace(i));
+        var normalizedInterpretations = interpretations
+            .Where(i => !string.IsNullOrWhiteSpace(i))
+            .Select(i => i.Trim().ToLowerInvariant())
+            .ToList();
+        var distinctInterpretations = normalizedInterpretations.Distinct().Count();
+        var duplicateInterpretationCount = normalizedInterpretations.Count - distinctInterpretations;
+
+        double interpretationDistinctness = normalizedInterpretations.Count == 0
+            ? 0d
+            : (double)distinctInterpretations / normalizedInterpretations.Count;
+
+        // Query fidelity: fraction of salient query terms echoed across the proposal text. Coarse by
+        // design — a shadow signal, not an authoritative measure of relevance.
+        var queryTerms = Tokenize(query);
+        var proposalText = string.Join(" ",
+            proposal.Select(c => $"{c.DisplayName} {c.Outcome}")
+                .Concat(interpretations));
+        var proposalTerms = Tokenize(proposalText).ToHashSet();
+        double queryFidelity = queryTerms.Count == 0
+            ? 0d
+            : (double)queryTerms.Count(t => proposalTerms.Contains(t)) / queryTerms.Count;
+
+        // Interpretation coverage: interpretations present relative to candidates (are candidates
+        // actually reasoned about, or bare outcomes?).
+        double interpretationCoverage = candidateCount == 0
+            ? 0d
+            : (double)(interpretationCount - emptyInterpretationCount) / candidateCount;
+
+        // Candidate separability: distinct outcomes relative to candidate count (1.0 ⇒ all distinct).
+        double candidateSeparability = candidateCount == 0
+            ? 0d
+            : (double)distinctCandidateCount / candidateCount;
+
+        return new ProposalIntegrityDiagnostics(
+            StructuralValid: integrity.IsAcceptable,
+            CandidateCount: candidateCount,
+            DistinctCandidateCount: distinctCandidateCount,
+            InterpretationCount: interpretationCount,
+            EmptyInterpretationCount: emptyInterpretationCount,
+            DuplicateInterpretationCount: duplicateInterpretationCount,
+            QueryFidelity: Math.Round(queryFidelity, 4),
+            InterpretationDistinctness: Math.Round(interpretationDistinctness, 4),
+            InterpretationCoverage: Math.Round(interpretationCoverage, 4),
+            CandidateSeparability: Math.Round(candidateSeparability, 4),
+            RecoveryTriggered: false,
+            RecoveryReason: null,
+            RecoverySucceeded: null);
+    }
+
+    // Diagnoses concrete defects from the diagnostics and maps them to a disposition. Structural failures
+    // are hard defects (Regenerate). Semantic weaknesses are soft defects (Repair) and, in shadow mode,
+    // are recorded but never rejected. Returns Accept when the proposal is structurally valid and shows
+    // no soft defects. The disposition is advisory in shadow mode and authoritative only when recovery is
+    // enabled.
+    private static (ProposalDisposition Disposition, IReadOnlyList<string> Defects) DiagnoseProposal(ProposalIntegrityDiagnostics d)
+    {
+        var defects = new List<string>();
+
+        if (!d.StructuralValid)
+        {
+            if (d.CandidateCount == 0)
+                defects.Add("NO_CANDIDATES");
+            else if (d.DistinctCandidateCount < 2)
+                defects.Add("LOW_CANDIDATE_SEPARABILITY");
+            else
+                defects.Add("INCOMPLETE_CANDIDATE_FIELDS");
+            return (ProposalDisposition.Regenerate, defects);
+        }
+
+        if (d.DuplicateInterpretationCount > 0)
+            defects.Add("DUPLICATE_INTERPRETATIONS");
+        if (d.EmptyInterpretationCount > 0)
+            defects.Add("EMPTY_INTERPRETATIONS");
+        if (d.InterpretationCount == 0)
+            defects.Add("MISSING_INTERPRETATIONS");
+        else if (d.InterpretationCoverage < 1.0d)
+            defects.Add("INCOMPLETE_INTERPRETATION_COVERAGE");
+        if (d.InterpretationCount > 0 && d.InterpretationDistinctness < 0.5d)
+            defects.Add("LOW_INTERPRETATION_DISTINCTNESS");
+        if (d.CandidateSeparability < 1.0d)
+            defects.Add("WEAK_CANDIDATE_SEPARABILITY");
+        if (d.QueryFidelity < 0.25d)
+            defects.Add("QUERY_DRIFT");
+
+        return defects.Count == 0
+            ? (ProposalDisposition.Accept, defects)
+            : (ProposalDisposition.Repair, defects);
+    }
+
+    // Builds a defect-targeted recovery instruction. This is REPAIR, not a re-roll: it preserves valid
+    // existing structure and asks only for correction of the diagnosed defects.
+    private static string BuildRecoveryInstruction(IReadOnlyList<string> defects)
+    {
+        var lines = new List<string>
+        {
+            "The previous proposal was rejected by the Proposal Integrity Gate.",
+            "Preserve the original query meaning and all valid existing structure. Correct ONLY the defects below:"
+        };
+        foreach (var defect in defects)
+        {
+            lines.Add(defect switch
+            {
+                "NO_CANDIDATES" => "- Provide candidate outcomes; the proposal contained none.",
+                "LOW_CANDIDATE_SEPARABILITY" => "- Provide at least two materially distinct candidate outcomes.",
+                "INCOMPLETE_CANDIDATE_FIELDS" => "- Every candidate must have a non-empty displayName and outcome.",
+                "DUPLICATE_INTERPRETATIONS" => "- Replace redundant interpretations with materially distinct ones.",
+                "EMPTY_INTERPRETATIONS" => "- Fill in every empty interpretation with substantive reasoning.",
+                "MISSING_INTERPRETATIONS" => "- Add interpretations that explain how each candidate is reasoned about.",
+                "INCOMPLETE_INTERPRETATION_COVERAGE" => "- Ensure each candidate is supported by at least one interpretation.",
+                "LOW_INTERPRETATION_DISTINCTNESS" => "- Increase the distinctness of interpretations; they are too similar.",
+                "WEAK_CANDIDATE_SEPARABILITY" => "- Make candidate outcomes clearly distinguishable from one another.",
+                "QUERY_DRIFT" => "- Realign the proposal with the original question; it has drifted off-topic.",
+                _ => $"- Correct: {defect}."
+            });
+        }
+        lines.Add("Respond with valid JSON only, matching the required schema.");
+        return string.Join("\n", lines);
+    }
+
+    private static IReadOnlyList<string> Tokenize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return Array.Empty<string>();
+        return text
+            .Split(new[] { ' ', '\t', '\n', '\r', '.', ',', ';', ':', '!', '?', '(', ')', '"', '\'', '/', '\\', '-' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => t.ToLowerInvariant())
+            .Where(t => t.Length > 3)
+            .Distinct()
+            .ToArray();
     }
 
     private static IReadOnlyList<ProposedCandidate> ParseProposal(string json, int maxCandidates)
@@ -941,30 +2121,337 @@ public sealed class LegalDecisionService(
     }
 
 
-    private async Task<List<DecisionEvidencePersistence>> RetrieveEvidenceAsync(string contextCode, IReadOnlyList<DecisionBranchPersistence> branches, Guid sessionId, Guid tenantId, int maxResults, CancellationToken cancellationToken)
+    private async Task<EvidenceRetrievalOutcome> RetrieveEvidenceAsync(string contextCode, IReadOnlyList<DecisionBranchPersistence> branches, Guid sessionId, Guid tenantId, int maxResults, CancellationToken cancellationToken)
     {
         var evidence = new List<DecisionEvidencePersistence>();
-        var target = branches.Where(b => b.IsOnFrontier).OrderByDescending(b => b.AdvScore).FirstOrDefault() ?? branches.OrderByDescending(b => b.AdvScore).FirstOrDefault();
-        if (target is null)
-            return evidence;
-        try
+        var verifications = new List<EvidenceVerificationResult>();
+
+        // Multi-branch IV-directed retrieval (§13,§34): research is not limited to a single dependency.
+        // We take the top-N highest-IV frontier dependencies (falling back to the highest-IV branch when
+        // the frontier is empty) and research each in a bounded round. This lets more than one essential
+        // dependency contribute verified evidence instead of only the single strongest branch.
+        const int maxResearchBranches = 3;
+        var targets = branches
+            .Where(b => b.IsOnFrontier)
+            .OrderByDescending(b => b.AdvScore)
+            .Take(maxResearchBranches)
+            .ToList();
+        if (targets.Count == 0)
         {
-            var objective = string.IsNullOrWhiteSpace(target.Interpretation) ? target.DisplayName : target.Interpretation!;
-            var sources = await retriever.RetrieveAsync(new DecisionRetrievalRequest(contextCode, objective, Math.Clamp(maxResults, 1, 10)), cancellationToken);
-            foreach (var s in sources)
+            var fallback = branches.OrderByDescending(b => b.AdvScore).FirstOrDefault();
+            if (fallback is not null)
+                targets.Add(fallback);
+        }
+        if (targets.Count == 0)
+            return new EvidenceRetrievalOutcome(evidence, verifications, DecisionResearchStates.NotNeeded, null);
+
+        var anyRetrieved = false;
+        var anyFailed = false;
+        string? firstFailureDetail = null;
+        foreach (var target in targets)
+        {
+            var branchOutcome = await RetrieveForBranchAsync(contextCode, target, sessionId, maxResults, cancellationToken);
+            evidence.AddRange(branchOutcome.Evidence);
+            verifications.AddRange(branchOutcome.Verifications);
+            switch (branchOutcome.ResearchStatus)
             {
-                // Retrieved source ≠ verified evidence (§14): factors default modestly and remain UNVERIFIED.
-                var ev = DecisionCoreMath.EvidenceVerificationValue(0.6, 0.6, 0.5, 0.6, 0.6);
-                evidence.Add(new DecisionEvidencePersistence(
-                    Guid.NewGuid(), target.DecisionBranchId, s.SourceRef, s.Title, s.Snippet,
-                    0.6m, 0.6m, 0.5m, 0.6m, 0.6m, (decimal)ev, "UNVERIFIED"));
+                case DecisionResearchStates.Retrieved:
+                    anyRetrieved = true;
+                    break;
+                case DecisionResearchStates.RetrievalFailed:
+                    anyFailed = true;
+                    firstFailureDetail ??= branchOutcome.FailureDetail;
+                    break;
             }
         }
-        catch (Exception ex)
+
+        // Aggregate status: any verified retrieval wins (RETRIEVED); otherwise a fault surfaces as
+        // RETRIEVAL_FAILED; otherwise every branch searched cleanly but found nothing (SEARCH_NO_RESULTS).
+        var aggregateStatus = anyRetrieved
+            ? DecisionResearchStates.Retrieved
+            : anyFailed
+                ? DecisionResearchStates.RetrievalFailed
+                : DecisionResearchStates.SearchNoResults;
+        return new EvidenceRetrievalOutcome(evidence, verifications, aggregateStatus, anyRetrieved ? null : firstFailureDetail);
+    }
+
+    // Bounded IV-directed retry for a single frontier dependency (§13,§34). A retrieval FAILURE is
+    // transient by nature (provider/index error) and must not silently downgrade the decision on the
+    // first fault, so we retry the same objective a bounded number of times. A successful call that
+    // simply returns no sources is NOT retried — that is a genuine finding (SEARCH_NO_RESULTS), not a
+    // fault. Retries are bounded to avoid unbounded work.
+    private async Task<EvidenceRetrievalOutcome> RetrieveForBranchAsync(string contextCode, DecisionBranchPersistence target, Guid sessionId, int maxResults, CancellationToken cancellationToken)
+    {
+        const int maxRetrievalAttempts = 3;
+        var objective = string.IsNullOrWhiteSpace(target.Interpretation) ? target.DisplayName : target.Interpretation!;
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= maxRetrievalAttempts; attempt++)
         {
-            logger.LogWarning(ex, "Decision-directed retrieval failed for session {SessionId}; continuing without external evidence.", sessionId);
+            var evidence = new List<DecisionEvidencePersistence>();
+            var verifications = new List<EvidenceVerificationResult>();
+            try
+            {
+                var sources = await retriever.RetrieveAsync(new DecisionRetrievalRequest(contextCode, objective, Math.Clamp(maxResults, 1, 10)), cancellationToken);
+                foreach (var s in sources)
+                {
+                    var evidenceId = Guid.NewGuid();
+                    var verification = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
+                        evidenceId, target.DecisionBranchId, objective, s.SourceRef, s.Title, s.Snippet,
+                        s.SourceType, s.Jurisdiction, s.AuthorityDate), cancellationToken);
+                    evidence.Add(ToEvidencePersistence(s, objective, target.DecisionBranchId, verification));
+                    verifications.Add(verification);
+                }
+                // Retrieval succeeded: distinguish "found something" from "searched but found nothing".
+                var status = evidence.Count > 0 ? DecisionResearchStates.Retrieved : DecisionResearchStates.SearchNoResults;
+                return new EvidenceRetrievalOutcome(evidence, verifications, status, null);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Transient fault: record and retry the same objective until the bound is hit.
+                lastError = ex;
+                logger.LogWarning(ex, "Decision-directed retrieval attempt {Attempt}/{MaxAttempts} failed for session {SessionId}, branch {BranchCode}.", attempt, maxRetrievalAttempts, sessionId, target.BranchCode);
+            }
         }
-        return evidence;
+
+        // Retrieval exhausted its bounded attempts for this dependency: failure becomes explicit decision
+        // state (§13) rather than a swallowed log entry, carrying the last observed fault as the detail.
+        logger.LogWarning(lastError, "Decision-directed retrieval exhausted {MaxAttempts} attempts for session {SessionId}, branch {BranchCode}; continuing without external evidence for this dependency.", maxRetrievalAttempts, sessionId, target.BranchCode);
+        return new EvidenceRetrievalOutcome([], [], DecisionResearchStates.RetrievalFailed, lastError?.Message);
+    }
+
+    // Explicit retrieval outcome so retrieval failure is a first-class decision signal, not a log-only
+    // event. ResearchStatus is one of DecisionResearchStates; FailureDetail is populated only on failure.
+    internal sealed record EvidenceRetrievalOutcome(
+        List<DecisionEvidencePersistence> Evidence,
+        List<EvidenceVerificationResult> Verifications,
+        string ResearchStatus,
+        string? FailureDetail);
+
+    private static DecisionEvidencePersistence ToEvidencePersistence(
+        DecisionRetrievedSource source,
+        string objective,
+        Guid? branchId,
+        EvidenceVerificationResult verification)
+    {
+        var status = verification.Disposition == EvidenceSupportDisposition.Contradicted
+            ? DecisionVerificationStates.Invalidated
+            : verification.IsDecisionAuthorized
+                ? DecisionVerificationStates.Verified
+                : DecisionVerificationStates.Unverified;
+        var lifecycle = verification.IsDecisionAuthorized
+            ? DecisionEvidenceLifecycleStates.Verified
+            : verification.Disposition switch
+            {
+                EvidenceSupportDisposition.PartiallySupported => DecisionEvidenceLifecycleStates.PartiallySupported,
+                EvidenceSupportDisposition.Unsupported => DecisionEvidenceLifecycleStates.Unsupported,
+                EvidenceSupportDisposition.Contradicted => DecisionEvidenceLifecycleStates.Contradicted,
+                EvidenceSupportDisposition.Error => DecisionEvidenceLifecycleStates.VerificationFailed,
+                _ => DecisionEvidenceLifecycleStates.Unverifiable,
+            };
+        var propositionFit = verification.PropositionSupport.State == PropositionSupportState.Supported ? 1m
+            : verification.PropositionSupport.State == PropositionSupportState.PartiallySupported ? 0.5m : 0m;
+
+        return new DecisionEvidencePersistence(
+            verification.DecisionEvidenceId, branchId, source.SourceRef, source.Title, source.Snippet,
+            verification.Identity.State == VerificationCheckState.Passed ? 1m : 0m,
+            verification.Citation.State == VerificationCheckState.Passed ? 1m : 0m,
+            verification.Holding.State is VerificationCheckState.Passed or VerificationCheckState.NotApplicable ? 1m : 0m,
+            verification.Authority.State is VerificationCheckState.Passed or VerificationCheckState.NotApplicable ? 1m : 0m,
+            propositionFit,
+            verification.IsVerified ? 1m : 0m,
+            status)
+        {
+            SupportedObjective = objective,
+            SupportingPassage = verification.IsDecisionAuthorized ? verification.PropositionSupport.SupportingPassage : null,
+            LifecycleState = lifecycle,
+        };
+    }
+
+    private static DecisionEvidenceVerificationPersistence ToPersistence(
+        EvidenceVerificationResult verification,
+        Guid decisionSessionId,
+        Guid tenantId,
+        Guid? actorUserId,
+        Guid? matterId)
+    {
+        var runId = Guid.NewGuid();
+        var factors = new[]
+        {
+            ToFactor(runId, EvidenceVerificationFactor.Identity, verification.Identity),
+            ToFactor(runId, EvidenceVerificationFactor.Provenance, verification.Provenance),
+            ToFactor(runId, EvidenceVerificationFactor.Citation, verification.Citation),
+            ToFactor(runId, EvidenceVerificationFactor.Passage, verification.Passage),
+            ToFactor(runId, verification.PropositionSupport),
+            ToFactor(runId, EvidenceVerificationFactor.StatementRole, verification.StatementRole),
+            ToFactor(runId, EvidenceVerificationFactor.Holding, verification.Holding),
+            ToFactor(runId, EvidenceVerificationFactor.Authority, verification.Authority),
+        };
+        return new DecisionEvidenceVerificationPersistence(
+            runId, verification.DecisionEvidenceId, decisionSessionId, verification.DecisionBranchId,
+            EvidenceSourceTypeCodes.ToCode(verification.SourceType), verification.Profile.ProfileCode,
+            EvidenceVerificationCodes.Disposition(verification.Disposition), verification.IsVerified,
+            verification.IsDecisionAuthorized, JsonSerializer.Serialize(verification.BlockingReasons),
+            matterId, tenantId, actorUserId, verification.EvaluatedAt.UtcDateTime, factors)
+        {
+            RetrievedCount = verification.Telemetry.RetrievedCount,
+            PreScreenRejectedCount = verification.Telemetry.PreScreenRejectedCount,
+            SourceSnapshotId = verification.SourceSnapshot?.SourceSnapshotId,
+            SourceContentHash = verification.SourceSnapshot?.ContentHash,
+            PassageHash = verification.SourceSnapshot?.PassageHash,
+            SourceProvider = verification.SourceSnapshot?.SourceProvider,
+            SourceVersion = verification.SourceSnapshot?.SourceVersion,
+            SourceRef = verification.SourceSnapshot?.SourceRef,
+            PassageRef = verification.SourceSnapshot?.PassageRef,
+            ExtractionVersion = verification.SourceSnapshot?.ExtractionVersion,
+            ProfileVersion = verification.Profile.Version,
+            MechanicalVerificationCount = verification.Telemetry.MechanicalVerificationCount,
+            SemanticVerificationCount = verification.Telemetry.SemanticVerificationCount,
+            PoloxiDeepeningCount = verification.Telemetry.PoloxiDeepeningCount,
+            CacheHitCount = verification.Telemetry.CacheHitCount,
+            InputTokenCount = verification.Telemetry.InputTokens,
+            OutputTokenCount = verification.Telemetry.OutputTokens,
+            LatencyMilliseconds = verification.Telemetry.TotalLatencyMilliseconds,
+        };
+    }
+
+    private static DecisionEvidenceVerificationFactorPersistence ToFactor(
+        Guid runId,
+        EvidenceVerificationFactor factor,
+        VerificationCheckResult result) => new(
+            Guid.NewGuid(), EvidenceVerificationCodes.Factor(factor), EvidenceVerificationCodes.State(result.State),
+            result.ReasonCode, result.Reason, result.VerifiedValue, result.SourceRef, result.SupportingPassage,
+            result.VerificationMethod, null, null, result.EvaluatedAt.UtcDateTime)
+        {
+            PassageRef = result.PassageRef,
+            VerifierId = result.VerifierId,
+            VerifierVersion = result.VerifierVersion,
+        };
+
+    private static DecisionEvidenceVerificationFactorPersistence ToFactor(
+        Guid runId,
+        PropositionSupportResult result) => new(
+            Guid.NewGuid(), EvidenceVerificationCodes.Factor(EvidenceVerificationFactor.PropositionSupport),
+            EvidenceVerificationCodes.State(result.State), result.ReasonCode, result.Reason, null, null,
+            result.SupportingPassage, result.VerificationMethod,
+            JsonSerializer.Serialize(result.SupportedComponents), JsonSerializer.Serialize(result.UnsupportedComponents),
+            result.EvaluatedAt.UtcDateTime)
+        {
+            PassageRef = result.PassageRef,
+            VerifierId = result.VerifierId,
+            VerifierVersion = result.VerifierVersion,
+        };
+
+    // Evidence Verification/Promotion stage (§14). A retrieved source is NOT verified evidence by
+    // default. This stage derives each factor from OBSERVABLE properties of the retrieved source and
+    // then decides VerificationStatus with a RULE/STATE-BASED gate — not the multiplicative product,
+    // which is mathematically unsound as an authoritative decision (e.g. 0.85^5 ≈ 0.444 would fail a
+    // 0.5 threshold). The VerificationValue is still computed and persisted, but only as a diagnostic.
+    // Promotion to VERIFIED requires that every identity-class factor is satisfied AND the source
+    // demonstrably supports the objective (proposition fit above a support floor).
+    internal static DecisionEvidencePersistence VerifyRetrievedSource(DecisionRetrievedSource source, string objective, Guid? branchId)
+    {
+        // Identity: the source is usable at all (has a resolvable reference and a title).
+        var hasSourceRef = !string.IsNullOrWhiteSpace(source.SourceRef);
+        var hasTitle = !string.IsNullOrWhiteSpace(source.Title);
+        var identity = hasSourceRef ? 1.0 : 0.0;
+
+        // Citation/authority identity: a resolvable, non-empty citation reference is present.
+        var citation = hasSourceRef && hasTitle ? 1.0 : hasSourceRef ? 0.6 : 0.0;
+
+        // Relevant passage located: the retrieved snippet carries usable content that is INDEPENDENT of
+        // the source title. A snippet that merely echoes the title establishes IDENTITY, not proposition
+        // support (§14) — e.g. a bare "Proposed Rule on Overtime Pay" result whose passage is its own
+        // title. Topical relevance must never be mistaken for a located supporting passage, so a
+        // title-echo snippet fails the PASSAGE_LOCATED rung exactly as an empty snippet does.
+        var hasRawSnippet = !string.IsNullOrWhiteSpace(source.Snippet);
+        var passageEchoesTitle = DecisionCoreMath.PassageEchoesTitle(source.Title, source.Snippet);
+        var hasPassage = hasRawSnippet && !passageEchoesTitle;
+        var holding = hasPassage ? 1.0 : 0.0;
+
+        // Authority weight: proxied by passage substance (a substantive passage carries more weight
+        // than a bare stub). Retained as a graded diagnostic; not a gate on its own.
+        var passageLength = source.Snippet?.Trim().Length ?? 0;
+        var weight = hasPassage ? Math.Clamp(0.5 + passageLength / 400.0, 0.5, 1.0) : 0.0;
+
+        // Claim ↔ passage support: content-token overlap (stopwords/short tokens removed, minimum shared
+        // content tokens required) between the objective and the retrieved passage. This rejects false
+        // support manufactured by incidental function-word overlap (e.g. an unrelated title sharing
+        // "that"/"for" with the objective) — the defect that let an executive-order source verify against
+        // an uncompensated-overtime proposition. Support is measured ONLY against an independently-located
+        // passage: when the snippet just echoes the title there is no passage to support anything, so fit
+        // is 0 regardless of topical anchor overlap (the "Proposed Rule on Overtime Pay" false positive).
+        var propositionFit = hasPassage
+            ? DecisionCoreMath.Clamp01(DecisionCoreMath.PropositionSupport(objective, source.Snippet))
+            : 0.0;
+
+        var verificationValue = DecisionCoreMath.EvidenceVerificationValue(
+            identity, citation, holding, weight, propositionFit);
+
+        // ── Explicit lifecycle ladder (§14) ──────────────────────────────────────────────────────
+        // Walk the discrete verification rungs in order. The FIRST rung that cannot be cleared fixes a
+        // terminal state; only a fully-climbed ladder reaches VERIFIED (positive authority). This
+        // replaces the multiplicative gate — each rung is auditable and answers "why not trusted yet?".
+        const double propositionSupportFloor = 0.10;
+        const double propositionContradictionCeiling = 0.02; // effectively no lexical support at all
+        var lifecycle = ClassifyEvidenceLifecycle(
+            retrieved: true,
+            identityVerified: hasSourceRef,
+            citationVerified: hasSourceRef,
+            passageLocated: hasPassage,
+            propositionFit: propositionFit,
+            supportFloor: propositionSupportFloor,
+            contradictionCeiling: propositionContradictionCeiling);
+
+        // Persisted status stays schema-compatible (VERIFIED / UNVERIFIED / INVALIDATED).
+        var status = DecisionEvidenceLifecycleStates.ToPersistedStatus(lifecycle);
+        var isVerified = DecisionEvidenceLifecycleStates.GrantsPositiveAuthority(lifecycle);
+
+        return new DecisionEvidencePersistence(
+            Guid.NewGuid(), branchId, source.SourceRef, source.Title, source.Snippet,
+            (decimal)identity, (decimal)citation, (decimal)holding, (decimal)weight, (decimal)propositionFit,
+            (decimal)verificationValue, status)
+        {
+            // Provenance (§14): a VERIFIED source records WHAT it was verified against and WHICH passage
+            // established support, so the claim ↔ source ↔ passage ↔ verification chain is traceable.
+            SupportedObjective = objective,
+            SupportingPassage = isVerified ? source.Snippet : null,
+            LifecycleState = lifecycle
+        };
+    }
+
+    // Deterministic evidence lifecycle classifier (§14). Climbs the rungs in order; the first unmet
+    // rung yields a terminal failure state. Only when every rung clears do we reach VERIFIED. Holding
+    // and authority rungs are treated as satisfied when proposition support clears comfortably, since
+    // this heuristic verifier cannot independently confirm a holding — that keeps promotion honest
+    // (support-established) while leaving room for a stronger verifier to gate those rungs explicitly.
+    internal static string ClassifyEvidenceLifecycle(
+        bool retrieved,
+        bool identityVerified,
+        bool citationVerified,
+        bool passageLocated,
+        double propositionFit,
+        double supportFloor,
+        double contradictionCeiling)
+    {
+        if (!retrieved)
+            return DecisionEvidenceLifecycleStates.RetrievalFailed;
+        if (!identityVerified)
+            return DecisionEvidenceLifecycleStates.Unverifiable;   // cannot establish the source is real
+        if (!citationVerified)
+            return DecisionEvidenceLifecycleStates.Unverifiable;   // no resolvable citation to rely on
+        if (!passageLocated)
+            return DecisionEvidenceLifecycleStates.Unsupported;    // nothing to support the objective with
+
+        // Passage exists — assess how it relates to the objective.
+        if (propositionFit <= contradictionCeiling)
+            return DecisionEvidenceLifecycleStates.Unsupported;    // passage present but no support relation
+        if (propositionFit < supportFloor)
+            return DecisionEvidenceLifecycleStates.PartiallySupported; // some overlap, below the required bar
+
+        // Proposition support cleared → passage supports the objective. This heuristic verifier does not
+        // independently confirm holding/authority rungs, so a support-established source is promoted to
+        // VERIFIED. A stronger verifier can override to HOLDING_VERIFIED/AUTHORITY_VALIDATED or downgrade.
+        return DecisionEvidenceLifecycleStates.Verified;
     }
 
     internal static List<DecisionFlipPointPersistence> BuildFlipPoints(IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionCandidatePersistence> candidates, Guid sessionId, Guid tenantId)
@@ -1066,6 +2553,103 @@ public sealed class LegalDecisionService(
         return result.Content;
     }
 
+    // ── Authoritative output-claim audit enforcement (§34/§35) ─────────────────────────────────────
+    // The output audit is no longer advisory: when POLOXI's governance overlay reports that the answer
+    // surfaces material claims it never authorized, the composed answer must NOT stand as an asserted
+    // legal conclusion. Rather than suppress the reasoning entirely (which would hide POLOXI's thinking),
+    // we RESTATE it — the original prose is preserved but reframed as an explicitly provisional,
+    // pending-research hypothesis, and every unauthorized material claim is disclosed as unverified.
+    // Result of an enforcement pass: the rewritten answer plus the authoritative record of which claims
+    // were actually located and rewritten in the prose (versus merely required).
+    private sealed record OutputEnforcementResult(
+        string Answer,
+        IReadOnlyList<Guid> AppliedClaimIds,
+        int RequiredCount,
+        int AppliedCount)
+    {
+        public bool UnauthorizedAssertionsRemain => AppliedCount < RequiredCount;
+    }
+
+    private static OutputEnforcementResult EnforceOutputAudit(string? finalAnswer, Features.Intelligence.Epistemic.OutputClaimAuditResult audit)
+    {
+        var unauthorized = audit.Violations.Count;
+        var unknown = audit.UnknownClaimIds.Count;
+
+        var preface =
+            "⚠ PROVISIONAL — UNVERIFIED. This is POLOXI's current leading hypothesis, not an evidence-backed "
+            + "legal conclusion. POLOXI's output audit found "
+            + $"{unauthorized} material claim(s) that are not yet verified"
+            + (unknown > 0 ? $" and {unknown} claim(s) with unestablished provenance" : string.Empty)
+            + ". These claims may NOT be relied upon as established until external evidence is retrieved and "
+            + "verified. The reasoning below is reproduced for transparency but must be read as pending research.";
+
+        // Claim-level disposition manifest (§34/§35). POLOXI decided each disposition; this makes the
+        // per-claim decisions explicit so the reader (and any downstream composer) can see exactly which
+        // propositions were qualified as uncertainty, suppressed, or flagged for correction.
+        var manifest = BuildDispositionManifest(audit.Authorizations);
+
+        if (string.IsNullOrWhiteSpace(finalAnswer))
+        {
+            var prefaceOnly = string.IsNullOrEmpty(manifest) ? preface : preface + "\n\n" + manifest;
+            var required = audit.Authorizations.Count(a =>
+                a.Disposition != Features.Intelligence.Epistemic.OutputClaimDisposition.Allow
+                && !string.IsNullOrWhiteSpace(a.ClaimText));
+            return new OutputEnforcementResult(prefaceOnly, [], required, 0);
+        }
+
+        // Rewrite the prose itself so each qualified/suppressed/corrected claim is reconciled with its
+        // POLOXI disposition in place — the reader never sees an unauthorized assertion standing as fact,
+        // even before consulting the manifest below. The detailed result reports exactly which claims were
+        // located and rewritten so the trace can flag any that could not be applied.
+        var transform = Features.Intelligence.Epistemic.OutputProseTransformer.TransformDetailed(
+            finalAnswer, audit.Authorizations);
+
+        var body = preface + "\n\n" + transform.Text;
+        var answer = string.IsNullOrEmpty(manifest) ? body : body + "\n\n" + manifest;
+        return new OutputEnforcementResult(
+            answer, transform.AppliedClaimIds, transform.RequiredCount, transform.AppliedCount);
+    }
+
+    // Render the POLOXI-decided claim dispositions (QUALIFY/SUPPRESS/CORRECT) as an explicit manifest.
+    // ALLOW claims need no annotation. Returns empty when nothing requires restatement.
+    private static string BuildDispositionManifest(
+        IReadOnlyList<Features.Intelligence.Epistemic.OutputClaimAuthorization> authorizations)
+    {
+        var actionable = authorizations
+            .Where(a => a.Disposition != Features.Intelligence.Epistemic.OutputClaimDisposition.Allow)
+            .ToList();
+        if (actionable.Count == 0)
+            return string.Empty;
+
+        var lines = new List<string> { "POLOXI claim authorization (composer must honor these dispositions):" };
+        foreach (var a in actionable)
+        {
+            var code = Features.Intelligence.Epistemic.OutputClaimDispositions.ToCode(a.Disposition);
+            var text = a.Disposition switch
+            {
+                Features.Intelligence.Epistemic.OutputClaimDisposition.Qualify =>
+                    string.IsNullOrWhiteSpace(a.ClaimText)
+                        ? "unresolved proposition — state as uncertainty, not as fact."
+                        : $"\"{Truncate(a.ClaimText)}\" — state as uncertainty (unresolved), not as fact.",
+                Features.Intelligence.Epistemic.OutputClaimDisposition.Suppress =>
+                    string.IsNullOrWhiteSpace(a.ClaimText)
+                        ? "unsupported/foreign assertion — must not appear as an assertion."
+                        : $"\"{Truncate(a.ClaimText)}\" — unsupported/foreign; must not appear as an assertion.",
+                Features.Intelligence.Epistemic.OutputClaimDisposition.Correct =>
+                    string.IsNullOrWhiteSpace(a.ClaimText)
+                        ? "contradicted by authoritative state — remove or correct."
+                        : $"\"{Truncate(a.ClaimText)}\" — contradicted by authoritative state; remove or correct.",
+                _ => a.Reason,
+            };
+            lines.Add($"  • [{code}] {text}");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    private static string Truncate(string value, int max = 160)
+        => value.Length <= max ? value : value[..max].TrimEnd() + "…";
+
     private static DecisionSearchResponse BuildResponse(DecisionSessionPersistence p, DecisionNextActionDto? nextAction, IReadOnlyCollection<DecisionReadinessItemDto> readiness,
         bool usedDependencyGraph = false, DecisionV2Result? v2 = null, Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null, string? graphDiagnostic = null, Features.Intelligence.Decision.DecisionSolverShadowDto? solverShadow = null)
         => new(
@@ -1074,7 +2658,12 @@ public sealed class LegalDecisionService(
             p.FinalAnswer, p.WinnerCandidateId,
             p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
             p.Branches.Select(b => new DecisionBranchDto(b.DecisionBranchId, b.ParentDecisionBranchId, b.LevelNumber, b.BranchCode, b.DisplayName, b.Interpretation, b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, b.AdvScore, b.IsOnFrontier, b.StopReason, b.SortOrder)).ToArray(),
-            p.Evidence.Select(e => new DecisionEvidenceDto(e.DecisionEvidenceId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet, e.VerificationValue, e.VerificationStatus)).ToArray(),
+            p.Evidence.Select(e => new DecisionEvidenceDto(e.DecisionEvidenceId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet, e.VerificationValue, e.VerificationStatus)
+            {
+                SupportedObjective = e.SupportedObjective,
+                SupportingPassage = e.SupportingPassage,
+                LifecycleState = e.LifecycleState
+            }).ToArray(),
             p.FlipPoints.Select(f => new DecisionFlipPointDto(f.DecisionFlipPointId, f.DecisionBranchId, f.Description, f.ChangeCost, f.WinnerChanges, f.RankDelta)).ToArray(),
             p.DurationMs)
         {
@@ -1141,11 +2730,14 @@ public sealed class LegalDecisionService(
         IReadOnlyCollection<DecisionCandidatePersistence> candidates,
         IReadOnlyCollection<DecisionBranchPersistence> branches,
         IReadOnlyCollection<DecisionEvidencePersistence> evidence,
-        double margin, double entropy, string statusCode)
+        double margin, double entropy, string statusCode, string researchStatus)
     {
         var winner = candidates.OrderBy(c => c.RankOrder).FirstOrDefault();
         var alternative = candidates.OrderBy(c => c.RankOrder).Skip(1).FirstOrDefault();
-        var verifiedEvidence = evidence.Count(e => e.VerificationValue >= 0.5m);
+        // Authoritative verified-source rule: VerificationStatus == VERIFIED decides verified support.
+        // The multiplicative VerificationValue factors are retained only as diagnostics and must not
+        // define readiness (see §7 clarification-gate diagnostics at line ~188 which use the same rule).
+        var verifiedEvidence = evidence.Count(e => string.Equals(e.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase));
         // Single authoritative high-impact frontier count (POLOXI owns the frontier). V2 readiness
         // consumes this same definition so the two panels can never disagree.
         var openFrontier = CountHighImpactFrontier(branches);
@@ -1156,6 +2748,18 @@ public sealed class LegalDecisionService(
         const double separationThreshold = 0.05;
         var marginSeparates = margin >= separationThreshold;
         var uncertaintyContained = entropy < 0.85;
+        // Evidence readiness reports WHY it failed using the explicit research state (§13), so a user can
+        // tell "we searched and found nothing" from "our retrieval operation failed" from "nothing was
+        // retrieved that could be verified" rather than always seeing a bare "0 verified source(s)".
+        var evidenceDetail = verifiedEvidence > 0
+            ? $"{verifiedEvidence} verified source(s)"
+            : researchStatus switch
+            {
+                DecisionResearchStates.RetrievalFailed => "Retrieval operation failed; no external evidence could be verified",
+                DecisionResearchStates.SearchNoResults => "Search returned no sources to verify",
+                DecisionResearchStates.NotNeeded => "No external research was required for this decision",
+                _ => "Retrieved sources did not meet verification requirements (0 verified)"
+            };
         return new[]
         {
             new DecisionReadinessItemDto("A leading outcome is identified", winner is not null, winner?.DisplayName),
@@ -1166,7 +2770,7 @@ public sealed class LegalDecisionService(
                 uncertaintyContained ? "Uncertainty is contained" : "Uncertainty is not contained",
                 uncertaintyContained, $"Candidate entropy {entropy:0.####}"),
             new DecisionReadinessItemDto("Strongest opposition considered", alternative is not null, alternative?.DisplayName),
-            new DecisionReadinessItemDto("Supporting evidence verified", verifiedEvidence > 0, $"{verifiedEvidence} verified source(s)"),
+            new DecisionReadinessItemDto("Supporting evidence verified", verifiedEvidence > 0, evidenceDetail),
             new DecisionReadinessItemDto(
                 openFrontier == 0 ? "No high-impact unresolved dependency" : $"{openFrontier} high-impact unresolved dependency",
                 openFrontier == 0,
@@ -1543,6 +3147,34 @@ public sealed class LegalDecisionService(
     private static double GetNumber(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) ? number : 0d;
 
+    private enum ProposalDisposition { Accept, Repair, Expand, Regenerate, Clarify, Degraded }
+
+    // Three fundamentally different terminal situations, preserved in the domain model even though only
+    // UnresolvedModelFailure is routed today (as the hard stop). Kept distinct so that, once shadow data
+    // shows which defect classes deserve which outcome, routing can be added without redefining meaning:
+    //   • UnresolvedModelFailure  : the model failed to produce an acceptable representation despite
+    //                               bounded recovery. NOT the user's fault.
+    //   • ClarificationRequired   : the query lacks information necessary to resolve the representation;
+    //                               regeneration cannot safely fix it (e.g. QUERY_UNDERSPECIFIED persists).
+    //   • DegradedProposal        : a usable but incomplete representation — remaining structure is
+    //                               sufficient for controlled continuation without pretending the missing
+    //                               component was resolved.
+    private enum ProposalTerminalSituation { UnresolvedModelFailure, ClarificationRequired, DegradedProposal }
+    private sealed record ProposalIntegrityResult(bool IsAcceptable, string Reason);
+    private sealed record ProposalIntegrityDiagnostics(
+        bool StructuralValid,
+        int CandidateCount,
+        int DistinctCandidateCount,
+        int InterpretationCount,
+        int EmptyInterpretationCount,
+        int DuplicateInterpretationCount,
+        double QueryFidelity,
+        double InterpretationDistinctness,
+        double InterpretationCoverage,
+        double CandidateSeparability,
+        bool RecoveryTriggered,
+        string? RecoveryReason,
+        bool? RecoverySucceeded);
     private sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches);
     internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children);
 }

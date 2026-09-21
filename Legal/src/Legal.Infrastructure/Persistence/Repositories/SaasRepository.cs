@@ -646,14 +646,18 @@ public sealed class SaasRepository(ISqlConnectionFactory connectionFactory) : IS
     public async Task<IReadOnlyList<OutboxMessageDto>> DequeueOutboxBatchAsync(int batchSize, CancellationToken ct = default)
     {
         const string sql = """
+            SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
             WITH cte AS (
                 SELECT TOP (@BatchSize) *
-                FROM SaaS.SaaS_Outbox WITH (ROWLOCK, READPAST, UPDLOCK)
+                FROM SaaS.SaaS_Outbox WITH (ROWLOCK, READPAST, UPDLOCK, READCOMMITTEDLOCK)
                 WHERE IsDeleted = 0 AND StatusCode = N'Pending' AND NextAttemptUtc <= SYSUTCDATETIME()
                 ORDER BY NextAttemptUtc
             )
             UPDATE cte
-            SET AttemptCount = AttemptCount + 1, ModifiedDateUtc = SYSUTCDATETIME()
+            SET AttemptCount = AttemptCount + 1,
+                NextAttemptUtc = DATEADD(MINUTE, 5, SYSUTCDATETIME()),
+                ModifiedDateUtc = SYSUTCDATETIME()
             OUTPUT inserted.OutboxId, inserted.MessageType, inserted.PayloadJson, inserted.AttemptCount, inserted.MaxAttempts;
             """;
         using var connection = await connectionFactory.CreateOpenConnectionAsync(ct);

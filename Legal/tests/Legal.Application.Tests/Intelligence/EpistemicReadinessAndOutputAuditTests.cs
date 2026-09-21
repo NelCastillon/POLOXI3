@@ -154,6 +154,47 @@ public sealed class EpistemicReadinessAndOutputAuditTests
 
         Assert.True(result.IsClean);
         Assert.Empty(result.Violations);
+        Assert.All(result.Authorizations, a => Assert.Equal(OutputClaimDisposition.Allow, a.Disposition));
+    }
+
+    // Regression (§34): a Contradicted claim carries Limited authority (NOT None), so an authority-only
+    // "clean" check would wrongly pass it. It must resolve to CORRECT and keep the output NOT clean so
+    // enforcement fires. This is the exact surface the corruption test depends on.
+    [Fact]
+    public async Task ContradictedClaimInOutput_IsNotClean_AndDispositionIsCorrect()
+    {
+        var sessionId = Guid.NewGuid();
+        var repo = new FakeRepo();
+        var contradicted = Row(sessionId, ClaimVerificationState.Contradicted, ClaimDecisionAuthority.Limited,
+            essential: false, materiality: 0.8m);
+        repo.Add(contradicted);
+
+        var auditor = new OutputClaimAuditor(repo, Settings);
+        var result = await auditor.AuditAsync(sessionId, Tenant, [contradicted.ClaimId]);
+
+        Assert.True(result.Enforced);
+        Assert.False(result.IsClean);
+        var authz = Assert.Single(result.Authorizations);
+        Assert.Equal(OutputClaimDisposition.Correct, authz.Disposition);
+    }
+
+    // Regression (§34): a Disputed claim also carries Limited authority and must resolve to QUALIFY,
+    // keeping the output NOT clean rather than being silently published as established.
+    [Fact]
+    public async Task DisputedClaimInOutput_IsNotClean_AndDispositionIsQualify()
+    {
+        var sessionId = Guid.NewGuid();
+        var repo = new FakeRepo();
+        var disputed = Row(sessionId, ClaimVerificationState.Disputed, ClaimDecisionAuthority.Limited,
+            essential: false, materiality: 0.8m);
+        repo.Add(disputed);
+
+        var auditor = new OutputClaimAuditor(repo, Settings);
+        var result = await auditor.AuditAsync(sessionId, Tenant, [disputed.ClaimId]);
+
+        Assert.False(result.IsClean);
+        var authz = Assert.Single(result.Authorizations);
+        Assert.Equal(OutputClaimDisposition.Qualify, authz.Disposition);
     }
 
     [Fact]

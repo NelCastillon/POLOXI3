@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision.Core;
 using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Infrastructure.Intelligence;
@@ -68,7 +69,19 @@ public sealed class LegalDecisionRetriever(ILegalRetriever legalRetriever, IInte
             var snippets = await legalRetriever.SearchAsync(request.Objective, configuration, LegalAuthorityKind.Any, cancellationToken);
             return snippets
                 .Take(Math.Max(1, request.MaximumResults))
-                .Select(s => new DecisionRetrievedSource(s.Url, s.Title, s.Snippet))
+                .Select(s => new DecisionRetrievedSource(s.Url, s.Title, s.Snippet)
+                {
+                    SourceType = s.AuthorityKind?.ToUpperInvariant() switch
+                    {
+                        "CASE" or "CASE_LAW" => Legal.Application.Features.Intelligence.Decision.Core.EvidenceSourceType.CaseLaw,
+                        "STATUTE" => Legal.Application.Features.Intelligence.Decision.Core.EvidenceSourceType.Statute,
+                        "REGULATION" => Legal.Application.Features.Intelligence.Decision.Core.EvidenceSourceType.Regulation,
+                        _ => null,
+                    },
+                    SourceProvider = s.SourceProvider,
+                    SourceVersion = s.SourceVersion,
+                    ProviderIdentityVerified = s.ProviderIdentityVerified,
+                })
                 .ToArray();
         }
         catch

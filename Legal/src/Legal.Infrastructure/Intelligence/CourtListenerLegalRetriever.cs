@@ -65,7 +65,12 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
                     BuildUrl(baseUrl,result.AbsoluteUrl),
                     BuildSnippet(result),
                     0m,
-                    retrievedUtc))
+                    retrievedUtc)
+                {
+                    SourceProvider="COURTLISTENER",
+                    SourceVersion="API_V4",
+                    ProviderIdentityVerified=true,
+                })
                 .Where(snippet=>!string.IsNullOrWhiteSpace(snippet.Snippet))
                 .ToList();
             // STAGE 4 (CourtListener response): log how many results came back and their titles so a

@@ -38,6 +38,28 @@ public sealed record EpistemicDecisionContext
     public required IReadOnlyList<DecisionGraphNodeDto> Nodes { get; init; }
 
     public required IReadOnlyList<DecisionGraphEdgeDto> Edges { get; init; }
+
+    public string? FinalAnswer { get; init; }
+
+    public IReadOnlyList<ComposerClaimProvenance> ComposerProvenance { get; init; } = [];
+}
+
+public static class OutputClaimExtractionStates
+{
+    public const string NotAttempted = "NOT_ATTEMPTED";
+    public const string Completed = "COMPLETED";
+    public const string Empty = "EMPTY";
+    public const string Failed = "FAILED";
+}
+
+public sealed record OutputClaimExtractionResult
+{
+    public bool Attempted { get; init; }
+    public int SourceLength { get; init; }
+    public bool SubstantiveAnswer { get; init; }
+    public int ClaimsReturned { get; init; }
+    public string StatusCode { get; init; } = OutputClaimExtractionStates.NotAttempted;
+    public string? FailureReason { get; init; }
 }
 
 public sealed record EpistemicGovernanceResult
@@ -51,6 +73,8 @@ public sealed record EpistemicGovernanceResult
     public DecisionReadinessResult? Readiness { get; init; }
 
     public OutputClaimAuditResult? OutputAudit { get; init; }
+
+    public OutputClaimExtractionResult ClaimExtraction { get; init; } = new();
 
     // EA-7: the override mode this run was governed under.
     public EpistemicOverrideMode OverrideMode { get; init; } = EpistemicOverrideMode.Advisory;
@@ -66,6 +90,8 @@ public sealed record EpistemicGovernanceResult
     // EA-7: every claim the overlay touched (authorized AND unauthorized), annotated for the UI so all
     // involved information stays visible for reference.
     public IReadOnlyList<InvolvedClaim> InvolvedClaims { get; init; } = [];
+
+    public IReadOnlyList<OutputClaimLedgerEntry> ClaimLedger { get; init; } = [];
 
     public IReadOnlyList<string> AuditNarrative { get; init; } = [];
 
@@ -94,6 +120,9 @@ public sealed record InvolvedClaim
     public required bool IsEssential { get; init; }
 
     public required string Annotation { get; init; }
+
+    public Guid? SourceBranchId { get; init; }
+    public Guid? SourceCandidateId { get; init; }
 }
 
 public interface IEpistemicDecisionBridge
@@ -107,6 +136,9 @@ public sealed class EpistemicDecisionBridge(
     IMaterialClaimVerificationService verificationService,
     IDecisionReadinessEvaluator readinessEvaluator,
     IOutputClaimAuditor outputAuditor,
+    IClaimExtractor claimExtractor,
+    IClaimIdentityResolver identityResolver,
+    IOutputClaimProvenanceReconciler provenanceReconciler,
     EpistemicAuthoritySettings settings,
     ILogger<EpistemicDecisionBridge> logger)
     : IEpistemicDecisionBridge
@@ -163,11 +195,18 @@ public sealed class EpistemicDecisionBridge(
                 DecisionAuthority = outcome.Authority.DecisionAuthority,
                 IsAuthorized = isAuthorized,
                 IsEssential = claim.IsEssential,
+                SourceBranchId = claim.SourceBranchId,
+                SourceCandidateId = claim.SourceCandidateId,
                 Annotation = isAuthorized
                     ? $"POLOXI-authorized ({ClaimCodes.ToCode(outcome.NewState)}); may be relied upon."
                     : $"Not authorized ({ClaimCodes.ToCode(outcome.NewState)}, authority=None); shown for reference only.",
             });
         }
+
+        var extraction = await ExtractOutputClaimsAsync(
+            context, involvedClaims, claimExtractor, identityResolver, provenanceReconciler, cancellationToken);
+        narrative.Add(extraction.FailureReason ??
+            $"Output claim extraction {extraction.Result.StatusCode}: {extraction.Result.ClaimsReturned} material claim(s) from {extraction.Result.SourceLength} characters.");
 
         narrative.Add($"Projected {projectedClaimIds.Count} assertion node(s) into authoritative claims; "
             + $"{authorizedClaimIds.Count} gained POLOXI authority.");
@@ -177,9 +216,14 @@ public sealed class EpistemicDecisionBridge(
             context.SessionId, context.TenantId, cancellationToken);
         narrative.AddRange(readiness.AuditNarrative);
 
-        // 3. Output audit over the claims that could surface in the answer (all projected claims).
-        var outputAudit = await outputAuditor.AuditAsync(
-            context.SessionId, context.TenantId, projectedClaimIds, cancellationToken);
+        // 3. Output audit over claims actually extracted from the composed answer.
+        var outputClaimIds = involvedClaims
+            .Where(c => extraction.ExtractedClaimIds.Contains(c.ClaimId))
+            .Select(c => c.ClaimId)
+            .ToArray();
+        var authoritativeAudit = await outputAuditor.AuditAsync(
+            context.SessionId, context.TenantId, outputClaimIds, cancellationToken);
+        var outputAudit = ApplyMappingInvariants(authoritativeAudit, extraction.Ledger);
         narrative.AddRange(outputAudit.AuditNarrative);
 
         // 4. EA-7 override computation. Downgrade-only and mode-gated. In Advisory mode the effective
@@ -206,12 +250,147 @@ public sealed class EpistemicDecisionBridge(
             AuthorizedClaimCount = authorizedClaimIds.Count,
             Readiness = readiness,
             OutputAudit = outputAudit,
+            ClaimExtraction = extraction.Result,
             OverrideMode = settings.OverrideMode,
             EaReady = eaReady,
             OverrideApplied = overrideApplied,
             InvolvedClaims = involvedClaims,
+            ClaimLedger = extraction.Ledger,
             AuditNarrative = narrative,
         };
+    }
+
+    private static async Task<(OutputClaimExtractionResult Result, HashSet<Guid> ExtractedClaimIds, IReadOnlyList<OutputClaimLedgerEntry> Ledger, string? FailureReason)> ExtractOutputClaimsAsync(
+        EpistemicDecisionContext context,
+        IReadOnlyList<InvolvedClaim> authoritativeClaims,
+        IClaimExtractor extractor,
+        IClaimIdentityResolver identityResolver,
+        IOutputClaimProvenanceReconciler provenanceReconciler,
+        CancellationToken cancellationToken)
+    {
+        var source = context.FinalAnswer ?? string.Empty;
+        var substantive = !string.IsNullOrWhiteSpace(source);
+        if (!substantive)
+            return (new OutputClaimExtractionResult { SourceLength = source.Length }, [], [], null);
+
+        try
+        {
+            var proposals = await extractor.ExtractAsync(new ClaimExtractionContext
+            {
+                SessionId = context.SessionId,
+                MatterId = context.MatterId,
+                SourceText = source,
+                ModelName = context.ProposedByModel,
+                PromptRunId = context.PromptRunId,
+                ComposerProvenance = context.ComposerProvenance,
+            }, cancellationToken);
+            var existing = authoritativeClaims.Select(c => new ClaimProposition
+            {
+                ClaimId = c.ClaimId,
+                SessionId = context.SessionId,
+                Text = c.Text,
+                NormalizedText = identityResolver.Normalize(c.Text),
+                ClaimType = ClaimType.Interpretive,
+                VerificationState = c.VerificationState,
+                DecisionAuthority = c.DecisionAuthority,
+                IsEssential = c.IsEssential,
+                SourceBranchId = c.SourceBranchId,
+                SourceCandidateId = c.SourceCandidateId,
+            }).ToArray();
+            var reconciled = provenanceReconciler.Reconcile(proposals, existing, context.ComposerProvenance);
+            var matched = reconciled
+                .Where(p => p.MappingState == ClaimMappingState.Mapped && p.SourcePropositionId.HasValue)
+                .Select(p => p.SourcePropositionId!.Value)
+                .ToHashSet();
+            var ledger = reconciled.Select(p => new OutputClaimLedgerEntry
+            {
+                OutputClaimId = p.SourcePropositionId ?? StableOutputClaimId(context.SessionId, p.ClaimKey, p.Text),
+                ClaimText = p.Text,
+                IsMaterial = p.IsMaterial,
+                SourcePropositionId = p.SourcePropositionId,
+                EvidenceAttachmentIds = p.EvidenceAttachmentIds,
+                DecisionEvidenceIds = p.DecisionEvidenceIds,
+                MappingState = p.MappingState,
+                Disposition = p.MappingState == ClaimMappingState.Mapped
+                    ? OutputClaimDisposition.Allow
+                    : OutputClaimDispositions.EnforceMappingInvariant(p.IsMaterial, p.MappingState, OutputClaimDisposition.Allow),
+                ReasonCode = p.MappingReasonCode ?? "OUTPUT_CLAIM_MAPPING_NOT_EVALUATED",
+            }).ToArray();
+            var status = proposals.Count == 0 ? OutputClaimExtractionStates.Empty : OutputClaimExtractionStates.Completed;
+            var reason = proposals.Count == 0
+                ? "OUTPUT_CLAIM_EXTRACTION_EMPTY: substantive answer produced zero material claims."
+                : matched.Count == 0
+                    ? "OUTPUT_CLAIM_EXTRACTION_UNMAPPED: material claims were found but none matched an authoritative graph claim."
+                    : null;
+            return (new OutputClaimExtractionResult
+            {
+                Attempted = true,
+                SourceLength = source.Length,
+                SubstantiveAnswer = true,
+                ClaimsReturned = proposals.Count,
+                StatusCode = status,
+                FailureReason = reason,
+            }, matched, ledger, reason);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var reason = $"OUTPUT_CLAIM_EXTRACTION_FAILED: {ex.GetType().Name}.";
+            return (new OutputClaimExtractionResult
+            {
+                Attempted = true,
+                SourceLength = source.Length,
+                SubstantiveAnswer = true,
+                StatusCode = OutputClaimExtractionStates.Failed,
+                FailureReason = reason,
+            }, [], [], reason);
+        }
+    }
+
+    private static OutputClaimAuditResult ApplyMappingInvariants(
+        OutputClaimAuditResult audit,
+        IReadOnlyList<OutputClaimLedgerEntry> ledger)
+    {
+        var blocked = ledger.Where(entry => entry.IsMaterial && entry.MappingState != ClaimMappingState.Mapped).ToArray();
+        if (blocked.Length == 0)
+            return audit;
+
+        var synthetic = blocked.Select(entry => new OutputClaimAuthorization
+        {
+            ClaimId = entry.OutputClaimId,
+            ClaimText = entry.ClaimText,
+            VerificationState = ClaimVerificationState.Unverifiable,
+            DecisionAuthority = ClaimDecisionAuthority.None,
+            Disposition = entry.Disposition,
+            IsForeign = entry.MappingState == ClaimMappingState.Unmapped,
+            Reason = entry.ReasonCode,
+        }).ToArray();
+        var violations = blocked.Select(entry => new OutputClaimViolation
+        {
+            ClaimId = entry.OutputClaimId,
+            ClaimText = entry.ClaimText,
+            VerificationState = ClaimVerificationState.Unverifiable,
+            DecisionAuthority = ClaimDecisionAuthority.None,
+            Reason = entry.ReasonCode,
+        }).ToArray();
+        return audit with
+        {
+            IsClean = false,
+            Authorizations = audit.Authorizations.Concat(synthetic).ToArray(),
+            Violations = audit.Violations.Concat(violations).ToArray(),
+            UnknownClaimIds = audit.UnknownClaimIds.Concat(blocked
+                .Where(entry => entry.MappingState == ClaimMappingState.Unmapped)
+                .Select(entry => entry.OutputClaimId)).Distinct().ToArray(),
+            AuditNarrative = audit.AuditNarrative.Concat([
+                $"Claim reconciliation blocked ALLOW for {blocked.Length} material unmapped or scope-exceeding claim(s)."
+            ]).ToArray(),
+        };
+    }
+
+    private static Guid StableOutputClaimId(Guid sessionId, string claimKey, string text)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{sessionId:N}|{claimKey}|{text}"));
+        return new Guid(bytes.AsSpan(0, 16));
     }
 
     // Build the authoritative claim shell for an assertion node. POLOXI owns state/authority; the

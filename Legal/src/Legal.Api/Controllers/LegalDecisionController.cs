@@ -126,4 +126,12 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Verify(Guid sessionId, [FromBody] DecisionVerificationChangeRequest request, CancellationToken cancellationToken)
         => Ok(await service.ApplyVerificationChangeAsync(TenantId, ActorUserId, sessionId, request, cancellationToken));
+
+    // POLOXI Bounded Research Loop — cockpit entrypoint ("Research this decision"). Runs the autonomous
+    // Retrieval → Verification → Evidence Promotion → Dependency Update → Recompetition loop until an
+    // explicit STOP condition. No-op (LOOP_DISABLED) unless the research-loop feature flag is enabled.
+    [HttpPost("sessions/{sessionId:guid}/research")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> Research(Guid sessionId, CancellationToken cancellationToken)
+        => Ok(await service.RunResearchLoopAsync(TenantId, ActorUserId, sessionId, cancellationToken));
 }

@@ -26,7 +26,9 @@ public sealed class EpistemicDecisionBridgeTests
         var readiness = new DecisionReadinessEvaluator(repo, gate, settings);
         var audit = new OutputClaimAuditor(repo, settings);
         return new EpistemicDecisionBridge(
-            verification, readiness, audit, settings, NullLogger<EpistemicDecisionBridge>.Instance);
+            verification, readiness, audit, new DeterministicOutputClaimExtractor(), new ClaimIdentityResolver(),
+            new OutputClaimProvenanceReconciler(),
+            settings, NullLogger<EpistemicDecisionBridge>.Instance);
     }
 
     private static DecisionGraphNodeDto Node(Guid id, string kind, bool essential = false, decimal support = 0.8m)
@@ -106,6 +108,7 @@ public sealed class EpistemicDecisionBridgeTests
             TenantId = Tenant,
             Nodes = [Node(proposition, DecisionGraphNodeKinds.Proposition)],
             Edges = [],
+            FinalAnswer = "PROPOSITION statement.",
         };
 
         var result = await bridge.ProjectAndGovernAsync(context);
@@ -114,6 +117,69 @@ public sealed class EpistemicDecisionBridgeTests
         Assert.Equal(0, result.AuthorizedClaimCount);
         // The unauthorized claim surfaced in output is an audit violation.
         Assert.NotNull(result.OutputAudit);
+        Assert.False(result.OutputAudit!.IsClean);
+    }
+
+    [Fact]
+    public async Task Bridge_ComposerProvenance_DoesNotBypassIndependentDecompositionOrScopeCheck()
+    {
+        var sessionId = Guid.NewGuid();
+        var proposition = Guid.NewGuid();
+        var evidence = Guid.NewGuid();
+        var bridge = Build(new FakeRepo(), new EpistemicAuthoritySettings());
+        var context = new EpistemicDecisionContext
+        {
+            SessionId = sessionId,
+            TenantId = Tenant,
+            Nodes = [new DecisionGraphNodeDto(proposition, DecisionGraphNodeKinds.Proposition, "P1", "P1",
+                "The exemption requires independent judgment", 0.9m, true, false,
+                DecisionVerificationStates.Verified, 0)],
+            Edges = [Edge(Guid.NewGuid(), evidence, proposition, DecisionVerificationStates.Verified)],
+            FinalAnswer = "The exemption requires independent judgment. The employees lacked independent judgment and therefore were misclassified.",
+            ComposerProvenance =
+            [
+                new ComposerClaimProvenance
+                {
+                    ClaimKey = $"OUTPUT:{sessionId:N}:1",
+                    SourcePropositionId = proposition,
+                },
+                new ComposerClaimProvenance
+                {
+                    ClaimKey = $"OUTPUT:{sessionId:N}:2",
+                    SourcePropositionId = proposition,
+                },
+            ],
+        };
+
+        var result = await bridge.ProjectAndGovernAsync(context);
+
+        Assert.Equal(2, result.ClaimExtraction.ClaimsReturned);
+        Assert.Equal(2, result.ClaimLedger.Count);
+        Assert.Equal(ClaimMappingState.Mapped, result.ClaimLedger[0].MappingState);
+        Assert.Equal(ClaimMappingState.ScopeExceeded, result.ClaimLedger[1].MappingState);
+        Assert.False(result.OutputAudit!.IsClean);
+        Assert.Contains(result.OutputAudit.Authorizations,
+            authorization => authorization.ClaimText.Contains("misclassified", StringComparison.OrdinalIgnoreCase)
+                && authorization.Disposition != OutputClaimDisposition.Allow);
+    }
+
+    [Fact]
+    public async Task Bridge_MaterialUnmappedClaim_IsNeverAllowed()
+    {
+        var bridge = Build(new FakeRepo(), new EpistemicAuthoritySettings());
+        var result = await bridge.ProjectAndGovernAsync(new EpistemicDecisionContext
+        {
+            SessionId = Guid.NewGuid(),
+            TenantId = Tenant,
+            Nodes = [],
+            Edges = [],
+            FinalAnswer = "The employees were conclusively misclassified under controlling law.",
+        });
+
+        var ledger = Assert.Single(result.ClaimLedger);
+        Assert.True(ledger.IsMaterial);
+        Assert.Equal(ClaimMappingState.Unmapped, ledger.MappingState);
+        Assert.NotEqual(OutputClaimDisposition.Allow, ledger.Disposition);
         Assert.False(result.OutputAudit!.IsClean);
     }
 

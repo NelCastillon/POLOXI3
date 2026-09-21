@@ -40,6 +40,8 @@ public static class DecisionResearchNeedFactory
         var why = essentialFailed
             ? "An essential dependency failed verification, reopening this issue; resolving it can change the ranking."
             : "This is the highest information-value unresolved issue on the decision frontier.";
+        var proposition = string.IsNullOrWhiteSpace(target.Interpretation) ? target.DisplayName : target.Interpretation;
+        var needType = ClassifyResearchNeed(proposition);
 
         return new DecisionResearchNeedPersistence(
             DecisionResearchNeedId: Guid.NewGuid(),
@@ -50,7 +52,7 @@ public static class DecisionResearchNeedFactory
             DecisionBranchId: target.DecisionBranchId,
             DecisionDependencyEventId: dependencyEventId,
             IssueLabel: target.DisplayName,
-            PropositionToResolve: string.IsNullOrWhiteSpace(target.Interpretation) ? target.DisplayName : target.Interpretation,
+            PropositionToResolve: proposition,
             AuthorityKind: essentialFailed ? "CONTROLLING_AUTHORITY" : "PERSUASIVE_OR_CONTROLLING",
             RequiredEvidenceKind: "VERIFIED_AUTHORITY",
             WhyDecisionRelevant: why,
@@ -58,6 +60,52 @@ public static class DecisionResearchNeedFactory
             CurrentUncertainty: uncertainty < 0 ? 0 : uncertainty,
             InformationValue: target.InformationValue,
             FalsificationCondition: $"Retrieval fails to establish or refute '{target.DisplayName}' with verified authority.",
-            StatusCode: "OPEN");
+            StatusCode: "OPEN")
+        {
+            ResearchNeedTypeCode = needType,
+        };
     }
+
+    public static DecisionResearchNeedPersistence CreateFromLeaf(
+        DecisionResearchNeedPersistence frontierNeed,
+        DecisionResearchSemanticLeaf leaf,
+        string proposalStatus,
+        string? proposalReason) => frontierNeed with
+    {
+        PropositionToResolve = leaf.Proposition.Trim(),
+        ResearchNeedTypeCode = leaf.ResearchNeedType,
+        SourceClassCode = leaf.SourceClass,
+        IsResearchable = leaf.Researchable,
+        ParentResearchKey = leaf.ParentResearchKey,
+        RequiredResearchKeysJson = System.Text.Json.JsonSerializer.Serialize(leaf.Requires),
+        CandidateDiscriminationJson = System.Text.Json.JsonSerializer.Serialize(leaf.CandidateDiscrimination),
+        SemanticProposalStatusCode = proposalStatus,
+        SemanticProposalReasonCode = proposalReason,
+        AuthorityKind = leaf.SourceClass == DecisionResearchSourceClasses.LegalAuthority
+            ? frontierNeed.AuthorityKind
+            : null,
+        RequiredEvidenceKind = leaf.SourceClass == DecisionResearchSourceClasses.MatterDocument
+            ? "VERIFIED_MATTER_DOCUMENT"
+            : "VERIFIED_AUTHORITY",
+        FalsificationCondition = $"Verified evidence fails to establish, refute, or materially narrow '{leaf.Proposition.Trim()}'.",
+    };
+
+    internal static string ClassifyResearchNeed(string? proposition)
+    {
+        var value = proposition?.ToLowerInvariant() ?? string.Empty;
+        var matter = ContainsAny(value, "employee", "actual duties", "worked", "document", "record", "email",
+            "contract", "declaration", "deposition", "correspondence", "invoice", "payroll", "timecard");
+        var legal = ContainsAny(value, "law", "legal", "statute", "regulation", "rule", "court", "holding",
+            "authority", "precedent", "exemption", "element", "standard");
+        if (matter && legal)
+            return DecisionResearchNeedTypes.Mixed;
+        if (matter)
+            return ContainsAny(value, "document", "record", "email", "contract", "declaration", "deposition",
+                "correspondence", "invoice", "payroll", "timecard")
+                ? DecisionResearchNeedTypes.MatterEvidence
+                : DecisionResearchNeedTypes.MatterFact;
+        return legal ? DecisionResearchNeedTypes.LegalRule : DecisionResearchNeedTypes.LegalAuthority;
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) => candidates.Any(value.Contains);
 }

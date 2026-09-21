@@ -133,7 +133,47 @@ public sealed record DecisionEvidenceDto(
     string? SourceTitle,
     string? Snippet,
     decimal VerificationValue,
-    string VerificationStatus);
+    string VerificationStatus)
+{
+    // Verification provenance (§14): traceable claim ↔ source ↔ passage ↔ verification chain.
+    public string? SupportedObjective { get; init; }
+    public string? SupportingPassage { get; init; }
+    public string? LifecycleState { get; init; }
+}
+
+public sealed record DecisionEvidenceVerificationFactorDto(
+    string FactorCode,
+    string StateCode,
+    string ReasonCode,
+    string? Reason,
+    string? VerifiedValue,
+    string? SourceRef,
+    string? SupportingPassage,
+    string VerificationMethod);
+
+public sealed record DecisionEvidenceVerificationDto(
+    Guid DecisionEvidenceVerificationId,
+    Guid DecisionEvidenceId,
+    Guid? DecisionBranchId,
+    string SourceTypeCode,
+    string ProfileCode,
+    string DispositionCode,
+    bool IsVerified,
+    bool IsDecisionAuthorized,
+    IReadOnlyCollection<string> BlockingReasons,
+    DateTime EvaluatedDateUtc,
+    IReadOnlyCollection<DecisionEvidenceVerificationFactorDto> Factors)
+{
+    public int RetrievedCount { get; init; }
+    public int PreScreenRejectedCount { get; init; }
+    public int MechanicalVerificationCount { get; init; }
+    public int SemanticVerificationCount { get; init; }
+    public int PoloxiDeepeningCount { get; init; }
+    public int CacheHitCount { get; init; }
+    public int InputTokenCount { get; init; }
+    public int OutputTokenCount { get; init; }
+    public long LatencyMilliseconds { get; init; }
+}
 
 public sealed record DecisionFlipPointDto(
     Guid DecisionFlipPointId,
@@ -200,13 +240,97 @@ public sealed record DecisionSearchResponse(
     // extracted/persisted for this session. Read-only projection for the cockpit; never scores. ──
     public IReadOnlyCollection<DecisionSupportSignalDto> VerifiedSignals { get; init; } = [];
 
+    // Persisted factor-by-factor evidence verification diagnostics. Read-only and non-scoring.
+    public IReadOnlyCollection<DecisionEvidenceVerificationDto> EvidenceVerifications { get; init; } = [];
+
     // ── POLOXI Legal B3 (Hallucination Solver) shadow/what-if snapshot. Populated when the solver
     // ran and recompeted the ranking on verified evidence. In ADVISORY mode this is a NON-DESTRUCTIVE
     // "what-if": the returned decision above is the original (B2) result, and this snapshot shows what
     // the ranking WOULD become if unsupported material support were removed. In ENFORCED mode the
     // returned decision equals this snapshot and IsAuthoritative is true. Null when the solver is off. ──
     public DecisionSolverShadowDto? SolverShadow { get; init; }
+
+    // ── Decision Integrity Trace inputs + projection (cockpit). All additive/optional; they never
+    // change the verdicts above. The projector reads these to build IntegrityTrace deterministically. ──
+
+    // Proposal Integrity Gate summary (disposition/attempt/defects) surfaced from candidate discovery.
+    public DecisionProposalIntegritySummaryDto? ProposalIntegrity { get; init; }
+
+    // Bounded research-loop audit summary (rounds committed/rolled back, stop reason, per-round audit).
+    public DecisionResearchLoopSummaryDto? ResearchSummary { get; init; }
+
+    // Research-loop eligibility snapshot captured at the entry gate. Always present on a live run; lets
+    // the Research stage report the exact NOT-RUN reason (setting disabled / graph disabled / V2 absent).
+    public DecisionResearchEligibilityDto? ResearchEligibility { get; init; }
+
+    // Per-claim output authorizations (ALLOW/QUALIFY/SUPPRESS/CORRECT) from the output-claim audit.
+    public IReadOnlyCollection<DecisionOutputAuthorizationDto> OutputAuthorizations { get; init; } = [];
+
+    // Aggregate output prose-transform outcome (required/applied counts + post-transform cleanliness).
+    // Null when no enforcement pass ran. Distinguishes "transformation required" from "actually applied".
+    public DecisionOutputTransformSummaryDto? OutputTransformSummary { get; init; }
+
+    // Safe diagnostics for the composed-answer claim extraction boundary. No answer text or provider
+    // payload is exposed; this records only execution state, input length, count, and a safe reason.
+    public DecisionOutputClaimExtractionDto? OutputClaimExtraction { get; init; }
+
+    // Deterministically-derived decision state version (1 + committed authoritative mutations).
+    public long DecisionStateVersion { get; init; } = 1;
+
+    // Per-phase execution timings for the Diagnostics view (label → milliseconds).
+    public IReadOnlyCollection<DecisionPhaseTimingDto> PhaseTimings { get; init; } = [];
+
+    // The projected Decision Integrity Trace. Null only on legacy paths that don't project it.
+    public DecisionIntegrityTraceDto? IntegrityTrace { get; init; }
 }
+
+public sealed record DecisionOutputClaimExtractionDto(
+    bool Attempted,
+    int AnswerLength,
+    bool SubstantiveAnswer,
+    int ClaimsReturned,
+    string StatusCode,
+    string? FailureReason);
+
+// One per-claim output authorization surfaced to the cockpit trace (§34/§35). A namespace-local mirror
+// of the epistemic OutputClaimAuthorization so the Decision contracts stay decoupled from Epistemic.
+public sealed record DecisionOutputAuthorizationDto(
+    Guid ClaimId,
+    string ClaimText,
+    string VerificationState,
+    string DecisionAuthority,
+    string Disposition,       // ALLOW | QUALIFY | SUPPRESS | CORRECT
+    bool IsForeign,
+    string Reason,
+    bool ProseTransformed)
+{
+    public Guid? SourceBranchId { get; init; }
+    public Guid? SourceCandidateId { get; init; }
+    public Guid? DecisionEvidenceId { get; init; }
+    public Guid? DecisionEvidenceAttachmentId { get; init; }
+    public Guid? DecisionEvidenceVerificationId { get; init; }
+    public Guid? SourceSnapshotId { get; init; }
+    public string? PassageRef { get; init; }
+    public bool IsMaterial { get; init; } = true;
+    public string MappingState { get; init; } = "UNMAPPED";
+    public Guid? SourcePropositionId { get; init; }
+    public string? MappingReasonCode { get; init; }
+}
+
+// Aggregate outcome of the output prose-transform pass. RequiredCount is how many claims needed the
+// prose rewritten; AppliedCount is how many were actually located and rewritten in the answer body. When
+// AppliedCount < RequiredCount, unauthorized assertions may still stand verbatim (post-transform audit
+// is NOT clean) even though every claim carries a disposition.
+public sealed record DecisionOutputTransformSummaryDto(
+    int RequiredCount,
+    int AppliedCount,
+    bool PostTransformClean)
+{
+    public int UnauthorizedAssertionsRemaining => Math.Max(0, RequiredCount - AppliedCount);
+}
+
+// One per-phase execution timing for the Diagnostics view.
+public sealed record DecisionPhaseTimingDto(string Phase, long Milliseconds);
 
 // The B3 solver's recompeted "what-if" ranking, kept alongside the original decision so the cockpit
 // can show BOTH the baseline and the verified-evidence-only recompetition. The candidate/branch
@@ -452,6 +576,58 @@ public static class DecisionVerificationStates
     public const string Unverified = "UNVERIFIED";
     public const string Verified = "VERIFIED";
     public const string Invalidated = "INVALIDATED";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// Explicit evidence verification LIFECYCLE (§14). Replaces the old multiplicative authority gate
+// (identity × citation × holding × weight × support) with an ordered ladder of discrete, auditable
+// stages. A source advances one rung at a time; the FIRST failed rung fixes a terminal failure state.
+// Only the fully-climbed VERIFIED state grants positive decision authority — every partial/failure
+// state contributes ZERO positive support (it may still contradict). This makes "why isn't this
+// evidence trusted yet?" answerable by pointing at the exact rung that did not clear.
+public static class DecisionEvidenceLifecycleStates
+{
+    // Progress ladder (in ascending order of establishment).
+    public const string Retrieved = "RETRIEVED";                              // a source came back
+    public const string IdentityVerified = "IDENTITY_VERIFIED";              // the source is who it claims to be
+    public const string CitationVerified = "CITATION_VERIFIED";             // a resolvable citation/reference exists
+    public const string PassageLocated = "PASSAGE_LOCATED";                 // a usable passage was found in the source
+    public const string PropositionSupportVerified = "PROPOSITION_SUPPORT_VERIFIED"; // passage supports the objective
+    public const string HoldingVerified = "HOLDING_VERIFIED";              // (where required) the holding is on point
+    public const string AuthorityValidated = "AUTHORITY_VALIDATED";        // (where required) the authority is controlling
+    public const string Verified = "VERIFIED";                            // fully established — positive authority
+
+    // Terminal failure states — none grant positive authority.
+    public const string PartiallySupported = "PARTIALLY_SUPPORTED";        // some support, below the required bar
+    public const string Contradicted = "CONTRADICTED";                    // the source cuts against the objective
+    public const string Unsupported = "UNSUPPORTED";                      // no support relationship established
+    public const string Unverifiable = "UNVERIFIABLE";                   // a required rung could not be evaluated
+    public const string RetrievalFailed = "RETRIEVAL_FAILED";           // retrieval itself failed
+    public const string VerificationFailed = "VERIFICATION_FAILED";     // verification errored out
+
+    // Only a fully-climbed VERIFIED lifecycle grants positive decision authority.
+    public static bool GrantsPositiveAuthority(string? lifecycleState) =>
+        string.Equals(lifecycleState, Verified, StringComparison.OrdinalIgnoreCase);
+
+    // Map a granular lifecycle state onto the persisted status vocabulary (schema-compatible):
+    // VERIFIED stays VERIFIED; CONTRADICTED maps to INVALIDATED; everything else is UNVERIFIED.
+    public static string ToPersistedStatus(string? lifecycleState) => lifecycleState switch
+    {
+        Verified => DecisionVerificationStates.Verified,
+        Contradicted => DecisionVerificationStates.Invalidated,
+        _ => DecisionVerificationStates.Unverified,
+    };
+}
+
+// Explicit research/retrieval outcome (§13). Retrieval failure must become explicit decision state
+// rather than disappearing into logs, so the pipeline can distinguish "we searched and found nothing"
+// from "our retrieval operation failed" from "no research was needed".
+public static class DecisionResearchStates
+{
+    public const string NotNeeded = "NOT_NEEDED";
+    public const string Retrieved = "RETRIEVED";
+    public const string SearchNoResults = "SEARCH_NO_RESULTS";
+    public const string RetrievalFailed = "RETRIEVAL_FAILED";
 }
 
 // A typed graph node surfaced to the cockpit (kind identifies which table it came from).

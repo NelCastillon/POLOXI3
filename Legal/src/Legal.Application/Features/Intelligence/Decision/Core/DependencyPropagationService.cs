@@ -41,11 +41,21 @@ public sealed class DependencyPropagationService : IDependencyPropagationService
         var previous = edge.VerificationStatus;
         edge.VerificationStatus = NormalizeStatus(newStatus);
 
-        // Recompute all node support first (idempotent), then produce the structured impact.
-        foreach (var node in model.Nodes.Values)
-            DecisionGraph.RecomputeSupport(model, node);
+        // Positive verification is also a causal state transition. Seed the target below with its support
+        // before the changed edge is applied so PropagateImpact can emit a signed SUPPORT_GAINED signal.
+        IReadOnlyDictionary<Guid, double>? supportBefore = null;
+        if (!string.Equals(previous, edge.VerificationStatus, StringComparison.OrdinalIgnoreCase)
+            && edge.VerificationStatus == DecisionVerificationStates.Verified)
+        {
+            supportBefore = model.Nodes.Values.ToDictionary(n => n.Id, n => n.Support);
+        }
 
-        var impact = DecisionGraph.PropagateImpact(model, maxDepth);
+        // Produce the structured impact directly. PropagateImpact snapshots pre-change node support and
+        // recomputes each affected node during traversal, so it can emit a signed per-node delta. We must
+        // NOT pre-recompute support here: doing so would apply the weakening BEFORE the snapshot, collapse
+        // every non-essential-break delta to zero, and silently drop recompetition for non-dispositive
+        // corruptions (only full essential breaks would ever propagate).
+        var impact = DecisionGraph.PropagateImpact(model, maxDepth, edge.Id, supportBefore);
         return new DependencyPropagationOutcome(impact, model, previous, EdgeFound: true);
     }
 

@@ -21,6 +21,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         double D(string key, double fallback) => map.TryGetValue(key, out var v) && double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : fallback;
         int I(string key, int fallback) => map.TryGetValue(key, out var v) && int.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) ? i : fallback;
 
+        bool B(string key, bool fallback) => map.TryGetValue(key, out var v) && bool.TryParse(v, out var b) ? b : fallback;
+
         return new DecisionCoreSettings(
             D("Decision.InformationValue.Weight.Uncertainty", 0.20),
             D("Decision.InformationValue.Weight.RankingImpact", 0.25),
@@ -36,7 +38,195 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             D("Decision.Threshold.DeepeningFlip", 0.40),
             I("Decision.MaxDepth", 4),
             I("Decision.MaxLlmCalls", 24),
-            I("Decision.MaxCandidates", 8));
+            I("Decision.MaxCandidates", 8),
+            B("Decision.ProposalIntegrity.EnableRecovery", false))
+        {
+            Verification = new DecisionVerificationSettings
+            {
+                Enabled = B("Decision.Verification.Enabled", true),
+                ShadowMode = B("Decision.Verification.ShadowMode", true),
+                MechanicalVerificationEnabled = B("Decision.Verification.Mechanical.Enabled", true),
+                SemanticVerificationEnabled = B("Decision.Verification.Semantic.Enabled", true),
+                MaxInputTokensPerEvidence = I("Decision.Verification.Semantic.MaxInputTokens", 2500),
+                MaxOutputTokensPerEvidence = I("Decision.Verification.Semantic.MaxOutputTokens", 700),
+                AllowSchemaRepair = B("Decision.Verification.Semantic.AllowSchemaRepair", true),
+                MaxSchemaRepairAttempts = I("Decision.Verification.Semantic.MaxSchemaRepairAttempts", 1),
+                PoloxiDeepeningEnabled = B("Decision.Verification.PoloxiDeepening.Enabled", false),
+                PoloxiDecisionMaterialOnly = B("Decision.Verification.PoloxiDeepening.DecisionMaterialOnly", true),
+                PoloxiMaxRounds = I("Decision.Verification.PoloxiDeepening.MaxRounds", 1),
+                EnforceVerifiedEvidenceOnly = B("Decision.Verification.Authorization.EnforceVerifiedOnly", false),
+                CacheEnabled = B("Decision.Verification.Cache.Enabled", true),
+            },
+        };
+    }
+
+    public async Task PersistOutputClaimProvenanceAsync(
+        IReadOnlyCollection<DecisionOutputClaimProvenancePersistence> provenance,
+        CancellationToken cancellationToken = default)
+    {
+        if (provenance.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionOutputClaimProvenance
+                (OutputClaimProvenanceId, DecisionSessionId, ClaimId, SourceBranchId, SourceCandidateId,
+                 DecisionEvidenceId, DecisionEvidenceAttachmentId, DecisionEvidenceVerificationId,
+                 SourceSnapshotId, PassageRef, ClaimText, IsMaterial, MappingStateCode,
+                 SourcePropositionId, MappingReasonCode, DispositionCode, TenantId, CreatedByUserId)
+            VALUES
+                (@OutputClaimProvenanceId, @DecisionSessionId, @ClaimId, @SourceBranchId, @SourceCandidateId,
+                 @DecisionEvidenceId, @DecisionEvidenceAttachmentId, @DecisionEvidenceVerificationId,
+                 @SourceSnapshotId, @PassageRef, @ClaimText, @IsMaterial, @MappingStateCode,
+                 @SourcePropositionId, @MappingReasonCode, @DispositionCode, @TenantId, @ActorUserId);
+            """, provenance, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistEvidenceVerificationsAsync(
+        IReadOnlyCollection<DecisionEvidenceVerificationPersistence> verifications,
+        CancellationToken cancellationToken = default)
+    {
+        if (verifications.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction(IsolationLevel.Serializable);
+        foreach (var verification in verifications)
+        {
+            await connection.ExecuteAsync(new CommandDefinition("""
+                IF @SourceSnapshotId IS NOT NULL AND NOT EXISTS
+                    (SELECT 1 FROM POLOXI.Legal_EvidenceSourceSnapshot WHERE SourceSnapshotId = @SourceSnapshotId)
+                BEGIN
+                    INSERT INTO POLOXI.Legal_EvidenceSourceSnapshot
+                        (SourceSnapshotId, DecisionEvidenceId, SourceProvider, SourceVersion, SourceRef,
+                         ContentHash, PassageHash, PassageRef, ExtractionVersion, RetrievedDateUtc, TenantId)
+                    VALUES
+                        (@SourceSnapshotId, @DecisionEvidenceId, @SourceProvider, @SourceVersion,
+                         @SourceRef,
+                         @SourceContentHash, @PassageHash, @PassageRef, @ExtractionVersion, @EvaluatedDateUtc, @TenantId);
+                END;
+
+                DECLARE @NextVerificationVersion INT =
+                    ISNULL((SELECT MAX(VerificationVersion)
+                            FROM POLOXI.Legal_DecisionEvidenceVerification WITH (UPDLOCK, HOLDLOCK)
+                            WHERE DecisionEvidenceId = @DecisionEvidenceId), 0) + 1;
+
+                UPDATE POLOXI.Legal_DecisionEvidenceVerification
+                   SET IsDeleted = 1
+                 WHERE DecisionEvidenceId = @DecisionEvidenceId AND TenantId = @TenantId AND IsDeleted = 0;
+
+                INSERT INTO POLOXI.Legal_DecisionEvidenceVerification
+                    (DecisionEvidenceVerificationId, DecisionEvidenceId, DecisionSessionId, DecisionBranchId,
+                     SourceTypeCode, ProfileCode, DispositionCode, IsVerified, IsDecisionAuthorized,
+                     BlockingReasonsJson, MatterId, TenantId, EvaluatedDateUtc, CreatedByUserId,
+                     MechanicalVerificationCount, SemanticVerificationCount, PoloxiDeepeningCount,
+                     CacheHitCount, InputTokenCount, OutputTokenCount, LatencyMilliseconds,
+                     SourceSnapshotId, ProfileVersion, VerificationVersion, RetrievedCount, PreScreenRejectedCount)
+                VALUES
+                    (@DecisionEvidenceVerificationId, @DecisionEvidenceId, @DecisionSessionId, @DecisionBranchId,
+                     @SourceTypeCode, @ProfileCode, @DispositionCode, @IsVerified, @IsDecisionAuthorized,
+                     @BlockingReasonsJson, @MatterId, @TenantId, @EvaluatedDateUtc, @ActorUserId,
+                     @MechanicalVerificationCount, @SemanticVerificationCount, @PoloxiDeepeningCount,
+                     @CacheHitCount, @InputTokenCount, @OutputTokenCount, @LatencyMilliseconds,
+                     @SourceSnapshotId, @ProfileVersion, @NextVerificationVersion, @RetrievedCount, @PreScreenRejectedCount);
+                """, verification, transaction, cancellationToken: cancellationToken));
+
+            if (verification.Factors.Count > 0)
+                await connection.ExecuteAsync(new CommandDefinition("""
+                    INSERT INTO POLOXI.Legal_DecisionEvidenceVerificationFactor
+                        (DecisionEvidenceVerificationFactorId, DecisionEvidenceVerificationId, FactorCode, StateCode,
+                         ReasonCode, Reason, VerifiedValue, SourceRef, SupportingPassage, VerificationMethod,
+                         SupportedComponentsJson, UnsupportedComponentsJson, EvaluatedDateUtc, TenantId, CreatedByUserId,
+                         PassageRef, VerifierId, VerifierVersion)
+                    VALUES
+                        (@DecisionEvidenceVerificationFactorId, @DecisionEvidenceVerificationId, @FactorCode, @StateCode,
+                         @ReasonCode, @Reason, @VerifiedValue, @SourceRef, @SupportingPassage, @VerificationMethod,
+                         @SupportedComponentsJson, @UnsupportedComponentsJson, @EvaluatedDateUtc, @TenantId, @ActorUserId,
+                         @PassageRef, @VerifierId, @VerifierVersion);
+                    """, verification.Factors.Select(f => new
+                    {
+                        f.DecisionEvidenceVerificationFactorId,
+                        verification.DecisionEvidenceVerificationId,
+                        f.FactorCode,
+                        f.StateCode,
+                        f.ReasonCode,
+                        f.Reason,
+                        f.VerifiedValue,
+                        f.SourceRef,
+                        f.SupportingPassage,
+                        f.VerificationMethod,
+                        f.SupportedComponentsJson,
+                        f.UnsupportedComponentsJson,
+                        f.EvaluatedDateUtc,
+                        f.PassageRef,
+                        f.VerifierId,
+                        f.VerifierVersion,
+                        verification.TenantId,
+                        verification.ActorUserId
+                    }), transaction, cancellationToken: cancellationToken));
+        }
+
+        transaction.Commit();
+    }
+
+    public async Task<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>> GetEvidenceVerificationsAsync(
+        Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var runs = (await connection.QueryAsync<DecisionEvidenceVerificationRow>(new CommandDefinition("""
+            SELECT DecisionEvidenceVerificationId, DecisionEvidenceId, DecisionSessionId, DecisionBranchId,
+                   SourceTypeCode, ProfileCode, DispositionCode, IsVerified, IsDecisionAuthorized,
+                   BlockingReasonsJson, MatterId, TenantId, CreatedByUserId AS ActorUserId, EvaluatedDateUtc,
+                   MechanicalVerificationCount, SemanticVerificationCount, PoloxiDeepeningCount,
+                   CacheHitCount, InputTokenCount, OutputTokenCount, LatencyMilliseconds,
+                   SourceSnapshotId, ProfileVersion, VerificationVersion
+                   , RetrievedCount, PreScreenRejectedCount
+            FROM POLOXI.Legal_DecisionEvidenceVerification
+            WHERE TenantId = @TenantId AND DecisionSessionId = @DecisionSessionId AND IsDeleted = 0;
+            """, new { TenantId = tenantId, DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+        if (runs.Length == 0)
+            return [];
+
+        var factors = (await connection.QueryAsync<DecisionEvidenceVerificationFactorRow>(new CommandDefinition("""
+            SELECT f.DecisionEvidenceVerificationFactorId, f.DecisionEvidenceVerificationId, f.FactorCode,
+                   f.StateCode, f.ReasonCode, f.Reason, f.VerifiedValue, f.SourceRef, f.SupportingPassage,
+                    f.VerificationMethod, f.SupportedComponentsJson, f.UnsupportedComponentsJson, f.EvaluatedDateUtc,
+                    f.PassageRef, f.VerifierId, f.VerifierVersion
+            FROM POLOXI.Legal_DecisionEvidenceVerificationFactor f
+            INNER JOIN POLOXI.Legal_DecisionEvidenceVerification v
+                ON v.DecisionEvidenceVerificationId = f.DecisionEvidenceVerificationId
+            WHERE v.TenantId = @TenantId AND v.DecisionSessionId = @DecisionSessionId
+              AND v.IsDeleted = 0 AND f.IsDeleted = 0;
+            """, new { TenantId = tenantId, DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+        var byRun = factors.GroupBy(f => f.DecisionEvidenceVerificationId).ToDictionary(g => g.Key, g => g.ToArray());
+        return runs.Select(r => new DecisionEvidenceVerificationPersistence(
+            r.DecisionEvidenceVerificationId, r.DecisionEvidenceId, r.DecisionSessionId, r.DecisionBranchId,
+            r.SourceTypeCode, r.ProfileCode, r.DispositionCode, r.IsVerified, r.IsDecisionAuthorized,
+            r.BlockingReasonsJson, r.MatterId, r.TenantId, r.ActorUserId, r.EvaluatedDateUtc,
+            byRun.GetValueOrDefault(r.DecisionEvidenceVerificationId, []).Select(f =>
+                new DecisionEvidenceVerificationFactorPersistence(
+                    f.DecisionEvidenceVerificationFactorId, f.FactorCode, f.StateCode, f.ReasonCode,
+                    f.Reason, f.VerifiedValue, f.SourceRef, f.SupportingPassage, f.VerificationMethod,
+                    f.SupportedComponentsJson, f.UnsupportedComponentsJson, f.EvaluatedDateUtc)
+                {
+                    PassageRef = f.PassageRef,
+                    VerifierId = f.VerifierId,
+                    VerifierVersion = f.VerifierVersion,
+                }).ToArray())
+            {
+                SourceSnapshotId = r.SourceSnapshotId,
+                ProfileVersion = r.ProfileVersion,
+                VerificationVersion = r.VerificationVersion,
+                RetrievedCount = r.RetrievedCount,
+                PreScreenRejectedCount = r.PreScreenRejectedCount,
+                MechanicalVerificationCount = r.MechanicalVerificationCount,
+                SemanticVerificationCount = r.SemanticVerificationCount,
+                PoloxiDeepeningCount = r.PoloxiDeepeningCount,
+                CacheHitCount = r.CacheHitCount,
+                InputTokenCount = r.InputTokenCount,
+                OutputTokenCount = r.OutputTokenCount,
+                LatencyMilliseconds = r.LatencyMilliseconds,
+            }).ToArray();
     }
 
     public async Task<DecisionV2Settings> GetV2SettingsAsync(CancellationToken cancellationToken = default)
@@ -110,12 +300,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                  TerminationReason, WinnerCandidateId, ContractCompleteness, CandidateEntropy, DecisionMargin, DepthReached,
                  LlmCallCount, DurationMs, FinalAnswer, ClarificationQuestion, ClarificationTarget, CorrelationId,
                  MatterId, NextBestActionText, NextBestActionImpactCode, NextBestActionRationale,
+                 ResearchStatusCode, ResearchFailureDetail,
                  TenantId, CreatedByUserId)
             VALUES
                 (@DecisionSessionId, @QueryText, @ContextCode, @ModelCode, @UsePoloxiEngine, @StatusCode, @TerminalStateCode,
                  @TerminationReason, @WinnerCandidateId, @ContractCompleteness, @CandidateEntropy, @DecisionMargin, @DepthReached,
                  @LlmCallCount, @DurationMs, @FinalAnswer, @ClarificationQuestion, @ClarificationTarget, @CorrelationId,
                  @MatterId, @NextBestActionText, @NextBestActionImpactCode, @NextBestActionRationale,
+                 @ResearchStatusCode, @ResearchFailureDetail,
                  @TenantId, @ActorUserId);
             """,
             new
@@ -125,7 +317,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 session.ContractCompleteness, session.CandidateEntropy, session.DecisionMargin, session.DepthReached,
                 session.LlmCallCount, session.DurationMs, session.FinalAnswer, session.ClarificationQuestion,
                 session.ClarificationTarget, session.CorrelationId, session.MatterId, session.NextBestActionText,
-                session.NextBestActionImpactCode, session.NextBestActionRationale, session.TenantId, session.ActorUserId
+                session.NextBestActionImpactCode, session.NextBestActionRationale,
+                session.ResearchStatusCode, session.ResearchFailureDetail, session.TenantId, session.ActorUserId
             },
             transaction, cancellationToken: cancellationToken));
 
@@ -175,16 +368,18 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 """
                 INSERT INTO POLOXI.Legal_DecisionEvidence
                     (DecisionEvidenceId, DecisionSessionId, DecisionBranchId, SourceRef, SourceTitle, Snippet, IdentityFactor,
-                     CitationFactor, HoldingFactor, WeightFactor, PropositionFit, VerificationValue, VerificationStatus, TenantId, CreatedByUserId)
+                     CitationFactor, HoldingFactor, WeightFactor, PropositionFit, VerificationValue, VerificationStatus, LifecycleState,
+                     SupportedObjective, SupportingPassage, TenantId, CreatedByUserId)
                 VALUES
                     (@DecisionEvidenceId, @DecisionSessionId, @DecisionBranchId, @SourceRef, @SourceTitle, @Snippet, @IdentityFactor,
-                     @CitationFactor, @HoldingFactor, @WeightFactor, @PropositionFit, @VerificationValue, @VerificationStatus, @TenantId, @ActorUserId);
+                     @CitationFactor, @HoldingFactor, @WeightFactor, @PropositionFit, @VerificationValue, @VerificationStatus, @LifecycleState,
+                     @SupportedObjective, @SupportingPassage, @TenantId, @ActorUserId);
                 """,
                 session.Evidence.Select(e => new
                 {
                     e.DecisionEvidenceId, session.DecisionSessionId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet,
                     e.IdentityFactor, e.CitationFactor, e.HoldingFactor, e.WeightFactor, e.PropositionFit, e.VerificationValue,
-                    e.VerificationStatus, session.TenantId, session.ActorUserId
+                    e.VerificationStatus, e.LifecycleState, e.SupportedObjective, e.SupportingPassage, session.TenantId, session.ActorUserId
                 }),
                 transaction, cancellationToken: cancellationToken));
 
@@ -265,7 +460,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             SELECT DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, QueryText, ContextCode, ModelCode, UsePoloxiEngine,
                    StatusCode, TerminalStateCode, TerminationReason, WinnerCandidateId, ContractCompleteness, CandidateEntropy,
                    DecisionMargin, DepthReached, LlmCallCount, DurationMs, FinalAnswer, ClarificationQuestion, ClarificationTarget, CorrelationId,
-                   MatterId, NextBestActionText, NextBestActionImpactCode, NextBestActionRationale
+                   MatterId, NextBestActionText, NextBestActionImpactCode, NextBestActionRationale,
+                   ResearchStatusCode, ResearchFailureDetail
             FROM POLOXI.Legal_DecisionSession
             WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionSessionId = @DecisionSessionId;
             """,
@@ -291,13 +487,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """,
             new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
 
-        var evidence = (await connection.QueryAsync<DecisionEvidencePersistence>(new CommandDefinition(
+        var evidenceRows = await connection.QueryAsync<DecisionEvidenceRow>(new CommandDefinition(
             """
             SELECT DecisionEvidenceId, DecisionBranchId, SourceRef, SourceTitle, Snippet, IdentityFactor, CitationFactor,
-                   HoldingFactor, WeightFactor, PropositionFit, VerificationValue, VerificationStatus
+                   HoldingFactor, WeightFactor, PropositionFit, VerificationValue, VerificationStatus, LifecycleState, SupportedObjective, SupportingPassage
             FROM POLOXI.Legal_DecisionEvidence WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId;
             """,
-            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken));
+        var evidence = evidenceRows.Select(Map).ToArray();
 
         var flipPoints = (await connection.QueryAsync<DecisionFlipPointPersistence>(new CommandDefinition(
             """
@@ -316,8 +513,99 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             MatterId = session.MatterId,
             NextBestActionText = session.NextBestActionText,
             NextBestActionImpactCode = session.NextBestActionImpactCode,
-            NextBestActionRationale = session.NextBestActionRationale
+            NextBestActionRationale = session.NextBestActionRationale,
+            ResearchStatusCode = session.ResearchStatusCode,
+            ResearchFailureDetail = session.ResearchFailureDetail
         };
+    }
+
+    public async Task PersistResearchEvidenceAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId,
+        IReadOnlyCollection<DecisionEvidencePersistence> evidence,
+        CancellationToken cancellationToken = default)
+    {
+        if (evidence.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_DecisionEvidence
+                (DecisionEvidenceId, DecisionSessionId, DecisionBranchId, SourceRef, SourceTitle, Snippet, IdentityFactor,
+                 CitationFactor, HoldingFactor, WeightFactor, PropositionFit, VerificationValue, VerificationStatus, LifecycleState,
+                 SupportedObjective, SupportingPassage, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionEvidenceId, @DecisionSessionId, @DecisionBranchId, @SourceRef, @SourceTitle, @Snippet, @IdentityFactor,
+                 @CitationFactor, @HoldingFactor, @WeightFactor, @PropositionFit, @VerificationValue, @VerificationStatus, @LifecycleState,
+                 @SupportedObjective, @SupportingPassage, @TenantId, @ActorUserId);
+            """,
+            evidence.Select(e => new
+            {
+                e.DecisionEvidenceId,
+                DecisionSessionId = decisionSessionId,
+                e.DecisionBranchId,
+                e.SourceRef,
+                e.SourceTitle,
+                e.Snippet,
+                e.IdentityFactor,
+                e.CitationFactor,
+                e.HoldingFactor,
+                e.WeightFactor,
+                e.PropositionFit,
+                e.VerificationValue,
+                e.VerificationStatus,
+                e.LifecycleState,
+                e.SupportedObjective,
+                e.SupportingPassage,
+                TenantId = tenantId,
+                ActorUserId = userId
+            }), cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateResearchEvidenceAsync(
+        Guid tenantId, Guid userId, Guid decisionSessionId,
+        IReadOnlyCollection<DecisionEvidencePersistence> evidence,
+        CancellationToken cancellationToken = default)
+    {
+        if (evidence.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE POLOXI.Legal_DecisionEvidence
+               SET IdentityFactor = @IdentityFactor,
+                   CitationFactor = @CitationFactor,
+                   HoldingFactor = @HoldingFactor,
+                   WeightFactor = @WeightFactor,
+                   PropositionFit = @PropositionFit,
+                   VerificationValue = @VerificationValue,
+                   VerificationStatus = @VerificationStatus,
+                    LifecycleState = @LifecycleState,
+                   SupportedObjective = @SupportedObjective,
+                   SupportingPassage = @SupportingPassage,
+                   ModifiedDateUtc = SYSUTCDATETIME(),
+                   ModifiedByUserId = @ActorUserId
+             WHERE DecisionEvidenceId = @DecisionEvidenceId
+               AND DecisionSessionId = @DecisionSessionId
+               AND TenantId = @TenantId
+               AND IsDeleted = 0;
+            """, evidence.Select(e => new
+            {
+                e.DecisionEvidenceId,
+                DecisionSessionId = decisionSessionId,
+                TenantId = tenantId,
+                ActorUserId = userId,
+                e.IdentityFactor,
+                e.CitationFactor,
+                e.HoldingFactor,
+                e.WeightFactor,
+                e.PropositionFit,
+                e.VerificationValue,
+                e.VerificationStatus,
+                e.LifecycleState,
+                e.SupportedObjective,
+                e.SupportingPassage
+            }), cancellationToken: cancellationToken));
     }
 
     // ── Matter aggregate + cockpit support ──────────────────────────────────────────────────────
@@ -679,23 +967,31 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             {
                 DecisionGraphNodeKinds.Fact => """
                     INSERT INTO POLOXI.Legal_DecisionFactProposition
-                        (DecisionFactPropositionId, DecisionSessionId, NodeCode, Statement, Support, VerificationStatus, SortOrder, TenantId, CreatedByUserId)
-                    VALUES (@NodeId, @SessionId, @NodeCode, @Statement, @Support, @VerificationStatus, @SortOrder, @TenantId, @ActorUserId);
+                        (DecisionFactPropositionId, DecisionSessionId, NodeCode, Statement, Support, VerificationStatus, SortOrder,
+                         SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId, TenantId, CreatedByUserId)
+                    VALUES (@NodeId, @SessionId, @NodeCode, @Statement, @Support, @VerificationStatus, @SortOrder,
+                         @SourceBranchId, @SourceCandidateId, @SourceEvidenceId, @SourceAuthorityId, @MatterId, @TenantId, @ActorUserId);
                     """,
                 DecisionGraphNodeKinds.Proposition => """
                     INSERT INTO POLOXI.Legal_DecisionLegalProposition
-                        (DecisionLegalPropositionId, DecisionSessionId, NodeCode, Statement, AuthorityRef, Support, VerificationStatus, SortOrder, TenantId, CreatedByUserId)
-                    VALUES (@NodeId, @SessionId, @NodeCode, @Statement, @AuthorityRef, @Support, @VerificationStatus, @SortOrder, @TenantId, @ActorUserId);
+                        (DecisionLegalPropositionId, DecisionSessionId, NodeCode, Statement, AuthorityRef, Support, VerificationStatus, SortOrder,
+                         SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId, TenantId, CreatedByUserId)
+                    VALUES (@NodeId, @SessionId, @NodeCode, @Statement, @AuthorityRef, @Support, @VerificationStatus, @SortOrder,
+                         @SourceBranchId, @SourceCandidateId, @SourceEvidenceId, @SourceAuthorityId, @MatterId, @TenantId, @ActorUserId);
                     """,
                 DecisionGraphNodeKinds.Element => """
                     INSERT INTO POLOXI.Legal_DecisionLegalElement
-                        (DecisionLegalElementId, DecisionSessionId, NodeCode, DisplayName, Statement, IsEssential, IsSatisfied, Support, VerificationStatus, SortOrder, TenantId, CreatedByUserId)
-                    VALUES (@NodeId, @SessionId, @NodeCode, @DisplayName, @Statement, @IsEssential, @IsSatisfied, @Support, @VerificationStatus, @SortOrder, @TenantId, @ActorUserId);
+                        (DecisionLegalElementId, DecisionSessionId, NodeCode, DisplayName, Statement, IsEssential, IsSatisfied, Support, VerificationStatus, SortOrder,
+                         SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId, TenantId, CreatedByUserId)
+                    VALUES (@NodeId, @SessionId, @NodeCode, @DisplayName, @Statement, @IsEssential, @IsSatisfied, @Support, @VerificationStatus, @SortOrder,
+                         @SourceBranchId, @SourceCandidateId, @SourceEvidenceId, @SourceAuthorityId, @MatterId, @TenantId, @ActorUserId);
                     """,
                 DecisionGraphNodeKinds.Strategy => """
                     INSERT INTO POLOXI.Legal_DecisionReasoningStrategy
-                        (DecisionReasoningStrategyId, DecisionSessionId, DecisionCandidateId, NodeCode, DisplayName, Rationale, Support, VerificationStatus, SortOrder, TenantId, CreatedByUserId)
-                    VALUES (@NodeId, @SessionId, @CandidateId, @NodeCode, @DisplayName, @Statement, @Support, @VerificationStatus, @SortOrder, @TenantId, @ActorUserId);
+                        (DecisionReasoningStrategyId, DecisionSessionId, DecisionCandidateId, NodeCode, DisplayName, Rationale, Support, VerificationStatus, SortOrder,
+                         SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId, TenantId, CreatedByUserId)
+                    VALUES (@NodeId, @SessionId, @CandidateId, @NodeCode, @DisplayName, @Statement, @Support, @VerificationStatus, @SortOrder,
+                         @SourceBranchId, @SourceCandidateId, @SourceEvidenceId, @SourceAuthorityId, @MatterId, @TenantId, @ActorUserId);
                     """,
                 DecisionGraphNodeKinds.Burden => """
                     INSERT INTO POLOXI.Legal_DecisionBurdenRule
@@ -735,6 +1031,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 n.BurdenedParty,
                 n.StandardOfProof,
                 CandidateId = n.CandidateId,
+                n.SourceBranchId,
+                n.SourceCandidateId,
+                n.SourceEvidenceId,
+                n.SourceAuthorityId,
+                n.MatterId,
                 graph.TenantId,
                 graph.ActorUserId
             }, transaction, cancellationToken: cancellationToken));
@@ -745,9 +1046,13 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO POLOXI.Legal_DecisionGraphEdge
                     (DecisionGraphEdgeId, DecisionSessionId, RelationCode, SourceNodeKind, SourceNodeId, TargetNodeKind, TargetNodeId,
-                     SupportWeight, Materiality, IsEssential, IsDispositive, VerificationStatus, VerificationNotes, PropagatedStateCode, TenantId, CreatedByUserId)
+                     SupportWeight, Materiality, IsEssential, IsDispositive, VerificationStatus, VerificationNotes, PropagatedStateCode,
+                     SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId, AlternativePathAllowed,
+                     PropagationPolicy, RowVersionNo, TenantId, CreatedByUserId)
                 VALUES (@EdgeId, @SessionId, @RelationCode, @SourceNodeKind, @SourceNodeId, @TargetNodeKind, @TargetNodeId,
-                     @SupportWeight, @Materiality, @IsEssential, @IsDispositive, @VerificationStatus, @VerificationNotes, @PropagatedStateCode, @TenantId, @ActorUserId);
+                     @SupportWeight, @Materiality, @IsEssential, @IsDispositive, @VerificationStatus, @VerificationNotes, @PropagatedStateCode,
+                     @SourceBranchId, @SourceCandidateId, @SourceEvidenceId, @SourceAuthorityId, @MatterId, @AlternativePathAllowed,
+                     @PropagationPolicy, @RowVersionNo, @TenantId, @ActorUserId);
                 """, new
             {
                 EdgeId = e.EdgeId,
@@ -764,6 +1069,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 e.VerificationStatus,
                 e.VerificationNotes,
                 e.PropagatedStateCode,
+                e.SourceBranchId,
+                e.SourceCandidateId,
+                e.SourceEvidenceId,
+                e.SourceAuthorityId,
+                e.MatterId,
+                e.AlternativePathAllowed,
+                e.PropagationPolicy,
+                e.RowVersionNo,
                 graph.TenantId,
                 graph.ActorUserId
             }, transaction, cancellationToken: cancellationToken));
@@ -857,12 +1170,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
         nodes.AddRange(procs.Select(r => Map(r, DecisionGraphNodeKinds.Procedure)));
 
-        var edgeRows = await connection.QueryAsync<DecisionGraphEdgePersistence>(new CommandDefinition("""
+        var edgeRows = await connection.QueryAsync<GraphEdgeRow>(new CommandDefinition("""
             SELECT DecisionGraphEdgeId AS EdgeId, RelationCode, SourceNodeKind, SourceNodeId, TargetNodeKind, TargetNodeId,
-                   SupportWeight, Materiality, IsEssential, IsDispositive, VerificationStatus, VerificationNotes, PropagatedStateCode
+                   SupportWeight, Materiality, IsEssential, IsDispositive, VerificationStatus, VerificationNotes, PropagatedStateCode,
+                   SourceBranchId, SourceCandidateId, SourceEvidenceId, SourceAuthorityId, MatterId,
+                   AlternativePathAllowed, PropagationPolicy, RowVersionNo
             FROM POLOXI.Legal_DecisionGraphEdge WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND IsDeleted = 0;
             """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
-        var edges = edgeRows.ToArray();
+        var edges = edgeRows.Select(Map).ToArray();
 
         var losing = await connection.QuerySingleOrDefaultAsync<DecisionLosingSideTestPersistence>(new CommandDefinition("""
             SELECT TOP 1 DecisionLosingSideTestId, WinnerCandidateId, ChallengerCandidateId, StrongestCaseSummary,
@@ -937,6 +1252,29 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             B("Decision.V2.Benchmark.Enabled", true));
     }
 
+    public async Task<DecisionResearchLoopSettings> GetResearchLoopSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<(string SettingKey, string SettingValue)>(new CommandDefinition(
+            "SELECT SettingKey, SettingValue FROM POLOXI.Legal_DecisionSetting WHERE IsDeleted = 0;",
+            cancellationToken: cancellationToken));
+        var map = rows.ToDictionary(r => r.SettingKey, r => r.SettingValue, StringComparer.OrdinalIgnoreCase);
+
+        bool B(string key, bool fallback) => map.TryGetValue(key, out var v) && bool.TryParse(v, out var b) ? b : fallback;
+        int I(string key, int fallback) => map.TryGetValue(key, out var v) && int.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) ? i : fallback;
+        double D(string key, double fallback) => map.TryGetValue(key, out var v) && double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : fallback;
+
+        // Default OFF: the bounded research loop stays disabled until validated end to end, preserving
+        // the shadow baseline. Budgets are conservative so an accidental enable can never run away.
+        return new DecisionResearchLoopSettings(
+            B("Decision.ResearchLoop.Enabled", false),
+            I("Decision.ResearchLoop.MaxRounds", 4),
+            I("Decision.ResearchLoop.MaxRetrievals", 12),
+            D("Decision.ResearchLoop.MinFrontierInformationValue", 0.15),
+            D("Decision.ResearchLoop.NoStateChangeEpsilon", 0.01),
+            B("Decision.ResearchLoop.UseSeedRetriever", false));
+    }
+
     public async Task<DecisionDependencyEventPersistence?> GetDependencyEventAsync(Guid tenantId, Guid decisionSessionId, string idempotencyKey, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -983,13 +1321,62 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         await connection.ExecuteAsync(new CommandDefinition("""
             INSERT INTO POLOXI.Legal_DecisionResearchNeed
                 (DecisionResearchNeedId, DecisionSessionId, MatterId, DecisionBranchId, DecisionDependencyEventId, IssueLabel,
-                 PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant, ExpectedDiscrimination,
-                 CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, TenantId, CreatedByUserId)
+                 PropositionToResolve, ResearchNeedTypeCode, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant, ExpectedDiscrimination,
+                 CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, TenantId, CreatedByUserId,
+                 SourceClassCode, IsResearchable, ParentResearchKey, RequiredResearchKeysJson,
+                 CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode)
             VALUES
                 (@DecisionResearchNeedId, @DecisionSessionId, @MatterId, @DecisionBranchId, @DecisionDependencyEventId, @IssueLabel,
-                 @PropositionToResolve, @AuthorityKind, @RequiredEvidenceKind, @WhyDecisionRelevant, @ExpectedDiscrimination,
-                 @CurrentUncertainty, @InformationValue, @FalsificationCondition, @StatusCode, @TenantId, @ActorUserId);
+                 @PropositionToResolve, @ResearchNeedTypeCode, @AuthorityKind, @RequiredEvidenceKind, @WhyDecisionRelevant, @ExpectedDiscrimination,
+                 @CurrentUncertainty, @InformationValue, @FalsificationCondition, @StatusCode, @TenantId, @ActorUserId,
+                 @SourceClassCode, @IsResearchable, @ParentResearchKey, @RequiredResearchKeysJson,
+                 @CandidateDiscriminationJson, @SemanticProposalStatusCode, @SemanticProposalReasonCode);
             """, researchNeed, cancellationToken: cancellationToken));
+    }
+
+    public async Task PersistEvidenceAttachmentsAsync(
+        IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments,
+        CancellationToken cancellationToken = default)
+    {
+        if (attachments.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionEvidenceAttachment
+                (DecisionEvidenceAttachmentId, DecisionSessionId, DecisionResearchNeedId, DecisionBranchId,
+                 DecisionEvidenceId, PropositionToResolve, SupportStateCode, AffectedGraphEdgeId,
+                 IsAuthoritative, AssessmentReason, MatterId, TenantId, CreatedByUserId,
+                 DecisionEvidenceVerificationId, SourceSnapshotId, PassageRef)
+            VALUES
+                (@DecisionEvidenceAttachmentId, @DecisionSessionId, @DecisionResearchNeedId, @DecisionBranchId,
+                 @DecisionEvidenceId, @PropositionToResolve, @SupportStateCode, @AffectedGraphEdgeId,
+                 @IsAuthoritative, @AssessmentReason, @MatterId, @TenantId, @ActorUserId,
+                 @DecisionEvidenceVerificationId, @SourceSnapshotId, @PassageRef);
+            """, attachments, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateEvidenceAttachmentsAsync(
+        IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments,
+        CancellationToken cancellationToken = default)
+    {
+        if (attachments.Count == 0)
+            return;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE POLOXI.Legal_DecisionEvidenceAttachment
+               SET SupportStateCode = @SupportStateCode,
+                   AffectedGraphEdgeId = @AffectedGraphEdgeId,
+                   IsAuthoritative = @IsAuthoritative,
+                   AssessmentReason = @AssessmentReason,
+                   ModifiedDateUtc = SYSUTCDATETIME(),
+                   ModifiedByUserId = @ActorUserId
+             WHERE DecisionEvidenceAttachmentId = @DecisionEvidenceAttachmentId
+               AND DecisionSessionId = @DecisionSessionId
+               AND TenantId = @TenantId
+               AND IsDeleted = 0;
+            """, attachments, cancellationToken: cancellationToken));
     }
 
     public async Task PersistFrontierSnapshotAsync(DecisionFrontierSnapshotPersistence snapshot, CancellationToken cancellationToken = default)
@@ -1039,14 +1426,35 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     public async Task<DecisionResearchNeedPersistence?> GetLatestOpenResearchNeedAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
-        return await connection.QuerySingleOrDefaultAsync<DecisionResearchNeedPersistence>(new CommandDefinition("""
+        var row = await connection.QuerySingleOrDefaultAsync<DecisionResearchNeedRow>(new CommandDefinition("""
             SELECT TOP 1 DecisionResearchNeedId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, MatterId, DecisionBranchId,
                    DecisionDependencyEventId, IssueLabel, PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant,
-                   ExpectedDiscrimination, CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode
+                   ExpectedDiscrimination, CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, ResearchNeedTypeCode,
+                   SourceClassCode, IsResearchable, ParentResearchKey, RequiredResearchKeysJson,
+                   CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode
             FROM POLOXI.Legal_DecisionResearchNeed
             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND StatusCode = N'OPEN' AND IsDeleted = 0
             ORDER BY InformationValue DESC, CreatedDateUtc DESC;
             """, new { SessionId = decisionSessionId, TenantId = tenantId }, cancellationToken: cancellationToken));
+
+        return row is null
+            ? null
+            : new DecisionResearchNeedPersistence(
+                row.DecisionResearchNeedId, row.DecisionSessionId, row.TenantId, row.ActorUserId,
+                row.MatterId, row.DecisionBranchId, row.DecisionDependencyEventId, row.IssueLabel,
+                row.PropositionToResolve, row.AuthorityKind, row.RequiredEvidenceKind, row.WhyDecisionRelevant,
+                row.ExpectedDiscrimination, row.CurrentUncertainty, row.InformationValue,
+                row.FalsificationCondition, row.StatusCode)
+            {
+                ResearchNeedTypeCode = row.ResearchNeedTypeCode,
+                SourceClassCode = row.SourceClassCode,
+                IsResearchable = row.IsResearchable,
+                ParentResearchKey = row.ParentResearchKey,
+                RequiredResearchKeysJson = row.RequiredResearchKeysJson,
+                CandidateDiscriminationJson = row.CandidateDiscriminationJson,
+                SemanticProposalStatusCode = row.SemanticProposalStatusCode,
+                SemanticProposalReasonCode = row.SemanticProposalReasonCode,
+            };
     }
 
     public async Task UpdateSessionOutcomeAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string statusCode, decimal entropy, decimal margin, Guid? winnerCandidateId, CancellationToken cancellationToken = default)
@@ -1062,6 +1470,18 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                    ModifiedByUserId = @UserId
              WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId;
             """, new { StatusCode = statusCode, Entropy = entropy, Margin = margin, WinnerCandidateId = winnerCandidateId, SessionId = decisionSessionId, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task UpdateSessionAnswerAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string? finalAnswer, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            UPDATE POLOXI.Legal_DecisionSession
+               SET FinalAnswer = @FinalAnswer,
+                   ModifiedDateUtc = SYSUTCDATETIME(),
+                   ModifiedByUserId = @UserId
+             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId;
+            """, new { FinalAnswer = finalAnswer, SessionId = decisionSessionId, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
     }
 
     public async Task ReplaceBranchesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionBranchPersistence> branches, CancellationToken cancellationToken = default)
@@ -1127,6 +1547,102 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         IsDispositive = r.IsDispositive
     };
 
+    private static DecisionEvidencePersistence Map(DecisionEvidenceRow r) => new(
+        r.DecisionEvidenceId, r.DecisionBranchId, r.SourceRef, r.SourceTitle, r.Snippet,
+        r.IdentityFactor, r.CitationFactor, r.HoldingFactor, r.WeightFactor,
+        r.PropositionFit, r.VerificationValue, r.VerificationStatus)
+    {
+        SupportedObjective = r.SupportedObjective,
+        SupportingPassage = r.SupportingPassage,
+        LifecycleState = r.LifecycleState
+    };
+
+    private static DecisionGraphEdgePersistence Map(GraphEdgeRow r) => new(
+        r.EdgeId, r.RelationCode, r.SourceNodeKind, r.SourceNodeId, r.TargetNodeKind, r.TargetNodeId,
+        r.SupportWeight, r.Materiality, r.IsEssential, r.IsDispositive, r.VerificationStatus,
+        r.VerificationNotes, r.PropagatedStateCode)
+    {
+        SourceBranchId = r.SourceBranchId,
+        SourceCandidateId = r.SourceCandidateId,
+        SourceEvidenceId = r.SourceEvidenceId,
+        SourceAuthorityId = r.SourceAuthorityId,
+        MatterId = r.MatterId,
+        AlternativePathAllowed = r.AlternativePathAllowed,
+        PropagationPolicy = r.PropagationPolicy,
+        RowVersionNo = r.RowVersionNo
+    };
+
+    private sealed record GraphEdgeRow(
+        Guid EdgeId, string RelationCode, string SourceNodeKind, Guid SourceNodeId,
+        string TargetNodeKind, Guid TargetNodeId, decimal SupportWeight, decimal Materiality,
+        bool IsEssential, bool IsDispositive, string VerificationStatus, string? VerificationNotes,
+        string? PropagatedStateCode, Guid? SourceBranchId, Guid? SourceCandidateId,
+        Guid? SourceEvidenceId, string? SourceAuthorityId, Guid? MatterId,
+        bool AlternativePathAllowed, string PropagationPolicy, int RowVersionNo);
+
+    private sealed record DecisionEvidenceRow(
+        Guid DecisionEvidenceId,
+        Guid? DecisionBranchId,
+        string? SourceRef,
+        string? SourceTitle,
+        string? Snippet,
+        decimal IdentityFactor,
+        decimal CitationFactor,
+        decimal HoldingFactor,
+        decimal WeightFactor,
+        decimal PropositionFit,
+        decimal VerificationValue,
+        string VerificationStatus,
+        string? LifecycleState,
+        string? SupportedObjective,
+        string? SupportingPassage);
+
+    private sealed record DecisionEvidenceVerificationRow(
+        Guid DecisionEvidenceVerificationId, Guid DecisionEvidenceId, Guid DecisionSessionId,
+        Guid? DecisionBranchId, string SourceTypeCode, string ProfileCode, string DispositionCode,
+        bool IsVerified, bool IsDecisionAuthorized, string? BlockingReasonsJson, Guid? MatterId,
+        Guid TenantId, Guid? ActorUserId, DateTime EvaluatedDateUtc,
+        int MechanicalVerificationCount, int SemanticVerificationCount, int PoloxiDeepeningCount,
+        int CacheHitCount, int InputTokenCount, int OutputTokenCount, long LatencyMilliseconds,
+        Guid? SourceSnapshotId, int ProfileVersion, int VerificationVersion,
+        int RetrievedCount, int PreScreenRejectedCount);
+
+    private sealed record DecisionEvidenceVerificationFactorRow(
+        Guid DecisionEvidenceVerificationFactorId, Guid DecisionEvidenceVerificationId,
+        string FactorCode, string StateCode, string ReasonCode, string? Reason, string? VerifiedValue,
+        string? SourceRef, string? SupportingPassage, string VerificationMethod,
+        string? SupportedComponentsJson, string? UnsupportedComponentsJson, DateTime EvaluatedDateUtc,
+        string? PassageRef, string? VerifierId, string? VerifierVersion);
+
+    private sealed class DecisionResearchNeedRow
+    {
+        public Guid DecisionResearchNeedId { get; init; }
+        public Guid DecisionSessionId { get; init; }
+        public Guid TenantId { get; init; }
+        public Guid? ActorUserId { get; init; }
+        public Guid? MatterId { get; init; }
+        public Guid? DecisionBranchId { get; init; }
+        public Guid? DecisionDependencyEventId { get; init; }
+        public string? IssueLabel { get; init; }
+        public string? PropositionToResolve { get; init; }
+        public string? AuthorityKind { get; init; }
+        public string? RequiredEvidenceKind { get; init; }
+        public string? WhyDecisionRelevant { get; init; }
+        public decimal ExpectedDiscrimination { get; init; }
+        public decimal CurrentUncertainty { get; init; }
+        public decimal InformationValue { get; init; }
+        public string? FalsificationCondition { get; init; }
+        public string StatusCode { get; init; } = string.Empty;
+        public string ResearchNeedTypeCode { get; init; } = string.Empty;
+        public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
+        public bool IsResearchable { get; init; } = true;
+        public string? ParentResearchKey { get; init; }
+        public string? RequiredResearchKeysJson { get; init; }
+        public string? CandidateDiscriminationJson { get; init; }
+        public string? SemanticProposalStatusCode { get; init; }
+        public string? SemanticProposalReasonCode { get; init; }
+    }
+
     private sealed record GraphNodeRow(
         Guid NodeId, string NodeCode, string? DisplayName, string? Statement, decimal Support, bool IsEssential,
         bool IsSatisfied, bool IsDispositive, string VerificationStatus, int SortOrder,
@@ -1145,5 +1661,6 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         bool UsePoloxiEngine, string StatusCode, string? TerminalStateCode, string TerminationReason, Guid? WinnerCandidateId,
         decimal ContractCompleteness, decimal CandidateEntropy, decimal DecisionMargin, int DepthReached, int LlmCallCount,
         long DurationMs, string? FinalAnswer, string? ClarificationQuestion, string? ClarificationTarget, string? CorrelationId,
-        Guid? MatterId, string? NextBestActionText, string? NextBestActionImpactCode, string? NextBestActionRationale);
+        Guid? MatterId, string? NextBestActionText, string? NextBestActionImpactCode, string? NextBestActionRationale,
+        string? ResearchStatusCode, string? ResearchFailureDetail);
 }
