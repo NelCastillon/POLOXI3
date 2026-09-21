@@ -1371,13 +1371,15 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 (DecisionResearchNeedId, DecisionSessionId, MatterId, DecisionBranchId, DecisionDependencyEventId, IssueLabel,
                  PropositionToResolve, ResearchNeedTypeCode, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant, ExpectedDiscrimination,
                  CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, TenantId, CreatedByUserId,
-                 SourceClassCode, IsResearchable, ResearchKey, ParentResearchKey, RequiredResearchKeysJson,
+                  SourceClassCode, IsResearchable, ResearchKey, ResearchQuestion, SearchQuery, SearchConceptsJson,
+                  AuthorityKindsJson, ApplicationDeferred, ParentResearchKey, RequiredResearchKeysJson,
                  CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode)
             VALUES
                 (@DecisionResearchNeedId, @DecisionSessionId, @MatterId, @DecisionBranchId, @DecisionDependencyEventId, @IssueLabel,
                  @PropositionToResolve, @ResearchNeedTypeCode, @AuthorityKind, @RequiredEvidenceKind, @WhyDecisionRelevant, @ExpectedDiscrimination,
                  @CurrentUncertainty, @InformationValue, @FalsificationCondition, @StatusCode, @TenantId, @ActorUserId,
-                 @SourceClassCode, @IsResearchable, @ResearchKey, @ParentResearchKey, @RequiredResearchKeysJson,
+                  @SourceClassCode, @IsResearchable, @ResearchKey, @ResearchQuestion, @SearchQuery, @SearchConceptsJson,
+                  @AuthorityKindsJson, @ApplicationDeferred, @ParentResearchKey, @RequiredResearchKeysJson,
                  @CandidateDiscriminationJson, @SemanticProposalStatusCode, @SemanticProposalReasonCode);
             """, researchNeed, cancellationToken: cancellationToken));
     }
@@ -1478,7 +1480,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             SELECT TOP 1 DecisionResearchNeedId, DecisionSessionId, TenantId, CreatedByUserId AS ActorUserId, MatterId, DecisionBranchId,
                    DecisionDependencyEventId, IssueLabel, PropositionToResolve, AuthorityKind, RequiredEvidenceKind, WhyDecisionRelevant,
                    ExpectedDiscrimination, CurrentUncertainty, InformationValue, FalsificationCondition, StatusCode, ResearchNeedTypeCode,
-                   SourceClassCode, IsResearchable, ResearchKey, ParentResearchKey, RequiredResearchKeysJson,
+                    SourceClassCode, IsResearchable, ResearchKey, ResearchQuestion, SearchQuery, SearchConceptsJson,
+                    AuthorityKindsJson, ApplicationDeferred, ParentResearchKey, RequiredResearchKeysJson,
                    CandidateDiscriminationJson, SemanticProposalStatusCode, SemanticProposalReasonCode
             FROM POLOXI.Legal_DecisionResearchNeed
             WHERE DecisionSessionId = @SessionId AND TenantId = @TenantId AND StatusCode = N'OPEN' AND IsDeleted = 0
@@ -1498,6 +1501,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 SourceClassCode = row.SourceClassCode,
                 IsResearchable = row.IsResearchable,
                 ResearchKey = row.ResearchKey,
+                ResearchQuestion = row.ResearchQuestion,
+                SearchQuery = row.SearchQuery,
+                SearchConceptsJson = row.SearchConceptsJson,
+                AuthorityKindsJson = row.AuthorityKindsJson,
+                ApplicationDeferred = row.ApplicationDeferred,
                 ParentResearchKey = row.ParentResearchKey,
                 RequiredResearchKeysJson = row.RequiredResearchKeysJson,
                 CandidateDiscriminationJson = row.CandidateDiscriminationJson,
@@ -1686,6 +1694,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
         public bool IsResearchable { get; init; } = true;
         public string? ResearchKey { get; init; }
+        public string? ResearchQuestion { get; init; }
+        public string? SearchQuery { get; init; }
+        public string? SearchConceptsJson { get; init; }
+        public string? AuthorityKindsJson { get; init; }
+        public bool ApplicationDeferred { get; init; }
         public string? ParentResearchKey { get; init; }
         public string? RequiredResearchKeysJson { get; init; }
         public string? CandidateDiscriminationJson { get; init; }

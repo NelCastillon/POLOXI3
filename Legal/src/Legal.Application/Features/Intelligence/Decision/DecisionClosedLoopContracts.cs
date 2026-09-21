@@ -101,9 +101,14 @@ public sealed record DecisionResearchSemanticLeaf
 {
     public required string ResearchKey { get; init; }
     public required string ResearchNeedType { get; init; }
+    public required string ResearchQuestion { get; init; }
     public required string Proposition { get; init; }
     public required string SourceClass { get; init; }
     public bool Researchable { get; init; }
+    public string? SearchQuery { get; init; }
+    public IReadOnlyList<string> SearchConcepts { get; init; } = [];
+    public IReadOnlyList<string> AuthorityKinds { get; init; } = [];
+    public bool ApplicationDeferred { get; init; }
     public IReadOnlyList<string> CandidateDiscrimination { get; init; } = [];
     public string? ParentResearchKey { get; init; }
     public IReadOnlyList<string> Requires { get; init; } = [];
@@ -212,6 +217,11 @@ public sealed record DecisionResearchNeedPersistence(
     public string SourceClassCode { get; init; } = DecisionResearchSourceClasses.LegalAuthority;
     public bool IsResearchable { get; init; } = true;
     public string? ResearchKey { get; init; }
+    public string? ResearchQuestion { get; init; }
+    public string? SearchQuery { get; init; }
+    public string? SearchConceptsJson { get; init; }
+    public string? AuthorityKindsJson { get; init; }
+    public bool ApplicationDeferred { get; init; }
     public string? ParentResearchKey { get; init; }
     public string? RequiredResearchKeysJson { get; init; }
     public string? CandidateDiscriminationJson { get; init; }

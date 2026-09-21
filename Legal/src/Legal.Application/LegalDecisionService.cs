@@ -1490,8 +1490,11 @@ public sealed class LegalDecisionService(
 
             roundNumber++;
             var narrative = new List<string>();
-            var objective = researchNeed.PropositionToResolve
+            var proposition = researchNeed.PropositionToResolve
                 ?? throw new InvalidOperationException("The accepted research need has no proposition.");
+            var searchQuery = string.IsNullOrWhiteSpace(researchNeed.SearchQuery)
+                ? proposition
+                : researchNeed.SearchQuery;
             // DIAGNOSTIC — Boundary B: a research round is actually starting. If A and C are logged but B is
             // never reached, the loop stopped on a pre-round guard (StopReason in the C record explains which).
             logger.LogInformation(
@@ -1520,7 +1523,7 @@ public sealed class LegalDecisionService(
                 else try
                 {
                     sources = await retriever.RetrieveAsync(
-                        new DecisionRetrievalRequest(contextCode, objective, 5), cancellationToken);
+                        new DecisionRetrievalRequest(contextCode, searchQuery, 5), cancellationToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -1536,13 +1539,13 @@ public sealed class LegalDecisionService(
                         Guid.NewGuid(), target.DecisionBranchId, s.SourceRef, s.Title, s.Snippet,
                         0m, 0m, 0m, 0m, 0m, 0m, DecisionVerificationStates.Unverified)
                     {
-                        SupportedObjective = objective
+                        SupportedObjective = proposition
                     })
                     .ToList();
                 var proposedAttachments = retrievedEvidence.Select(e => new DecisionEvidenceAttachmentPersistence(
                     Guid.NewGuid(), decisionSessionId, tenantId, userId, current.MatterId,
                     researchNeed.DecisionResearchNeedId, target.DecisionBranchId, e.DecisionEvidenceId,
-                    objective, DecisionEvidenceAttachmentStates.ProposedSupportFor,
+                    proposition, DecisionEvidenceAttachmentStates.ProposedSupportFor,
                     dependencyPath?.EdgeId, IsAuthoritative: false, AssessmentReason: null)).ToList();
                 await repository.PersistResearchEvidenceAsync(
                     tenantId, userId, decisionSessionId, retrievedEvidence, cancellationToken);
@@ -1555,7 +1558,7 @@ public sealed class LegalDecisionService(
                 foreach (var (source, persisted) in sources.Zip(retrievedEvidence))
                 {
                     var result = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
-                        persisted.DecisionEvidenceId, target.DecisionBranchId, objective,
+                        persisted.DecisionEvidenceId, target.DecisionBranchId, proposition,
                         source.SourceRef, source.Title, source.Snippet, source.SourceType,
                         source.Jurisdiction, source.AuthorityDate)
                     {
@@ -1564,7 +1567,7 @@ public sealed class LegalDecisionService(
                         ProviderIdentityVerified = source.ProviderIdentityVerified,
                     }, cancellationToken);
                     verificationResults.Add(result);
-                    verified.Add(ToEvidencePersistence(source, objective, target.DecisionBranchId, result));
+                    verified.Add(ToEvidencePersistence(source, proposition, target.DecisionBranchId, result));
                 }
                 var anyVerified = verified.Any(e =>
                     string.Equals(e.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase));
@@ -1634,7 +1637,7 @@ public sealed class LegalDecisionService(
                     edgesVerifiedThisRun.Add(dependencyPath.EdgeId);
                     var changeRequest = new DecisionVerificationChangeRequest(
                         dependencyPath.EdgeId, newStatus,
-                        Notes: $"Autonomous research loop round {roundNumber}: {objective}",
+                        Notes: $"Autonomous research loop round {roundNumber}: {proposition}",
                         IdempotencyKey: $"RESEARCHLOOP:{decisionSessionId:N}:{roundNumber}:{dependencyPath.EdgeId:N}",
                         RunClosedLoop: true);
 

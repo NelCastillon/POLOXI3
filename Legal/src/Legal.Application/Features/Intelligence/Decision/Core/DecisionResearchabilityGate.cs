@@ -33,7 +33,9 @@ public sealed class DecisionResearchabilityGate
         {
             var leafDefects = new List<string>();
             if (string.IsNullOrWhiteSpace(leaf.ResearchKey)) leafDefects.Add("RESEARCH_KEY_MISSING");
+            if (string.IsNullOrWhiteSpace(leaf.ResearchQuestion)) leafDefects.Add("RESEARCH_QUESTION_MISSING");
             if (string.IsNullOrWhiteSpace(leaf.Proposition)) leafDefects.Add("PROPOSITION_MISSING");
+            if (LooksLikeQuestion(leaf.Proposition)) leafDefects.Add("PROPOSITION_MUST_BE_DECLARATIVE");
             if (!AllowedTypes.Contains(leaf.ResearchNeedType)) leafDefects.Add("RESEARCH_NEED_TYPE_INVALID");
             if (leaf.CandidateDiscrimination.Count == 0) leafDefects.Add("CANDIDATE_DISCRIMINATION_MISSING");
             if (leaf.Requires.Any(required => !keys.Contains(required))) leafDefects.Add("REQUIRED_LEAF_UNKNOWN");
@@ -44,9 +46,17 @@ public sealed class DecisionResearchabilityGate
                 leafDefects.Add("DERIVED_NODE_MUST_NOT_BE_RETRIEVED");
             if (derived && leaf.Requires.Count < 2)
                 leafDefects.Add("DERIVED_NODE_DEPENDENCIES_INSUFFICIENT");
+            if (derived && !leaf.ApplicationDeferred)
+                leafDefects.Add("APPLICATION_MUST_BE_DEFERRED");
+            if (derived && (!string.IsNullOrWhiteSpace(leaf.SearchQuery) || leaf.SearchConcepts.Count > 0 || leaf.AuthorityKinds.Count > 0))
+                leafDefects.Add("DERIVED_NODE_MUST_NOT_HAVE_RETRIEVAL_INSTRUCTIONS");
 
             if (leaf.Researchable)
             {
+                if (string.IsNullOrWhiteSpace(leaf.SearchQuery)) leafDefects.Add("SEARCH_QUERY_MISSING");
+                if (leaf.SearchConcepts.Count == 0) leafDefects.Add("SEARCH_CONCEPTS_MISSING");
+                if (leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Mixed, StringComparison.OrdinalIgnoreCase))
+                    leafDefects.Add("MIXED_LEAF_MUST_BE_DECOMPOSED");
                 var expectedSource = leaf.ResearchNeedType is DecisionResearchNeedTypes.MatterFact or DecisionResearchNeedTypes.MatterEvidence
                     ? DecisionResearchSourceClasses.MatterDocument
                     : DecisionResearchSourceClasses.LegalAuthority;
@@ -59,6 +69,12 @@ public sealed class DecisionResearchabilityGate
                     leafDefects.Add("MATTER_FINDING_NOT_PUBLICLY_RESEARCHABLE");
                 if (LooksLikeVagueOrBiasedLegalQuestion(leaf.Proposition))
                     leafDefects.Add("LEGAL_PROPOSITION_NOT_PRECISE");
+                if (leaf.SourceClass.Equals(DecisionResearchSourceClasses.LegalAuthority, StringComparison.OrdinalIgnoreCase)
+                    && leaf.AuthorityKinds.Count == 0)
+                    leafDefects.Add("AUTHORITY_KINDS_MISSING");
+                if (leaf.SourceClass.Equals(DecisionResearchSourceClasses.MatterDocument, StringComparison.OrdinalIgnoreCase)
+                    && leaf.AuthorityKinds.Count > 0)
+                    leafDefects.Add("MATTER_LEAF_MUST_NOT_HAVE_AUTHORITY_KINDS");
             }
 
             if (leafDefects.Count == 0 && leaf.Researchable)
@@ -76,6 +92,24 @@ public sealed class DecisionResearchabilityGate
             defects.Add("APPLICATION_NODE_MISSING");
 
         return new DecisionResearchabilityResult(defects.Count == 0, defects, valid);
+    }
+
+    private static bool LooksLikeQuestion(string proposition)
+    {
+        var value = proposition.Trim();
+        if (value.EndsWith('?'))
+            return true;
+        return value.StartsWith("what ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("which ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("who ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("when ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("where ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("how ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("whether ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("does ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("do ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("is ", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("are ", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool LooksLikeApplicationConclusion(string proposition)
