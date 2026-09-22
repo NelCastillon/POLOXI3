@@ -32,16 +32,19 @@ public sealed class DecisionResearchabilityGate
         foreach (var leaf in proposal.Leaves)
         {
             var leafDefects = new List<string>();
+            var frontierContainer = leaf.IsFrontierQuestionContainer;
             if (string.IsNullOrWhiteSpace(leaf.ResearchKey)) leafDefects.Add("RESEARCH_KEY_MISSING");
             if (string.IsNullOrWhiteSpace(leaf.ResearchQuestion)) leafDefects.Add("RESEARCH_QUESTION_MISSING");
             if (string.IsNullOrWhiteSpace(leaf.Proposition)) leafDefects.Add("PROPOSITION_MISSING");
-            if (LooksLikeQuestion(leaf.Proposition)) leafDefects.Add("PROPOSITION_MUST_BE_DECLARATIVE");
+            if (!frontierContainer && LooksLikeQuestion(leaf.Proposition)) leafDefects.Add("PROPOSITION_MUST_BE_DECLARATIVE");
             if (!AllowedTypes.Contains(leaf.ResearchNeedType)) leafDefects.Add("RESEARCH_NEED_TYPE_INVALID");
             if (leaf.CandidateDiscrimination.Count == 0) leafDefects.Add("CANDIDATE_DISCRIMINATION_MISSING");
             if (leaf.Requires.Any(required => !keys.Contains(required))) leafDefects.Add("REQUIRED_LEAF_UNKNOWN");
 
             var derived = leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Application, StringComparison.OrdinalIgnoreCase)
                 || leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Derived, StringComparison.OrdinalIgnoreCase);
+            if (frontierContainer && !derived)
+                leafDefects.Add("FRONTIER_QUESTION_MUST_BE_DERIVED");
             if (derived && (leaf.Researchable || !leaf.SourceClass.Equals(DecisionResearchSourceClasses.None, StringComparison.OrdinalIgnoreCase)))
                 leafDefects.Add("DERIVED_NODE_MUST_NOT_BE_RETRIEVED");
             if (derived && leaf.Requires.Count < 2)
@@ -84,8 +87,6 @@ public sealed class DecisionResearchabilityGate
 
         if (valid.Count == 0)
             defects.Add("NO_SOURCE_RESOLVABLE_LEAVES");
-        if (valid.Count < 2)
-            defects.Add("INSUFFICIENT_SOURCE_RESOLVABLE_LEAVES");
         if (!proposal.Leaves.Any(leaf =>
                 leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Application, StringComparison.OrdinalIgnoreCase)
                 && !leaf.Researchable))

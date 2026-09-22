@@ -597,6 +597,30 @@ public sealed class DecisionIntegrityTraceProjectorTests
     }
 
     [Fact]
+    public void OutputControl_SuppressedClaimsWithCleanFinalAudit_AreSuccessfulControls()
+    {
+        var response = BaseResponse() with
+        {
+            OutputAuthorizations =
+            [
+                new DecisionOutputAuthorizationDto(Guid.NewGuid(), "c1", "UNVERIFIED", "NONE", "SUPPRESS", false, "r", true),
+                new DecisionOutputAuthorizationDto(Guid.NewGuid(), "c2", "UNVERIFIED", "NONE", "SUPPRESS", false, "r", true),
+            ],
+            GovernanceVerdict = Verdict(outputClean: true, violations: []),
+            OutputTransformSummary = new DecisionOutputTransformSummaryDto(
+                RequiredCount: 2, AppliedCount: 2, PostTransformClean: true),
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(IntegrityTraceStatus.Passed, trace.OutputControl.Status);
+        Assert.Equal("ENFORCED · 0 unauthorized · 0A · 0Q · 2S · 0C", trace.OutputControl.CompactSummary);
+        Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Transformations applied" && d.Value == "2");
+        Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Original assertions remain" && d.Value == "0");
+        Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Post-transform audit" && d.Value == "CLEAN");
+    }
+
+    [Fact]
     public void OutputControl_QualifiedClaimsWithCleanFinalAudit_AreSuccessfulControls()
     {
         var response = BaseResponse() with
@@ -614,7 +638,7 @@ public sealed class DecisionIntegrityTraceProjectorTests
         var trace = DecisionIntegrityTraceProjector.Project(response);
 
         Assert.Equal(IntegrityTraceStatus.Passed, trace.OutputControl.Status);
-        Assert.Equal("0A · 3Q · 0S · 0C", trace.OutputControl.CompactSummary);
+        Assert.Equal("ENFORCED · 0 unauthorized · 0A · 3Q · 0S · 0C", trace.OutputControl.CompactSummary);
         Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Transformations applied" && d.Value == "3");
         Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Original assertions remain" && d.Value == "0");
         Assert.Contains(trace.OutputControl.Detail, d => d.Label == "Post-transform audit" && d.Value == "CLEAN");
@@ -717,6 +741,7 @@ public sealed class DecisionIntegrityTraceProjectorTests
         Assert.Contains(trace.Research.Detail, d => d.Label == "Failure type" && d.Value == "InvalidOperationException");
         Assert.Contains(trace.Research.Detail, d => d.Label == "Reason" && d.Value.Contains("no matching element"));
         Assert.Contains(trace.Research.Detail, d => d.Label == "Authoritative state changed" && d.Value == "NO");
+        Assert.Equal(IntegrityState.AttentionRequired, trace.Integrity);
     }
 
     [Fact]
@@ -741,6 +766,54 @@ public sealed class DecisionIntegrityTraceProjectorTests
         Assert.Contains(trace.Research.Detail, d => d.Label == "Failure type" && d.Value == "InvalidOperationException");
         Assert.Contains(trace.Research.Detail, d => d.Label == "Reason" && d.Value.Contains("no matching element"));
         Assert.Contains(trace.Research.Detail, d => d.Label == "Authoritative state changed" && d.Value == "NO");
+        Assert.Equal(IntegrityState.AttentionRequired, trace.Integrity);
+    }
+
+    [Fact]
+    public void Research_PreRoundRepairFailure_ProjectsTransformationAttempts()
+    {
+        var transformation = new DecisionResearchTransformationDto(
+            FrontierBranchId: Guid.NewGuid(), FrontierBranchCode: "C3.B1.frontier",
+            FrontierLabel: "Allocation at or below the statutory threshold",
+            Attempts:
+            [
+                new DecisionResearchTransformationAttemptDto(
+                    Attempt: 1, ModelCode: "Astra", Status: "GATE_REJECTED", LeavesProduced: 1,
+                    Disposition: "REPAIR", Defects: ["C3.B1.frontier:PROPOSITION_MUST_BE_DECLARATIVE"],
+                    Leaves:
+                    [
+                        new DecisionResearchTransformationLeafDto(
+                            "C3.B1.frontier", DecisionResearchNeedTypes.Mixed,
+                            "Allocation at or below the statutory threshold",
+                            DecisionResearchSourceClasses.None, false, "REJECT", null, []),
+                    ]),
+                new DecisionResearchTransformationAttemptDto(
+                    Attempt: 2, ModelCode: "Astra", Status: "MALFORMED_JSON", LeavesProduced: 0,
+                    Disposition: "REPAIR", Defects: ["JSON_PARSE_FAILED"], Leaves: []),
+            ],
+            SelectedResearchKey: null, SelectionReason: null, SearchQuery: null);
+        var response = BaseResponse() with
+        {
+            ResearchSummary = new DecisionResearchLoopSummaryDto(
+                Enabled: true, RoundsExecuted: 0, RoundsCommitted: 0, RoundsRolledBack: 0,
+                TotalRetrievals: 0, StopReason: DecisionResearchLoopStopReasons.ResearchNeedUnresolved,
+                Rounds: [], Failure: new DecisionResearchFailureDto(
+                    RoundNumber: 0, Stage: "RESEARCH_NEED_SELECTION", ExceptionType: "RESEARCHABILITY_GATE",
+                    Reason: "REPAIR: JSON_PARSE_FAILED", AuthoritativeStateChanged: false)
+                {
+                    Transformation = transformation,
+                }),
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(IntegrityState.AttentionRequired, trace.Integrity);
+        Assert.Contains(trace.Research.Children, child =>
+            child.Title == "Research Need Attempt 1" && child.Summary == "GATE_REJECTED · REPAIR");
+        Assert.Contains(trace.Research.Children, child =>
+            child.Title == "Research Need Attempt 2" && child.Summary == "MALFORMED_JSON · REPAIR");
+        Assert.Contains(trace.Research.Children.SelectMany(child => child.Detail), detail =>
+            detail.Label == "Defect" && detail.Value == "JSON_PARSE_FAILED");
     }
 
     [Fact]

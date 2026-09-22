@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence;
 using Legal.Application.Features.Intelligence.Decision;
+using Microsoft.AspNetCore.Components.Forms;
 
 namespace Legal.Web.Services;
 
@@ -64,6 +65,7 @@ public sealed class ApiClient(HttpClient httpClient)
         // POLOXI Legal Decision cockpit — matter dashboard + timeline.
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>> GetLegalDecisionMattersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>>("api/legal_decision/matters",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto> GetLegalDecisionMatterFacetsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto>("api/legal_decision/matters/facets",token)??new([],[],[]);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto?> GetLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>($"api/legal_decision/domainpacks/{packCode}",token);
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto?> GetLegalDecisionMatterAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>($"api/legal_decision/matters/{matterId}",token);
         public async Task<Guid> CreateLegalDecisionMatterAsync(Legal.Application.Features.Intelligence.Decision.DecisionMatterCreateRequest request,CancellationToken token=default)
         {
@@ -76,6 +78,23 @@ public sealed class ApiClient(HttpClient httpClient)
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> GetLegalDecisionSessionAsync(Guid sessionId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse>($"api/legal_decision/sessions/{sessionId}",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionClosedLoopResultDto?> ApplyLegalDecisionVerificationAsync(Guid sessionId,Legal.Application.Features.Intelligence.Decision.DecisionVerificationChangeRequest request,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/sessions/{sessionId}/verify",request,token);response.EnsureSuccessStatusCode();return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionClosedLoopResultDto>(token);}
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>> GetLegalDecisionMatterSessionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>>($"api/legal_decision/matters/{matterId}/sessions",token)??[];
+        public async Task<IReadOnlyCollection<LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
+        public async Task<LegalDocumentDto?> UploadLegalMatterDocumentAsync(Guid matterId,IBrowserFile file,string? documentTypeCode,string? domainPackCode,CancellationToken token=default)
+        {
+            using var form=new MultipartFormDataContent();
+            using var stream=file.OpenReadStream(100*1024*1024,token);
+            using var content=new StreamContent(stream);
+            content.Headers.ContentType=new(file.ContentType);
+            form.Add(content,"file",file.Name);
+            if(!string.IsNullOrWhiteSpace(documentTypeCode))form.Add(new StringContent(documentTypeCode),"documentTypeCode");
+            if(!string.IsNullOrWhiteSpace(domainPackCode))form.Add(new StringContent(domainPackCode),"domainPackCode");
+            using var response=await _httpClient.PostAsync($"api/legal_decision/matters/{matterId}/documents",form,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<LegalDocumentDto>(cancellationToken:token);
+        }
+        public async Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetLegalDocumentPassagesAsync(Guid documentVersionId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<LegalDocumentPassageDto>>($"api/legal_decision/documents/versions/{documentVersionId}/passages",token)??[];
+        public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetLegalMatterRetrievalTelemetryAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>($"api/legal_decision/matters/{matterId}/retrieval-telemetry",token)??[];
+        public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetLegalSessionRetrievalTelemetryAsync(Guid sessionId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>($"api/legal_decision/sessions/{sessionId}/retrieval-telemetry",token)??[];
         public async Task UpdateLegalDecisionMatterAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionMatterUpdateRequest request,CancellationToken token=default)
         {
             using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}",request,token);
@@ -91,6 +110,40 @@ public sealed class ApiClient(HttpClient httpClient)
             using var response=await _httpClient.DeleteAsync($"api/legal_decision/matters/{matterId}",token);
             await EnsureSuccessWithDetailAsync(response,token);
         }
+        // POLOXI Legal Decision — Personal Injury manual matter wizard (profile + child aggregates).
+        public async Task<Legal.Application.Features.Intelligence.Decision.PersonalInjuryOptionsDto> GetLegalDecisionPersonalInjuryOptionsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PersonalInjuryOptionsDto>("api/legal_decision/personalinjury/options",token)??new();
+        public Task<Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileDto?> GetLegalDecisionPersonalInjuryProfileAsync(Guid matterId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileDto>($"api/legal_decision/matters/{matterId}/personalinjury",token);
+        public async Task SaveLegalDecisionPersonalInjuryProfileAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.PersonalInjuryProfileSaveRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/personalinjury",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
+        // POLOXI Legal Decision — Personal Injury Generate-New-Matter draft / provenance (scaffold).
+        public async Task<Guid> CreateLegalDecisionPersonalInjuryDraftAsync(Legal.Application.Features.Intelligence.Decision.PersonalInjuryMatterDraftCreateRequest request,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/personalinjury/drafts",request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            var created=await response.Content.ReadFromJsonAsync<CreatedDraftResult>(cancellationToken:token);
+            return created?.DecisionPIMatterDraftId??Guid.Empty;
+        }
+        public Task<Legal.Application.Features.Intelligence.Decision.PersonalInjuryMatterDraftDto?> GetLegalDecisionPersonalInjuryDraftAsync(Guid draftId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PersonalInjuryMatterDraftDto>($"api/legal_decision/personalinjury/drafts/{draftId}",token);
+        public async Task ConfirmLegalDecisionPersonalInjuryDraftAsync(Guid draftId,Guid matterId,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsync($"api/legal_decision/personalinjury/drafts/{draftId}/confirm/{matterId}",content:null,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
+        // POLOXI Legal Decision — Personal Injury decision intelligence (decision types + PI decide pipeline).
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.PersonalInjuryDecisionTypeDto>> GetLegalDecisionPersonalInjuryDecisionTypesAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.PersonalInjuryDecisionTypeDto>>("api/legal_decision/personalinjury/decisiontypes",token)??[];
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.PersonalInjuryStageDecisionDto>> GetLegalDecisionPersonalInjuryStageDecisionMapAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.PersonalInjuryStageDecisionDto>>("api/legal_decision/personalinjury/stagedecisionmap",token)??[];
+        public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> DecideLegalDecisionPersonalInjuryAsync(Legal.Application.Features.Intelligence.Decision.PersonalInjuryDecisionContext context,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/personalinjury/decide",context,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse>(cancellationToken:token);
+        }
+
+        private sealed record CreatedDraftResult(Guid DecisionPIMatterDraftId);
+
         private sealed record CreatedMatterResult(Guid DecisionMatterId);
 
     public async Task<IReadOnlyList<MathExecutionSummary>> GetMathRunsAsync(int take=50,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<MathExecutionSummary>>($"api/intelligence_math/runs?take={take}",token)??[];

@@ -54,6 +54,7 @@ builder.Services.AddScoped<Legal.Application.Abstractions.Services.IEpistemicTen
 builder.Services.AddSingleton<Legal.Api.Services.WideSearchOperationStore>();
 // Transactional outbox drain worker — delivers invitation emails after commit (retry-safe).
 builder.Services.AddHostedService<Legal.Api.Services.OutboxDrainHostedService>();
+builder.Services.AddHostedService<Legal.Api.Services.LegalDocumentSearchProjectionHostedService>();
 
 var app = builder.Build();
 

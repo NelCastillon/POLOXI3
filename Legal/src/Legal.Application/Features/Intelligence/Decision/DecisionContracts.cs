@@ -49,6 +49,17 @@ public sealed record DecisionSearchRequest(
     // typed legal graph and readiness reflect what decision is actually being asked NOW.
     [StringLength(200)] public string? Posture { get; init; }
     [StringLength(300)] public string? MotionTarget { get; init; }
+
+    // Matter jurisdiction / governing law (e.g. "California") threaded into evidence verification so
+    // AuthorityVerifier can establish legal applicability of retrieved authorities. When a retrieved
+    // source declares its own jurisdiction that takes precedence; this is the matter-level fallback so
+    // authority applicability is not left AUTHORITY_JURISDICTION_NOT_ESTABLISHED. Null = no matter context.
+    [StringLength(120)] public string? Jurisdiction { get; init; }
+
+    // Practice-area Domain Pack (POLOXI.Legal_DecisionDomainPack.PackCode) that supplies domain
+    // semantics (terminology, decision-hierarchy dimensions, evidence types, verification profiles)
+    // to the decision. Advisory only: POLOXI Core reasoning is unchanged. Null = no domain pack.
+    [StringLength(60)] public string? DomainPackCode { get; init; }
 }
 
 // DB-backed model option for the decision Model dropdown.
@@ -124,7 +135,30 @@ public sealed record DecisionBranchDto(
     decimal AdvScore,
     bool IsOnFrontier,
     string? StopReason,
-    int SortOrder);
+    int SortOrder)
+{
+    public string GenerationOriginCode { get; init; } = DecisionBranchGenerationOrigins.DynamicLlm;
+    public Guid? DecisionDomainConceptId { get; init; }
+    public string? DomainConceptCode { get; init; }
+    public decimal? GuardrailMatchScore { get; init; }
+    public string? GuardrailActionCode { get; init; }
+    public int? GuardrailVersion { get; init; }
+}
+
+public static class DecisionBranchGenerationOrigins
+{
+    public const string DynamicLlm = "DYNAMIC_LLM";
+    public const string DynamicLlmEnriched = "DYNAMIC_LLM_ENRICHED";
+    public const string DomainFallback = "DOMAIN_FALLBACK";
+}
+
+public static class DecisionGuardrailActions
+{
+    public const string NovelAccepted = "NOVEL_ACCEPTED";
+    public const string ConceptMatched = "CONCEPT_MATCHED";
+    public const string ConstraintEnriched = "CONSTRAINT_ENRICHED";
+    public const string FallbackAdded = "FALLBACK_ADDED";
+}
 
 public sealed record DecisionEvidenceDto(
     Guid DecisionEvidenceId,
@@ -217,6 +251,10 @@ public sealed record DecisionSearchResponse(
     // Decision readiness checklist (shown separately from outcome strength; §readiness).
     public IReadOnlyCollection<DecisionReadinessItemDto> Readiness { get; init; } = [];
 
+    // Audit-only summary of DB-backed Domain Pack guardrails applied to the dynamic hierarchy.
+    // It never participates in candidate scoring, IV, frontier selection, or readiness.
+    public DecisionDomainGuardrailSummaryDto? DomainGuardrails { get; init; }
+
     // ── POLOXI Legal V2 (dependency-aware) additions. Empty/null on the V1 path. ──
     public bool UsedDependencyGraph { get; init; }
     // When the graph was enabled but no typed graph was produced, this carries the deterministic
@@ -283,6 +321,14 @@ public sealed record DecisionSearchResponse(
     // The projected Decision Integrity Trace. Null only on legacy paths that don't project it.
     public DecisionIntegrityTraceDto? IntegrityTrace { get; init; }
 }
+
+public sealed record DecisionDomainGuardrailSummaryDto(
+    int DynamicBranchCount,
+    int EnrichedBranchCount,
+    int NovelBranchCount,
+    int DormantFallbackCount,
+    IReadOnlyCollection<string> AppliedConceptCodes,
+    string PolicyCode);
 
 public sealed record DecisionOutputClaimExtractionDto(
     bool Attempted,
@@ -393,6 +439,11 @@ public sealed record DecisionMatterDto(
     DateTime CreatedDateUtc,
     DateTime? ModifiedDateUtc)
 {
+    // ── Practice-area classification (Domain Pack scoping, e.g. PERSONAL_INJURY). ──
+    public string? PracticeAreaCode { get; init; }
+    public string? ClaimTypeCode { get; init; }
+    public string? DomainPackCode { get; init; }
+
     // ── Structured Type dimension (legacy MatterTypeCode + Subtype). ──
     public string? Subtype { get; init; }
 
@@ -425,6 +476,11 @@ public sealed record DecisionMatterCreateRequest(
     [StringLength(200)] string? Posture,
     [StringLength(4000)] string? Description)
 {
+    // ── Practice-area classification (Domain Pack scoping, e.g. PERSONAL_INJURY). ──
+    [StringLength(60)] public string? PracticeAreaCode { get; init; }
+    [StringLength(120)] public string? ClaimTypeCode { get; init; }
+    [StringLength(60)] public string? DomainPackCode { get; init; }
+
     // ── Structured Type dimension. ──
     [StringLength(120)] public string? Subtype { get; init; }
 
@@ -450,6 +506,11 @@ public sealed record DecisionMatterUpdateRequest(
     [StringLength(200)] string? Posture,
     [StringLength(4000)] string? Description)
 {
+    // ── Practice-area classification (Domain Pack scoping, e.g. PERSONAL_INJURY). ──
+    [StringLength(60)] public string? PracticeAreaCode { get; init; }
+    [StringLength(120)] public string? ClaimTypeCode { get; init; }
+    [StringLength(60)] public string? DomainPackCode { get; init; }
+
     // ── Structured Type dimension. ──
     [StringLength(120)] public string? Subtype { get; init; }
 
@@ -465,6 +526,67 @@ public sealed record DecisionMatterUpdateRequest(
     [StringLength(200)] public string? RespondingParty { get; init; }
     [StringLength(300)] public string? MotionTarget { get; init; }
     [StringLength(300)] public string? RequestedDisposition { get; init; }
+}
+
+// ── Domain Pack (practice-area domain semantics) DTOs
+// A database-backed Domain Pack supplies terminology, decision-hierarchy dimensions, evidence
+// classifications, verification profiles, and matter-type taxonomy for a practice area. POLOXI Core
+// owns all decision reasoning; the pack is advisory domain configuration only.
+public sealed record DecisionDomainPackDto(
+    Guid DecisionDomainPackId,
+    string PackCode,
+    string PracticeAreaCode,
+    string Name,
+    string? Description,
+    IReadOnlyCollection<DecisionDomainPackDimensionDto> Dimensions,
+    IReadOnlyCollection<DecisionDomainPackEvidenceTypeDto> EvidenceTypes,
+    IReadOnlyCollection<DecisionDomainPackVerificationProfileDto> VerificationProfiles,
+    IReadOnlyCollection<DecisionDomainPackMatterTypeDto> MatterTypes)
+{
+    public IReadOnlyCollection<DecisionDomainConceptDto> Concepts { get; init; } = [];
+    public IReadOnlyCollection<DecisionDomainConceptRelationDto> ConceptRelations { get; init; } = [];
+}
+
+public sealed record DecisionDomainPackDimensionDto(string DimensionCode, string Name, string? Description);
+
+public sealed record DecisionDomainPackEvidenceTypeDto(string EvidenceTypeCode, string Name, string? DimensionCode, string? Description);
+
+public sealed record DecisionDomainPackVerificationProfileDto(string ProfileCode, string Name, string? EvidenceTypeCode, string? Description);
+
+public sealed record DecisionDomainPackMatterTypeDto(string MatterTypeCode, string Name, string? Description);
+
+public sealed record DecisionDomainConceptDto(
+    Guid DecisionDomainConceptId,
+    string ConceptCode,
+    string DimensionCode,
+    string Name,
+    string? Description,
+    string ConceptKindCode,
+    string SourceClassCode,
+    string? VerificationProfileCode,
+    string? JurisdictionCode,
+    string? MatterTypeCode,
+    bool IsRequiredCoverage,
+    bool IsFallbackEligible,
+    int SortOrder,
+    int VersionNumber);
+
+public sealed record DecisionDomainConceptRelationDto(
+    Guid DecisionDomainConceptRelationId,
+    string SourceConceptCode,
+    string TargetConceptCode,
+    string RelationTypeCode,
+    string? ConstraintCode,
+    string? Description,
+    string? JurisdictionCode,
+    string? MatterTypeCode,
+    bool IsHardConstraint,
+    int SortOrder);
+
+// Well-known Domain Pack codes.
+public static class DecisionDomainPackCodes
+{
+    public const string PersonalInjury = "PERSONAL_INJURY";
 }
 
 // Request to transition a matter's lifecycle status (OPEN <-> CLOSED).
@@ -510,6 +632,11 @@ public sealed record DecisionMatterFacetsDto(
     public IReadOnlyCollection<string> States { get; init; } = [];
     public IReadOnlyCollection<string> CourtLevels { get; init; } = [];
     public IReadOnlyCollection<string> GoverningLaws { get; init; } = [];
+
+    // ── Practice-area classification option lists (DB-backed, e.g. Personal Injury). ──
+    public IReadOnlyCollection<string> PracticeAreas { get; init; } = [];
+    public IReadOnlyCollection<string> PiMatterTypes { get; init; } = [];
+    public IReadOnlyCollection<string> PiClaimTypes { get; init; } = [];
 }
 
 // A decision-history timeline event (sourced from Legal_DecisionEvent for a session).
@@ -625,6 +752,7 @@ public static class DecisionEvidenceLifecycleStates
 public static class DecisionResearchStates
 {
     public const string NotNeeded = "NOT_NEEDED";
+    public const string RequiredPending = "REQUIRED_PENDING";
     public const string Retrieved = "RETRIEVED";
     public const string SearchNoResults = "SEARCH_NO_RESULTS";
     public const string RetrievalFailed = "RETRIEVAL_FAILED";

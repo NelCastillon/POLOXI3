@@ -246,7 +246,27 @@ public sealed record DecisionBranchPersistence(
     decimal Cost,
     bool IsOnFrontier,
     string? StopReason,
-    int SortOrder);
+    int SortOrder)
+{
+    public DecisionBranchPersistence()
+        : this(Guid.Empty, null, 0, string.Empty, string.Empty, null, string.Empty,
+            0m, 0m, 0m, 0m, 0m, 0m, false, null, 0)
+    {
+    }
+
+    public bool IsExecutable =>
+        !string.Equals(GenerationOriginCode,
+            DecisionBranchGenerationOrigins.DomainFallback, StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(BranchStateCode,
+            DecisionBranchStates.Dormant, StringComparison.OrdinalIgnoreCase);
+
+    public string GenerationOriginCode { get; init; } = DecisionBranchGenerationOrigins.DynamicLlm;
+    public Guid? DecisionDomainConceptId { get; init; }
+    public string? DomainConceptCode { get; init; }
+    public decimal? GuardrailMatchScore { get; init; }
+    public string? GuardrailActionCode { get; init; }
+    public int? GuardrailVersion { get; init; }
+}
 
 public sealed record DecisionEvidencePersistence(
     Guid DecisionEvidenceId,

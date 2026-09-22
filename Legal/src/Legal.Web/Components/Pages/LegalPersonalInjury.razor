@@ -1,0 +1,773 @@
+@page "/legal/personalinjury"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="intel-page matters-page">
+        <header class="intel-header">
+            <div>
+                <span><i class="bi bi-bandaid"></i> Legal Decision Intelligence · Personal Injury Command Center</span>
+                <h1>Personal Injury Matters</h1>
+                <p>Every personal injury matter groups the decisions POLOXI has reasoned about — the current best outcome, its readiness, and what could still change it. Open a matter to see its decision cockpit, or start a new decision.</p>
+            </div>
+            <div class="um-header-actions matters-header-actions">
+                <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading" title="Refresh matters">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+                <button class="um-btn um-btn-ghost" @onclick="GenerateTestMatterAsync" disabled="@(_generating || _loading)" title="Generate a random test matter">
+                    <i class="bi @(_generating ? "bi-hourglass-split" : "bi-shuffle")"></i> @(_generating ? "Generating…" : "Generate Test Matter")
+                </button>
+                <button class="um-btn um-btn-primary" @onclick="OpenCreate">
+                    <i class="bi bi-plus-lg"></i> New matter
+                </button>
+            </div>
+        </header>
+
+        <section class="intel-panel matters-filter-panel" aria-label="Filter matters">
+            <div class="matters-search-row">
+                <div class="matters-search-box">
+                    <i class="bi bi-search" aria-hidden="true"></i>
+                    <input type="search" aria-label="Search matters" placeholder="Search by title, type, jurisdiction, or posture" @bind="_search" @bind:event="oninput" />
+                </div>
+                <div class="matters-result-context" aria-live="polite">
+                    <strong>@Filtered.Count</strong>
+                    <span>of @_matters.Count matters shown</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="pc-kpi-strip" aria-label="Matter summary">
+            <button type="button" class="pc-kpi-card @(_activeFilter == "ALL" ? "pc-kpi-card--active" : null)" @onclick='() => SetFilter("ALL")' title="All matters">
+                <span class="pc-kpi-label">All matters</span>
+                <span class="pc-kpi-value">@_matters.Count</span>
+            </button>
+            <button type="button" class="pc-kpi-card @(_activeFilter == "OPEN" ? "pc-kpi-card--active" : null)" @onclick='() => SetFilter("OPEN")' title="Open matters">
+                <span class="pc-kpi-label">Open</span>
+                <span class="pc-kpi-value">@_matters.Count(m => string.Equals(m.StatusCode, "OPEN", StringComparison.OrdinalIgnoreCase))</span>
+            </button>
+            <button type="button" class="pc-kpi-card @(_activeFilter == "DECIDED" ? "pc-kpi-card--active" : null)" @onclick='() => SetFilter("DECIDED")' title="Matters with a decision on record">
+                <span class="pc-kpi-label">Decided</span>
+                <span class="pc-kpi-value">@_matters.Count(m => m.LatestSessionId is not null)</span>
+            </button>
+            <button type="button" class="pc-kpi-card pc-kpi-card--danger @(_activeFilter == "ATRISK" ? "pc-kpi-card--active" : null)" @onclick='() => SetFilter("ATRISK")' title="Matters with critical flip points that could overturn the current outcome">
+                <span class="pc-kpi-label">At risk</span>
+                <span class="pc-kpi-value">@_matters.Count(m => m.CriticalFlipPointCount > 0)</span>
+            </button>
+        </section>
+
+        <section class="matters-guide" aria-label="How to use Legal Decision Intelligence">
+            <button type="button" class="matters-guide-head" @onclick="() => _showGuide = !_showGuide" aria-expanded="@_showGuide">
+                <i class="bi bi-mortarboard"></i>
+                <span>How to use Legal Decision Intelligence — start here</span>
+                <i class="bi @(_showGuide ? "bi-chevron-up" : "bi-chevron-down") ms-auto"></i>
+            </button>
+            @if (_showGuide)
+            {
+                <ol class="matters-guide-steps">
+                    <li>
+                        <strong>Create a matter.</strong>
+                        Click <em>New matter</em> and describe the case: title, matter type, jurisdiction, and procedural posture. A matter is the folder that groups every decision POLOXI reasons about for that case.
+                    </li>
+                    <li>
+                        <strong>Open the matter cockpit.</strong>
+                        Click a matter card to open its detail page. It shows the current best decision on record, when it was last decided, and any critical flip points that could overturn the outcome.
+                    </li>
+                    <li>
+                        <strong>Run a decision.</strong>
+                        Click <em>Decide in this matter</em>. Describe the legal question, the facts, and the outcome you need. Keep the <em>POLOXI Engine</em> on for candidate competition, evidence grounding, and readiness gating; enable <em>Dependency Graph (V2)</em> for a typed legal dependency graph with independent verification.
+                    </li>
+                    <li>
+                        <strong>Review the verdict — not just the answer.</strong>
+                        POLOXI presents the leading outcome with its composite support, decision status (for example <em>Decision Ready</em> vs provisional), competing candidates, and the evidence behind each. If POLOXI asks a clarification question, answer it and continue — it never guesses on a blocking ambiguity.
+                    </li>
+                    <li>
+                        <strong>Watch the flip points.</strong>
+                        Matters flagged <em>At risk</em> have critical flip points: facts or authorities that could overturn the recorded outcome. Re-run the decision when those inputs change, and close the matter when it is resolved.
+                    </li>
+                </ol>
+            }
+        </section>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_loadError</div>
+        }
+
+        @if (_loading)
+        {
+            <div class="matters-loading" role="status" aria-live="polite">
+                <i class="bi bi-hourglass-split"></i> Loading matters…
+            </div>
+        }
+        else if (Filtered.Count == 0)
+        {
+            <div class="matters-empty">
+                <i class="bi bi-inboxes"></i>
+                <h3>No matters yet</h3>
+                <p>Create a matter to start grouping decisions, or run an ad-hoc decision from the cockpit.</p>
+                <button class="um-btn um-btn-primary" @onclick="OpenCreate"><i class="bi bi-plus-lg"></i> New matter</button>
+            </div>
+        }
+        else
+        {
+            <div class="matters-grid" aria-label="Matter portfolio">
+                @foreach (var matter in Filtered)
+                {
+                    <article class="matter-card" role="button" tabindex="0"
+                             @onclick="() => OpenMatter(matter)"
+                             @onkeydown="@(e => OnCardKey(e, matter))">
+                        <header class="matter-card-head">
+                            <span class="matter-card-status matter-status-@(matter.StatusCode.ToLowerInvariant())">@matter.StatusCode</span>
+                            @if (matter.CriticalFlipPointCount > 0)
+                            {
+                                <span class="matter-card-risk" title="@matter.CriticalFlipPointCount critical flip point(s) could overturn the current outcome">
+                                    <i class="bi bi-exclamation-octagon-fill"></i> @matter.CriticalFlipPointCount at risk
+                                </span>
+                            }
+                        </header>
+                        <h2 class="matter-card-title">@matter.Title</h2>
+                        <div class="matter-card-tags">
+                            @if (!string.IsNullOrWhiteSpace(matter.MatterTypeCode))
+                            {
+                                <span class="matter-tag"><i class="bi bi-tag"></i> @matter.MatterTypeCode</span>
+                            }
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(matter.Jurisdiction))
+                        {
+                            <div class="matter-card-context"><i class="bi bi-geo-alt"></i><span>@matter.Jurisdiction</span></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(matter.Posture))
+                        {
+                            <div class="matter-card-context"><i class="bi bi-diagram-2"></i><span>@matter.Posture</span></div>
+                        }
+                        <div class="matter-card-decision">
+                            @if (matter.LatestSessionId is not null)
+                            {
+                                <span class="matter-card-decision-label">Current best decision</span>
+                                <strong class="matter-card-outcome">@(string.IsNullOrWhiteSpace(matter.CurrentOutcome) ? "—" : matter.CurrentOutcome)</strong>
+                                @if (!string.IsNullOrWhiteSpace(matter.DecisionStatusCode))
+                                {
+                                    <span class="matter-card-decision-status">@matter.DecisionStatusCode</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="matter-card-decision-label matter-card-nodecision"><i class="bi bi-hourglass"></i> No decision yet</span>
+                            }
+                        </div>
+                        <footer class="matter-card-foot">
+                            <span title="Last decided"><i class="bi bi-clock-history"></i> @(matter.LastDecidedUtc?.ToLocalTime().ToString("g") ?? "Never")</span>
+                            <span class="matter-card-open">Open <i class="bi bi-arrow-right-short"></i></span>
+                        </footer>
+                    </article>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_showCreate)
+    {
+        <div class="um-modal-backdrop" @onclick="() => _showCreate = false">
+            <div class="um-modal" @onclick:stopPropagation="true">
+                <div class="um-modal-header">
+                    <i class="bi bi-folder-plus"></i>
+                    <span>New matter</span>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _showCreate = false"><i class="bi bi-x-lg"></i></button>
+                </div>
+                <EditForm Model="_form" OnValidSubmit="CreateAsync">
+                    <DataAnnotationsValidator />
+                    <div class="um-modal-body">
+                        <div class="um-form-grid">
+                            <label class="um-field">
+                                <span class="um-field-label">Title</span>
+                                <InputText class="form-control" @bind-Value="_form.Title" placeholder="e.g. Acme v. Globex — Summary Judgment" />
+                                <ValidationMessage For="() => _form.Title" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Matter type</span>
+                                <InputText class="form-control" list="matter-type-options" @bind-Value="_form.MatterTypeCode" placeholder="Select or type a matter type" autocomplete="off" />
+                                <datalist id="matter-type-options">
+                                    @foreach (var v in MatterTypeOptions)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.MatterTypeCode" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Claim type</span>
+                                <InputText class="form-control" list="pi-claim-type-options" @bind-Value="_form.ClaimTypeCode" placeholder="Select or type a claim type" autocomplete="off" />
+                                <datalist id="pi-claim-type-options">
+                                    @foreach (var v in ClaimTypeOptions)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.ClaimTypeCode" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Jurisdiction</span>
+                                <InputText class="form-control" list="matter-jurisdiction-options" @bind-Value="_form.Jurisdiction" placeholder="Select or type a jurisdiction" autocomplete="off" />
+                                <datalist id="matter-jurisdiction-options">
+                                    @foreach (var v in _facets.Jurisdictions)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Jurisdiction" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Posture</span>
+                                <InputText class="form-control" list="matter-posture-options" @bind-Value="_form.Posture" placeholder="Select or type a posture" autocomplete="off" />
+                                <datalist id="matter-posture-options">
+                                    @foreach (var v in _facets.Postures)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Posture" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Subtype</span>
+                                <InputText class="form-control" list="matter-subtype-options" @bind-Value="_form.Subtype" placeholder="Select or type a subtype" autocomplete="off" />
+                                <datalist id="matter-subtype-options">
+                                    @foreach (var v in _facets.Subtypes)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.Subtype" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Court system</span>
+                                <InputText class="form-control" list="matter-courtsystem-options" @bind-Value="_form.CourtSystem" placeholder="Select or type a court system" autocomplete="off" />
+                                <datalist id="matter-courtsystem-options">
+                                    @foreach (var v in _facets.CourtSystems)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.CourtSystem" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">State</span>
+                                <InputText class="form-control" list="matter-state-options" @bind-Value="_form.State" placeholder="Select or type a state" autocomplete="off" />
+                                <datalist id="matter-state-options">
+                                    @foreach (var v in _facets.States)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.State" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Court level</span>
+                                <InputText class="form-control" list="matter-courtlevel-options" @bind-Value="_form.CourtLevel" placeholder="Select or type a court level" autocomplete="off" />
+                                <datalist id="matter-courtlevel-options">
+                                    @foreach (var v in _facets.CourtLevels)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.CourtLevel" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">County</span>
+                                <InputText class="form-control" @bind-Value="_form.County" placeholder="e.g. Los Angeles County" autocomplete="off" />
+                                <ValidationMessage For="() => _form.County" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Governing law</span>
+                                <InputText class="form-control" list="matter-governinglaw-options" @bind-Value="_form.GoverningLaw" placeholder="Select or type governing law" autocomplete="off" />
+                                <datalist id="matter-governinglaw-options">
+                                    @foreach (var v in _facets.GoverningLaws)
+                                    {
+                                        <option value="@v" />
+                                    }
+                                </datalist>
+                                <ValidationMessage For="() => _form.GoverningLaw" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Moving party</span>
+                                <InputText class="form-control" @bind-Value="_form.MovingParty" placeholder="Party bringing the motion" autocomplete="off" />
+                                <ValidationMessage For="() => _form.MovingParty" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Responding party</span>
+                                <InputText class="form-control" @bind-Value="_form.RespondingParty" placeholder="Party opposing the motion" autocomplete="off" />
+                                <ValidationMessage For="() => _form.RespondingParty" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Motion target</span>
+                                <InputText class="form-control" @bind-Value="_form.MotionTarget" placeholder="What the motion targets (e.g. contract claim)" autocomplete="off" />
+                                <ValidationMessage For="() => _form.MotionTarget" class="text-danger" />
+                            </label>
+                            <label class="um-field">
+                                <span class="um-field-label">Requested disposition</span>
+                                <InputText class="form-control" @bind-Value="_form.RequestedDisposition" placeholder="Relief requested (e.g. judgment without trial)" autocomplete="off" />
+                                <ValidationMessage For="() => _form.RequestedDisposition" class="text-danger" />
+                            </label>
+                            <label class="um-field um-field-wide um-field--full">
+                                <span class="um-field-label">Description</span>
+                                <InputTextArea class="form-control" rows="3" @bind-Value="_form.Description" placeholder="Optional context for this matter" />
+                                <ValidationMessage For="() => _form.Description" class="text-danger" />
+                            </label>
+                        </div>
+                        @if (_createError is not null)
+                        {
+                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_createError</div>
+                        }
+                    </div>
+                    <div class="um-modal-footer">
+                        <button type="button" class="um-btn um-btn-ghost" @onclick="() => _showCreate = false">Cancel</button>
+                        <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">
+                            <i class="bi bi-check-lg"></i> @(_saving ? "Creating…" : "Create matter")
+                        </button>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    }
+</LegalWorkspace>
+
+@code {
+    private bool _loading = true;
+    private bool _showGuide;
+    private bool _showCreate;
+    private bool _saving;
+    private bool _generating;
+    private string? _loadError;
+    private string? _createError;
+    private string _search = string.Empty;
+    private string _activeFilter = "ALL";
+    private IReadOnlyCollection<DecisionMatterDto> _matters = [];
+    private DecisionMatterFacetsDto _facets = new([], [], []);
+    private DecisionDomainPackDto? _domainPack;
+    private MatterForm _form = new();
+
+    private IReadOnlyList<DecisionMatterDto> Filtered
+    {
+        get
+        {
+            IEnumerable<DecisionMatterDto> q = _matters;
+            q = _activeFilter switch
+            {
+                "OPEN" => q.Where(m => string.Equals(m.StatusCode, "OPEN", StringComparison.OrdinalIgnoreCase)),
+                "DECIDED" => q.Where(m => m.LatestSessionId is not null),
+                "ATRISK" => q.Where(m => m.CriticalFlipPointCount > 0),
+                _ => q
+            };
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                var s = _search.Trim();
+                q = q.Where(m =>
+                    (m.Title?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (m.MatterTypeCode?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (m.Jurisdiction?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    (m.Posture?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
+            }
+            return q.OrderByDescending(m => m.CreatedDateUtc).ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury", "/legal/personalinjury"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            var all = await Api.GetLegalDecisionMattersAsync();
+            _matters = all
+                .Where(m => string.Equals(m.PracticeAreaCode, DecisionDomainPackCodes.PersonalInjury, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            _facets = await Api.GetLegalDecisionMatterFacetsAsync();
+            _domainPack = await Api.GetLegalDecisionDomainPackAsync(DecisionDomainPackCodes.PersonalInjury);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+        {
+            // Session missing or expired — send the user to sign in.
+            Navigation.NavigateTo("/login", forceLoad: true);
+            return;
+        }
+        catch (OperationCanceledException)
+        {
+            // AuthRedirectHandler already redirected to /login on a 401/403.
+            return;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load matters: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void SetFilter(string filter) => _activeFilter = filter;
+
+    // Domain-pack-backed matter types for Personal Injury (falls back to DB facet list when the pack is unavailable).
+    private IReadOnlyList<string> MatterTypeOptions =>
+        _domainPack is { MatterTypes.Count: > 0 }
+            ? _domainPack.MatterTypes.Select(t => t.Name).ToList()
+            : _facets.PiMatterTypes.ToList();
+
+    // DB-backed Personal Injury claim types (PI_CLAIM_TYPE option set).
+    private IReadOnlyList<string> ClaimTypeOptions => _facets.PiClaimTypes.ToList();
+
+    private void OpenCreate()
+    {
+        _form = new MatterForm();
+        _createError = null;
+        _showCreate = true;
+    }
+
+    private void OpenMatter(DecisionMatterDto m) => Navigation.NavigateTo($"/legal/matters/{m.DecisionMatterId}");
+
+    private void OnCardKey(KeyboardEventArgs e, DecisionMatterDto m)
+    {
+        if (e.Key is "Enter" or " ")
+            OpenMatter(m);
+    }
+
+    private async Task CreateAsync()
+    {
+        _saving = true;
+        _createError = null;
+        StateHasChanged();
+        try
+        {
+            var request = new DecisionMatterCreateRequest(
+                _form.Title.Trim(),
+                string.IsNullOrWhiteSpace(_form.MatterTypeCode) ? null : _form.MatterTypeCode.Trim(),
+                string.IsNullOrWhiteSpace(_form.Jurisdiction) ? null : _form.Jurisdiction.Trim(),
+                string.IsNullOrWhiteSpace(_form.Posture) ? null : _form.Posture.Trim(),
+                string.IsNullOrWhiteSpace(_form.Description) ? null : _form.Description.Trim())
+            {
+                PracticeAreaCode = DecisionDomainPackCodes.PersonalInjury,
+                ClaimTypeCode = string.IsNullOrWhiteSpace(_form.ClaimTypeCode) ? null : _form.ClaimTypeCode.Trim(),
+                Subtype = string.IsNullOrWhiteSpace(_form.Subtype) ? null : _form.Subtype.Trim(),
+                CourtSystem = string.IsNullOrWhiteSpace(_form.CourtSystem) ? null : _form.CourtSystem.Trim(),
+                State = string.IsNullOrWhiteSpace(_form.State) ? null : _form.State.Trim(),
+                CourtLevel = string.IsNullOrWhiteSpace(_form.CourtLevel) ? null : _form.CourtLevel.Trim(),
+                County = string.IsNullOrWhiteSpace(_form.County) ? null : _form.County.Trim(),
+                GoverningLaw = string.IsNullOrWhiteSpace(_form.GoverningLaw) ? null : _form.GoverningLaw.Trim(),
+                MovingParty = string.IsNullOrWhiteSpace(_form.MovingParty) ? null : _form.MovingParty.Trim(),
+                RespondingParty = string.IsNullOrWhiteSpace(_form.RespondingParty) ? null : _form.RespondingParty.Trim(),
+                MotionTarget = string.IsNullOrWhiteSpace(_form.MotionTarget) ? null : _form.MotionTarget.Trim(),
+                RequestedDisposition = string.IsNullOrWhiteSpace(_form.RequestedDisposition) ? null : _form.RequestedDisposition.Trim()
+            };
+            var id = await Api.CreateLegalDecisionMatterAsync(request);
+            _showCreate = false;
+            if (id != Guid.Empty)
+                Navigation.NavigateTo($"/legal/personalinjury/{id}/wizard");
+            else
+                await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _createError = $"Create failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+            StateHasChanged();
+        }
+    }
+
+    // Generates a random, fully-populated test matter and persists it through the normal
+    // create pipeline (same API/service/repository as "New matter"), then opens its cockpit.
+    private async Task GenerateTestMatterAsync()
+    {
+        _generating = true;
+        _loadError = null;
+        StateHasChanged();
+        try
+        {
+            var request = BuildRandomTestMatter();
+            var id = await Api.CreateLegalDecisionMatterAsync(request);
+            if (id != Guid.Empty)
+            {
+                // Immediately run the matter through the PI decision pipeline, then open the decision
+                // cockpit on the resulting session so the ranked outcomes are ready on arrival.
+                var decisionTypeCode = await ResolvePiDecisionTypeCodeAsync();
+                if (!string.IsNullOrWhiteSpace(decisionTypeCode))
+                {
+                    try
+                    {
+                        var response = await Api.DecideLegalDecisionPersonalInjuryAsync(
+                            new PersonalInjuryDecisionContext(id, decisionTypeCode!));
+                        if (response is not null)
+                        {
+                            Navigation.NavigateTo($"/legal/personalinjury_decision?matterId={id}&sessionId={response.DecisionSessionId}");
+                            return;
+                        }
+                    }
+                    catch
+                    {
+                        // If the decision pipeline fails, still surface the created matter cockpit.
+                    }
+                }
+                Navigation.NavigateTo($"/legal/matters/{id}");
+            }
+            else
+                await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Generate test matter failed: {ex.Message}";
+        }
+        finally
+        {
+            _generating = false;
+            StateHasChanged();
+        }
+    }
+
+    private static readonly Random _rng = new();
+
+    // Picks a sensible PI decision type: prefer the DB-backed stage→default map, else the first type.
+    private async Task<string?> ResolvePiDecisionTypeCodeAsync()
+    {
+        try
+        {
+            var stageMap = await Api.GetLegalDecisionPersonalInjuryStageDecisionMapAsync();
+            var mapped = stageMap.FirstOrDefault()?.DefaultDecisionTypeCode;
+            if (!string.IsNullOrWhiteSpace(mapped))
+                return mapped;
+
+            var types = await Api.GetLegalDecisionPersonalInjuryDecisionTypesAsync();
+            return types.FirstOrDefault()?.DecisionTypeCode;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static T Pick<T>(IReadOnlyList<T> items) => items[_rng.Next(items.Count)];
+
+    private DecisionMatterCreateRequest BuildRandomTestMatter()
+    {
+        // Prefer DB-backed option lists (facets) when available; fall back to representative pools.
+        string PickFacet(IReadOnlyCollection<string> facet, IReadOnlyList<string> fallback)
+            => facet is { Count: > 0 } ? Pick(facet.ToList()) : Pick(fallback);
+
+        // Injured plaintiff (a natural person) vs. an at-fault defendant (person, business, or carrier).
+        var plaintiff = Pick(_plaintiffNames);
+        var defendant = Pick(_rng.Next(2) == 0 ? _defendantNames : _defendantCompanies);
+
+        var accident = Pick(_accidents);                // e.g. "rear-end motor vehicle collision"
+        var injury = Pick(_injuries);                   // e.g. "cervical disc herniation (C5-C6)"
+        var bodyPart = Pick(_bodyParts);                // e.g. "lower back"
+        var treatment = Pick(_treatments);              // e.g. "orthopedic surgery and physical therapy"
+        var stage = Pick(_piStages);                    // e.g. "pre-litigation demand"
+        var liabilityTheory = Pick(_liabilityTheories); // e.g. "negligent operation of a vehicle"
+        var damages = Pick(_damages);                   // e.g. "past and future medical expenses and lost wages"
+
+        var matterType = "Personal Injury";
+        var subtype = Pick(_piSubtypes);
+        var state = PickFacet(_facets.States, _states);
+        var courtSystem = "United States - State";
+        var courtLevel = PickFacet(_facets.CourtLevels, _piCourtLevels);
+        var county = Pick(_counties);
+        var governingLaw = state;
+        var motionTarget = $"the {Pick(_piMotionTargets)}";
+        var disposition = Pick(_piDispositions);
+        var jurisdiction = $"United States - {state} - {courtLevel} - {county} - Governing law: {governingLaw}";
+        var posture = $"{subtype} - Plaintiff: {plaintiff} - Theory: {liabilityTheory} - Stage: {stage}";
+        var title = $"{plaintiff} v. {defendant} - {subtype}";
+
+        var description =
+            $"Personal injury matter ({subtype}). {plaintiff} was injured in a {accident} allegedly caused by {defendant} " +
+            $"through {liabilityTheory}. Claimed injuries: {injury} affecting the {bodyPart}, treated with {treatment}. " +
+            $"Jurisdiction: {jurisdiction}. Current stage: {stage}. Damages sought: {damages}. " +
+            $"Requested outcome: {disposition}. Auto-generated test matter for validating the PI decision cockpit, dashboard, and ranking panels.";
+
+        return new DecisionMatterCreateRequest(
+            title.Length > 300 ? title[..300] : title,
+            matterType,
+            jurisdiction.Length > 120 ? jurisdiction[..120] : jurisdiction,
+            posture.Length > 200 ? posture[..200] : posture,
+            description)
+        {
+            PracticeAreaCode = DecisionDomainPackCodes.PersonalInjury,
+            Subtype = subtype,
+            CourtSystem = courtSystem,
+            State = state,
+            CourtLevel = courtLevel,
+            County = county,
+            GoverningLaw = governingLaw,
+            MovingParty = plaintiff,
+            RespondingParty = defendant,
+            MotionTarget = motionTarget,
+            RequestedDisposition = disposition
+        };
+    }
+
+    private static readonly string[] _states =
+    {
+        "California", "New York", "Texas", "Illinois", "Delaware", "Oregon", "Washington", "Florida", "Massachusetts"
+    };
+
+    private static readonly string[] _counties =
+    {
+        "Multnomah County", "Cook County", "Harris County", "Los Angeles County",
+        "New Castle County", "King County", "Suffolk County", "Dallas County", "Orange County"
+    };
+
+    private static readonly string[] _plaintiffNames =
+    {
+        "Maria Gonzalez", "James Carter", "Aisha Patel", "Robert Nguyen", "Emily Thompson",
+        "Hannah Weber", "Carlos Mendoza", "Priya Sharma", "William Foster", "Grace Chen"
+    };
+
+    private static readonly string[] _defendantNames =
+    {
+        "Thomas Bradley", "Angela Moore", "Kevin Sullivan", "Rebecca Lin", "Marcus Webb",
+        "Diane Foster", "Anthony Russo", "Karen Mitchell", "Steven Park", "Nicole Adams"
+    };
+
+    private static readonly string[] _defendantCompanies =
+    {
+        "Redwood Freight Lines", "Metro Transit Authority", "Cascade Grocers Inc.", "Summit Property Management",
+        "Blue Harbor Rideshare", "Ironclad Construction Co.", "Northwind Trucking LLC", "Pioneer Retail Group",
+        "Meridian Insurance Company", "Riverside Apartments LP", "Delta Warehousing Inc.", "Vertex Logistics"
+    };
+
+    private static readonly string[] _accidents =
+    {
+        "rear-end motor vehicle collision", "T-bone intersection collision", "multi-vehicle highway pileup",
+        "slip-and-fall on a wet grocery-store floor", "trip-and-fall on a broken sidewalk",
+        "pedestrian struck in a crosswalk", "commercial truck collision", "rideshare vehicle accident",
+        "workplace scaffolding fall", "dog-bite attack", "premises staircase fall", "motorcycle collision",
+        "defective-product malfunction", "nursing-home neglect incident"
+    };
+
+    private static readonly string[] _injuries =
+    {
+        "cervical disc herniation (C5-C6)", "lumbar radiculopathy", "closed-head traumatic brain injury",
+        "comminuted tibia-fibula fracture", "rotator-cuff tear requiring surgery", "ACL and meniscus tear",
+        "post-concussion syndrome", "fractured wrist (distal radius)", "soft-tissue whiplash injury",
+        "displaced hip fracture", "spinal compression fracture", "complex regional pain syndrome"
+    };
+
+    private static readonly string[] _bodyParts =
+    {
+        "neck", "lower back", "right shoulder", "left knee", "head", "right wrist", "hip", "spine"
+    };
+
+    private static readonly string[] _treatments =
+    {
+        "emergency room care and orthopedic follow-up", "spinal surgery and physical therapy",
+        "arthroscopic knee surgery", "epidural steroid injections and pain management",
+        "months of chiropractic and physical therapy", "neurological evaluation and cognitive therapy",
+        "open-reduction internal-fixation surgery", "ongoing physical rehabilitation"
+    };
+
+    private static readonly string[] _piStages =
+    {
+        "investigation and treatment", "pre-litigation demand", "policy-limits demand",
+        "complaint filed", "written discovery", "depositions", "mediation", "trial preparation"
+    };
+
+    private static readonly string[] _liabilityTheories =
+    {
+        "negligent operation of a vehicle", "failure to maintain safe premises", "distracted driving",
+        "failure to yield the right of way", "negligent hiring and supervision", "a dangerous property condition",
+        "a defective and unreasonably dangerous product", "violation of a safety statute (negligence per se)"
+    };
+
+    private static readonly string[] _damages =
+    {
+        "past and future medical expenses and lost wages", "medical specials, lost earning capacity, and pain and suffering",
+        "economic and non-economic damages", "past medical bills, future care costs, and general damages",
+        "wage loss, out-of-pocket costs, and loss of enjoyment of life"
+    };
+
+    private static readonly string[] _piSubtypes =
+    {
+        "Motor Vehicle Accident", "Premises Liability", "Slip and Fall", "Product Liability",
+        "Pedestrian Accident", "Trucking Accident", "Dog Bite", "Workplace Injury", "Wrongful Death"
+    };
+
+    private static readonly string[] _piCourtLevels =
+    {
+        "Superior Court", "District Court", "Circuit Court", "County Court", "Court of Appeals"
+    };
+
+    private static readonly string[] _piMotionTargets =
+    {
+        "liability question", "comparative-fault defense", "damages calculation",
+        "statute-of-limitations defense", "causation dispute", "policy-coverage question"
+    };
+
+    private static readonly string[] _piDispositions =
+    {
+        "policy-limits settlement", "favorable jury verdict for the plaintiff", "structured settlement",
+        "summary judgment on liability for the plaintiff", "confidential negotiated settlement",
+        "full-value settlement of all claims"
+    };
+
+    private sealed class MatterForm
+    {
+        [Required, StringLength(300, MinimumLength = 2)]
+        public string Title { get; set; } = string.Empty;
+
+        [StringLength(80)]
+        public string? MatterTypeCode { get; set; }
+
+        [StringLength(120)]
+        public string? ClaimTypeCode { get; set; }
+
+        [StringLength(120)]
+        public string? Jurisdiction { get; set; }
+
+        [StringLength(200)]
+        public string? Posture { get; set; }
+
+        [StringLength(120)]
+        public string? Subtype { get; set; }
+
+        [StringLength(120)]
+        public string? CourtSystem { get; set; }
+
+        [StringLength(120)]
+        public string? State { get; set; }
+
+        [StringLength(120)]
+        public string? CourtLevel { get; set; }
+
+        [StringLength(120)]
+        public string? County { get; set; }
+
+        [StringLength(120)]
+        public string? GoverningLaw { get; set; }
+
+        [StringLength(200)]
+        public string? MovingParty { get; set; }
+
+        [StringLength(200)]
+        public string? RespondingParty { get; set; }
+
+        [StringLength(300)]
+        public string? MotionTarget { get; set; }
+
+        [StringLength(300)]
+        public string? RequestedDisposition { get; set; }
+
+        [StringLength(4000)]
+        public string? Description { get; set; }
+    }
+}

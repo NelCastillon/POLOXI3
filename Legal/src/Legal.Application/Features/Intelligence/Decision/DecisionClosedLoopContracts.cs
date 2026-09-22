@@ -27,6 +27,12 @@ public static class DecisionBranchSignalKinds
     public const string RecompetitionRequested = "CANDIDATE_RECOMPETITION_REQUESTED";
 }
 
+public static class DecisionResearchSemanticNodeRoles
+{
+    public const string Proposition = "PROPOSITION";
+    public const string FrontierQuestion = "FRONTIER_QUESTION";
+}
+
 // A single domain-neutral signal: "something a branch/candidate depends on changed, by this delta."
 // SupportDelta is a signed multiplier in [-1,1] applied by POLOXI to the branch's inputs; POLOXI
 // decides what (if anything) that means for candidate ranking.
@@ -112,6 +118,11 @@ public sealed record DecisionResearchSemanticLeaf
     public IReadOnlyList<string> CandidateDiscrimination { get; init; } = [];
     public string? ParentResearchKey { get; init; }
     public IReadOnlyList<string> Requires { get; init; } = [];
+    public string NodeRole { get; init; } = DecisionResearchSemanticNodeRoles.Proposition;
+
+    public bool IsFrontierQuestionContainer =>
+        NodeRole.Equals(DecisionResearchSemanticNodeRoles.FrontierQuestion, StringComparison.OrdinalIgnoreCase)
+        || ResearchKey.EndsWith(".frontier", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record DecisionResearchSemanticProposal
@@ -319,7 +330,38 @@ public sealed record DecisionResearchRoundDto(
     public IReadOnlyDictionary<string, int> AttachmentStateCounts { get; init; }
         = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     public int AuthoritativeChanges { get; init; }
+    public DecisionResearchTransformationDto? Transformation { get; init; }
 }
+
+// Safe execution telemetry for the bounded Research Need transformation. It records model completion,
+// parse/gate outcomes, atomic leaves, and deterministic selection without exposing prompts or provider payloads.
+public sealed record DecisionResearchTransformationLeafDto(
+    string ResearchKey,
+    string ResearchNeedType,
+    string Proposition,
+    string SourceClass,
+    bool Researchable,
+    string GateStatus,
+    string? SearchQuery,
+    IReadOnlyCollection<string> Requires);
+
+public sealed record DecisionResearchTransformationAttemptDto(
+    int Attempt,
+    string ModelCode,
+    string Status,
+    int LeavesProduced,
+    string Disposition,
+    IReadOnlyCollection<string> Defects,
+    IReadOnlyCollection<DecisionResearchTransformationLeafDto> Leaves);
+
+public sealed record DecisionResearchTransformationDto(
+    Guid? FrontierBranchId,
+    string? FrontierBranchCode,
+    string? FrontierLabel,
+    IReadOnlyCollection<DecisionResearchTransformationAttemptDto> Attempts,
+    string? SelectedResearchKey,
+    string? SelectionReason,
+    string? SearchQuery);
 
 // Safe production diagnostic for a failed research round. Deliberately excludes stack traces,
 // source locations, prompts, and provider payloads.
@@ -328,7 +370,10 @@ public sealed record DecisionResearchFailureDto(
     string Stage,
     string ExceptionType,
     string Reason,
-    bool AuthoritativeStateChanged);
+    bool AuthoritativeStateChanged)
+{
+    public DecisionResearchTransformationDto? Transformation { get; init; }
+}
 
 // The result of running the bounded autonomous research loop end to end: the ordered per-round audit,
 // the explicit stop reason, cumulative budget usage, and the final decision artifact.

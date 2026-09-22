@@ -282,6 +282,9 @@ internal static class RollbackFixture
             new VerifiedDecisionSignalService(),
             new EmptySupportSignalRepository(),
             verificationPipeline ?? DeterministicEvidenceVerificationFixture.Pipeline(),
+            new UnusedDocumentCorpusRepository(),
+            new UnusedMatterContextRetriever(),
+            new DecisionResearchSourceRouter(),
             NullLogger<LegalDecisionService>.Instance);
 }
 
@@ -300,6 +303,31 @@ internal sealed class AtomicResearchNeedAiProvider : ILegalDecisionAiProvider
             10,
             "research-need-test",
             TimeSpan.FromMilliseconds(1)));
+}
+
+internal sealed class UnusedDocumentCorpusRepository : ILegalDocumentCorpusRepository
+{
+    public Task<DecisionRetrievalArchitectureSettings> GetRetrievalArchitectureSettingsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new DecisionRetrievalArchitectureSettings(false, false, 12, 18000, false, true, false, false));
+    public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId, Guid? matterId, Guid? decisionSessionId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchMatterContextAsync(Guid tenantId, Guid userId, Guid matterId, string query, int maximumItems, int maximumCharacters, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchLegacyProjectionAsync(Guid tenantId, Guid userId, Guid matterId, string query, int maximumItems, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<Guid> CreateDocumentAsync(Guid documentId, LegalDocumentIntakeRequest request, string sha256Hash, string storageReference, string malwareStatusCode, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task SaveExtractionAsync(Guid tenantId, Guid userId, Guid documentVersionId, string correlationId, DocumentExtractionResult extraction, IReadOnlyCollection<LegalDocumentPassageDto> passages, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task MarkProcessingFailedAsync(Guid tenantId, Guid userId, Guid documentVersionId, string errorCode, string errorMessage, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task SaveSemanticProposalAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, LegalDocumentSemanticProposal proposal, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task PersistRetrievalTelemetryAsync(Guid tenantId, Guid userId, DecisionRetrievalTelemetry telemetry, CancellationToken cancellationToken = default) => throw Unexpected();
+    private static NotSupportedException Unexpected() => new("Document corpus must not be called on the research-loop path.");
+}
+
+internal sealed class UnusedMatterContextRetriever : ILegalMatterContextRetriever
+{
+    public Task<LegalMatterContextResult> RetrieveAsync(Guid tenantId, Guid userId, Guid matterId, string query, DecisionRetrievalArchitectureSettings settings, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Matter context must not be called on the research-loop path.");
 }
 
 internal sealed class UnusedEpistemicBridge : IEpistemicDecisionBridge

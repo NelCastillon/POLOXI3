@@ -128,6 +128,7 @@ public static class DecisionIntegrityTraceProjector
                 : $"ROUND {s.Failure.RoundNumber}";
             // The loop was invoked and faulted before committing anything. Authoritative state is preserved;
             // the trace must say FAILED with the concrete reason, never a generic not-run.
+            var failureChildren = ProjectResearchTransformation(s.Failure.Transformation);
             return Stage("RESEARCH", "Research", IntegrityTraceStatus.Failed,
                 $"FAILED · {failurePoint}",
                 [
@@ -138,7 +139,7 @@ public static class DecisionIntegrityTraceProjector
                     new("Reason", Truncate(s.Failure.Reason)),
                     new("Authoritative state changed", s.Failure.AuthoritativeStateChanged ? "YES" : "NO"),
                     new("Stop reason", s.StopReason),
-                ]);
+                ], failureChildren);
         }
         if (!s.Enabled)
             return Stage("RESEARCH", "Research", IntegrityTraceStatus.Skipped, "SKIPPED · LOOP DISABLED",
@@ -208,6 +209,8 @@ public static class DecisionIntegrityTraceProjector
             roundDetail.Add(new("Winner changed", round.WinnerChanged ? "YES" : "NO"));
             roundDetail.Add(new("Entropy", $"{round.EntropyBefore:0.###} → {round.EntropyAfter:0.###}"));
 
+            var transformationDetail = ProjectResearchTransformationDetails(round.Transformation);
+            roundDetail.AddRange(transformationDetail);
             return new IntegrityStageChildDto(
                 $"Round {round.RoundNumber}",
                 round.WinnerChanged ? IntegrityTraceStatus.Partial : IntegrityTraceStatus.Passed,
@@ -216,6 +219,85 @@ public static class DecisionIntegrityTraceProjector
         }).ToArray();
 
         return Stage("RESEARCH", "Research", status, compact, detail, children);
+    }
+
+    private static IReadOnlyList<IntegrityStageChildDto> ProjectResearchTransformation(
+        DecisionResearchTransformationDto? transformation)
+    {
+        if (transformation is null)
+            return [];
+
+        var children = new List<IntegrityStageChildDto>
+        {
+            new(
+                "Frontier",
+                IntegrityTraceStatus.Partial,
+                transformation.FrontierLabel,
+                [
+                    new("Branch", transformation.FrontierBranchCode ?? "—"),
+                    new("Target", transformation.FrontierLabel ?? "—"),
+                ]),
+        };
+
+        foreach (var attempt in transformation.Attempts)
+        {
+            var attemptStatus = string.Equals(attempt.Status, "COMPLETED", StringComparison.OrdinalIgnoreCase)
+                ? IntegrityTraceStatus.Passed
+                : string.Equals(attempt.Status, "MODEL_CALL_FAILED", StringComparison.OrdinalIgnoreCase)
+                    ? IntegrityTraceStatus.Failed
+                    : IntegrityTraceStatus.Partial;
+            var attemptDetail = new List<IntegrityStageDetailDto>
+            {
+                new("Model", attempt.ModelCode),
+                new("Status", attempt.Status),
+                new("Disposition", attempt.Disposition),
+                new("Leaves produced", attempt.LeavesProduced.ToString()),
+            };
+            foreach (var defect in attempt.Defects)
+                attemptDetail.Add(new IntegrityStageDetailDto("Defect", defect));
+            foreach (var leaf in attempt.Leaves)
+            {
+                attemptDetail.Add(new IntegrityStageDetailDto(
+                    $"{leaf.ResearchKey} · {leaf.ResearchNeedType}",
+                    $"{leaf.GateStatus} · {leaf.SourceClass} · researchable {(leaf.Researchable ? "YES" : "NO")} · {Truncate(leaf.Proposition)}"));
+            }
+
+            children.Add(new IntegrityStageChildDto(
+                $"Research Need Attempt {attempt.Attempt}",
+                attemptStatus,
+                $"{attempt.Status} · {attempt.Disposition}",
+                attemptDetail));
+        }
+
+        if (!string.IsNullOrWhiteSpace(transformation.SelectedResearchKey))
+        {
+            children.Add(new IntegrityStageChildDto(
+                "Selected research leaf",
+                IntegrityTraceStatus.Passed,
+                transformation.SelectedResearchKey,
+                [
+                    new("Research key", transformation.SelectedResearchKey),
+                    new("Selection reason", transformation.SelectionReason ?? "—"),
+                    new("Search query", transformation.SearchQuery ?? "—"),
+                ]));
+        }
+
+        return children;
+    }
+
+    private static IReadOnlyList<IntegrityStageDetailDto> ProjectResearchTransformationDetails(
+        DecisionResearchTransformationDto? transformation)
+    {
+        if (transformation is null)
+            return [];
+
+        return
+        [
+            new("Research Need attempts", transformation.Attempts.Count.ToString()),
+            new("Selected research leaf", transformation.SelectedResearchKey ?? "—"),
+            new("Selection reason", transformation.SelectionReason ?? "—"),
+            new("Search query", transformation.SearchQuery ?? "—"),
+        ];
     }
 
     // ── Stage 3: Verification ────────────────────────────────────────────────────────────────────
@@ -454,7 +536,10 @@ public static class DecisionIntegrityTraceProjector
             : applied < required ? IntegrityTraceStatus.Partial
             : IntegrityTraceStatus.Passed;
 
-        var compact = $"{allow}A · {qualify}Q · {suppress}S · {correct}C";
+        var dispositionSummary = $"{allow}A · {qualify}Q · {suppress}S · {correct}C";
+        var compact = status == IntegrityTraceStatus.Passed
+            ? $"ENFORCED · {remaining} unauthorized · {dispositionSummary}"
+            : dispositionSummary;
         var detail = new List<IntegrityStageDetailDto>
         {
             new("Claims detected", r.OutputAuthorizations.Count.ToString()),
@@ -622,8 +707,11 @@ public static class DecisionIntegrityTraceProjector
             || consistency == StateConsistency.Invalid)
             return IntegrityState.Failed;
 
-        // ATTENTION: partial verification/output fallback, or a research round rolled back.
+        // ATTENTION: an applicable Research stage failed or was partial/rolled back, output requires
+        // attention, or propagation failed. Preserving authoritative state prevents FAILED integrity,
+        // but it does not make an invoked Research failure HEALTHY.
         if (outputIntegrity == OutputIntegrityState.AttentionRequired
+            || research.Status == IntegrityTraceStatus.Failed
             || research.Status == IntegrityTraceStatus.RolledBack
             || research.Status == IntegrityTraceStatus.Partial
             || propagation.Status == IntegrityTraceStatus.Failed)

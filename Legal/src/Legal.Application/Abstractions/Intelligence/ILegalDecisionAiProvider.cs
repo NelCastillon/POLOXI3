@@ -37,7 +37,13 @@ public interface ILegalDecisionRetriever
     Task<IReadOnlyCollection<DecisionRetrievedSource>> RetrieveAsync(DecisionRetrievalRequest request, CancellationToken cancellationToken = default);
 }
 
-public sealed record DecisionRetrievalRequest(string ContextCode, string Objective, int MaximumResults);
+public sealed record DecisionRetrievalRequest(string ContextCode, string Objective, int MaximumResults)
+{
+    public Guid TenantId { get; init; }
+    public string? Jurisdiction { get; init; }
+    public IReadOnlyCollection<string> AuthorityKinds { get; init; } = [];
+    public DateTime? AuthorityCutoffDate { get; init; }
+}
 
 public sealed record DecisionRetrievedSource(string SourceRef, string Title, string Snippet)
 {

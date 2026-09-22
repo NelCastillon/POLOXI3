@@ -65,9 +65,15 @@ public sealed class LegalDecisionRetriever(ILegalRetriever legalRetriever, IInte
 
         try
         {
-            var configuration = await wideRepository.GetLegalGroundingConfigurationAsync(Guid.Empty, cancellationToken);
-            var snippets = await legalRetriever.SearchAsync(request.Objective, configuration, LegalAuthorityKind.Any, cancellationToken);
+            var configuration = await wideRepository.GetLegalGroundingConfigurationAsync(request.TenantId, cancellationToken);
+            var authorityKind = ResolveAuthorityKind(request.AuthorityKinds);
+            var objective = string.IsNullOrWhiteSpace(request.Jurisdiction)
+                ? request.Objective
+                : $"{request.Objective} jurisdiction {request.Jurisdiction}";
+            var snippets = await legalRetriever.SearchAsync(objective, configuration, authorityKind, cancellationToken);
             return snippets
+                .Where(s => request.AuthorityKinds.Count == 0 || request.AuthorityKinds.Any(kind => AuthorityKindMatches(kind, s.AuthorityKind)))
+                .Where(s => request.AuthorityCutoffDate is null || s.RetrievedDateUtc <= request.AuthorityCutoffDate.Value)
                 .Take(Math.Max(1, request.MaximumResults))
                 .Select(s => new DecisionRetrievedSource(s.Url, s.Title, s.Snippet)
                 {
@@ -88,5 +94,26 @@ public sealed class LegalDecisionRetriever(ILegalRetriever legalRetriever, IInte
         {
             return [];
         }
+    }
+
+    private static bool AuthorityKindMatches(string requested, string? actual)
+    {
+        static string Normalize(string value) => value.Replace("_", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+        var left = Normalize(requested);
+        var right = Normalize(actual ?? string.Empty);
+        return left == right || (left == "CASELAW" && right == "CASE");
+    }
+
+    private static LegalAuthorityKind ResolveAuthorityKind(IReadOnlyCollection<string> authorityKinds)
+    {
+        if (authorityKinds.Count != 1)
+            return LegalAuthorityKind.Any;
+        return authorityKinds.First().ToUpperInvariant() switch
+        {
+            "CASE" or "CASE_LAW" => LegalAuthorityKind.Case,
+            "STATUTE" => LegalAuthorityKind.Statute,
+            "REGULATION" => LegalAuthorityKind.Regulation,
+            _ => LegalAuthorityKind.Any,
+        };
     }
 }

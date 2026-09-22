@@ -31,6 +31,9 @@ public sealed class LegalDecisionService(
     Features.Intelligence.Epistemic.IVerifiedDecisionSignalService verifiedSignalService,
     Abstractions.Persistence.IDecisionSupportSignalRepository decisionSupportSignalRepository,
     IIndependentEvidenceVerificationPipeline evidenceVerificationPipeline,
+    ILegalDocumentCorpusRepository documentCorpusRepository,
+    ILegalMatterContextRetriever matterContextRetriever,
+    IDecisionResearchSourceRouter researchSourceRouter,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -54,6 +57,89 @@ public sealed class LegalDecisionService(
             .Select(g => g.OrderBy(r => r.Priority).First())
             .Select(r => new DecisionModelOptionDto(r.ModelCode, r.DeploymentName, r.ProviderTypeCode))
             .ToArray();
+    }
+
+    private static bool DomainApplicabilityMatches(string? configuredValue, string? matterValue)
+    {
+        if (string.IsNullOrWhiteSpace(configuredValue))
+            return true;
+        if (string.IsNullOrWhiteSpace(matterValue))
+            return false;
+        return NormalizeDomainText(configuredValue).Equals(NormalizeDomainText(matterValue), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ApplicabilitySpecificity(string? jurisdictionCode, string? matterTypeCode) =>
+        (string.IsNullOrWhiteSpace(jurisdictionCode) ? 0 : 1)
+        + (string.IsNullOrWhiteSpace(matterTypeCode) ? 0 : 1);
+
+    private static string NormalizeDomainText(string value) =>
+        new(value.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+
+    private static string BuildDomainGuardrailProposalContext(
+        DecisionDomainPackDto domainPack,
+        IReadOnlyCollection<DecisionDomainConceptDto> concepts,
+        IReadOnlyCollection<DecisionDomainConceptRelationDto> relations)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            domainPack.PackCode,
+            Policy = "ADVISORY_GUARDRAILS_DYNAMIC_HIERARCHY_PRIMARY",
+            Concepts = concepts.Select(concept => new
+            {
+                concept.ConceptCode,
+                concept.DimensionCode,
+                concept.Name,
+                concept.Description,
+                concept.ConceptKindCode,
+                concept.SourceClassCode,
+                concept.VerificationProfileCode,
+                concept.IsRequiredCoverage,
+                concept.IsFallbackEligible,
+            }),
+            Constraints = relations.Select(relation => new
+            {
+                relation.SourceConceptCode,
+                relation.TargetConceptCode,
+                relation.RelationTypeCode,
+                relation.ConstraintCode,
+                relation.Description,
+                relation.IsHardConstraint,
+            }),
+        });
+
+        return "\n\nDOMAIN PACK SEMANTIC GUARDRAILS (database-backed, advisory):\n"
+            + snapshot
+            + "\nGenerate candidates and branches dynamically for THIS decision. Do not copy this taxonomy as a fixed hierarchy. "
+            + "Use applicable concepts to avoid omissions, duplicates, semantic drift, and unsupported assumptions. "
+            + "Novel decision-specific branches are allowed. Required coverage means the proposal should cover the concept "
+            + "when it is decision-material, not that every concept must become a branch.";
+    }
+
+    private static string BuildMatterContextProposalContext(LegalMatterContextResult context)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            context.SourceRouteCode,
+            Policy = "MATTER_CONTEXT_IS_GROUNDING_NOT_AUTHORITATIVE_DECISION_STATE",
+            Items = context.Items.Select(item => new
+            {
+                item.Title,
+                item.Text,
+                item.SourceReference,
+                item.PageNumber,
+                item.ExtractionMethodCode,
+                item.EvidenceStateCode,
+                item.FactStateCode,
+                item.IsDecisionAuthoritative,
+                item.RelevanceScore,
+                item.DocumentTypeCode,
+                item.DimensionCode
+            })
+        });
+        return "\n\nMATTER DOCUMENT CONTEXT (retrieved before proposal; provenance preserved):\n"
+            + snapshot
+            + "\nUse this context only as grounded input. Preserve uncertainty and disputes. Do not treat proposed or alleged items as verified, "
+            + "and do not convert retrieved context directly into authoritative POLOXI state.";
     }
 
     public async Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(Guid tenantId, CancellationToken cancellationToken = default)
@@ -91,6 +177,111 @@ public sealed class LegalDecisionService(
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetMatterFacetsAsync(tenantId, cancellationToken);
 
+    public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => repository.GetDomainPackAsync(tenantId, packCode, cancellationToken);
+
+    // ── Personal Injury (Domain Pack: PERSONAL_INJURY) support ──
+    public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetPersonalInjuryOptionsAsync(tenantId, cancellationToken);
+
+    public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => repository.GetPersonalInjuryProfileAsync(tenantId, decisionMatterId, cancellationToken);
+
+    public Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default)
+        => repository.SavePersonalInjuryProfileAsync(tenantId, userId, decisionMatterId, request, cancellationToken);
+
+    public Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetPersonalInjuryDecisionTypesAsync(tenantId, cancellationToken);
+
+    public Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetPersonalInjuryStageDecisionMapAsync(tenantId, cancellationToken);
+
+    public Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default)
+        => repository.CreatePersonalInjuryDraftAsync(tenantId, userId, request, cancellationToken);
+
+    public Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default)
+        => repository.GetPersonalInjuryDraftAsync(tenantId, decisionPIMatterDraftId, cancellationToken);
+
+    public Task<bool> MarkPersonalInjuryDraftConfirmedAsync(Guid tenantId, Guid userId, Guid decisionPIMatterDraftId, Guid confirmedMatterId, CancellationToken cancellationToken = default)
+        => repository.MarkPersonalInjuryDraftConfirmedAsync(tenantId, userId, decisionPIMatterDraftId, confirmedMatterId, cancellationToken);
+
+    // Transform PI decision context → DecisionSearchRequest, then run the existing POLOXI pipeline
+    // unchanged. Domain-pack semantics are advisory; POLOXI Core owns all scoring. The query text is
+    // enriched from the PI matter profile so the decision reflects the actual PI posture.
+    public async Task<DecisionSearchResponse> DecidePersonalInjuryAsync(
+        Guid tenantId, Guid userId, PersonalInjuryDecisionContext context,
+        IReadOnlyCollection<string>? grantedPermissions, CancellationToken cancellationToken = default)
+    {
+        var matter = await repository.GetMatterAsync(tenantId, context.DecisionMatterId, cancellationToken)
+            ?? throw new InvalidOperationException($"Personal Injury matter '{context.DecisionMatterId}' was not found.");
+
+        var decisionTypes = await repository.GetPersonalInjuryDecisionTypesAsync(tenantId, cancellationToken);
+        var decisionType = decisionTypes.FirstOrDefault(t =>
+            string.Equals(t.DecisionTypeCode, context.DecisionTypeCode, StringComparison.OrdinalIgnoreCase));
+
+        var profile = await repository.GetPersonalInjuryProfileAsync(tenantId, context.DecisionMatterId, cancellationToken);
+
+        var query = BuildPersonalInjuryQuery(matter, decisionType, profile, context.Question);
+
+        var request = new DecisionSearchRequest(tenantId, userId, query, CorrelationId: Guid.NewGuid().ToString("N"))
+        {
+            GrantedPermissions = grantedPermissions?.ToArray() ?? [],
+            ModelCode = context.ModelCode,
+            ContextCode = string.IsNullOrWhiteSpace(context.ContextCode) ? "LEGAL" : context.ContextCode,
+            MatterId = context.DecisionMatterId,
+            Posture = matter.Posture,
+            MotionTarget = matter.MotionTarget,
+            Jurisdiction = ResolveMatterJurisdiction(matter, profile),
+            DomainPackCode = string.IsNullOrWhiteSpace(matter.DomainPackCode)
+                ? DecisionDomainPackCodes.PersonalInjury
+                : matter.DomainPackCode
+        };
+
+        return await DecideAsync(request, cancellationToken);
+    }
+
+    // Resolves the effective legal jurisdiction / governing law for a matter so AuthorityVerifier can
+    // establish authority applicability. Prefers the structured GoverningLaw/State dimensions, then the
+    // legacy free-text Jurisdiction, then the PI profile's incident state. Null when nothing is known.
+    private static string? ResolveMatterJurisdiction(DecisionMatterDto matter, PersonalInjuryProfileDto? profile)
+    {
+        if (!string.IsNullOrWhiteSpace(matter.GoverningLaw)) return matter.GoverningLaw!.Trim();
+        if (!string.IsNullOrWhiteSpace(matter.State)) return matter.State!.Trim();
+        if (!string.IsNullOrWhiteSpace(matter.Jurisdiction)) return matter.Jurisdiction!.Trim();
+        if (!string.IsNullOrWhiteSpace(profile?.IncidentState)) return profile!.IncidentState!.Trim();
+        return null;
+    }
+
+    private static string BuildPersonalInjuryQuery(
+        DecisionMatterDto matter, PersonalInjuryDecisionTypeDto? decisionType,
+        PersonalInjuryProfileDto? profile, string? question)
+    {
+        if (!string.IsNullOrWhiteSpace(question))
+            return question!.Trim();
+
+        var sb = new System.Text.StringBuilder();
+        var decisionLabel = decisionType?.Name ?? "personal injury decision";
+        sb.Append($"For the personal injury matter \"{matter.Title}\", decide: {decisionLabel}.");
+
+        if (profile is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(profile.IncidentTypeCode))
+                sb.Append($" Incident type: {profile.IncidentTypeCode}.");
+            if (profile.IncidentDate is { } date)
+                sb.Append($" Incident date: {date:yyyy-MM-dd}.");
+            if (!string.IsNullOrWhiteSpace(profile.IncidentState))
+                sb.Append($" Jurisdiction/state: {profile.IncidentState}.");
+            if (!string.IsNullOrWhiteSpace(profile.LiabilitySummary))
+                sb.Append($" Liability: {profile.LiabilitySummary}.");
+            if (!string.IsNullOrWhiteSpace(profile.InjurySummary))
+                sb.Append($" Injuries: {profile.InjurySummary}.");
+            if (!string.IsNullOrWhiteSpace(profile.DamagesSummary))
+                sb.Append($" Damages: {profile.DamagesSummary}.");
+        }
+
+        return sb.ToString();
+    }
+
     public async Task<DecisionSearchResponse> DecideAsync(DecisionSearchRequest request, CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
@@ -115,10 +306,86 @@ public sealed class LegalDecisionService(
         if (hasCounterfactual)
             effectiveQuery += $"\n\nCounterfactual assumption (treat as established for this analysis): {request.CounterfactualAssumption}";
 
-        Record("SESSION_STARTED", "INTAKE", new { request.Query, contextCode, route.ModelCode, request.UsePoloxiEngine, hasClarification, hasCounterfactual });
+        DecisionDomainPackDto? domainPack = null;
+        IReadOnlyList<DecisionDomainConceptDto> applicableDomainConcepts = [];
+        IReadOnlyList<DecisionDomainConceptRelationDto> applicableDomainRelations = [];
+        if (!string.IsNullOrWhiteSpace(request.DomainPackCode))
+        {
+            domainPack = await repository.GetDomainPackAsync(request.TenantId, request.DomainPackCode, cancellationToken);
+            DecisionMatterDto? domainMatter = null;
+            if (request.MatterId is { } domainMatterId)
+                domainMatter = await repository.GetMatterAsync(request.TenantId, domainMatterId, cancellationToken);
+
+            applicableDomainConcepts = (domainPack?.Concepts ?? [])
+                .Where(concept => DomainApplicabilityMatches(concept.JurisdictionCode, request.Jurisdiction)
+                    && DomainApplicabilityMatches(concept.MatterTypeCode, domainMatter?.MatterTypeCode))
+                .GroupBy(concept => concept.ConceptCode, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(concept => ApplicabilitySpecificity(concept.JurisdictionCode, concept.MatterTypeCode))
+                    .ThenBy(concept => concept.SortOrder)
+                    .First())
+                .OrderBy(concept => concept.SortOrder)
+                .ToArray();
+            var applicableCodes = applicableDomainConcepts
+                .Select(concept => concept.ConceptCode)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            applicableDomainRelations = (domainPack?.ConceptRelations ?? [])
+                .Where(relation => applicableCodes.Contains(relation.SourceConceptCode)
+                    && applicableCodes.Contains(relation.TargetConceptCode)
+                    && DomainApplicabilityMatches(relation.JurisdictionCode, request.Jurisdiction)
+                    && DomainApplicabilityMatches(relation.MatterTypeCode, domainMatter?.MatterTypeCode))
+                .OrderBy(relation => relation.SortOrder)
+                .ToArray();
+        }
+
+        Record("SESSION_STARTED", "INTAKE", new
+        {
+            request.Query,
+            contextCode,
+            route.ModelCode,
+            request.UsePoloxiEngine,
+            hasClarification,
+            hasCounterfactual,
+            domainPackCode = domainPack?.PackCode,
+            domainConceptCount = applicableDomainConcepts.Count,
+            domainConstraintCount = applicableDomainRelations.Count,
+        });
 
         if (!request.UsePoloxiEngine)
             return await ComposeDirectAnswerAsync(request, sessionId, contextCode, events, timer, cancellationToken);
+
+        var retrievalSettings = await documentCorpusRepository.GetRetrievalArchitectureSettingsAsync(cancellationToken);
+        LegalMatterContextResult matterContext = new(false, DecisionResearchRouteCodes.NoneDerived, [], 0, 0, "NO_MATTER");
+        if (request.MatterId is { } matterId)
+        {
+            var matterContextTimer = Stopwatch.StartNew();
+            matterContext = await matterContextRetriever.RetrieveAsync(
+                request.TenantId, request.UserId, matterId, effectiveQuery, retrievalSettings, cancellationToken);
+            matterContextTimer.Stop();
+            Record("MATTER_CONTEXT_RETRIEVED", "MATTER_CONTEXT", new
+            {
+                matterContext.Enabled,
+                matterContext.SourceRouteCode,
+                matterContext.CandidateCount,
+                matterContext.FilteredCount,
+                returnedCount = matterContext.Items.Count,
+                matterContext.NotRunReason
+            });
+            if (retrievalSettings.TelemetryEnabled)
+            {
+                await documentCorpusRepository.PersistRetrievalTelemetryAsync(
+                    request.TenantId,
+                    request.UserId,
+                    new DecisionRetrievalTelemetry(
+                        Guid.NewGuid(), null, matterId, DecisionRetrievalStages.MatterContext,
+                        "MATTER_CONTEXT_RETRIEVED", matterContext.SourceRouteCode, matterContext.Enabled,
+                        matterContext.CandidateCount, matterContext.FilteredCount, matterContext.Items.Count,
+                        null, "MATTER_DOCUMENT", request.Jurisdiction,
+                        JsonSerializer.Serialize(new { matterContext.NotRunReason }),
+                        matterContextTimer.ElapsedMilliseconds),
+                    cancellationToken);
+            }
+        }
 
         // ── Candidate Discovery (LLM proposal only) ─────────────────────────────────────────────
         var discoveryPrompt = await repository.GetPromptAsync(DiscoveryPromptCode, cancellationToken)
@@ -126,6 +393,10 @@ public sealed class LegalDecisionService(
         var discoveryUser = discoveryPrompt.UserPromptTemplate
             .Replace("{{QUERY}}", effectiveQuery)
             .Replace("{{CONTEXT}}", contextCode);
+        if (domainPack is not null && applicableDomainConcepts.Count > 0)
+            discoveryUser += BuildDomainGuardrailProposalContext(domainPack, applicableDomainConcepts, applicableDomainRelations);
+        if (matterContext.Items.Count > 0)
+            discoveryUser += BuildMatterContextProposalContext(matterContext);
         var discovery = await aiProvider.GenerateAsync(
             new DecisionAiRequest(route, "DECISION_DISCOVERY", discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
@@ -266,6 +537,22 @@ public sealed class LegalDecisionService(
 
         // ── Candidate × Branch competition + deterministic Core scoring ──────────────────────────
         var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, out var branches, cancellationToken);
+        if (applicableDomainConcepts.Count > 0)
+        {
+            var governance = ApplyDomainGuardrails(
+                effectiveQuery, candidates, branches, applicableDomainConcepts, applicableDomainRelations);
+            branches = governance.Branches;
+            Record("DOMAIN_GUARDRAILS_APPLIED", "COMPETITION", new
+            {
+                domainPackCode = domainPack?.PackCode,
+                governance.MatchedBranchCount,
+                governance.NovelBranchCount,
+                governance.FallbackBranchCount,
+                applicableConceptCount = applicableDomainConcepts.Count,
+                applicableConstraintCount = applicableDomainRelations.Count,
+                policy = "DYNAMIC_PRIMARY_ADVISORY_GUARDRAILS",
+            });
+        }
         Record("CANDIDATES_SCORED", "COMPETITION", new { candidateCount = candidates.Count });
 
         // Bounded adaptive deepening telemetry: emit an observable event only when the deepening pass
@@ -288,14 +575,16 @@ public sealed class LegalDecisionService(
         var margin = DecisionCoreMath.Margin(orderedScores);
 
         // ── Decision-Directed Retrieval / Evidence (§13,§14) ────────────────────────────────────
-        var retrieval = await RetrieveEvidenceAsync(contextCode, branches, sessionId, request.TenantId, request.MaximumResults, cancellationToken);
+        var retrieval = new EvidenceRetrievalOutcome([], [], DecisionResearchStates.RequiredPending, "AUTHORITATIVE_RESEARCH_NEED_ROUTING_REQUIRED");
         var evidence = retrieval.Evidence;
-        Record("EVIDENCE_RETRIEVED", "RETRIEVAL", new
+        Record("EVIDENCE_RETRIEVAL_DEFERRED", "RETRIEVAL", new
         {
             evidenceCount = evidence.Count,
             researchStatus = retrieval.ResearchStatus,
             failureDetail = retrieval.FailureDetail
         });
+        if (retrievalSettings.LegacyUnconditionalRetrievalEnabled)
+            Record("LEGACY_RETRIEVAL_BYPASS_IGNORED", "RETRIEVAL", new { reason = "AUTHORITATIVE_RESEARCH_NEED_ROUTING_REQUIRED" });
 
         // ── Frontier + Flip Points (§11,§30) ────────────────────────────────────────────────────
         var flipPoints = BuildFlipPoints(branches, candidates, sessionId, request.TenantId);
@@ -644,7 +933,7 @@ public sealed class LegalDecisionService(
                             (decimal)recompete.PreviousMargin, (decimal)recompete.CurrentMargin,
                             projected.Count, recompete.ReopenedBranchCount,
                             recompete.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
-                            recompete.Branches.Select(b => new DecisionBranchDto(b.DecisionBranchId, b.ParentDecisionBranchId, b.LevelNumber, b.BranchCode, b.DisplayName, b.Interpretation, b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, b.AdvScore, b.IsOnFrontier, b.StopReason, b.SortOrder)).ToArray());
+                            recompete.Branches.Select(MapBranch).ToArray());
 
                         // The shadow snapshot is always built (above) so both rankings are visible.
                         // The authoritative Legal_DecisionRecompetition row is written ONLY in Enforced
@@ -1339,6 +1628,7 @@ public sealed class LegalDecisionService(
         Guid tenantId, Guid userId, Guid decisionSessionId, CancellationToken cancellationToken = default)
     {
         var loop = await repository.GetResearchLoopSettingsAsync(cancellationToken);
+        var retrievalArchitecture = await documentCorpusRepository.GetRetrievalArchitectureSettingsAsync(cancellationToken);
         var rounds = new List<DecisionResearchRoundDto>();
 
         // DIAGNOSTIC (Research Loop Execution Diagnosis) — Boundary A: RunResearchLoopAsync entered.
@@ -1378,7 +1668,7 @@ public sealed class LegalDecisionService(
 
         try
         {
-            return await RunResearchLoopCoreAsync(tenantId, userId, decisionSessionId, loop, rounds, DoneAsync, cancellationToken);
+            return await RunResearchLoopCoreAsync(tenantId, userId, decisionSessionId, loop, retrievalArchitecture, rounds, DoneAsync, cancellationToken);
         }
         finally
         {
@@ -1389,6 +1679,7 @@ public sealed class LegalDecisionService(
     // Core loop body, invoked only while the per-session guard is held.
     private async Task<DecisionResearchLoopResultDto> RunResearchLoopCoreAsync(
         Guid tenantId, Guid userId, Guid decisionSessionId, DecisionResearchLoopSettings loop,
+        DecisionRetrievalArchitectureSettings retrievalArchitecture,
         List<DecisionResearchRoundDto> rounds,
         Func<int, int, string, DecisionResearchFailureDto?, Task<DecisionResearchLoopResultDto>> DoneAsync,
         CancellationToken cancellationToken)
@@ -1423,6 +1714,16 @@ public sealed class LegalDecisionService(
                 new DecisionResearchFailureDto(0, preRoundStage, ex.GetType().Name, ex.Message, false));
         }
 
+        // Matter jurisdiction (e.g. "California") is the AuthorityVerifier fallback when a retrieved source
+        // does not declare its own jurisdiction, so authority applicability is not left unestablished.
+        string? matterJurisdiction = null;
+        if (session.MatterId is { } researchMatterId)
+        {
+            var researchMatter = await repository.GetMatterAsync(tenantId, researchMatterId, cancellationToken);
+            if (researchMatter is not null)
+                matterJurisdiction = ResolveMatterJurisdiction(researchMatter, null);
+        }
+
         while (true)
         {
             // Stop: round budget.
@@ -1437,6 +1738,7 @@ public sealed class LegalDecisionService(
             DecisionBranchPersistence target;
             DecisionResearchNeedPersistence researchNeed;
             DecisionGraphEdgePersistence? dependencyPath;
+            DecisionResearchTransformationDto? researchTransformation = null;
             try
             {
                 preRoundStage = "FRONTIER_SELECTION";
@@ -1464,11 +1766,15 @@ public sealed class LegalDecisionService(
                     userId, current.MatterId, dependencyEventId: null)
                     ?? throw new InvalidOperationException("The selected frontier did not produce a research need.");
                 var semanticNeed = await GenerateResearchNeedAsync(current, target, frontierNeed, cancellationToken);
+                researchTransformation = semanticNeed.Transformation;
                 if (semanticNeed.SelectedNeed is null)
                     return await DoneAsync(roundNumber, totalRetrievals,
                         DecisionResearchLoopStopReasons.ResearchNeedUnresolved,
                         new DecisionResearchFailureDto(roundNumber, preRoundStage, "RESEARCHABILITY_GATE",
-                            semanticNeed.Reason ?? "No source-resolvable research leaf passed the bounded researchability gate.", false));
+                            semanticNeed.Reason ?? "No source-resolvable research leaf passed the bounded researchability gate.", false)
+                        {
+                            Transformation = semanticNeed.Transformation,
+                        });
                 researchNeed = semanticNeed.SelectedNeed;
                 foreach (var plannedNeed in semanticNeed.Needs)
                     await repository.PersistResearchNeedAsync(plannedNeed, cancellationToken);
@@ -1510,27 +1816,69 @@ public sealed class LegalDecisionService(
             var currentStage = "RETRIEVAL";
             try
             {
-                // 1) Retrieve external evidence for the objective (live provider or seed retriever per flag).
+                // 1) Route the accepted need to its authoritative source boundary, then retrieve.
                 IReadOnlyCollection<DecisionRetrievedSource> sources;
-                if (DecisionResearchNeedTypes.RequiresMatterSources(researchNeed.ResearchNeedTypeCode))
+                var route = researchSourceRouter.Route(researchNeed, matterJurisdiction);
+                var retrievalTimer = Stopwatch.StartNew();
+                if (!route.RetrievalRequired)
                 {
                     logger.LogInformation(
-                        "Research need {ResearchNeedId} requires matter sources ({NeedType}); public legal-authority retrieval was not invoked.",
-                        researchNeed.DecisionResearchNeedId, researchNeed.ResearchNeedTypeCode);
+                        "Research need {ResearchNeedId} uses route {RouteCode}; no source retrieval was invoked.",
+                        researchNeed.DecisionResearchNeedId, route.RouteCode);
                     sources = [];
-                    narrative.Add($"Research need route {researchNeed.ResearchNeedTypeCode} requires matter-document retrieval, which is not configured for this path.");
+                    narrative.Add($"Research need route {route.RouteCode}: {route.Reason}");
+                }
+                else if (route.RouteCode == DecisionResearchRouteCodes.MatterCorpus)
+                {
+                    if (current.MatterId is not { } matterId)
+                    {
+                        sources = [];
+                        narrative.Add("Matter-corpus retrieval was selected, but the decision session has no matter.");
+                    }
+                    else
+                    {
+                        var matterItems = await documentCorpusRepository.SearchRoutedMatterContextAsync(
+                            tenantId, matterId, searchQuery, route.DocumentTypeCodes, 5, cancellationToken);
+                        sources = matterItems.Select(item => new DecisionRetrievedSource(item.SourceReference, item.Title, item.Text)
+                        {
+                            SourceType = EvidenceSourceType.MatterDocument,
+                            SourceProvider = "LEGAL_MATTER_CORPUS",
+                            SourceVersion = item.LegalDocumentVersionId?.ToString(),
+                            ProviderIdentityVerified = item.LegalDocumentId.HasValue && item.LegalDocumentVersionId.HasValue
+                        }).ToArray();
+                    }
                 }
                 else try
                 {
                     sources = await retriever.RetrieveAsync(
-                        new DecisionRetrievalRequest(contextCode, searchQuery, 5), cancellationToken);
+                        new DecisionRetrievalRequest(DecisionContexts.Legal, searchQuery, 5)
+                        {
+                            TenantId = tenantId,
+                            Jurisdiction = route.Jurisdiction,
+                            AuthorityKinds = route.AuthorityKinds,
+                            AuthorityCutoffDate = route.AuthorityCutoffDate
+                        }, cancellationToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     logger.LogWarning(ex, "Research loop retrieval failed for session {SessionId}, branch {BranchCode}.", decisionSessionId, target.BranchCode);
                     sources = [];
                 }
-                totalRetrievals++;
+                retrievalTimer.Stop();
+                if (route.RetrievalRequired)
+                    totalRetrievals++;
+                if (retrievalArchitecture.TelemetryEnabled)
+                {
+                    await documentCorpusRepository.PersistRetrievalTelemetryAsync(
+                        tenantId, userId,
+                        new DecisionRetrievalTelemetry(
+                            Guid.NewGuid(), decisionSessionId, current.MatterId, DecisionRetrievalStages.DecisionResearch,
+                            "RESEARCH_SOURCE_ROUTED", route.RouteCode, true,
+                            sources.Count, 0, sources.Count, route.ResearchNeedTypeCode, route.SourceClassCode,
+                            route.Jurisdiction, JsonSerializer.Serialize(new { route.Reason, route.AuthorityKinds, route.DocumentTypeCodes, configuredRoutingFlag = retrievalArchitecture.Stage3AuthoritativeRoutingEnabled, routingMandatory = true }),
+                            retrievalTimer.ElapsedMilliseconds),
+                        cancellationToken);
+                }
 
                 // Persist every attempt before verification. The attachment is explicitly non-authoritative
                 // until the verifier finalizes its support state below.
@@ -1560,7 +1908,7 @@ public sealed class LegalDecisionService(
                     var result = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
                         persisted.DecisionEvidenceId, target.DecisionBranchId, proposition,
                         source.SourceRef, source.Title, source.Snippet, source.SourceType,
-                        source.Jurisdiction, source.AuthorityDate)
+                        string.IsNullOrWhiteSpace(source.Jurisdiction) ? matterJurisdiction : source.Jurisdiction, source.AuthorityDate)
                     {
                         SourceProvider = source.SourceProvider,
                         SourceVersion = source.SourceVersion,
@@ -1676,7 +2024,8 @@ public sealed class LegalDecisionService(
                     SourcesEvaluated = verified.Count,
                     VerificationDispositionCounts = verificationDispositionCounts,
                     AttachmentStateCounts = attachmentStateCounts,
-                    AuthoritativeChanges = finalizedAttachments.Count(a => a.IsAuthoritative)
+                    AuthoritativeChanges = finalizedAttachments.Count(a => a.IsAuthoritative),
+                    Transformation = researchTransformation,
                 });
 
                 // Stop: no material state change (|Δentropy| below epsilon AND no winner flip).
@@ -1743,7 +2092,7 @@ public sealed class LegalDecisionService(
         return DecisionModelRouteSelector.Select(routes, featureCode, modelCode);
     }
 
-    private async Task<(IReadOnlyList<DecisionResearchNeedPersistence> Needs, DecisionResearchNeedPersistence? SelectedNeed, string? Reason)> GenerateResearchNeedAsync(
+    private async Task<(IReadOnlyList<DecisionResearchNeedPersistence> Needs, DecisionResearchNeedPersistence? SelectedNeed, string? Reason, DecisionResearchTransformationDto Transformation)> GenerateResearchNeedAsync(
         DecisionSessionPersistence session,
         DecisionBranchPersistence frontier,
         DecisionResearchNeedPersistence frontierNeed,
@@ -1773,13 +2122,42 @@ public sealed class LegalDecisionService(
             .Replace("{{CANDIDATES}}", candidates)
             .Replace("{{FRONTIER}}", frontierArtifact);
         var gate = new DecisionResearchabilityGate();
+        var attempts = new List<DecisionResearchTransformationAttemptDto>(2);
+
+        DecisionResearchTransformationDto Transformation(
+            string? selectedResearchKey = null,
+            string? selectionReason = null,
+            string? searchQuery = null) => new(
+                frontier.DecisionBranchId,
+                frontier.BranchCode,
+                frontier.DisplayName,
+                attempts.ToArray(),
+                selectedResearchKey,
+                selectionReason,
+                searchQuery);
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var response = await aiProvider.GenerateAsync(new DecisionAiRequest(
-                route, ResearchNeedPromptCode, prompt.SystemPrompt, userPrompt,
-                prompt.OutputSchemaJson, session.CorrelationId ?? Guid.NewGuid().ToString("N")), cancellationToken);
-            var proposal = ParseResearchSemanticProposal(response.StructuredOutputJson ?? response.Content);
+            DecisionAiResult response;
+            try
+            {
+                response = await aiProvider.GenerateAsync(new DecisionAiRequest(
+                    route, ResearchNeedPromptCode, prompt.SystemPrompt, userPrompt,
+                    prompt.OutputSchemaJson, session.CorrelationId ?? Guid.NewGuid().ToString("N")), cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                attempts.Add(new DecisionResearchTransformationAttemptDto(
+                    attempt, route.ModelCode, "MODEL_CALL_FAILED", 0, "UNRESOLVED",
+                    [$"MODEL_CALL_FAILED:{ex.GetType().Name}"], []));
+                logger.LogWarning(ex,
+                    "Research need transformation model call failed for session {SessionId}, branch {BranchCode}, attempt {Attempt}.",
+                    session.DecisionSessionId, frontier.BranchCode, attempt);
+                return ([], null, $"UNRESOLVED: MODEL_CALL_FAILED:{ex.GetType().Name}", Transformation());
+            }
+
+            var parseSucceeded = TryParseResearchSemanticProposal(
+                response.StructuredOutputJson ?? response.Content, out var proposal);
             var evaluation = gate.Evaluate(proposal);
             if (evaluation.IsAcceptable)
             {
@@ -1801,35 +2179,93 @@ public sealed class LegalDecisionService(
                     .ToArray();
                 var selectedNeed = needs.Single(need =>
                     need.ResearchKey!.Equals(selectedLeaf.ResearchKey, StringComparison.OrdinalIgnoreCase));
-                return (needs, selectedNeed, null);
+                attempts.Add(BuildResearchTransformationAttempt(
+                    attempt, route.ModelCode, "COMPLETED", "ACCEPT", proposal, evaluation));
+                logger.LogInformation(
+                    "Research need transformation accepted for session {SessionId}, branch {BranchCode}, attempt {Attempt}, leaves={Leaves}, selected={SelectedResearchKey}, sourceClass={SourceClass}.",
+                    session.DecisionSessionId, frontier.BranchCode, attempt, proposal.Leaves.Count,
+                    selectedLeaf.ResearchKey, selectedLeaf.SourceClass);
+                return (needs, selectedNeed, null, Transformation(
+                    selectedLeaf.ResearchKey,
+                    "LEGAL_AUTHORITY_PREFERRED_THEN_CANDIDATE_DISCRIMINATION",
+                    selectedLeaf.SearchQuery));
             }
 
-            if (attempt == 1)
+            var disposition = parseSucceeded
+                ? DecisionResearchNeedRepairPlanner.Diagnose(evaluation.Defects)
+                : DecisionResearchNeedDisposition.Repair;
+            var status = parseSucceeded ? "GATE_REJECTED" : "MALFORMED_JSON";
+            var defects = parseSucceeded ? evaluation.Defects : ["JSON_PARSE_FAILED", .. evaluation.Defects];
+            attempts.Add(BuildResearchTransformationAttempt(
+                attempt, route.ModelCode, status, disposition.ToString().ToUpperInvariant(), proposal,
+                evaluation with { Defects = defects }));
+            logger.LogInformation(
+                "Research need transformation rejected for session {SessionId}, branch {BranchCode}, attempt {Attempt}, status={Status}, disposition={Disposition}, leaves={Leaves}, defects={Defects}.",
+                session.DecisionSessionId, frontier.BranchCode, attempt, status, disposition,
+                proposal.Leaves.Count, string.Join("; ", defects));
+
+            // Do not spend the bounded repair attempt on an unrecoverable structural failure.
+            if (attempt == 1 && disposition != DecisionResearchNeedDisposition.Unresolved)
             {
-                userPrompt += "\n\nREPAIR ONLY THESE DEFECTS:\n- "
-                    + string.Join("\n- ", evaluation.Defects)
-                    + "\nPreserve valid leaves. Return the complete corrected JSON object once.";
+                userPrompt += DecisionResearchNeedRepairPlanner.BuildDirective(disposition, defects);
                 continue;
             }
 
-            return ([], null, string.Join("; ", evaluation.Defects));
+            return ([], null, $"{disposition.ToString().ToUpperInvariant()}: {string.Join("; ", defects)}", Transformation());
         }
 
-        return ([], null, "RESEARCHABILITY_GATE_UNRESOLVED");
+        return ([], null, "RESEARCHABILITY_GATE_UNRESOLVED", Transformation());
     }
 
-    private static DecisionResearchSemanticProposal ParseResearchSemanticProposal(string json)
+    private static bool TryParseResearchSemanticProposal(string json, out DecisionResearchSemanticProposal proposal)
     {
         try
         {
-            return JsonSerializer.Deserialize<DecisionResearchSemanticProposal>(json,
+            proposal = JsonSerializer.Deserialize<DecisionResearchSemanticProposal>(json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? new DecisionResearchSemanticProposal();
+            return true;
         }
         catch (JsonException)
         {
-            return new DecisionResearchSemanticProposal();
+            proposal = new DecisionResearchSemanticProposal();
+            return false;
         }
+    }
+
+    private static DecisionResearchTransformationAttemptDto BuildResearchTransformationAttempt(
+        int attempt,
+        string modelCode,
+        string status,
+        string disposition,
+        DecisionResearchSemanticProposal proposal,
+        DecisionResearchabilityResult evaluation)
+    {
+        var researchableKeys = evaluation.ResearchableLeaves
+            .Select(leaf => leaf.ResearchKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var leaves = proposal.Leaves.Select(leaf =>
+        {
+            var rejected = evaluation.Defects.Any(defect =>
+                defect.StartsWith($"{leaf.ResearchKey}:", StringComparison.OrdinalIgnoreCase));
+            var gateStatus = rejected ? "REJECT"
+                : researchableKeys.Contains(leaf.ResearchKey) ? "ACCEPT"
+                : leaf.Researchable ? "NOT_SELECTED"
+                : "ACCEPT_AS_DERIVED";
+            return new DecisionResearchTransformationLeafDto(
+                leaf.ResearchKey,
+                leaf.ResearchNeedType,
+                leaf.Proposition,
+                leaf.SourceClass,
+                leaf.Researchable,
+                gateStatus,
+                leaf.SearchQuery,
+                leaf.Requires);
+        }).ToArray();
+
+        return new DecisionResearchTransformationAttemptDto(
+            attempt, modelCode, status, proposal.Leaves.Count, disposition,
+            evaluation.Defects, leaves);
     }
 
     // Deterministic integrity check for a parsed proposal. The LLM proposes structure but cannot be
@@ -2130,108 +2566,125 @@ public sealed class LegalDecisionService(
         }
     }
 
+    internal sealed record DomainGuardrailGovernanceResult(
+        List<DecisionBranchPersistence> Branches,
+        int MatchedBranchCount,
+        int NovelBranchCount,
+        int FallbackBranchCount);
 
-    private async Task<EvidenceRetrievalOutcome> RetrieveEvidenceAsync(string contextCode, IReadOnlyList<DecisionBranchPersistence> branches, Guid sessionId, Guid tenantId, int maxResults, CancellationToken cancellationToken)
+    internal static DomainGuardrailGovernanceResult ApplyDomainGuardrails(
+        string query,
+        IReadOnlyCollection<DecisionCandidatePersistence> candidates,
+        IReadOnlyCollection<DecisionBranchPersistence> dynamicBranches,
+        IReadOnlyCollection<DecisionDomainConceptDto> concepts,
+        IReadOnlyCollection<DecisionDomainConceptRelationDto> relations)
     {
-        var evidence = new List<DecisionEvidencePersistence>();
-        var verifications = new List<EvidenceVerificationResult>();
+        var governed = new List<DecisionBranchPersistence>(dynamicBranches.Count + concepts.Count);
+        var matchedCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var matchedCount = 0;
+        var novelCount = 0;
 
-        // Multi-branch IV-directed retrieval (§13,§34): research is not limited to a single dependency.
-        // We take the top-N highest-IV frontier dependencies (falling back to the highest-IV branch when
-        // the frontier is empty) and research each in a bounded round. This lets more than one essential
-        // dependency contribute verified evidence instead of only the single strongest branch.
-        const int maxResearchBranches = 3;
-        var targets = branches
-            .Where(b => b.IsOnFrontier)
-            .OrderByDescending(b => b.AdvScore)
-            .Take(maxResearchBranches)
-            .ToList();
-        if (targets.Count == 0)
+        foreach (var branch in dynamicBranches)
         {
-            var fallback = branches.OrderByDescending(b => b.AdvScore).FirstOrDefault();
-            if (fallback is not null)
-                targets.Add(fallback);
-        }
-        if (targets.Count == 0)
-            return new EvidenceRetrievalOutcome(evidence, verifications, DecisionResearchStates.NotNeeded, null);
+            var branchText = $"{branch.DisplayName} {branch.Interpretation}";
+            var match = concepts
+                .Select(concept => new
+                {
+                    Concept = concept,
+                    Score = DomainConceptMatchScore(
+                        branchText,
+                        $"{concept.Name} {concept.Description} {concept.DimensionCode}"),
+                })
+                .OrderByDescending(item => item.Score)
+                .ThenBy(item => item.Concept.SortOrder)
+                .FirstOrDefault();
 
-        var anyRetrieved = false;
-        var anyFailed = false;
-        string? firstFailureDetail = null;
-        foreach (var target in targets)
-        {
-            var branchOutcome = await RetrieveForBranchAsync(contextCode, target, sessionId, maxResults, cancellationToken);
-            evidence.AddRange(branchOutcome.Evidence);
-            verifications.AddRange(branchOutcome.Verifications);
-            switch (branchOutcome.ResearchStatus)
+            // A concept match enriches provenance only; it never changes branch scores/state/frontier.
+            if (match is not null && match.Score >= 0.34d)
             {
-                case DecisionResearchStates.Retrieved:
-                    anyRetrieved = true;
-                    break;
-                case DecisionResearchStates.RetrievalFailed:
-                    anyFailed = true;
-                    firstFailureDetail ??= branchOutcome.FailureDetail;
-                    break;
+                matchedCodes.Add(match.Concept.ConceptCode);
+                matchedCount++;
+                var constrained = relations.Any(relation => relation.IsHardConstraint
+                    && (relation.SourceConceptCode.Equals(match.Concept.ConceptCode, StringComparison.OrdinalIgnoreCase)
+                        || relation.TargetConceptCode.Equals(match.Concept.ConceptCode, StringComparison.OrdinalIgnoreCase)));
+                governed.Add(branch with
+                {
+                    GenerationOriginCode = DecisionBranchGenerationOrigins.DynamicLlmEnriched,
+                    DecisionDomainConceptId = match.Concept.DecisionDomainConceptId,
+                    DomainConceptCode = match.Concept.ConceptCode,
+                    GuardrailMatchScore = (decimal)DecisionCoreMath.Clamp01(match.Score),
+                    GuardrailActionCode = constrained
+                        ? DecisionGuardrailActions.ConstraintEnriched
+                        : DecisionGuardrailActions.ConceptMatched,
+                    GuardrailVersion = match.Concept.VersionNumber,
+                });
+            }
+            else
+            {
+                novelCount++;
+                governed.Add(branch with
+                {
+                    GenerationOriginCode = DecisionBranchGenerationOrigins.DynamicLlm,
+                    GuardrailActionCode = DecisionGuardrailActions.NovelAccepted,
+                });
             }
         }
 
-        // Aggregate status: any verified retrieval wins (RETRIEVED); otherwise a fault surfaces as
-        // RETRIEVAL_FAILED; otherwise every branch searched cleanly but found nothing (SEARCH_NO_RESULTS).
-        var aggregateStatus = anyRetrieved
-            ? DecisionResearchStates.Retrieved
-            : anyFailed
-                ? DecisionResearchStates.RetrievalFailed
-                : DecisionResearchStates.SearchNoResults;
-        return new EvidenceRetrievalOutcome(evidence, verifications, aggregateStatus, anyRetrieved ? null : firstFailureDetail);
+        // Fallback coverage is deliberately narrow and dormant: only required concepts that are strongly
+        // relevant to the actual query and absent from every dynamic branch are recorded. They do not enter
+        // Candidate × Branch competition, IV, frontier, retrieval, or ranking unless later reopened by POLOXI.
+        var fallbackCount = 0;
+        var fallbackParentCode = candidates.OrderBy(candidate => candidate.RankOrder).FirstOrDefault()?.CandidateCode ?? "DOMAIN";
+        foreach (var concept in concepts
+            .Where(concept => concept.IsRequiredCoverage && concept.IsFallbackEligible && !matchedCodes.Contains(concept.ConceptCode))
+            .OrderBy(concept => concept.SortOrder))
+        {
+            var queryFit = DomainConceptMatchScore(query, $"{concept.Name} {concept.Description} {concept.DimensionCode}");
+            if (queryFit < 0.42d)
+                continue;
+
+            fallbackCount++;
+            governed.Add(new DecisionBranchPersistence(
+                Guid.NewGuid(), null, 1, $"{fallbackParentCode}.GF{fallbackCount}", concept.Name,
+                concept.Description, DecisionBranchStates.Dormant,
+                InformationValue: 0m, DecisionRelevance: 0m, FlipPotential: 0m, EvidenceAvailability: 0m,
+                AdvScore: 0m, Cost: 1m, IsOnFrontier: false,
+                StopReason: "DOMAIN_FALLBACK_NOT_ACTIVATED", SortOrder: 10000 + concept.SortOrder)
+            {
+                GenerationOriginCode = DecisionBranchGenerationOrigins.DomainFallback,
+                DecisionDomainConceptId = concept.DecisionDomainConceptId,
+                DomainConceptCode = concept.ConceptCode,
+                GuardrailMatchScore = (decimal)DecisionCoreMath.Clamp01(queryFit),
+                GuardrailActionCode = DecisionGuardrailActions.FallbackAdded,
+                GuardrailVersion = concept.VersionNumber,
+            });
+        }
+
+        return new DomainGuardrailGovernanceResult(governed, matchedCount, novelCount, fallbackCount);
     }
 
-    // Bounded IV-directed retry for a single frontier dependency (§13,§34). A retrieval FAILURE is
-    // transient by nature (provider/index error) and must not silently downgrade the decision on the
-    // first fault, so we retry the same objective a bounded number of times. A successful call that
-    // simply returns no sources is NOT retried — that is a genuine finding (SEARCH_NO_RESULTS), not a
-    // fault. Retries are bounded to avoid unbounded work.
-    private async Task<EvidenceRetrievalOutcome> RetrieveForBranchAsync(string contextCode, DecisionBranchPersistence target, Guid sessionId, int maxResults, CancellationToken cancellationToken)
+    private static double DomainConceptMatchScore(string left, string right)
     {
-        const int maxRetrievalAttempts = 3;
-        var objective = string.IsNullOrWhiteSpace(target.Interpretation) ? target.DisplayName : target.Interpretation!;
-        Exception? lastError = null;
-        for (var attempt = 1; attempt <= maxRetrievalAttempts; attempt++)
-        {
-            var evidence = new List<DecisionEvidencePersistence>();
-            var verifications = new List<EvidenceVerificationResult>();
-            try
-            {
-                var sources = await retriever.RetrieveAsync(new DecisionRetrievalRequest(contextCode, objective, Math.Clamp(maxResults, 1, 10)), cancellationToken);
-                foreach (var s in sources)
-                {
-                    var evidenceId = Guid.NewGuid();
-                    var verification = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
-                        evidenceId, target.DecisionBranchId, objective, s.SourceRef, s.Title, s.Snippet,
-                        s.SourceType, s.Jurisdiction, s.AuthorityDate)
-                    {
-                        SourceProvider = s.SourceProvider,
-                        SourceVersion = s.SourceVersion,
-                        ProviderIdentityVerified = s.ProviderIdentityVerified,
-                    }, cancellationToken);
-                    evidence.Add(ToEvidencePersistence(s, objective, target.DecisionBranchId, verification));
-                    verifications.Add(verification);
-                }
-                // Retrieval succeeded: distinguish "found something" from "searched but found nothing".
-                var status = evidence.Count > 0 ? DecisionResearchStates.Retrieved : DecisionResearchStates.SearchNoResults;
-                return new EvidenceRetrievalOutcome(evidence, verifications, status, null);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Transient fault: record and retry the same objective until the bound is hit.
-                lastError = ex;
-                logger.LogWarning(ex, "Decision-directed retrieval attempt {Attempt}/{MaxAttempts} failed for session {SessionId}, branch {BranchCode}.", attempt, maxRetrievalAttempts, sessionId, target.BranchCode);
-            }
-        }
+        var semanticSimilarity = DecisionCoreMath.Similarity(left, right);
+        var leftTokens = DomainMatchTokens(left);
+        var rightTokens = DomainMatchTokens(right);
+        if (leftTokens.Count == 0 || rightTokens.Count == 0)
+            return semanticSimilarity;
 
-        // Retrieval exhausted its bounded attempts for this dependency: failure becomes explicit decision
-        // state (§13) rather than a swallowed log entry, carrying the last observed fault as the detail.
-        logger.LogWarning(lastError, "Decision-directed retrieval exhausted {MaxAttempts} attempts for session {SessionId}, branch {BranchCode}; continuing without external evidence for this dependency.", maxRetrievalAttempts, sessionId, target.BranchCode);
-        return new EvidenceRetrievalOutcome([], [], DecisionResearchStates.RetrievalFailed, lastError?.Message);
+        var overlap = leftTokens.Count(token => rightTokens.Contains(token));
+        var coverage = (double)overlap / Math.Min(leftTokens.Count, rightTokens.Count);
+        return Math.Max(semanticSimilarity, coverage);
+    }
+
+    private static HashSet<string> DomainMatchTokens(string value)
+    {
+        string[] stopWords = ["THE", "AND", "OR", "OF", "TO", "A", "AN", "IS", "ARE", "FOR", "IN", "ON", "WITH", "WHETHER"];
+        var stops = stopWords.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return value
+            .Split([' ', '\t', '\r', '\n', '-', '/', '.', ',', ';', ':', '(', ')'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeDomainText)
+            .Where(token => token.Length >= 4 && !stops.Contains(token))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     // Explicit retrieval outcome so retrieval failure is a first-class decision signal, not a log-only
@@ -2673,7 +3126,7 @@ public sealed class LegalDecisionService(
             p.DepthReached, p.LlmCallCount, p.CandidateEntropy, p.DecisionMargin, p.ContractCompleteness,
             p.FinalAnswer, p.WinnerCandidateId,
             p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
-            p.Branches.Select(b => new DecisionBranchDto(b.DecisionBranchId, b.ParentDecisionBranchId, b.LevelNumber, b.BranchCode, b.DisplayName, b.Interpretation, b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability, b.AdvScore, b.IsOnFrontier, b.StopReason, b.SortOrder)).ToArray(),
+            p.Branches.Select(MapBranch).ToArray(),
             p.Evidence.Select(e => new DecisionEvidenceDto(e.DecisionEvidenceId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet, e.VerificationValue, e.VerificationStatus)
             {
                 SupportedObjective = e.SupportedObjective,
@@ -2689,6 +3142,7 @@ public sealed class LegalDecisionService(
             CounterfactualAssumption = p.CounterfactualAssumption,
             NextBestAction = nextAction,
             Readiness = readiness,
+            DomainGuardrails = BuildDomainGuardrailSummary(p.Branches),
             UsedDependencyGraph = usedDependencyGraph,
             GraphDiagnostic = graphDiagnostic,
             GraphNodes = v2?.Nodes ?? [],
@@ -2698,6 +3152,45 @@ public sealed class LegalDecisionService(
             GovernanceVerdict = governanceVerdict,
             SolverShadow = solverShadow
         };
+
+    private static DecisionBranchDto MapBranch(DecisionBranchPersistence branch) =>
+        new(branch.DecisionBranchId, branch.ParentDecisionBranchId, branch.LevelNumber, branch.BranchCode,
+            branch.DisplayName, branch.Interpretation, branch.BranchStateCode, branch.InformationValue,
+            branch.DecisionRelevance, branch.FlipPotential, branch.EvidenceAvailability, branch.AdvScore,
+            branch.IsOnFrontier, branch.StopReason, branch.SortOrder)
+        {
+            GenerationOriginCode = branch.GenerationOriginCode,
+            DecisionDomainConceptId = branch.DecisionDomainConceptId,
+            DomainConceptCode = branch.DomainConceptCode,
+            GuardrailMatchScore = branch.GuardrailMatchScore,
+            GuardrailActionCode = branch.GuardrailActionCode,
+            GuardrailVersion = branch.GuardrailVersion,
+        };
+
+    private static DecisionDomainGuardrailSummaryDto? BuildDomainGuardrailSummary(
+        IReadOnlyCollection<DecisionBranchPersistence> branches)
+    {
+        var governed = branches.Where(branch => !string.IsNullOrWhiteSpace(branch.GuardrailActionCode)).ToArray();
+        if (governed.Length == 0)
+            return null;
+
+        return new DecisionDomainGuardrailSummaryDto(
+            DynamicBranchCount: branches.Count(branch => !string.Equals(branch.GenerationOriginCode,
+                DecisionBranchGenerationOrigins.DomainFallback, StringComparison.OrdinalIgnoreCase)),
+            EnrichedBranchCount: branches.Count(branch => string.Equals(branch.GenerationOriginCode,
+                DecisionBranchGenerationOrigins.DynamicLlmEnriched, StringComparison.OrdinalIgnoreCase)),
+            NovelBranchCount: branches.Count(branch => string.Equals(branch.GuardrailActionCode,
+                DecisionGuardrailActions.NovelAccepted, StringComparison.OrdinalIgnoreCase)),
+            DormantFallbackCount: branches.Count(branch => string.Equals(branch.GenerationOriginCode,
+                DecisionBranchGenerationOrigins.DomainFallback, StringComparison.OrdinalIgnoreCase)),
+            AppliedConceptCodes: branches
+                .Where(branch => !string.IsNullOrWhiteSpace(branch.DomainConceptCode))
+                .Select(branch => branch.DomainConceptCode!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(code => code, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            PolicyCode: "DYNAMIC_PRIMARY_ADVISORY_GUARDRAILS");
+    }
 
     // ── Next Best Action: pick the open (frontier / active) branch with the highest information value.
     // Impact class scales with flip potential — a branch that can overturn the winner is VERY HIGH. ──
@@ -2773,6 +3266,7 @@ public sealed class LegalDecisionService(
             {
                 DecisionResearchStates.RetrievalFailed => "Retrieval operation failed; no external evidence could be verified",
                 DecisionResearchStates.SearchNoResults => "Search returned no sources to verify",
+                DecisionResearchStates.RequiredPending => "Research required but unresolved; authoritative Research Need retrieval has not produced verified evidence",
                 DecisionResearchStates.NotNeeded => "No external research was required for this decision",
                 _ => "Retrieved sources did not meet verification requirements (0 verified)"
             };
@@ -2834,7 +3328,9 @@ public sealed class LegalDecisionService(
         var candidateArtifact = JsonSerializer.Serialize(new
         {
             candidates = candidates.Select(c => new { code = c.CandidateCode, c.DisplayName, c.Outcome, c.CompositeScore }),
-            branches = branches.Select(b => new { b.BranchCode, b.DisplayName, b.Interpretation, b.FlipPotential })
+            branches = branches
+                .Where(static branch => branch.IsExecutable)
+                .Select(b => new { b.BranchCode, b.DisplayName, b.Interpretation, b.FlipPotential })
         });
         // Structured posture context (from the matter) grounds the proposal in the decision being
         // asked NOW: which motion, and what it targets. Appended only; empty when not supplied.

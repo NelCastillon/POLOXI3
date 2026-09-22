@@ -83,6 +83,54 @@ public sealed class DecisionResearchabilityGateTests
     }
 
     [Fact]
+    public void InterrogativeFrontierContainer_DoesNotPoisonValidResearchableLeaves()
+    {
+        var hierarchy = ValidHierarchy();
+        var frontier = new DecisionResearchSemanticLeaf
+        {
+            ResearchKey = "C3.B1.frontier",
+            ResearchNeedType = DecisionResearchNeedTypes.Application,
+            ResearchQuestion = "Whether Emily's causal negligence exceeds the governing comparative-fault threshold?",
+            Proposition = "Whether Emily's causal negligence exceeds the governing comparative-fault threshold remains unresolved.",
+            SourceClass = DecisionResearchSourceClasses.None,
+            Researchable = false,
+            ApplicationDeferred = true,
+            CandidateDiscrimination = ["C3", "C4"],
+            Requires = hierarchy.Leaves.Where(leaf => leaf.Researchable).Select(leaf => leaf.ResearchKey).ToArray(),
+        };
+        var proposal = hierarchy with { Leaves = [frontier, .. hierarchy.Leaves] };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.True(result.IsAcceptable);
+        Assert.DoesNotContain(result.Defects, defect => defect.Contains("PROPOSITION_MUST_BE_DECLARATIVE", StringComparison.Ordinal));
+        Assert.NotEmpty(result.ResearchableLeaves);
+    }
+
+    [Fact]
+    public void FrontierContainer_WithInsufficientDependencies_RemainsRejected()
+    {
+        var hierarchy = ValidHierarchy();
+        var frontier = new DecisionResearchSemanticLeaf
+        {
+            ResearchKey = "C3.B1.frontier",
+            ResearchNeedType = DecisionResearchNeedTypes.Application,
+            ResearchQuestion = "Whether the threshold is met?",
+            Proposition = "Whether the threshold is met remains unresolved.",
+            SourceClass = DecisionResearchSourceClasses.None,
+            Researchable = false,
+            ApplicationDeferred = true,
+            CandidateDiscrimination = ["C3", "C4"],
+            Requires = [hierarchy.Leaves[0].ResearchKey],
+        };
+
+        var result = new DecisionResearchabilityGate().Evaluate(hierarchy with { Leaves = [frontier, .. hierarchy.Leaves] });
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains("C3.B1.frontier:DERIVED_NODE_DEPENDENCIES_INSUFFICIENT", result.Defects);
+    }
+
+    [Fact]
     public void AssertedApplicationConclusion_IsRejectedEvenWhenMarkedResearchable()
     {
         var proposal = new DecisionResearchSemanticProposal

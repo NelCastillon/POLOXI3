@@ -25,6 +25,30 @@ public static class ServiceCollectionExtensions
         {
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;
         });
+        services.AddOptions<DocumentIntelligenceOptions>()
+            .Bind(configuration.GetSection(DocumentIntelligenceOptions.SectionName))
+            .Validate(options => options.ModelId.Equals("prebuilt-layout", StringComparison.OrdinalIgnoreCase),
+                "DocumentIntelligence:ModelId must be prebuilt-layout for legal-document ingestion.")
+            .Validate(options => options.MaximumFileSizeBytes > 0, "DocumentIntelligence:MaximumFileSizeBytes must be positive.")
+            .Validate(options => options.NativeTextMinimumCharactersPerPage > 0,
+                "DocumentIntelligence:NativeTextMinimumCharactersPerPage must be positive.")
+            .Validate(options => options.NativeTextMinimumReadableCharacterRatio is > 0 and <= 1,
+                "DocumentIntelligence:NativeTextMinimumReadableCharacterRatio must be greater than zero and no greater than one.")
+            .Validate(options => options.BinaryStoreProvider.Equals("FileSystem", StringComparison.OrdinalIgnoreCase) ||
+                                 !string.IsNullOrWhiteSpace(options.BlobConnectionString) || Uri.TryCreate(options.BlobServiceUri, UriKind.Absolute, out _),
+                "Azure Blob storage requires DocumentIntelligence:BlobConnectionString or BlobServiceUri.")
+            .Validate(options => !options.BinaryStoreProvider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase) || options.BlobRetentionDays > 0,
+                "DocumentIntelligence:BlobRetentionDays must be positive for Azure Blob storage.")
+            .Validate(options => options.MalwareScannerProvider.Equals("Http", StringComparison.OrdinalIgnoreCase) ||
+                                 !string.IsNullOrWhiteSpace(options.BlobConnectionString) || Uri.TryCreate(options.BlobServiceUri, UriKind.Absolute, out _),
+                "Defender for Storage requires DocumentIntelligence:BlobConnectionString or BlobServiceUri.")
+            .Validate(options => !options.MalwareScannerProvider.Equals("DefenderForStorage", StringComparison.OrdinalIgnoreCase) ||
+                                 (options.DefenderScanTimeoutSeconds > 0 && options.DefenderScanPollSeconds > 0),
+                "Defender scan timeout and poll interval must be positive.")
+            .Validate(options => !options.SearchProjectionEnabled ||
+                                 (Uri.TryCreate(options.SearchEndpoint, UriKind.Absolute, out _) && !string.IsNullOrWhiteSpace(options.SearchIndexName)),
+                "Enabled Azure AI Search projection requires SearchEndpoint and SearchIndexName.")
+            .ValidateOnStart();
         services.AddSingleton<ISqlConnectionFactory, SqlConnectionFactory>();
         services.AddSingleton<LegalDatabaseMigrator>();
 
@@ -35,6 +59,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEpistemicClaimRepository, EpistemicClaimRepository>();
         services.AddScoped<IDecisionGovernanceRepository, DecisionGovernanceRepository>();
         services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
+        services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
 
         // POLOXI Epistemic Authority Layer (EA-1/EA-2): deterministic, stateless governance services.
         // Settings are DB-backed and runtime-effective: resolved per scope from Core.ConfigurationSetting
@@ -145,6 +170,23 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalDecisionRepository, LegalDecisionRepository>();
         services.AddScoped<ILegalDecisionAiProvider, LegalDecisionAiProvider>();
         services.AddScoped<ILegalDecisionRetriever, LegalDecisionRetriever>();
+        services.AddScoped<IDocumentExtractionProvider, AzureDocumentIntelligenceProvider>();
+        services.AddSingleton<ILegalDocumentIntakeValidator, LegalDocumentIntakeValidator>();
+        if (configuration[$"{DocumentIntelligenceOptions.SectionName}:BinaryStoreProvider"]?.Equals("FileSystem", StringComparison.OrdinalIgnoreCase) == true)
+            services.AddSingleton<ILegalDocumentBinaryStore, FileSystemLegalDocumentBinaryStore>();
+        else
+            services.AddSingleton<ILegalDocumentBinaryStore, AzureBlobLegalDocumentBinaryStore>();
+        if (configuration[$"{DocumentIntelligenceOptions.SectionName}:MalwareScannerProvider"]?.Equals("Http", StringComparison.OrdinalIgnoreCase) == true)
+            services.AddHttpClient<ILegalDocumentSecurityScanner, HttpLegalDocumentSecurityScanner>();
+        else
+            services.AddSingleton<ILegalDocumentSecurityScanner, AzureDefenderLegalDocumentSecurityScanner>();
+        services.AddSingleton<INativeDocumentTextProvider, NativeDocumentTextProvider>();
+        services.AddScoped<ILegalDocumentExtractionRouter, Legal.Application.Features.Intelligence.Decision.LegalDocumentExtractionRouter>();
+        services.AddScoped<ILegalDocumentSearchProjectionDispatcher, LegalDocumentSearchProjectionDispatcher>();
+        services.AddScoped<ILegalDocumentSemanticInterpreter, Legal.Application.Features.Intelligence.Decision.LegalDocumentSemanticInterpreter>();
+        services.AddScoped<ILegalDocumentIntakeService, Legal.Application.Features.Intelligence.Decision.LegalDocumentIntakeService>();
+        services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
+        services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.IDependencyPropagationService, Legal.Application.Features.Intelligence.Decision.Core.DependencyPropagationService>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.ILegalDecisionImpactMapper, Legal.Application.Features.Intelligence.Decision.Core.LegalDecisionImpactMapper>();
         services.AddScoped<ILegalDecisionService, LegalDecisionService>();

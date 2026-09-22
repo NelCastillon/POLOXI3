@@ -277,6 +277,34 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("Matter facets are not used on the research-loop path.");
 
+    public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+        => Task.FromResult<DecisionDomainPackDto?>(null);
+
     public Task PersistGraphAsync(DecisionGraphPersistence graph, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    // ── Personal Injury (Domain Pack) — not exercised by the research-loop tests ──
+    public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult(new PersonalInjuryOptionsDto());
+
+    public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<PersonalInjuryProfileDto?>(null);
+
+    public Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>>([]);
+
+    public Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<PersonalInjuryStageDecisionDto>>([]);
+
+    public Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default)
+        => Task.FromResult(Guid.NewGuid());
+
+    public Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default)
+        => Task.FromResult<PersonalInjuryMatterDraftDto?>(null);
+
+    public Task<bool> MarkPersonalInjuryDraftConfirmedAsync(Guid tenantId, Guid userId, Guid decisionPIMatterDraftId, Guid confirmedMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult(true);
 }

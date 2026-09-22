@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using Dapper;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Features.Intelligence.Decision;
@@ -397,17 +398,21 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 INSERT INTO POLOXI.Legal_DecisionBranch
                     (DecisionBranchId, DecisionSessionId, ParentDecisionBranchId, LevelNumber, BranchCode, DisplayName, Interpretation,
                      BranchStateCode, InformationValue, DecisionRelevance, FlipPotential, EvidenceAvailability, AdvScore, Cost,
-                     IsOnFrontier, StopReason, SortOrder, TenantId, CreatedByUserId)
+                     IsOnFrontier, StopReason, SortOrder, GenerationOriginCode, DecisionDomainConceptId, DomainConceptCode,
+                     GuardrailMatchScore, GuardrailActionCode, GuardrailVersion, TenantId, CreatedByUserId)
                 VALUES
                     (@DecisionBranchId, @DecisionSessionId, @ParentDecisionBranchId, @LevelNumber, @BranchCode, @DisplayName, @Interpretation,
                      @BranchStateCode, @InformationValue, @DecisionRelevance, @FlipPotential, @EvidenceAvailability, @AdvScore, @Cost,
-                     @IsOnFrontier, @StopReason, @SortOrder, @TenantId, @ActorUserId);
+                     @IsOnFrontier, @StopReason, @SortOrder, @GenerationOriginCode, @DecisionDomainConceptId, @DomainConceptCode,
+                     @GuardrailMatchScore, @GuardrailActionCode, @GuardrailVersion, @TenantId, @ActorUserId);
                 """,
                 session.Branches.Select(b => new
                 {
                     b.DecisionBranchId, session.DecisionSessionId, b.ParentDecisionBranchId, b.LevelNumber, b.BranchCode, b.DisplayName,
                     b.Interpretation, b.BranchStateCode, b.InformationValue, b.DecisionRelevance, b.FlipPotential, b.EvidenceAvailability,
-                    b.AdvScore, b.Cost, b.IsOnFrontier, b.StopReason, b.SortOrder, session.TenantId, session.ActorUserId
+                    b.AdvScore, b.Cost, b.IsOnFrontier, b.StopReason, b.SortOrder, b.GenerationOriginCode, b.DecisionDomainConceptId,
+                    b.DomainConceptCode, b.GuardrailMatchScore, b.GuardrailActionCode, b.GuardrailVersion,
+                    session.TenantId, session.ActorUserId
                 }),
                 transaction, cancellationToken: cancellationToken));
 
@@ -530,7 +535,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         var branches = (await connection.QueryAsync<DecisionBranchPersistence>(new CommandDefinition(
             """
             SELECT DecisionBranchId, ParentDecisionBranchId, LevelNumber, BranchCode, DisplayName, Interpretation, BranchStateCode,
-                   InformationValue, DecisionRelevance, FlipPotential, EvidenceAvailability, AdvScore, Cost, IsOnFrontier, StopReason, SortOrder
+                   InformationValue, DecisionRelevance, FlipPotential, EvidenceAvailability, AdvScore, Cost, IsOnFrontier, StopReason, SortOrder,
+                   COALESCE(GenerationOriginCode, N'DYNAMIC_LLM') AS GenerationOriginCode, DecisionDomainConceptId, DomainConceptCode,
+                   GuardrailMatchScore, GuardrailActionCode, GuardrailVersion
             FROM POLOXI.Legal_DecisionBranch WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId ORDER BY LevelNumber, SortOrder;
             """,
             new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
@@ -664,6 +671,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             SELECT
                 m.DecisionMatterId, m.Title, m.MatterTypeCode, m.Jurisdiction, m.Posture, m.Description, m.StatusCode,
+                m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
@@ -697,6 +705,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             SELECT
                 m.DecisionMatterId, m.Title, m.MatterTypeCode, m.Jurisdiction, m.Posture, m.Description, m.StatusCode,
+                m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
                 m.Subtype, m.CourtSystem, m.State, m.CourtLevel, m.County, m.GoverningLaw,
                 m.MovingParty, m.RespondingParty, m.MotionTarget, m.RequestedDisposition,
                 m.CreatedDateUtc, m.ModifiedDateUtc,
@@ -730,9 +739,11 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             INSERT INTO POLOXI.Legal_DecisionMatter
                 (DecisionMatterId, Title, MatterTypeCode, Jurisdiction, Posture, Description, StatusCode, TenantId, CreatedByUserId,
+                 PracticeAreaCode, ClaimTypeCode, DomainPackCode,
                  Subtype, CourtSystem, State, CourtLevel, County, GoverningLaw, MovingParty, RespondingParty, MotionTarget, RequestedDisposition)
             VALUES
                 (@DecisionMatterId, @Title, @MatterTypeCode, @Jurisdiction, @Posture, @Description, N'OPEN', @TenantId, @UserId,
+                 @PracticeAreaCode, @ClaimTypeCode, @DomainPackCode,
                  @Subtype, @CourtSystem, @State, @CourtLevel, @County, @GoverningLaw, @MovingParty, @RespondingParty, @MotionTarget, @RequestedDisposition);
             """,
             new
@@ -743,6 +754,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 request.Jurisdiction,
                 request.Posture,
                 request.Description,
+                request.PracticeAreaCode,
+                request.ClaimTypeCode,
+                request.DomainPackCode,
                 request.Subtype,
                 request.CourtSystem,
                 request.State,
@@ -759,6 +773,623 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             cancellationToken: cancellationToken));
         return id;
     }
+
+    // ── Domain Pack (practice-area domain semantics) ─────────────────────────────────────────────
+    // Loads a database-backed Domain Pack (global default rows use TenantId NULL; tenant rows override)
+    // with its dimensions, evidence types, verification profiles, and matter-type taxonomy. Advisory
+    // configuration only — POLOXI Core decision reasoning is unchanged.
+    public async Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var pack = await connection.QuerySingleOrDefaultAsync<DomainPackRow>(new CommandDefinition(
+            """
+            SELECT TOP 1 DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description
+            FROM POLOXI.Legal_DecisionDomainPack
+            WHERE IsDeleted = 0 AND IsActive = 1 AND PackCode = @PackCode
+              AND (TenantId = @TenantId OR TenantId IS NULL)
+            ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder;
+            """,
+            new { TenantId = tenantId, PackCode = packCode },
+            cancellationToken: cancellationToken));
+        if (pack is null)
+            return null;
+
+        var dimensions = (await connection.QueryAsync<DecisionDomainPackDimensionDto>(new CommandDefinition(
+            """
+            SELECT DimensionCode, Name, Description FROM POLOXI.Legal_DecisionDomainPackDimension
+            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
+            """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
+
+        var evidenceTypes = (await connection.QueryAsync<DecisionDomainPackEvidenceTypeDto>(new CommandDefinition(
+            """
+            SELECT EvidenceTypeCode, Name, DimensionCode, Description FROM POLOXI.Legal_DecisionDomainPackEvidenceType
+            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
+            """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
+
+        var profiles = (await connection.QueryAsync<DecisionDomainPackVerificationProfileDto>(new CommandDefinition(
+            """
+            SELECT ProfileCode, Name, EvidenceTypeCode, Description FROM POLOXI.Legal_DecisionDomainPackVerificationProfile
+            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
+            """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
+
+        var matterTypes = (await connection.QueryAsync<DecisionDomainPackMatterTypeDto>(new CommandDefinition(
+            """
+            SELECT MatterTypeCode, Name, Description FROM POLOXI.Legal_DecisionDomainPackMatterType
+            WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId ORDER BY SortOrder, Name;
+            """, new { PackId = pack.DecisionDomainPackId }, cancellationToken: cancellationToken))).ToArray();
+
+        var concepts = (await connection.QueryAsync<DecisionDomainConceptDto>(new CommandDefinition(
+            """
+            WITH RankedConcept AS
+            (
+                SELECT DecisionDomainConceptId, ConceptCode, DimensionCode, Name, Description, ConceptKindCode,
+                       SourceClassCode, VerificationProfileCode, JurisdictionCode, MatterTypeCode,
+                       IsRequiredCoverage, IsFallbackEligible, SortOrder, VersionNumber,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY ConceptCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, VersionNumber DESC, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainConcept
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT DecisionDomainConceptId, ConceptCode, DimensionCode, Name, Description, ConceptKindCode,
+                   SourceClassCode, VerificationProfileCode, JurisdictionCode, MatterTypeCode,
+                   IsRequiredCoverage, IsFallbackEligible, SortOrder, VersionNumber
+            FROM RankedConcept WHERE ScopeRank = 1 ORDER BY SortOrder, Name;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
+        var conceptRelations = (await connection.QueryAsync<DecisionDomainConceptRelationDto>(new CommandDefinition(
+            """
+            WITH RankedRelation AS
+            (
+                SELECT DecisionDomainConceptRelationId, SourceConceptCode, TargetConceptCode, RelationTypeCode,
+                       ConstraintCode, Description, JurisdictionCode, MatterTypeCode, IsHardConstraint, SortOrder,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY SourceConceptCode, TargetConceptCode, RelationTypeCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainConceptRelation
+                WHERE IsDeleted = 0 AND IsActive = 1 AND DecisionDomainPackId = @PackId
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT DecisionDomainConceptRelationId, SourceConceptCode, TargetConceptCode, RelationTypeCode,
+                   ConstraintCode, Description, JurisdictionCode, MatterTypeCode, IsHardConstraint, SortOrder
+            FROM RankedRelation WHERE ScopeRank = 1 ORDER BY SortOrder;
+            """, new { PackId = pack.DecisionDomainPackId, TenantId = tenantId }, cancellationToken: cancellationToken))).ToArray();
+
+        return new DecisionDomainPackDto(
+            pack.DecisionDomainPackId, pack.PackCode, pack.PracticeAreaCode, pack.Name, pack.Description,
+            dimensions, evidenceTypes, profiles, matterTypes)
+        {
+            Concepts = concepts,
+            ConceptRelations = conceptRelations,
+        };
+    }
+
+    private sealed record DomainPackRow(Guid DecisionDomainPackId, string PackCode, string PracticeAreaCode, string Name, string? Description);
+
+    // ── Personal Injury (Domain Pack: PERSONAL_INJURY) profile + child aggregates + options ────────
+    // Selectable values are DB-backed (POLOXI.Legal_DecisionMatterOption FieldCode buckets and the
+    // dedicated PI config tables). No PI options are hardcoded in code.
+    public async Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = (await connection.QueryAsync<(string FieldCode, string Value)>(new CommandDefinition(
+            """
+            SELECT FieldCode, Value
+            FROM POLOXI.Legal_DecisionMatterOption
+            WHERE IsDeleted = 0 AND IsActive = 1 AND FieldCode LIKE N'PI\_%' ESCAPE N'\'
+            ORDER BY FieldCode, SortOrder, Value;
+            """,
+            cancellationToken: cancellationToken))).ToArray();
+
+        string[] For(string field) => rows.Where(r => string.Equals(r.FieldCode, field, StringComparison.OrdinalIgnoreCase)).Select(r => r.Value).ToArray();
+
+        return new PersonalInjuryOptionsDto
+        {
+            IncidentTypes = For("PI_INCIDENT_TYPE"),
+            BodyAreas = For("PI_BODY_AREA"),
+            InjurySeverities = For("PI_INJURY_SEVERITY"),
+            CoverageTypes = For("PI_COVERAGE_TYPE"),
+            CoverageStatuses = For("PI_COVERAGE_STATUS"),
+            TreatmentStatuses = For("PI_TREATMENT_STATUS"),
+            DamageTypes = For("PI_DAMAGE_TYPE"),
+            LienTypes = For("PI_LIEN_TYPE"),
+            LienStatuses = For("PI_LIEN_STATUS"),
+            DemandStatuses = For("PI_DEMAND_STATUS"),
+            SettlementStatuses = For("PI_SETTLEMENT_STATUS"),
+            LitigationStatuses = For("PI_LITIGATION_STATUS"),
+            MatterStages = For("PI_MATTER_STAGE"),
+            DeadlineRuleSources = For("PI_DEADLINE_RULE_SOURCE"),
+            DeadlineVerificationStates = For("PI_DEADLINE_VERIFICATION"),
+            VehicleRoles = For("PI_VEHICLE_ROLE"),
+            DraftSourceTypes = For("PI_DRAFT_SOURCE_TYPE"),
+            DraftVerificationStates = For("PI_DRAFT_VERIFICATION_STATE")
+        };
+    }
+
+    public async Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<PersonalInjuryDecisionTypeDto>(new CommandDefinition(
+            """
+            SELECT DecisionTypeCode, Name, Description
+            FROM POLOXI.Legal_DecisionPIDecisionType
+            WHERE IsDeleted = 0 AND IsActive = 1 AND (TenantId = @TenantId OR TenantId IS NULL)
+            ORDER BY SortOrder, Name;
+            """,
+            new { TenantId = tenantId },
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<PersonalInjuryStageDecisionDto>(new CommandDefinition(
+            """
+            SELECT StageCode, DefaultDecisionTypeCode
+            FROM POLOXI.Legal_DecisionPIStageDecisionMap
+            WHERE IsDeleted = 0 AND IsActive = 1 AND (TenantId = @TenantId OR TenantId IS NULL)
+            ORDER BY SortOrder, StageCode;
+            """,
+            new { TenantId = tenantId },
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await connection.QueryMultipleAsync(new CommandDefinition(
+            """
+            SELECT TOP 1 DecisionMatterId, IncidentTypeCode, IncidentDate, IncidentTime, IncidentLocation, IncidentCity,
+                   IncidentCounty, IncidentState, IncidentSummary, LiabilitySummary, InjurySummary, TreatmentSummary,
+                   DamagesSummary, CurrentStageCode, LitigationStatusCode, DemandStatusCode, SettlementStatusCode
+            FROM POLOXI.Legal_DecisionPIMatterProfile
+            WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId AND (TenantId = @TenantId OR TenantId IS NULL);
+
+            SELECT DecisionPIInsurancePolicyId AS Id, Carrier, Insured, Adjuster, ClaimNumber, PolicyNumber, CoverageTypeCode,
+                   BodilyInjuryLimitPerPerson, BodilyInjuryLimitPerOccur, CoverageStatusCode, LimitsSource, LimitsVerified, Notes
+            FROM POLOXI.Legal_DecisionPIInsurancePolicy WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIInjuryId AS Id, BodyAreaCode, InitialSymptoms, Diagnosis, IsPreexisting, ClaimedPermanency,
+                   SurgeryRecommended, SurgeryPerformed, SeverityCode, Notes
+            FROM POLOXI.Legal_DecisionPIInjury WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPITreatmentId AS Id, Provider, Specialty, FirstTreatmentDate, LastTreatmentDate, StatusCode,
+                   VisitCount, RecordRequestStatus, BillRequestStatus, TreatmentGapDays, Notes
+            FROM POLOXI.Legal_DecisionPITreatment WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIMedicalBillId AS Id, Provider, AmountBilled, Adjustments, AmountPaid, OutstandingBalance, Payer, LienStatusCode, Notes
+            FROM POLOXI.Legal_DecisionPIMedicalBill WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIDamageId AS Id, DamageTypeCode, Description, ClaimedAmount, IsEconomic, Notes
+            FROM POLOXI.Legal_DecisionPIDamage WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPILienId AS Id, Lienholder, LienTypeCode, AssertedAmount, VerifiedAmount, NegotiatedAmount, FinalPayoffAmount, StatusCode, Notes
+            FROM POLOXI.Legal_DecisionPILien WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIDemandId AS Id, DemandDate, DemandAmount, Recipient, ResponseDeadline, StatusCode, Notes
+            FROM POLOXI.Legal_DecisionPIDemand WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPINegotiationId AS Id, EventDate, Amount, Source, IsOffer, Conditions, ExpirationDate, Notes
+            FROM POLOXI.Legal_DecisionPINegotiation WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPISettlementId AS Id, GrossRecovery, Fees, Costs, Liens, NetToClient, StatusCode, SettlementDate, Notes
+            FROM POLOXI.Legal_DecisionPISettlement WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIDeadlineId AS Id, DeadlineTypeCode, CandidateDate, RuleSourceCode, VerificationState, Notes
+            FROM POLOXI.Legal_DecisionPIDeadline WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIIncidentVehicleId AS Id, RoleCode, Description, Owner, Driver, ImpactType, Citation, Notes
+            FROM POLOXI.Legal_DecisionPIIncidentVehicle WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+
+            SELECT DecisionPIWitnessId AS Id, Name, ContactInfo, StatementSummary, SupportsClient, Notes
+            FROM POLOXI.Legal_DecisionPIWitness WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId ORDER BY CreatedDateUtc;
+            """,
+            new { TenantId = tenantId, MatterId = decisionMatterId },
+            cancellationToken: cancellationToken));
+
+        var profile = await multi.ReadSingleOrDefaultAsync<PersonalInjuryProfileRow>();
+        var insurance = (await multi.ReadAsync<PersonalInjuryInsurancePolicyDto>()).ToArray();
+        var injuries = (await multi.ReadAsync<PersonalInjuryInjuryDto>()).ToArray();
+        var treatments = (await multi.ReadAsync<PersonalInjuryTreatmentDto>()).ToArray();
+        var bills = (await multi.ReadAsync<PersonalInjuryMedicalBillDto>()).ToArray();
+        var damages = (await multi.ReadAsync<PersonalInjuryDamageDto>()).ToArray();
+        var liens = (await multi.ReadAsync<PersonalInjuryLienDto>()).ToArray();
+        var demands = (await multi.ReadAsync<PersonalInjuryDemandDto>()).ToArray();
+        var negotiations = (await multi.ReadAsync<PersonalInjuryNegotiationDto>()).ToArray();
+        var settlements = (await multi.ReadAsync<PersonalInjurySettlementDto>()).ToArray();
+        var deadlines = (await multi.ReadAsync<PersonalInjuryDeadlineDto>()).ToArray();
+        var vehicles = (await multi.ReadAsync<PersonalInjuryIncidentVehicleDto>()).ToArray();
+        var witnesses = (await multi.ReadAsync<PersonalInjuryWitnessDto>()).ToArray();
+
+        if (profile is null &&
+            insurance.Length == 0 && injuries.Length == 0 && treatments.Length == 0 && bills.Length == 0 &&
+            damages.Length == 0 && liens.Length == 0 && demands.Length == 0 && negotiations.Length == 0 &&
+            settlements.Length == 0 && deadlines.Length == 0 && vehicles.Length == 0 && witnesses.Length == 0)
+            return null;
+
+        return new PersonalInjuryProfileDto(decisionMatterId)
+        {
+            IncidentTypeCode = profile?.IncidentTypeCode,
+            IncidentDate = profile?.IncidentDate is { } dt ? DateOnly.FromDateTime(dt) : null,
+            IncidentTime = profile?.IncidentTime is { } ts ? TimeOnly.FromTimeSpan(ts) : null,
+            IncidentLocation = profile?.IncidentLocation,
+            IncidentCity = profile?.IncidentCity,
+            IncidentCounty = profile?.IncidentCounty,
+            IncidentState = profile?.IncidentState,
+            IncidentSummary = profile?.IncidentSummary,
+            LiabilitySummary = profile?.LiabilitySummary,
+            InjurySummary = profile?.InjurySummary,
+            TreatmentSummary = profile?.TreatmentSummary,
+            DamagesSummary = profile?.DamagesSummary,
+            CurrentStageCode = profile?.CurrentStageCode,
+            LitigationStatusCode = profile?.LitigationStatusCode,
+            DemandStatusCode = profile?.DemandStatusCode,
+            SettlementStatusCode = profile?.SettlementStatusCode,
+            InsurancePolicies = insurance,
+            Injuries = injuries,
+            Treatments = treatments,
+            MedicalBills = bills,
+            Damages = damages,
+            Liens = liens,
+            Demands = demands,
+            Negotiations = negotiations,
+            Settlements = settlements,
+            Deadlines = deadlines,
+            IncidentVehicles = vehicles,
+            Witnesses = witnesses
+        };
+    }
+
+    // Full replace-on-save of the PI profile + child aggregates (soft-delete existing rows, re-insert).
+    public async Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = connection.BeginTransaction();
+        var actor = userId == Guid.Empty ? (Guid?)null : userId;
+
+        // Upsert the 1:1 profile.
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionPIMatterProfile
+            SET IncidentTypeCode = @IncidentTypeCode, IncidentDate = @IncidentDate, IncidentTime = @IncidentTime,
+                IncidentLocation = @IncidentLocation, IncidentCity = @IncidentCity, IncidentCounty = @IncidentCounty,
+                IncidentState = @IncidentState, IncidentSummary = @IncidentSummary, LiabilitySummary = @LiabilitySummary,
+                InjurySummary = @InjurySummary, TreatmentSummary = @TreatmentSummary, DamagesSummary = @DamagesSummary,
+                CurrentStageCode = @CurrentStageCode, LitigationStatusCode = @LitigationStatusCode,
+                DemandStatusCode = @DemandStatusCode, SettlementStatusCode = @SettlementStatusCode,
+                ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+            WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+
+            IF @@ROWCOUNT = 0
+            INSERT INTO POLOXI.Legal_DecisionPIMatterProfile
+                (DecisionMatterId, IncidentTypeCode, IncidentDate, IncidentTime, IncidentLocation, IncidentCity, IncidentCounty,
+                 IncidentState, IncidentSummary, LiabilitySummary, InjurySummary, TreatmentSummary, DamagesSummary,
+                 CurrentStageCode, LitigationStatusCode, DemandStatusCode, SettlementStatusCode, TenantId, CreatedByUserId)
+            VALUES
+                (@MatterId, @IncidentTypeCode, @IncidentDate, @IncidentTime, @IncidentLocation, @IncidentCity, @IncidentCounty,
+                 @IncidentState, @IncidentSummary, @LiabilitySummary, @InjurySummary, @TreatmentSummary, @DamagesSummary,
+                 @CurrentStageCode, @LitigationStatusCode, @DemandStatusCode, @SettlementStatusCode, @TenantId, @Actor);
+            """,
+            new
+            {
+                MatterId = decisionMatterId,
+                request.IncidentTypeCode,
+                IncidentDate = request.IncidentDate.HasValue ? request.IncidentDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                IncidentTime = request.IncidentTime.HasValue ? request.IncidentTime.Value.ToTimeSpan() : (TimeSpan?)null,
+                request.IncidentLocation,
+                request.IncidentCity,
+                request.IncidentCounty,
+                request.IncidentState,
+                request.IncidentSummary,
+                request.LiabilitySummary,
+                request.InjurySummary,
+                request.TreatmentSummary,
+                request.DamagesSummary,
+                request.CurrentStageCode,
+                request.LitigationStatusCode,
+                request.DemandStatusCode,
+                request.SettlementStatusCode,
+                TenantId = tenantId,
+                Actor = actor
+            },
+            transaction: tx, cancellationToken: cancellationToken));
+
+        // Soft-delete then re-insert all child aggregates.
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionPIInsurancePolicy SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIInjury          SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPITreatment       SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIMedicalBill     SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIDamage          SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPILien            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIDemand          SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPINegotiation     SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPISettlement      SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIDeadline        SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIIncidentVehicle SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            UPDATE POLOXI.Legal_DecisionPIWitness         SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor WHERE IsDeleted = 0 AND DecisionMatterId = @MatterId;
+            """,
+            new { MatterId = decisionMatterId, Actor = actor },
+            transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var p in request.InsurancePolicies)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIInsurancePolicy
+                    (DecisionMatterId, Carrier, Insured, Adjuster, ClaimNumber, PolicyNumber, CoverageTypeCode,
+                     BodilyInjuryLimitPerPerson, BodilyInjuryLimitPerOccur, CoverageStatusCode, LimitsSource, LimitsVerified, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @Carrier, @Insured, @Adjuster, @ClaimNumber, @PolicyNumber, @CoverageTypeCode,
+                     @BodilyInjuryLimitPerPerson, @BodilyInjuryLimitPerOccur, @CoverageStatusCode, @LimitsSource, @LimitsVerified, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, p.Carrier, p.Insured, p.Adjuster, p.ClaimNumber, p.PolicyNumber, p.CoverageTypeCode,
+                      p.BodilyInjuryLimitPerPerson, p.BodilyInjuryLimitPerOccur, p.CoverageStatusCode, p.LimitsSource, p.LimitsVerified, p.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var i in request.Injuries)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIInjury
+                    (DecisionMatterId, BodyAreaCode, InitialSymptoms, Diagnosis, IsPreexisting, ClaimedPermanency, SurgeryRecommended, SurgeryPerformed, SeverityCode, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @BodyAreaCode, @InitialSymptoms, @Diagnosis, @IsPreexisting, @ClaimedPermanency, @SurgeryRecommended, @SurgeryPerformed, @SeverityCode, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, i.BodyAreaCode, i.InitialSymptoms, i.Diagnosis, i.IsPreexisting, i.ClaimedPermanency, i.SurgeryRecommended, i.SurgeryPerformed, i.SeverityCode, i.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var t in request.Treatments)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPITreatment
+                    (DecisionMatterId, Provider, Specialty, FirstTreatmentDate, LastTreatmentDate, StatusCode, VisitCount, RecordRequestStatus, BillRequestStatus, TreatmentGapDays, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @Provider, @Specialty, @FirstTreatmentDate, @LastTreatmentDate, @StatusCode, @VisitCount, @RecordRequestStatus, @BillRequestStatus, @TreatmentGapDays, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, t.Provider, t.Specialty,
+                      FirstTreatmentDate = t.FirstTreatmentDate.HasValue ? t.FirstTreatmentDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      LastTreatmentDate = t.LastTreatmentDate.HasValue ? t.LastTreatmentDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      t.StatusCode, t.VisitCount, t.RecordRequestStatus, t.BillRequestStatus, t.TreatmentGapDays, t.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var b in request.MedicalBills)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIMedicalBill
+                    (DecisionMatterId, Provider, AmountBilled, Adjustments, AmountPaid, OutstandingBalance, Payer, LienStatusCode, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @Provider, @AmountBilled, @Adjustments, @AmountPaid, @OutstandingBalance, @Payer, @LienStatusCode, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, b.Provider, b.AmountBilled, b.Adjustments, b.AmountPaid, b.OutstandingBalance, b.Payer, b.LienStatusCode, b.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var d in request.Damages)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIDamage
+                    (DecisionMatterId, DamageTypeCode, Description, ClaimedAmount, IsEconomic, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @DamageTypeCode, @Description, @ClaimedAmount, @IsEconomic, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, d.DamageTypeCode, d.Description, d.ClaimedAmount, d.IsEconomic, d.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var l in request.Liens)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPILien
+                    (DecisionMatterId, Lienholder, LienTypeCode, AssertedAmount, VerifiedAmount, NegotiatedAmount, FinalPayoffAmount, StatusCode, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @Lienholder, @LienTypeCode, @AssertedAmount, @VerifiedAmount, @NegotiatedAmount, @FinalPayoffAmount, @StatusCode, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, l.Lienholder, l.LienTypeCode, l.AssertedAmount, l.VerifiedAmount, l.NegotiatedAmount, l.FinalPayoffAmount, l.StatusCode, l.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var d in request.Demands)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIDemand
+                    (DecisionMatterId, DemandDate, DemandAmount, Recipient, ResponseDeadline, StatusCode, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @DemandDate, @DemandAmount, @Recipient, @ResponseDeadline, @StatusCode, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId,
+                      DemandDate = d.DemandDate.HasValue ? d.DemandDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      d.DemandAmount, d.Recipient,
+                      ResponseDeadline = d.ResponseDeadline.HasValue ? d.ResponseDeadline.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      d.StatusCode, d.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var n in request.Negotiations)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPINegotiation
+                    (DecisionMatterId, EventDate, Amount, Source, IsOffer, Conditions, ExpirationDate, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @EventDate, @Amount, @Source, @IsOffer, @Conditions, @ExpirationDate, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId,
+                      EventDate = n.EventDate.HasValue ? n.EventDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      n.Amount, n.Source, n.IsOffer, n.Conditions,
+                      ExpirationDate = n.ExpirationDate.HasValue ? n.ExpirationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      n.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var s in request.Settlements)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPISettlement
+                    (DecisionMatterId, GrossRecovery, Fees, Costs, Liens, NetToClient, StatusCode, SettlementDate, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @GrossRecovery, @Fees, @Costs, @Liens, @NetToClient, @StatusCode, @SettlementDate, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, s.GrossRecovery, s.Fees, s.Costs, s.Liens, s.NetToClient, s.StatusCode,
+                      SettlementDate = s.SettlementDate.HasValue ? s.SettlementDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      s.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var dl in request.Deadlines)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIDeadline
+                    (DecisionMatterId, DeadlineTypeCode, CandidateDate, RuleSourceCode, VerificationState, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @DeadlineTypeCode, @CandidateDate, @RuleSourceCode, @VerificationState, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, dl.DeadlineTypeCode,
+                      CandidateDate = dl.CandidateDate.HasValue ? dl.CandidateDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                      dl.RuleSourceCode, dl.VerificationState, dl.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var v in request.IncidentVehicles)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIIncidentVehicle
+                    (DecisionMatterId, RoleCode, Description, Owner, Driver, ImpactType, Citation, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @RoleCode, @Description, @Owner, @Driver, @ImpactType, @Citation, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, v.RoleCode, v.Description, v.Owner, v.Driver, v.ImpactType, v.Citation, v.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        foreach (var w in request.Witnesses)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIWitness
+                    (DecisionMatterId, Name, ContactInfo, StatementSummary, SupportsClient, Notes, TenantId, CreatedByUserId)
+                VALUES (@MatterId, @Name, @ContactInfo, @StatementSummary, @SupportsClient, @Notes, @TenantId, @Actor);
+                """,
+                new { MatterId = decisionMatterId, w.Name, w.ContactInfo, w.StatementSummary, w.SupportsClient, w.Notes, TenantId = tenantId, Actor = actor },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        tx.Commit();
+    }
+
+    // ── Generate-New-Matter draft / provenance persistence (extraction wired later) ──
+    public async Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var tx = connection.BeginTransaction();
+        var draftId = Guid.NewGuid();
+        var actor = userId == Guid.Empty ? (Guid?)null : userId;
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_DecisionPIMatterDraft
+                (DecisionPIMatterDraftId, StatusCode, Prompt, SourceDocumentIdsJson, TenantId, CreatedByUserId)
+            VALUES (@DraftId, @StatusCode, @Prompt, @SourceDocumentIdsJson, @TenantId, @Actor);
+            """,
+            new
+            {
+                DraftId = draftId,
+                StatusCode = PersonalInjuryMatterDraftStatusCodes.PendingReview,
+                request.Prompt,
+                SourceDocumentIdsJson = request.SourceDocumentIds.Count > 0 ? JsonSerializer.Serialize(request.SourceDocumentIds) : null,
+                TenantId = tenantId,
+                Actor = actor
+            },
+            transaction: tx, cancellationToken: cancellationToken));
+
+        var order = 0;
+        foreach (var f in request.Fields)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionPIMatterDraftField
+                    (DecisionPIMatterDraftId, FieldCode, ProposedValue, SourceType, SourceDocumentId, SourcePassage,
+                     VerificationState, ConflictReason, ConflictsJson, SortOrder, TenantId, CreatedByUserId)
+                VALUES (@DraftId, @FieldCode, @ProposedValue, @SourceType, @SourceDocumentId, @SourcePassage,
+                     @VerificationState, @ConflictReason, @ConflictsJson, @SortOrder, @TenantId, @Actor);
+                """,
+                new
+                {
+                    DraftId = draftId,
+                    f.FieldCode,
+                    f.ProposedValue,
+                    f.SourceType,
+                    f.SourceDocumentId,
+                    f.SourcePassage,
+                    f.VerificationState,
+                    f.ConflictReason,
+                    ConflictsJson = f.Conflicts.Count > 0 ? JsonSerializer.Serialize(f.Conflicts) : null,
+                    SortOrder = order++,
+                    TenantId = tenantId,
+                    Actor = actor
+                },
+                transaction: tx, cancellationToken: cancellationToken));
+
+        tx.Commit();
+        return draftId;
+    }
+
+    public async Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await connection.QueryMultipleAsync(new CommandDefinition(
+            """
+            SELECT TOP 1 DecisionPIMatterDraftId, StatusCode, Prompt, CreatedDateUtc
+            FROM POLOXI.Legal_DecisionPIMatterDraft
+            WHERE IsDeleted = 0 AND DecisionPIMatterDraftId = @DraftId AND (TenantId = @TenantId OR TenantId IS NULL);
+
+            SELECT FieldCode, ProposedValue, SourceType, SourceDocumentId, SourcePassage, VerificationState, ConflictReason, ConflictsJson
+            FROM POLOXI.Legal_DecisionPIMatterDraftField
+            WHERE IsDeleted = 0 AND DecisionPIMatterDraftId = @DraftId ORDER BY SortOrder;
+            """,
+            new { TenantId = tenantId, DraftId = decisionPIMatterDraftId },
+            cancellationToken: cancellationToken));
+
+        var draft = await multi.ReadSingleOrDefaultAsync<PersonalInjuryDraftRow>();
+        if (draft is null)
+            return null;
+        var fieldRows = (await multi.ReadAsync<PersonalInjuryDraftFieldRow>()).ToArray();
+
+        var fields = fieldRows.Select(r => new GeneratedMatterFieldDto(
+            r.FieldCode, r.ProposedValue,
+            r.SourceType ?? PersonalInjuryDraftSourceTypes.Missing,
+            r.VerificationState ?? PersonalInjuryDraftVerificationStates.Missing)
+        {
+            SourceDocumentId = r.SourceDocumentId,
+            SourcePassage = r.SourcePassage,
+            ConflictReason = r.ConflictReason,
+            Conflicts = string.IsNullOrWhiteSpace(r.ConflictsJson)
+                ? []
+                : JsonSerializer.Deserialize<List<GeneratedMatterFieldCandidateDto>>(r.ConflictsJson) ?? []
+        }).ToArray();
+
+        return new PersonalInjuryMatterDraftDto(draft.DecisionPIMatterDraftId, draft.StatusCode, draft.Prompt, draft.CreatedDateUtc)
+        {
+            Fields = fields
+        };
+    }
+
+    public async Task<bool> MarkPersonalInjuryDraftConfirmedAsync(Guid tenantId, Guid userId, Guid decisionPIMatterDraftId, Guid confirmedMatterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionPIMatterDraft
+            SET StatusCode = @StatusCode, ConfirmedMatterId = @ConfirmedMatterId,
+                ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @Actor
+            WHERE IsDeleted = 0 AND DecisionPIMatterDraftId = @DraftId AND (TenantId = @TenantId OR TenantId IS NULL);
+            """,
+            new
+            {
+                StatusCode = PersonalInjuryMatterDraftStatusCodes.Confirmed,
+                ConfirmedMatterId = confirmedMatterId,
+                DraftId = decisionPIMatterDraftId,
+                TenantId = tenantId,
+                Actor = userId == Guid.Empty ? (Guid?)null : userId
+            },
+            cancellationToken: cancellationToken));
+        return affected > 0;
+    }
+
+    private sealed record PersonalInjuryProfileRow(
+        Guid DecisionMatterId, string? IncidentTypeCode, DateTime? IncidentDate, TimeSpan? IncidentTime, string? IncidentLocation,
+        string? IncidentCity, string? IncidentCounty, string? IncidentState, string? IncidentSummary, string? LiabilitySummary,
+        string? InjurySummary, string? TreatmentSummary, string? DamagesSummary, string? CurrentStageCode, string? LitigationStatusCode,
+        string? DemandStatusCode, string? SettlementStatusCode);
+
+    private sealed record PersonalInjuryDraftRow(Guid DecisionPIMatterDraftId, string StatusCode, string? Prompt, DateTime CreatedDateUtc);
+
+    private sealed record PersonalInjuryDraftFieldRow(
+        string FieldCode, string? ProposedValue, string? SourceType, Guid? SourceDocumentId, string? SourcePassage,
+        string? VerificationState, string? ConflictReason, string? ConflictsJson);
 
     public async Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
     {
@@ -810,6 +1441,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 Jurisdiction = @Jurisdiction,
                 Posture = @Posture,
                 Description = @Description,
+                PracticeAreaCode = @PracticeAreaCode,
+                ClaimTypeCode = @ClaimTypeCode,
+                DomainPackCode = @DomainPackCode,
                 Subtype = @Subtype,
                 CourtSystem = @CourtSystem,
                 State = @State,
@@ -831,6 +1465,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 request.Jurisdiction,
                 request.Posture,
                 request.Description,
+                request.PracticeAreaCode,
+                request.ClaimTypeCode,
+                request.DomainPackCode,
                 request.Subtype,
                 request.CourtSystem,
                 request.State,
@@ -961,6 +1598,28 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 SELECT LTRIM(RTRIM(m.GoverningLaw)), 1000000 FROM POLOXI.Legal_DecisionMatter m
                     WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId AND NULLIF(LTRIM(RTRIM(m.GoverningLaw)), N'') IS NOT NULL
             ) t GROUP BY Value ORDER BY MIN(Ord), Value;
+            SELECT o.Value FROM POLOXI.Legal_DecisionMatterOption o
+                WHERE o.IsDeleted = 0 AND o.IsActive = 1 AND o.FieldCode = N'PRACTICE_AREA'
+                AND (o.TenantId IS NULL OR o.TenantId = @TenantId)
+                GROUP BY o.Value, o.SortOrder ORDER BY o.SortOrder, o.Value;
+            SELECT Value FROM (
+                SELECT o.Value, o.SortOrder AS Ord FROM POLOXI.Legal_DecisionMatterOption o
+                    WHERE o.IsDeleted = 0 AND o.IsActive = 1 AND o.FieldCode = N'PI_MATTER_TYPE'
+                    AND (o.TenantId IS NULL OR o.TenantId = @TenantId)
+                UNION
+                SELECT LTRIM(RTRIM(m.MatterTypeCode)), 1000000 FROM POLOXI.Legal_DecisionMatter m
+                    WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId AND m.PracticeAreaCode = N'PERSONAL_INJURY'
+                    AND NULLIF(LTRIM(RTRIM(m.MatterTypeCode)), N'') IS NOT NULL
+            ) t GROUP BY Value ORDER BY MIN(Ord), Value;
+            SELECT Value FROM (
+                SELECT o.Value, o.SortOrder AS Ord FROM POLOXI.Legal_DecisionMatterOption o
+                    WHERE o.IsDeleted = 0 AND o.IsActive = 1 AND o.FieldCode = N'PI_CLAIM_TYPE'
+                    AND (o.TenantId IS NULL OR o.TenantId = @TenantId)
+                UNION
+                SELECT LTRIM(RTRIM(m.ClaimTypeCode)), 1000000 FROM POLOXI.Legal_DecisionMatter m
+                    WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId AND m.PracticeAreaCode = N'PERSONAL_INJURY'
+                    AND NULLIF(LTRIM(RTRIM(m.ClaimTypeCode)), N'') IS NOT NULL
+            ) t GROUP BY Value ORDER BY MIN(Ord), Value;
             """,
             new { TenantId = tenantId },
             cancellationToken: cancellationToken));
@@ -972,13 +1631,19 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         var states = (await multi.ReadAsync<string>()).ToArray();
         var courtLevels = (await multi.ReadAsync<string>()).ToArray();
         var governingLaws = (await multi.ReadAsync<string>()).ToArray();
+        var practiceAreas = (await multi.ReadAsync<string>()).ToArray();
+        var piMatterTypes = (await multi.ReadAsync<string>()).ToArray();
+        var piClaimTypes = (await multi.ReadAsync<string>()).ToArray();
         return new DecisionMatterFacetsDto(matterTypes, jurisdictions, postures)
         {
             Subtypes = subtypes,
             CourtSystems = courtSystems,
             States = states,
             CourtLevels = courtLevels,
-            GoverningLaws = governingLaws
+            GoverningLaws = governingLaws,
+            PracticeAreas = practiceAreas,
+            PiMatterTypes = piMatterTypes,
+            PiClaimTypes = piClaimTypes
         };
     }
 
@@ -986,6 +1651,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         r.DecisionMatterId, r.Title, r.MatterTypeCode, r.Jurisdiction, r.Posture, r.Description, r.StatusCode,
         r.CreatedDateUtc, r.ModifiedDateUtc)
     {
+        PracticeAreaCode = r.PracticeAreaCode,
+        ClaimTypeCode = r.ClaimTypeCode,
+        DomainPackCode = r.DomainPackCode,
         Subtype = r.Subtype,
         CourtSystem = r.CourtSystem,
         State = r.State,
@@ -1714,6 +2382,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     private sealed record MatterRow(
         Guid DecisionMatterId, string Title, string? MatterTypeCode, string? Jurisdiction, string? Posture, string? Description,
         string StatusCode,
+        string? PracticeAreaCode, string? ClaimTypeCode, string? DomainPackCode,
         string? Subtype, string? CourtSystem, string? State, string? CourtLevel, string? County, string? GoverningLaw,
         string? MovingParty, string? RespondingParty, string? MotionTarget, string? RequestedDisposition,
         DateTime CreatedDateUtc, DateTime? ModifiedDateUtc, Guid? LatestSessionId, string? CurrentOutcome,
