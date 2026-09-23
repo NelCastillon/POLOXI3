@@ -10,8 +10,8 @@ namespace Legal.Application.Features.Intelligence.Epistemic;
 // authoritative disposition, BEFORE persistence.
 //
 //   QUALIFY  — the claim text is rewritten in place as explicit uncertainty (not asserted as fact).
-//   SUPPRESS — the claim text is replaced with an explicit withheld-assertion marker.
-//   CORRECT  — the claim text is replaced with an explicit removed/contradicted marker.
+//   SUPPRESS — the claim text is removed from attorney-facing prose.
+//   CORRECT  — the contradicted claim text is removed from attorney-facing prose.
 //   ALLOW    — left untouched.
 //
 // Matching is deterministic ordinal-insensitive substring replacement. Longer claims are applied first
@@ -74,10 +74,8 @@ public static class OutputProseTransformer
             {
                 OutputClaimDisposition.Qualify =>
                     $"[UNRESOLVED — POLOXI has not established this; stated as uncertainty, not fact: {a.ClaimText}]",
-                OutputClaimDisposition.Suppress =>
-                    "[CLAIM WITHHELD — unsupported/foreign assertion suppressed by POLOXI output audit]",
-                OutputClaimDisposition.Correct =>
-                    "[CLAIM REMOVED — contradicted by POLOXI's authoritative verification state]",
+                OutputClaimDisposition.Suppress => string.Empty,
+                OutputClaimDisposition.Correct => string.Empty,
                 _ => a.ClaimText,
             };
 

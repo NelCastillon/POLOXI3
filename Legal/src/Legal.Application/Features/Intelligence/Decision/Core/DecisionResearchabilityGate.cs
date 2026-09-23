@@ -32,19 +32,14 @@ public sealed class DecisionResearchabilityGate
         foreach (var leaf in proposal.Leaves)
         {
             var leafDefects = new List<string>();
-            var frontierContainer = leaf.IsFrontierQuestionContainer;
+            var derived = IsDerived(leaf);
             if (string.IsNullOrWhiteSpace(leaf.ResearchKey)) leafDefects.Add("RESEARCH_KEY_MISSING");
             if (string.IsNullOrWhiteSpace(leaf.ResearchQuestion)) leafDefects.Add("RESEARCH_QUESTION_MISSING");
             if (string.IsNullOrWhiteSpace(leaf.Proposition)) leafDefects.Add("PROPOSITION_MISSING");
-            if (!frontierContainer && LooksLikeQuestion(leaf.Proposition)) leafDefects.Add("PROPOSITION_MUST_BE_DECLARATIVE");
             if (!AllowedTypes.Contains(leaf.ResearchNeedType)) leafDefects.Add("RESEARCH_NEED_TYPE_INVALID");
             if (leaf.CandidateDiscrimination.Count == 0) leafDefects.Add("CANDIDATE_DISCRIMINATION_MISSING");
             if (leaf.Requires.Any(required => !keys.Contains(required))) leafDefects.Add("REQUIRED_LEAF_UNKNOWN");
 
-            var derived = leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Application, StringComparison.OrdinalIgnoreCase)
-                || leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Derived, StringComparison.OrdinalIgnoreCase);
-            if (frontierContainer && !derived)
-                leafDefects.Add("FRONTIER_QUESTION_MUST_BE_DERIVED");
             if (derived && (leaf.Researchable || !leaf.SourceClass.Equals(DecisionResearchSourceClasses.None, StringComparison.OrdinalIgnoreCase)))
                 leafDefects.Add("DERIVED_NODE_MUST_NOT_BE_RETRIEVED");
             if (derived && leaf.Requires.Count < 2)
@@ -56,6 +51,7 @@ public sealed class DecisionResearchabilityGate
 
             if (leaf.Researchable)
             {
+                if (LooksLikeQuestion(leaf.Proposition)) leafDefects.Add("PROPOSITION_MUST_BE_DECLARATIVE");
                 if (string.IsNullOrWhiteSpace(leaf.SearchQuery)) leafDefects.Add("SEARCH_QUERY_MISSING");
                 if (leaf.SearchConcepts.Count == 0) leafDefects.Add("SEARCH_CONCEPTS_MISSING");
                 if (leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Mixed, StringComparison.OrdinalIgnoreCase))
@@ -94,6 +90,10 @@ public sealed class DecisionResearchabilityGate
 
         return new DecisionResearchabilityResult(defects.Count == 0, defects, valid);
     }
+
+    private static bool IsDerived(DecisionResearchSemanticLeaf leaf) =>
+        leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Application, StringComparison.OrdinalIgnoreCase)
+        || leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Derived, StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksLikeQuestion(string proposition)
     {

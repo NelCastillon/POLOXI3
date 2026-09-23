@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence;
 using Microsoft.Extensions.Logging;
 
@@ -15,14 +16,15 @@ namespace Legal.Infrastructure.Intelligence;
 // collection so enterprise search never breaks and other sources are unaffected.
 public interface ICornellLiiLegalSource
 {
-    Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default);
+    Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default);
 }
 
 public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogger<CornellLiiLegalRetriever> logger):ICornellLiiLegalSource
 {
-    public async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
+    public async Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
     {
-        if(!configuration.CornellLiiEnabled||string.IsNullOrWhiteSpace(query)||string.IsNullOrWhiteSpace(configuration.CornellLiiBaseUrl))return [];
+        if(!configuration.CornellLiiEnabled||string.IsNullOrWhiteSpace(query)||string.IsNullOrWhiteSpace(configuration.CornellLiiBaseUrl))
+            return new([],new("CORNELL_LII",false,!configuration.CornellLiiEnabled?"DISABLED":"INVALID_REQUEST",0,0));
 
         var baseUrl=configuration.CornellLiiBaseUrl.Trim().TrimEnd('/');
         // Resolve at most MaximumSnippetsPerQuery distinct citations to keep cost/latency bounded.
@@ -30,7 +32,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
         // STAGE 3 (Cornell LII citation extraction): log which citations were parsed so a
         // "authority present in the prompt but never resolved" state is visible in the trace.
         logger.LogInformation("LEGAL-TRACE stage=3-cornelllii-citations count={Count} query=\"{Query}\" citations=[{Citations}]",citations.Count,query,string.Join(" | ",citations.Select(citation=>citation.Label)));
-        if(citations.Count==0)return [];
+        if(citations.Count==0)return new([],new("CORNELL_LII",true,"NO_CITATIONS_RESOLVED",0,0));
 
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(configuration.TimeoutSeconds));
@@ -43,7 +45,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
         }
 
         logger.LogInformation("LEGAL-TRACE stage=4-cornelllii-response resolved={Resolved} of citations={CitationCount} query=\"{Query}\"",snippets.Count,citations.Count,query);
-        return snippets;
+        return new(snippets,new("CORNELL_LII",true,snippets.Count>0?"SUCCEEDED":"FETCH_FAILED",citations.Count,snippets.Count));
     }
 
     private async Task<WideExternalKnowledgeSnippet?> FetchCitationAsync(string query,LiiCitation citation,CancellationToken timeoutToken,CancellationToken cancellationToken)
@@ -77,6 +79,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
                 0m,
                 DateTime.UtcNow)
             {
+                    AuthorityKind=citation.AuthorityKind,
                 SourceProvider="CORNELL_LII",
                 SourceVersion="HTML_V1",
                 ProviderIdentityVerified=true,
@@ -101,7 +104,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
             var article=match.Groups["article"].Value;
             var section=match.Groups["section"].Value;
             var url=$"{baseUrl}/ucc/{article}/{article}-{section}";
-            if(seen.Add(url))yield return new LiiCitation($"U.C.C. § {article}-{section} (Cornell LII)",url);
+            if(seen.Add(url))yield return new LiiCitation($"U.C.C. § {article}-{section} (Cornell LII)",url,"STATUTE");
         }
 
         // U.S. Code: "42 U.S.C. § 1983", "17 USC 107" -> /uscode/text/{title}/{section}
@@ -110,7 +113,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
             var title=match.Groups["title"].Value;
             var section=match.Groups["section"].Value;
             var url=$"{baseUrl}/uscode/text/{title}/{section}";
-            if(seen.Add(url))yield return new LiiCitation($"{title} U.S.C. § {section} (Cornell LII)",url);
+            if(seen.Add(url))yield return new LiiCitation($"{title} U.S.C. § {section} (Cornell LII)",url,"STATUTE");
         }
 
         // CFR: "29 CFR § 1604.11", "12 C.F.R. 1026.1" -> /cfr/text/{title}/{section}
@@ -119,7 +122,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
             var title=match.Groups["title"].Value;
             var section=match.Groups["section"].Value;
             var url=$"{baseUrl}/cfr/text/{title}/{section}";
-            if(seen.Add(url))yield return new LiiCitation($"{title} C.F.R. § {section} (Cornell LII)",url);
+            if(seen.Add(url))yield return new LiiCitation($"{title} C.F.R. § {section} (Cornell LII)",url,"REGULATION");
         }
     }
 
@@ -137,7 +140,7 @@ public sealed partial class CornellLiiLegalRetriever(HttpClient httpClient,ILogg
         return collapsed.Length<=maxLength?collapsed:collapsed[..maxLength].TrimEnd()+"…";
     }
 
-    private sealed record LiiCitation(string Label,string Url);
+    private sealed record LiiCitation(string Label,string Url,string AuthorityKind);
 
     [GeneratedRegex(@"(?:U\.?\s?C\.?\s?C\.?|uniform\s+commercial\s+code)\s*(?:§+\s*|section\s+|sec\.?\s+)?(?<article>\d{1,2})[-–](?<section>\d{1,4}[a-zA-Z]?)",RegexOptions.IgnoreCase|RegexOptions.CultureInvariant)]
     private static partial Regex UccCitationRegex();

@@ -42,6 +42,25 @@ public sealed class ProviderArtifactEvidenceVerificationTests
         Assert.Equal(0, result.Telemetry.SemanticVerificationCount);
     }
 
+    [Fact]
+    public async Task RegistryBackedOfficialAuthority_CompletesVerificationWithoutPlaywright()
+    {
+        var inspector = new RejectingInspector();
+        var pipeline = BuildPipeline(inspector);
+        var request = Request("https://delcode.delaware.gov/title10/c081/sc02/index.html") with
+        {
+            SourceProvider = "OFFICIAL_AUTHORITY",
+            SourceVersion = "DELAWARE_CODE:FULL_PAGE_TEXT",
+        };
+
+        var result = await pipeline.VerifyAsync(request);
+
+        Assert.Equal(0, inspector.CallCount);
+        Assert.Equal(VerificationCheckState.Passed, result.Identity.State);
+        Assert.Equal(VerificationCheckState.Passed, result.Citation.State);
+        Assert.Equal(VerificationCheckState.Passed, result.Passage.State);
+    }
+
     private static EvidenceVerificationRequest Request(string sourceRef) => new(
         Guid.NewGuid(), Guid.NewGuid(), Proposition, sourceRef, "29 CFR Part 778 — Overtime Compensation", Passage,
         EvidenceSourceType.Regulation, "US", new DateOnly(2024, 1, 1), new DateOnly(2025, 1, 1), true)

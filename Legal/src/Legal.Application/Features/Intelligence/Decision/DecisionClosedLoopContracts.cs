@@ -27,6 +27,60 @@ public static class DecisionBranchSignalKinds
     public const string RecompetitionRequested = "CANDIDATE_RECOMPETITION_REQUESTED";
 }
 
+public static class LegalAuthorityIssueScopes
+{
+    public const string SubstantiveLaw = "SUBSTANTIVE_LAW";
+    public const string ProceduralLaw = "PROCEDURAL_LAW";
+    public const string SettlementEnforcement = "SETTLEMENT_ENFORCEMENT";
+    public const string MatterEvidence = "MATTER_EVIDENCE";
+}
+
+public static class LegalAuthorityRoles
+{
+    public const string Controlling = "CONTROLLING";
+    public const string FederalApplyingStateLaw = "FEDERAL_APPLYING_STATE_LAW";
+    public const string Persuasive = "PERSUASIVE";
+}
+
+public static class LegalAuthorityScopeStatuses
+{
+    public const string Resolved = "RESOLVED";
+    public const string PartiallyResolved = "PARTIALLY_RESOLVED";
+    public const string Unresolved = "UNRESOLVED";
+    public const string NotApplicable = "NOT_APPLICABLE";
+}
+
+public static class LegalAuthorityScopeResolutionCodes
+{
+    public const string MatterContract = "MATTER_CONTRACT";
+    public const string SessionSnapshot = "SESSION_SNAPSHOT";
+    public const string RequestedAssumption = "REQUESTED_ASSUMPTION";
+    public const string MissingGoverningLaw = "REQUIRED_GOVERNING_LAW_MISSING";
+    public const string MissingCourtOrForum = "REQUIRED_COURT_OR_FORUM_MISSING";
+    public const string MissingProceduralLaw = "REQUIRED_PROCEDURAL_LAW_MISSING";
+    public const string ConflictingLegalContext = "CONFLICTING_LEGAL_CONTEXT";
+    public const string RetrievalScopeUnsupported = "RETRIEVAL_SCOPE_UNSUPPORTED";
+}
+
+public sealed record LegalAuthorityScope
+{
+    public string IssueScopeCode { get; init; } = LegalAuthorityIssueScopes.SubstantiveLaw;
+    public string AuthorityRoleCode { get; init; } = LegalAuthorityRoles.Controlling;
+    public string? GoverningLaw { get; init; }
+    public string? CourtSystem { get; init; }
+    public string? CourtOrForum { get; init; }
+    public string? CourtLevel { get; init; }
+    public string? SubjectMatterJurisdiction { get; init; }
+    public string? PersonalTerritorialJurisdiction { get; init; }
+    public string? ProceduralLaw { get; init; }
+    public string? ProceduralPosture { get; init; }
+    public string? SourceTypeCode { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
+    public string StatusCode { get; init; } = LegalAuthorityScopeStatuses.Unresolved;
+    public string? ResolutionCode { get; init; }
+    public string? ProvenanceCode { get; init; }
+}
+
 public static class DecisionResearchSemanticNodeRoles
 {
     public const string Proposition = "PROPOSITION";
@@ -238,6 +292,12 @@ public sealed record DecisionResearchNeedPersistence(
     public string? CandidateDiscriminationJson { get; init; }
     public string? SemanticProposalStatusCode { get; init; }
     public string? SemanticProposalReasonCode { get; init; }
+    public Guid AtomicPropositionId { get; init; }
+    public string? MatterJurisdiction { get; init; }
+    public string? GoverningLaw { get; init; }
+    public string? CourtOrForum { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
+    public LegalAuthorityScope? AuthorityScope { get; init; }
 }
 
 public sealed record DecisionFrontierSnapshotPersistence(
@@ -331,7 +391,68 @@ public sealed record DecisionResearchRoundDto(
         = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     public int AuthoritativeChanges { get; init; }
     public DecisionResearchTransformationDto? Transformation { get; init; }
+    public Guid? NextRecommendedFrontierBranchId { get; init; }
+    public string? NextRecommendedFrontierBranchCode { get; init; }
+    public string? NextRecommendedFrontierLabel { get; init; }
+    public string? RetrievalOutcomeCode { get; init; }
+    public IReadOnlyCollection<DecisionRetrievalAttemptDto> RetrievalAttempts { get; init; } = [];
+    public DecisionResearchRecoveryDto? Recovery { get; init; }
+    public Guid? AtomicPropositionId { get; init; }
+    public Guid? SearchPlanId { get; init; }
+    public IReadOnlyCollection<DecisionRetrievedPassageLineageDto> SelectedPassages { get; init; } = [];
+    public LegalAuthorityScope? AuthorityScope { get; init; }
 }
+
+public sealed record DecisionRetrievedPassageLineageDto(
+    string SourceRef,
+    string? PassageIdentity,
+    string? ProviderCode,
+    decimal PropositionSelectionScore,
+    int PropositionSelectionRank,
+    Guid? NormalizedAuthorityId);
+
+public static class DecisionResearchRecoveryDiagnoses
+{
+    public const string WrongJurisdiction = "WRONG_JURISDICTION";
+    public const string IrrelevantPassages = "IRRELEVANT_PASSAGES";
+    public const string WrongSourceClass = "WRONG_SOURCE_CLASS";
+    public const string PropositionTooBroad = "PROPOSITION_TOO_BROAD";
+    public const string NoSupportingAuthority = "NO_SUPPORTING_AUTHORITY";
+}
+
+public sealed record DecisionResearchRecoveryDto(
+    bool Attempted,
+    string DiagnosisCode,
+    string ActionCode,
+    string OriginalProposition,
+    string RecoveryProposition,
+    string RecoveryQuery,
+    int SourcesRetrieved,
+    int SourcesEvaluated,
+    int DecisionAuthorizedSources,
+    string OutcomeCode);
+
+public sealed record DecisionResearchRecoveryPlan(
+    string DiagnosisCode,
+    string ActionCode,
+    string Proposition,
+    string Query,
+    string SourceClassCode,
+    string ResearchNeedTypeCode,
+    IReadOnlyCollection<string> AuthorityKinds);
+
+public sealed record DecisionRetrievalAttemptDto(
+    Guid? SearchPlanId,
+    Guid? SearchOperationId,
+    string? OperationKind,
+    string Query,
+    string ProviderCode,
+    string OutcomeCode,
+    int RawResultCount,
+    int ReturnedCount,
+    string RecoveryActionCode,
+    string? Detail,
+    long DurationMilliseconds);
 
 // Safe execution telemetry for the bounded Research Need transformation. It records model completion,
 // parse/gate outcomes, atomic leaves, and deterministic selection without exposing prompts or provider payloads.
@@ -361,7 +482,13 @@ public sealed record DecisionResearchTransformationDto(
     IReadOnlyCollection<DecisionResearchTransformationAttemptDto> Attempts,
     string? SelectedResearchKey,
     string? SelectionReason,
-    string? SearchQuery);
+    string? SearchQuery)
+{
+    public Guid? AttemptedResearchNeedId { get; init; }
+    public Guid? SelectedResearchNeedId { get; init; }
+    public Guid? PropositionId { get; init; }
+    public Guid? SearchPlanId { get; init; }
+}
 
 // Safe production diagnostic for a failed research round. Deliberately excludes stack traces,
 // source locations, prompts, and provider payloads.

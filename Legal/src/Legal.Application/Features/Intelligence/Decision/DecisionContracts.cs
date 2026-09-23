@@ -55,6 +55,9 @@ public sealed record DecisionSearchRequest(
     // source declares its own jurisdiction that takes precedence; this is the matter-level fallback so
     // authority applicability is not left AUTHORITY_JURISDICTION_NOT_ESTABLISHED. Null = no matter context.
     [StringLength(120)] public string? Jurisdiction { get; init; }
+    [StringLength(120)] public string? GoverningLaw { get; init; }
+    [StringLength(300)] public string? CourtOrForum { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
 
     // Practice-area Domain Pack (POLOXI.Legal_DecisionDomainPack.PackCode) that supplies domain
     // semantics (terminology, decision-hierarchy dimensions, evidence types, verification profiles)
@@ -215,7 +218,12 @@ public sealed record DecisionFlipPointDto(
     string Description,
     decimal ChangeCost,
     bool WinnerChanges,
-    int RankDelta);
+    int RankDelta)
+{
+    public Guid? TargetCandidateId { get; init; }
+    public string? TargetCandidateCode { get; init; }
+    public string PolarityCode { get; init; } = "UNRESOLVED";
+}
 
 // The structured decision artifact (§35): a snapshot of Core state, not an LLM conclusion.
 public sealed record DecisionSearchResponse(
@@ -453,6 +461,10 @@ public sealed record DecisionMatterDto(
     public string? CourtLevel { get; init; }
     public string? County { get; init; }
     public string? GoverningLaw { get; init; }
+    public string? SubjectMatterJurisdiction { get; init; }
+    public string? PersonalTerritorialJurisdiction { get; init; }
+    public string? ProceduralLaw { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
 
     // ── Structured Posture dimension (legacy Posture + these). ──
     public string? MovingParty { get; init; }
@@ -490,6 +502,10 @@ public sealed record DecisionMatterCreateRequest(
     [StringLength(120)] public string? CourtLevel { get; init; }
     [StringLength(120)] public string? County { get; init; }
     [StringLength(120)] public string? GoverningLaw { get; init; }
+    [StringLength(300)] public string? SubjectMatterJurisdiction { get; init; }
+    [StringLength(300)] public string? PersonalTerritorialJurisdiction { get; init; }
+    [StringLength(300)] public string? ProceduralLaw { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
 
     // ── Structured Posture dimension. ──
     [StringLength(200)] public string? MovingParty { get; init; }
@@ -520,6 +536,10 @@ public sealed record DecisionMatterUpdateRequest(
     [StringLength(120)] public string? CourtLevel { get; init; }
     [StringLength(120)] public string? County { get; init; }
     [StringLength(120)] public string? GoverningLaw { get; init; }
+    [StringLength(300)] public string? SubjectMatterJurisdiction { get; init; }
+    [StringLength(300)] public string? PersonalTerritorialJurisdiction { get; init; }
+    [StringLength(300)] public string? ProceduralLaw { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
 
     // ── Structured Posture dimension. ──
     [StringLength(200)] public string? MovingParty { get; init; }

@@ -177,13 +177,20 @@ internal static class ProviderArtifactVerification
             || DecisionCoreMath.PassageEchoesTitle(request.SourceTitle, request.SourceText)
             || !Uri.TryCreate(request.SourceRef, UriKind.Absolute, out var uri)
             || uri.Scheme is not ("http" or "https")
-            || !ProviderHosts.TryGetValue(request.SourceProvider.Trim(), out var allowedHosts)
-            || !allowedHosts.Any(host => uri.Host.Equals(host, StringComparison.OrdinalIgnoreCase)
-                || uri.Host.EndsWith($".{host}", StringComparison.OrdinalIgnoreCase)))
+            || !ProviderHostMatches(request.SourceProvider.Trim(), uri))
             return false;
 
         reason = $"The {request.SourceProvider} retrieval adapter returned a stable source URL, title, versioned provider artifact, and substantive source passage.";
         return true;
+    }
+
+    private static bool ProviderHostMatches(string provider, Uri uri)
+    {
+        if(provider.Equals("OFFICIAL_AUTHORITY",StringComparison.OrdinalIgnoreCase))
+            return true;
+        return ProviderHosts.TryGetValue(provider,out var allowedHosts)
+            && allowedHosts.Any(host=>uri.Host.Equals(host,StringComparison.OrdinalIgnoreCase)
+                || uri.Host.EndsWith($".{host}",StringComparison.OrdinalIgnoreCase));
     }
 }
 

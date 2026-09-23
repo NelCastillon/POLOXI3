@@ -1,4 +1,5 @@
 using Legal.Application.Abstractions.Persistence;
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Application.Tests.Intelligence;
@@ -24,7 +25,7 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
         Routes = routes ?? [];
     }
 
-    public DecisionSessionPersistence Session { get; private set; }
+    public DecisionSessionPersistence Session { get; set; }
     private DecisionGraphPersistence _graph;
     public DecisionPromptDefinition? Prompt { get; set; }
     public IReadOnlyCollection<DecisionModelRouteDto> Routes { get; set; }
@@ -49,6 +50,11 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public List<DecisionDependencyEventPersistence> DependencyEvents { get; } = [];
     public List<DecisionRecompetitionPersistence> Recompetitions { get; } = [];
     public List<DecisionFrontierSnapshotPersistence> FrontierSnapshots { get; } = [];
+    public List<DecisionResearchNeedPersistence> ResearchNeeds { get; } = [];
+    public List<LegalAuthorityRetrievalResult> LegalResearchExecutions { get; } = [];
+    public List<LegalDecisionImpactResult> LegalDecisionImpacts { get; } = [];
+    public List<VerifiedLegalProposition> VerifiedLegalPropositions { get; } = [];
+    public List<DecisionClarificationPersistence> Clarifications { get; } = [];
 
     // ── Settings (loop path reads these) ──────────────────────────────────────────────────────────
     public Task<DecisionCoreSettings> GetCoreSettingsAsync(CancellationToken cancellationToken = default)
@@ -84,6 +90,23 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     {
         PersistResearchEvidenceCount += evidence.Count;
         ResearchEvidence.AddRange(evidence);
+        return Task.CompletedTask;
+    }
+
+    public Task PersistClarificationAsync(DecisionClarificationPersistence clarification, CancellationToken cancellationToken = default)
+    {
+        Clarifications.Add(clarification);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyCollection<DecisionClarificationPersistence>> GetClarificationLineageAsync(
+        Guid tenantId, Guid parentDecisionSessionId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionClarificationPersistence>>(
+            Clarifications.Where(item => item.TenantId == tenantId).OrderBy(item => item.CreatedDateUtc).ToArray());
+
+    public Task PersistVerifiedLegalPropositionsAsync(Guid tenantId,Guid decisionSessionId,IReadOnlyCollection<VerifiedLegalProposition> propositions,CancellationToken cancellationToken=default)
+    {
+        VerifiedLegalPropositions.AddRange(propositions);
         return Task.CompletedTask;
     }
 
@@ -183,6 +206,7 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task PersistResearchNeedAsync(DecisionResearchNeedPersistence researchNeed, CancellationToken cancellationToken = default)
     {
         PersistResearchNeedCount++;
+        ResearchNeeds.Add(researchNeed);
         return Task.CompletedTask;
     }
 
@@ -246,6 +270,18 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
 
     public Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    public Task PersistLegalResearchExecutionAsync(LegalSearchPlan plan, LegalAuthorityRetrievalResult result, CancellationToken cancellationToken = default)
+    {
+        LegalResearchExecutions.Add(result);
+        return Task.CompletedTask;
+    }
+
+    public Task PersistLegalDecisionImpactAsync(Guid tenantId, Guid decisionSessionId, LegalDecisionImpactResult impact, CancellationToken cancellationToken = default)
+    {
+        LegalDecisionImpacts.Add(impact);
+        return Task.CompletedTask;
+    }
 
     public Task AppendSessionEventsAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEventPersistence> events, CancellationToken cancellationToken = default)
         => Task.CompletedTask;

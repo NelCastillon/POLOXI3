@@ -12,6 +12,8 @@ public interface IIntelligenceWideRepository
     Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Legal-context grounding configuration (CourtListener + GovInfo/eCFR) from Core.ConfigurationSetting.
     Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetLegalAuthoritySourcesAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    Task UpsertLegalAuthoritySourceAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default);
     // DB-backed concept -> legal authority map (POLOXI.Legal_LegalConceptAuthority) used to resolve
     // concept-only legal branches to concrete UCC/U.S. Code citations for grounding.
     Task<IReadOnlyCollection<WideLegalConceptAuthorityDto>> GetLegalConceptAuthoritiesAsync(Guid tenantId,CancellationToken cancellationToken=default);

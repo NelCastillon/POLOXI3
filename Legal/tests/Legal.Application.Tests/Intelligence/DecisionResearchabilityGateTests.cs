@@ -108,6 +108,34 @@ public sealed class DecisionResearchabilityGateTests
     }
 
     [Fact]
+    public void RootDerivedResearchQuestion_WithF0Key_DoesNotPoisonValidResearchableLeaves()
+    {
+        var hierarchy = ValidHierarchy();
+        var children = hierarchy.Leaves
+            .Select(leaf => leaf with { ParentResearchKey = "F0" })
+            .ToArray();
+        var frontier = new DecisionResearchSemanticLeaf
+        {
+            ResearchKey = "F0",
+            ResearchNeedType = DecisionResearchNeedTypes.Derived,
+            ResearchQuestion = "Whether Emily's causal negligence exceeds the applicable comparison threshold?",
+            Proposition = "Whether Emily's causal negligence exceeds the applicable comparison threshold remains unresolved.",
+            SourceClass = DecisionResearchSourceClasses.None,
+            Researchable = false,
+            ApplicationDeferred = true,
+            CandidateDiscrimination = ["C3", "C4"],
+            Requires = children.Where(leaf => leaf.Researchable).Select(leaf => leaf.ResearchKey).ToArray(),
+        };
+
+        var result = new DecisionResearchabilityGate().Evaluate(
+            new DecisionResearchSemanticProposal { Leaves = [frontier, .. children] });
+
+        Assert.True(result.IsAcceptable);
+        Assert.DoesNotContain("F0:PROPOSITION_MUST_BE_DECLARATIVE", result.Defects);
+        Assert.Equal(children.Count(leaf => leaf.Researchable), result.ResearchableLeaves.Count);
+    }
+
+    [Fact]
     public void FrontierContainer_WithInsufficientDependencies_RemainsRejected()
     {
         var hierarchy = ValidHierarchy();
@@ -216,6 +244,44 @@ public sealed class DecisionResearchabilityGateTests
 
         Assert.False(result.IsAcceptable);
         Assert.Contains(result.Defects, defect => defect.EndsWith(":PROPOSITION_MUST_BE_DECLARATIVE", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SettlementEnforcement_QuestionShapedApplication_DoesNotBlockValidResearchLeaves()
+    {
+        var hierarchy = ValidHierarchy();
+        var application = hierarchy.Leaves[2] with
+        {
+            ResearchKey = "C5.B1.application",
+            ResearchQuestion = "Whether the asserted settlement is enforceable?",
+            Proposition = "Whether the asserted settlement is enforceable remains deferred pending verified authority and matter evidence.",
+            Requires = [hierarchy.Leaves[0].ResearchKey, hierarchy.Leaves[1].ResearchKey],
+        };
+
+        var result = new DecisionResearchabilityGate().Evaluate(
+            hierarchy with { Leaves = [hierarchy.Leaves[0], hierarchy.Leaves[1], application] });
+
+        Assert.True(result.IsAcceptable);
+        Assert.DoesNotContain("C5.B1.application:PROPOSITION_MUST_BE_DECLARATIVE", result.Defects);
+        Assert.Equal(2, result.ResearchableLeaves.Count);
+    }
+
+    [Fact]
+    public void SettlementEnforcement_QuestionShapedResearchableLeaf_RemainsRejectedForBoundedRepair()
+    {
+        var hierarchy = ValidHierarchy();
+        var legalRule = hierarchy.Leaves[0] with
+        {
+            ResearchKey = "C5.B1.legal-rule",
+            Proposition = "Whether an asserted settlement is enforceable?",
+        };
+        var proposal = hierarchy with { Leaves = [legalRule, hierarchy.Leaves[1], hierarchy.Leaves[2]] };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains("C5.B1.legal-rule:PROPOSITION_MUST_BE_DECLARATIVE", result.Defects);
+        Assert.Equal(DecisionResearchNeedDisposition.Repair, DecisionResearchNeedRepairPlanner.Diagnose(result.Defects));
     }
 
     private static DecisionResearchSemanticProposal ValidHierarchy() => new()

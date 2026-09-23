@@ -8,21 +8,37 @@ public sealed class DeterministicVerificationCandidatePreScreen : IVerificationC
     {
         var passageAvailable = !string.IsNullOrWhiteSpace(request.SourceText);
         if (!passageAvailable)
-            return new(false, "PRESCREEN_NO_CANDIDATE_PASSAGE", 0, false);
+            return new(VerificationCandidatePreScreenDisposition.RejectIrrelevant,
+                "PRESCREEN_NO_CANDIDATE_PASSAGE", 0, false);
+
+        if (sourceType == EvidenceSourceType.Unknown && string.IsNullOrWhiteSpace(request.SourceRef))
+            return new(VerificationCandidatePreScreenDisposition.RejectIrrelevant,
+                "PRESCREEN_SOURCE_TYPE_UNKNOWN", 0, true);
 
         var propositionTerms = Terms(request.Proposition);
         var sourceTerms = Terms(request.SourceText!);
         var overlap = propositionTerms.Count == 0
             ? 0
             : propositionTerms.Count(sourceTerms.Contains) / (double)propositionTerms.Count;
-        var sourceCompatible = sourceType != EvidenceSourceType.Unknown
-            || !string.IsNullOrWhiteSpace(request.SourceRef);
+        if (IsWrongJurisdiction(request.Jurisdiction, request.GoverningJurisdiction))
+            return new(VerificationCandidatePreScreenDisposition.RejectIrrelevant,
+                "PRESCREEN_JURISDICTION_MISMATCH", overlap, true);
 
-        return new(
-            sourceCompatible && overlap > 0,
-            sourceCompatible ? "PRESCREEN_RELEVANCE" : "PRESCREEN_SOURCE_TYPE_UNKNOWN",
-            overlap,
-            true);
+        if (overlap > 0)
+            return new(VerificationCandidatePreScreenDisposition.AdvanceToSemantic,
+                "PRESCREEN_RELEVANCE_MATCH", overlap, true);
+
+        return new(VerificationCandidatePreScreenDisposition.UncertainRequiresDeeperScreen,
+            "PRESCREEN_RELEVANCE_UNCERTAIN", overlap, true);
+    }
+
+    private static bool IsWrongJurisdiction(string? source, string? governing)
+    {
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(governing))
+            return false;
+        var sourceTerms = Terms(source);
+        var governingTerms = Terms(governing);
+        return sourceTerms.Count > 0 && governingTerms.Count > 0 && !sourceTerms.Overlaps(governingTerms);
     }
 
     private static HashSet<string> Terms(string value) => value

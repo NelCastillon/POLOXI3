@@ -53,7 +53,7 @@ public static class DecisionResearchNeedFactory
             DecisionDependencyEventId: dependencyEventId,
             IssueLabel: target.DisplayName,
             PropositionToResolve: proposition,
-            AuthorityKind: essentialFailed ? "CONTROLLING_AUTHORITY" : "PERSUASIVE_OR_CONTROLLING",
+            AuthorityKind: LegalAuthorityRoles.Controlling,
             RequiredEvidenceKind: "VERIFIED_AUTHORITY",
             WhyDecisionRelevant: why,
             ExpectedDiscrimination: target.FlipPotential,

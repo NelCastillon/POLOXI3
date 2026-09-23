@@ -181,6 +181,16 @@ public static class DecisionIntegrityTraceProjector
             {
                 new("Target", round.TargetBranchLabel ?? "—"),
                 new("Proposition", round.PropositionToResolve ?? "—"),
+                new("Atomic Proposition ID", round.AtomicPropositionId?.ToString() ?? "—"),
+                new("Search Plan ID", round.SearchPlanId?.ToString() ?? "—"),
+                new("Authority scope", round.AuthorityScope?.IssueScopeCode ?? "—"),
+                new("Authority role", round.AuthorityScope?.AuthorityRoleCode ?? "—"),
+                new("Governing law", round.AuthorityScope?.GoverningLaw ?? "UNRESOLVED"),
+                new("Court or forum", round.AuthorityScope?.CourtOrForum ?? "UNRESOLVED"),
+                new("Procedural law", round.AuthorityScope?.ProceduralLaw ?? "UNRESOLVED"),
+                new("Scope status", round.AuthorityScope is null
+                    ? "UNAVAILABLE"
+                    : $"{round.AuthorityScope.StatusCode} · {round.AuthorityScope.ResolutionCode}"),
                 new("Information value", round.TargetInformationValue.ToString("0.##")),
                 new("Retrieved", round.SourcesRetrieved.ToString()),
                 new("Evaluated", round.SourcesEvaluated.ToString()),
@@ -208,9 +218,31 @@ public static class DecisionIntegrityTraceProjector
             roundDetail.Add(new("State change", round.AuthoritativeChanges > 0 ? "YES" : "NO"));
             roundDetail.Add(new("Winner changed", round.WinnerChanged ? "YES" : "NO"));
             roundDetail.Add(new("Entropy", $"{round.EntropyBefore:0.###} → {round.EntropyAfter:0.###}"));
+            roundDetail.Add(new("Attempted frontier", FormatFrontier(round.TargetBranchId, null, round.TargetBranchLabel)));
+            roundDetail.Add(new("Next recommended frontier", FormatFrontier(
+                round.NextRecommendedFrontierBranchId,
+                round.NextRecommendedFrontierBranchCode,
+                round.NextRecommendedFrontierLabel)));
 
             var transformationDetail = ProjectResearchTransformationDetails(round.Transformation);
             roundDetail.AddRange(transformationDetail);
+            foreach (var attempt in round.RetrievalAttempts)
+            {
+                roundDetail.Add(new IntegrityStageDetailDto(
+                    $"Retrieval attempt · {attempt.ProviderCode}",
+                    $"{attempt.OperationKind ?? "UNSPECIFIED"} · {attempt.OutcomeCode} · raw {attempt.RawResultCount} · returned {attempt.ReturnedCount} · recovery {attempt.RecoveryActionCode} · {Truncate(attempt.Query)}"));
+                if (!string.IsNullOrWhiteSpace(attempt.Detail))
+                    roundDetail.Add(new IntegrityStageDetailDto("Retrieval detail", attempt.Detail));
+            }
+            if (round.Recovery is { } recovery)
+            {
+                roundDetail.Add(new("Verification-feedback diagnosis", recovery.DiagnosisCode));
+                roundDetail.Add(new("Recovery action", recovery.ActionCode));
+                roundDetail.Add(new("Recovery proposition", Truncate(recovery.RecoveryProposition)));
+                roundDetail.Add(new("Recovery query", Truncate(recovery.RecoveryQuery)));
+                roundDetail.Add(new("Recovery results",
+                    $"{recovery.OutcomeCode} · retrieved {recovery.SourcesRetrieved} · evaluated {recovery.SourcesEvaluated} · authorized {recovery.DecisionAuthorizedSources}"));
+            }
             return new IntegrityStageChildDto(
                 $"Round {round.RoundNumber}",
                 round.WinnerChanged ? IntegrityTraceStatus.Partial : IntegrityTraceStatus.Passed,
@@ -234,6 +266,7 @@ public static class DecisionIntegrityTraceProjector
                 IntegrityTraceStatus.Partial,
                 transformation.FrontierLabel,
                 [
+                    new("Frontier branch ID", transformation.FrontierBranchId?.ToString() ?? "—"),
                     new("Branch", transformation.FrontierBranchCode ?? "—"),
                     new("Target", transformation.FrontierLabel ?? "—"),
                 ]),
@@ -277,6 +310,10 @@ public static class DecisionIntegrityTraceProjector
                 transformation.SelectedResearchKey,
                 [
                     new("Research key", transformation.SelectedResearchKey),
+                    new("Attempted Research Need ID", transformation.AttemptedResearchNeedId?.ToString() ?? "—"),
+                    new("Selected Research Need ID", transformation.SelectedResearchNeedId?.ToString() ?? "—"),
+                    new("Dependency Proposition ID", transformation.PropositionId?.ToString() ?? "UNBOUND"),
+                    new("Search Plan ID", transformation.SearchPlanId?.ToString() ?? "—"),
                     new("Selection reason", transformation.SelectionReason ?? "—"),
                     new("Search query", transformation.SearchQuery ?? "—"),
                 ]));
@@ -294,10 +331,23 @@ public static class DecisionIntegrityTraceProjector
         return
         [
             new("Research Need attempts", transformation.Attempts.Count.ToString()),
+            new("Attempted frontier branch ID", transformation.FrontierBranchId?.ToString() ?? "—"),
+            new("Attempted Research Need ID", transformation.AttemptedResearchNeedId?.ToString() ?? "—"),
+            new("Selected Research Need ID", transformation.SelectedResearchNeedId?.ToString() ?? "—"),
+            new("Dependency Proposition ID", transformation.PropositionId?.ToString() ?? "UNBOUND"),
+            new("Search Plan ID", transformation.SearchPlanId?.ToString() ?? "—"),
             new("Selected research leaf", transformation.SelectedResearchKey ?? "—"),
             new("Selection reason", transformation.SelectionReason ?? "—"),
             new("Search query", transformation.SearchQuery ?? "—"),
         ];
+    }
+
+    private static string FormatFrontier(Guid? branchId, string? branchCode, string? label)
+    {
+        if (!branchId.HasValue && string.IsNullOrWhiteSpace(branchCode) && string.IsNullOrWhiteSpace(label))
+            return "NONE";
+
+        return $"{label ?? "—"} · {branchCode ?? "—"} · {branchId?.ToString() ?? "—"}";
     }
 
     // ── Stage 3: Verification ────────────────────────────────────────────────────────────────────

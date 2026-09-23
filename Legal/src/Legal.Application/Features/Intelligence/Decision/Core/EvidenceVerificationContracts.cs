@@ -218,6 +218,7 @@ public sealed record EvidenceVerificationRequest(
     public string? PassageRef { get; init; }
     public string? ExtractionVersion { get; init; }
     public bool ProviderIdentityVerified { get; init; }
+    public string? GoverningJurisdiction { get; init; }
 }
 
 public sealed record EvidenceSourceSnapshot
@@ -247,11 +248,21 @@ public sealed record SemanticVerificationResult
     public bool CacheHit { get; init; }
 }
 
+public enum VerificationCandidatePreScreenDisposition
+{
+    RejectIrrelevant=0,
+    AdvanceToSemantic=1,
+    UncertainRequiresDeeperScreen=2,
+}
+
 public sealed record VerificationCandidatePreScreenResult(
-    bool ShouldVerify,
+    VerificationCandidatePreScreenDisposition Disposition,
     string ReasonCode,
     double Relevance,
-    bool PotentialPassageAvailable);
+    bool PotentialPassageAvailable)
+{
+    public bool ShouldVerify => Disposition != VerificationCandidatePreScreenDisposition.RejectIrrelevant;
+}
 
 public interface IVerificationCandidatePreScreen
 {

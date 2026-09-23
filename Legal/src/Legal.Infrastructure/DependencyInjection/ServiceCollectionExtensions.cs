@@ -122,7 +122,14 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<ICourtListenerLegalSource, CourtListenerLegalRetriever>();
         services.AddHttpClient<IGovInfoLegalSource, GovInfoLegalRetriever>();
         services.AddHttpClient<ICornellLiiLegalSource, CornellLiiLegalRetriever>();
+        services.AddSingleton<ILegalJurisdictionDetector, LegalJurisdictionDetector>();
+        services.AddScoped<ILegalAuthoritySourceRegistry, LegalAuthoritySourceRegistry>();
+        services.AddScoped<ILegalAuthorityDiscoveryConfiguration, LegalAuthorityDiscoveryConfiguration>();
+        services.AddHttpClient<ILegalAuthoritySourceBootstrapper, LegalAuthoritySourceBootstrapper>();
+        services.AddHttpClient<IOfficialLegalAuthoritySource, OfficialLegalAuthorityRetriever>();
         services.AddScoped<ILegalRetriever, LegalRetriever>();
+        services.AddSingleton<ILegalResearchPlanner, LegalResearchPlanner>();
+        services.AddScoped<ILegalAuthorityRetrievalService, LegalAuthorityRetrievalService>();
         services.AddSingleton<IWebSourceInspector, PlaywrightWebSourceInspector>();
         services.AddSingleton<IEvidenceSourceClassifier, DeterministicEvidenceSourceClassifier>();
         services.AddSingleton<IVerificationProfileProvider, VerificationProfileProvider>();

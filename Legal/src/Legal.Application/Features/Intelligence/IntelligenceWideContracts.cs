@@ -857,6 +857,39 @@ public sealed record WideLegalGroundingConfiguration(
     bool CornellLiiEnabled,
     string CornellLiiBaseUrl);
 
+public sealed record LegalAuthoritySourceDescriptor(
+    Guid LegalAuthoritySourceId,
+    string ProviderCode,
+    string JurisdictionCode,
+    string AuthorityKindCode,
+    string CitationPattern,
+    string BaseUrl,
+    string DocumentUrlTemplate,
+    string? SectionAnchorTemplate,
+    string ExtractionStrategyCode,
+    int Priority);
+
+public sealed record LegalAuthorityDiscoveryRequest(
+    Guid TenantId,
+    string Query,
+    string JurisdictionCode,
+    string AuthorityKindCode,
+    string CitationText);
+
+public sealed record LegalAuthoritySourceRegistration(
+    string ProviderCode,
+    string JurisdictionCode,
+    string AuthorityKindCode,
+    string CitationPattern,
+    string BaseUrl,
+    string DocumentUrlTemplate,
+    string? SectionAnchorTemplate,
+    string ExtractionStrategyCode,
+    int Priority,
+    string DiscoveryMethodCode,
+    string DiscoveryEvidenceUrl,
+    DateTime VerifiedDateUtc);
+
 // DB-backed concept -> legal authority mapping (POLOXI.Legal_LegalConceptAuthority). Concept-only legal
 // branches (e.g. "cure of delay", "implied waiver") produce no explicit citation, so this map resolves
 // the decisive doctrine to a concrete UCC/U.S. Code citation that the citation-driven retrievers can
@@ -915,6 +948,7 @@ public sealed record WideExternalKnowledgeSnippet
     public string? AuthorityKind{get;set;}
     public string? SourceProvider{get;set;}
     public string? SourceVersion{get;set;}
+    public string? Jurisdiction{get;set;}
     public bool ProviderIdentityVerified{get;set;}
     // AuthorityIdentityVerified: mandatory gate — did a retrieved source actually reference the proposed
     // authority? Proposition scoring can never rescue a snippet that failed this gate.

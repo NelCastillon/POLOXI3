@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence;
 using Microsoft.Extensions.Logging;
 
@@ -11,16 +12,17 @@ namespace Legal.Infrastructure.Intelligence;
 // Aggregated by LegalRetriever. Fail-soft: any error returns an empty snippet collection.
 public interface IGovInfoLegalSource
 {
-    Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default);
+    Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default);
 }
 
 public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoLegalRetriever> logger):IGovInfoLegalSource
 {
     private static readonly JsonSerializerOptions JsonOptions=new(JsonSerializerDefaults.Web);
 
-    public async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
+    public async Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
     {
-        if(!configuration.GovInfoEnabled||string.IsNullOrWhiteSpace(query))return [];
+        if(!configuration.GovInfoEnabled||string.IsNullOrWhiteSpace(query))
+            return new([],new("GOVINFO_ECFR",false,!configuration.GovInfoEnabled?"DISABLED":"INVALID_REQUEST",0,0));
         using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(configuration.TimeoutSeconds));
 
@@ -31,7 +33,9 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
         var govInfoTask=SearchGovInfoAsync(query,configuration,timeout.Token,cancellationToken);
         var ecfrTask=SearchEcfrAsync(query,configuration,timeout.Token,cancellationToken);
         await Task.WhenAll(govInfoTask,ecfrTask);
-        return govInfoTask.Result.Concat(ecfrTask.Result).Take(configuration.MaximumSnippetsPerQuery).ToList();
+        var raw=govInfoTask.Result.Concat(ecfrTask.Result).ToList();
+        var snippets=raw.Take(configuration.MaximumSnippetsPerQuery).ToList();
+        return new(snippets,new("GOVINFO_ECFR",true,snippets.Count>0?"SUCCEEDED":"NO_RESULTS",raw.Count,snippets.Count));
     }
 
     private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchGovInfoAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken timeoutToken,CancellationToken cancellationToken)
@@ -56,7 +60,7 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
 
             var retrievedUtc=DateTime.UtcNow;
             return results
-                .Where(result=>!string.IsNullOrWhiteSpace(result.Title))
+                .Where(IsStatutoryPublication)
                 .Take(configuration.MaximumSnippetsPerQuery)
                 .Select(result=>new WideExternalKnowledgeSnippet(
                     query,
@@ -66,6 +70,7 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
                     0m,
                     retrievedUtc)
                 {
+                    AuthorityKind="STATUTE",
                     SourceProvider="GOVINFO",
                     SourceVersion="SEARCH_API_V1",
                     ProviderIdentityVerified=true,
@@ -77,6 +82,24 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
             logger.LogWarning(exception,"GovInfo legal grounding call failed; continuing without this source.");
             return [];
         }
+    }
+
+    private static bool IsStatutoryPublication(GovInfoSearchResult result)
+    {
+        if(string.IsNullOrWhiteSpace(result.Title)||string.IsNullOrWhiteSpace(result.ResultLink))return false;
+        var collection=result.CollectionCode?.Trim();
+        if(collection is not null)
+            return collection.Equals("USCODE",StringComparison.OrdinalIgnoreCase)
+                || collection.Equals("PLAW",StringComparison.OrdinalIgnoreCase)
+                || collection.Equals("STATUTE",StringComparison.OrdinalIgnoreCase);
+
+        var identity=$"{result.Title} {result.ResultLink}";
+        return identity.Contains("United States Code",StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("Public Law",StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("Statutes at Large",StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("/uscode/",StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("/plaw/",StringComparison.OrdinalIgnoreCase)
+            || identity.Contains("/statute/",StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchEcfrAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken timeoutToken,CancellationToken cancellationToken)
@@ -109,6 +132,7 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
                     0m,
                     retrievedUtc)
                 {
+                    AuthorityKind="REGULATION",
                     SourceProvider="ECFR",
                     SourceVersion="SEARCH_API_V1",
                     ProviderIdentityVerified=true,
@@ -146,7 +170,8 @@ public sealed class GovInfoLegalRetriever(HttpClient httpClient,ILogger<GovInfoL
     private sealed record GovInfoSearchResult(
         [property:JsonPropertyName("title")]string? Title,
         [property:JsonPropertyName("teaser")]string? Teaser,
-        [property:JsonPropertyName("resultLink")]string? ResultLink);
+        [property:JsonPropertyName("resultLink")]string? ResultLink,
+        [property:JsonPropertyName("collectionCode")]string? CollectionCode);
 
     private sealed record EcfrSearchResponse([property:JsonPropertyName("results")]List<EcfrSearchResult>? Results);
 

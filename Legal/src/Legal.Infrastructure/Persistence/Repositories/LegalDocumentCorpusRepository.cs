@@ -140,7 +140,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             """
             SELECT TOP(100) DecisionRetrievalTelemetryId, DecisionSessionId, DecisionMatterId AS MatterId,
                    StageCode, EventCode, RouteCode, Enabled, CandidateCount, FilteredCount, ReturnedCount,
-                   ResearchNeedTypeCode, SourceClassCode, Jurisdiction, DurationMilliseconds, CreatedDateUtc
+                    ResearchNeedTypeCode, SourceClassCode, Jurisdiction, DetailJson, DurationMilliseconds, CreatedDateUtc
             FROM POLOXI.Legal_DecisionRetrievalTelemetry
             WHERE TenantId=@TenantId AND IsDeleted=0
               AND (@MatterId IS NULL OR DecisionMatterId=@MatterId)

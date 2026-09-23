@@ -27,6 +27,65 @@ namespace Legal.Application.Tests.Intelligence;
 [Collection("ResearchLoopSerial")]
 public sealed class DecisionResearchRoundRollbackTests
 {
+    [Fact]
+    public void ClarificationContext_AccumulatesInOrderAndFiltersUnrelatedGraphScopes()
+    {
+        var branchId = Guid.NewGuid();
+        var candidateId = Guid.NewGuid();
+        var graphNodeId = Guid.NewGuid();
+        var graphEdgeId = Guid.NewGuid();
+        var unrelatedBranchId = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var sessionId = Guid.NewGuid();
+        var clarifications = new[]
+        {
+            Clarification("First target", "First answer", "SESSION_LINEAGE", null, null, null, null, 1),
+            Clarification("Branch target", "Branch answer", "RELATED_DECISION_SCOPE", branchId, null, null, null, 2),
+            Clarification("Candidate target", "Candidate answer", "RELATED_DECISION_SCOPE", null, candidateId, null, null, 3),
+            Clarification("Node target", "Node answer", "RELATED_DECISION_SCOPE", null, null, graphNodeId, null, 4),
+            Clarification("Edge target", "Edge answer", "RELATED_DECISION_SCOPE", null, null, null, graphEdgeId, 5),
+            Clarification("Unrelated target", "Must not appear", "RELATED_DECISION_SCOPE", unrelatedBranchId, null, null, null, 6),
+        };
+
+        var context = LegalDecisionService.BuildClarificationPromptContext(
+            clarifications,
+            new HashSet<Guid> { branchId },
+            new HashSet<Guid> { candidateId },
+            new HashSet<Guid> { graphNodeId },
+            new HashSet<Guid> { graphEdgeId });
+
+        Assert.Contains("First target: First answer", context);
+        Assert.Contains("Branch target: Branch answer", context);
+        Assert.Contains("Candidate target: Candidate answer", context);
+        Assert.Contains("Node target: Node answer", context);
+        Assert.Contains("Edge target: Edge answer", context);
+        Assert.DoesNotContain("Must not appear", context);
+        Assert.True(context.IndexOf("First answer", StringComparison.Ordinal) < context.IndexOf("Branch answer", StringComparison.Ordinal));
+
+        DecisionClarificationPersistence Clarification(
+            string target, string answer, string scope, Guid? branch, Guid? candidate,
+            Guid? node, Guid? edge, int minute) => new(
+                Guid.NewGuid(), sessionId, sessionId, "Question", target, answer,
+                branch, candidate, node, edge, scope, tenantId, Guid.NewGuid(),
+                new DateTime(2026, 1, 1, 0, minute, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public void ClarificationContext_IsBoundedWithoutChangingGraphScopeData()
+    {
+        var graphNodeId = Guid.NewGuid();
+        var clarifications = Enumerable.Range(0, 30).Select(index => new DecisionClarificationPersistence(
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "Question", $"Target {index}", new string('a', 500),
+            null, null, graphNodeId, null, "RELATED_DECISION_SCOPE", Guid.NewGuid(), Guid.NewGuid(),
+            DateTime.UtcNow.AddMinutes(index))).ToArray();
+
+        var context = LegalDecisionService.BuildClarificationPromptContext(
+            clarifications, relatedGraphNodeIds: new HashSet<Guid> { graphNodeId });
+
+        Assert.True(context.Length <= 6000);
+        Assert.All(clarifications, item => Assert.Equal(graphNodeId, item.DecisionGraphNodeId));
+    }
+
     // ── FAULT: propagation throws before commit → RESEARCH_ROUND_FAILED, no partial mutation. ──────
     [Fact]
     public async Task RoundFaultBeforeCommit_StopsWithResearchRoundFailed_AndPreservesPriorState()
@@ -65,6 +124,164 @@ public sealed class DecisionResearchRoundRollbackTests
         Assert.Equal(baseline.Margin, after.DecisionMargin);
         Assert.Equal(baseline.WinnerId, after.WinnerCandidateId);
         Assert.Equal(baseline.StatusCode, after.StatusCode);
+    }
+
+    [Fact]
+    public async Task InitialVerificationFailure_UsesBoundedRecoveryAndPromotesSupportingAuthority()
+    {
+        var repo = RollbackFixture.SeededRepository(out var baseline);
+        var retriever = new RecoveringAuthorityRetriever(recoverySupports: true);
+        var service = RollbackFixture.Service(repo, new DependencyPropagationService(),
+            new RecoveryAwareVerificationPipeline(), retriever);
+
+        var result = await service.RunResearchLoopAsync(baseline.TenantId, baseline.SessionId, default);
+
+        Assert.Equal(2, result.TotalRetrievals);
+        var round = Assert.Single(result.Rounds);
+        Assert.NotNull(round.Recovery);
+        Assert.Equal("RECOVERED", round.Recovery!.OutcomeCode);
+        Assert.Equal(1, round.Recovery.DecisionAuthorizedSources);
+        Assert.Equal(2, retriever.CallCount);
+        var authoritativeAttachment = Assert.Single(repo.EvidenceAttachments, attachment => attachment.IsAuthoritative);
+        Assert.NotEqual(Guid.Empty, authoritativeAttachment.AtomicPropositionId);
+        Assert.NotNull(authoritativeAttachment.LegalSearchPlanId);
+        Assert.False(string.IsNullOrWhiteSpace(authoritativeAttachment.PassageRef));
+        Assert.True(authoritativeAttachment.PropositionSelectionRank > 0);
+        Assert.Equal(1, repo.UpdateEdgeVerificationCount);
+    }
+
+    [Fact]
+    public async Task AuthorityContext_IsPersistedAndPassedIdenticallyToRetrievalAndVerification()
+    {
+        var repo = RollbackFixture.SeededRepository(out var baseline);
+        var retriever = new RecoveringAuthorityRetriever(recoverySupports: true);
+        var verifier = new RecordingVerificationPipeline();
+        var service = RollbackFixture.Service(repo, new DependencyPropagationService(), verifier, retriever);
+
+        await service.RunResearchLoopAsync(baseline.TenantId, baseline.SessionId, default);
+
+        Assert.NotEmpty(repo.ResearchNeeds);
+        Assert.All(repo.ResearchNeeds, need => Assert.Equal("Delaware", need.MatterJurisdiction));
+        Assert.All(retriever.Requests, request => Assert.Equal("Delaware", request.Jurisdiction));
+        Assert.All(verifier.Requests, request => Assert.Equal("Delaware", request.GoverningJurisdiction));
+    }
+
+    [Fact]
+    public async Task MissingAuthoritativeJurisdiction_DefersAuthorityResearchWithoutGraphMutation()
+    {
+        var repo = RollbackFixture.SeededRepository(out var baseline);
+        repo.Session = repo.Session with { MatterJurisdiction = null };
+        var retriever = new RecoveringAuthorityRetriever(recoverySupports: true);
+        var service = RollbackFixture.Service(repo, new DependencyPropagationService(), retriever: retriever);
+
+        var result = await service.RunResearchLoopAsync(baseline.TenantId, baseline.SessionId, default);
+
+        Assert.Equal(DecisionResearchLoopStopReasons.ResearchNeedUnresolved, result.StopReason);
+        Assert.Equal("AUTHORITY_JURISDICTION_NOT_ESTABLISHED", result.Failure?.ExceptionType);
+        Assert.Equal(0, retriever.CallCount);
+        Assert.Equal(0, repo.UpdateEdgeVerificationCount);
+        Assert.Equal(0, repo.PersistDependencyEventCount);
+    }
+
+    [Fact]
+    public async Task RecoveryQuery_DoesNotDuplicateJurisdictionAlreadyPresentInProposition()
+    {
+        var need = new DecisionResearchNeedPersistence(
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null, null, null, null,
+            "Comparative negligence", "Delaware comparative negligence reduces recovery proportionally.",
+            "CASE_LAW", null, "Decision relevant", 1m, 1m, 1m, null, "OPEN");
+        var verification = await DeterministicEvidenceVerificationFixture.Pipeline().VerifyAsync(
+            new EvidenceVerificationRequest(
+                Guid.NewGuid(), null, need.PropositionToResolve!, "https://authority.example/1",
+                "Delaware authority", "The court discusses comparative negligence.",
+                EvidenceSourceType.CaseLaw, null, new DateOnly(2024, 1, 1), DecisionMaterial: true));
+
+        var plan = LegalDecisionService.BuildResearchRecoveryPlan(need, [verification], "Delaware");
+
+        Assert.Equal(1, plan.Query.Split("Delaware", StringSplitOptions.None).Length - 1);
+    }
+
+    [Theory]
+    [InlineData("Delaware comparative negligence threshold",LegalAuthorityIssueScopes.SubstantiveLaw)]
+    [InlineData("Summary judgment procedural standard",LegalAuthorityIssueScopes.ProceduralLaw)]
+    [InlineData("Enforce the settlement agreement",LegalAuthorityIssueScopes.SettlementEnforcement)]
+    public void AuthorityScope_ResolvesPerSelectedIssue(string proposition,string expectedScope)
+    {
+        var repo=RollbackFixture.SeededRepository(out _);
+        var need=new DecisionResearchNeedPersistence(
+            Guid.NewGuid(),repo.Session.DecisionSessionId,repo.Session.TenantId,null,repo.Session.MatterId,null,null,
+            proposition,proposition,"CONTROLLING_AUTHORITY",null,"Relevant",1m,1m,1m,null,"OPEN");
+
+        var scope=LegalDecisionService.ResolveAuthorityScope(need,repo.Session);
+
+        Assert.Equal(expectedScope,scope.IssueScopeCode);
+        Assert.Equal("Delaware",scope.GoverningLaw);
+    }
+
+    [Theory]
+    [InlineData("PERSUASIVE_OR_CONTROLLING")]
+    [InlineData("CONTROLLING_AUTHORITY")]
+    [InlineData(null)]
+    public void AuthorityScope_AmbiguousLegacyRoleDefaultsToControlling(string? authorityKind)
+    {
+        var repo=RollbackFixture.SeededRepository(out _);
+        var need=new DecisionResearchNeedPersistence(
+            Guid.NewGuid(),repo.Session.DecisionSessionId,repo.Session.TenantId,null,repo.Session.MatterId,null,null,
+            "Delaware comparative negligence","Delaware comparative negligence",authorityKind,null,"Relevant",1m,1m,1m,null,"OPEN");
+
+        var scope=LegalDecisionService.ResolveAuthorityScope(need,repo.Session);
+
+        Assert.Equal(LegalAuthorityRoles.Controlling,scope.AuthorityRoleCode);
+    }
+
+    [Fact]
+    public void AuthorityScope_ConflictingGoverningLawAndForumTerritory_RemainsUnresolved()
+    {
+        var repo=RollbackFixture.SeededRepository(out _);
+        var session=repo.Session with
+        {
+            GoverningLaw="New York",
+            CourtOrForum="United States – State · Oregon · Superior Court · Multnomah County",
+            AuthorityScope=new LegalAuthorityScope
+            {
+                GoverningLaw="New York",
+                CourtSystem="United States – State",
+                CourtOrForum="United States – State · Oregon · Superior Court · Multnomah County",
+                CourtLevel="Superior Court",
+                PersonalTerritorialJurisdiction="Oregon",
+                ProvenanceCode=LegalAuthorityScopeResolutionCodes.MatterContract,
+            },
+        };
+        var need=new DecisionResearchNeedPersistence(
+            Guid.NewGuid(),session.DecisionSessionId,session.TenantId,null,session.MatterId,null,null,
+            "Enforce settlement agreement","New York settlement enforcement","CONTROLLING",null,"Relevant",1m,1m,1m,null,"OPEN");
+
+        var scope=LegalDecisionService.ResolveAuthorityScope(need,session);
+
+        Assert.Equal(LegalAuthorityScopeStatuses.Unresolved,scope.StatusCode);
+        Assert.Equal(LegalAuthorityScopeResolutionCodes.ConflictingLegalContext,scope.ResolutionCode);
+        Assert.Equal("New York",scope.GoverningLaw);
+        Assert.Contains("Multnomah County",scope.CourtOrForum);
+    }
+
+    [Fact]
+    public async Task RecoveryVerificationFailure_StopsWithUnresolvedResearchGapWithoutAuthoritativeMutation()
+    {
+        var repo = RollbackFixture.SeededRepository(out var baseline);
+        var retriever = new RecoveringAuthorityRetriever(recoverySupports: false);
+        var service = RollbackFixture.Service(repo, new DependencyPropagationService(), retriever: retriever);
+
+        var result = await service.RunResearchLoopAsync(baseline.TenantId, baseline.SessionId, default);
+
+        Assert.Equal(2, result.TotalRetrievals);
+        var round = Assert.Single(result.Rounds);
+        Assert.NotNull(round.Recovery);
+        Assert.Equal("UNRESOLVED_RESEARCH_GAP", round.Recovery!.OutcomeCode);
+        Assert.Equal(0, round.Recovery.DecisionAuthorizedSources);
+        Assert.Equal(2, retriever.CallCount);
+        Assert.DoesNotContain(repo.EvidenceAttachments, attachment => attachment.IsAuthoritative);
+        Assert.Equal(0, repo.UpdateEdgeVerificationCount);
+        Assert.Equal(0, repo.PersistDependencyEventCount);
     }
 
     // ── POSITIVE CONTROL: real propagation crosses the commit boundary (a round actually runs). ────
@@ -190,6 +407,86 @@ internal sealed class EchoRetriever : ILegalDecisionRetriever
             }]);
 }
 
+internal sealed class RecoveringAuthorityRetriever(bool recoverySupports) : ILegalDecisionRetriever
+{
+    public int CallCount { get; private set; }
+    public List<LegalResearchRequest> Requests { get; } = [];
+
+    public Task<IReadOnlyCollection<DecisionRetrievedSource>> RetrieveAsync(
+        DecisionRetrievalRequest request, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyCollection<DecisionRetrievedSource>>([]);
+
+    public Task<LegalAuthorityRetrievalResult> RetrieveResearchNeedAsync(
+        LegalResearchRequest request, CancellationToken cancellationToken = default)
+    {
+        CallCount++;
+        Requests.Add(request);
+        var operation = new LegalSearchOperation(Guid.NewGuid(), LegalSearchOperationKind.Lexical,
+            request.ResearchNeed.SearchQuery ?? request.ResearchNeed.PropositionToResolve ?? string.Empty,
+            LegalAuthorityKind.Case, 1);
+        var plan = new LegalSearchPlan(Guid.NewGuid(), request.ResearchNeed.DecisionResearchNeedId,
+            request.DecisionSessionId, request.TenantId, request.ResearchNeed.PropositionToResolve ?? string.Empty,
+            request.Jurisdiction, request.AuthorityCutoffDate, [operation])
+        {
+            AtomicPropositionId = request.ResearchNeed.AtomicPropositionId == Guid.Empty
+                ? request.ResearchNeed.DecisionResearchNeedId
+                : request.ResearchNeed.AtomicPropositionId,
+        };
+        var passage = CallCount == 1 || !recoverySupports
+            ? "This unrelated procedural order resolves a filing deadline and does not address the governing rule."
+            : $"We hold that {request.ResearchNeed.PropositionToResolve}";
+        var authority = new NormalizedLegalAuthority(
+            $"AUTH-{CallCount}", $"https://authority.example/{CallCount}", "Controlling authority", passage,
+            request.Jurisdiction, new DateOnly(2024,1,1), "CASE_LAW", "TEST_PROVIDER", "1", true,
+            [operation.LegalSearchOperationId])
+        {
+            AtomicPropositionId = plan.AtomicPropositionId,
+            LegalSearchPlanId = plan.LegalSearchPlanId,
+            PassageIdentity = $"PASSAGE-{CallCount}",
+            PropositionSelectionScore = CallCount == 1 ? 0m : 1m,
+            PropositionSelectionRank = 1,
+        };
+        var attempt = new LegalProviderAttempt(Guid.NewGuid(), plan.LegalSearchPlanId,
+            operation.LegalSearchOperationId, "TEST_PROVIDER", LegalRetrievalOutcome.ResultsFound,
+            1, 1, null, 1)
+        {
+            OperationKind = operation.Kind,
+            Query = operation.Query,
+            RecoveryActionCode = "STOP_IF_AUTHORITY_BUDGET_MET",
+        };
+        return Task.FromResult(new LegalAuthorityRetrievalResult(
+            plan, request.ResearchNeed.DecisionResearchNeedId, LegalRetrievalOutcome.ResultsFound,
+            [authority], [attempt]));
+    }
+}
+
+internal sealed class RecordingVerificationPipeline : IIndependentEvidenceVerificationPipeline
+{
+    private readonly IIndependentEvidenceVerificationPipeline inner = DeterministicEvidenceVerificationFixture.Pipeline();
+    public List<EvidenceVerificationRequest> Requests { get; } = [];
+
+    public Task<EvidenceVerificationResult> VerifyAsync(
+        EvidenceVerificationRequest request, CancellationToken cancellationToken = default)
+    {
+        Requests.Add(request);
+        return inner.VerifyAsync(request, cancellationToken);
+    }
+}
+
+internal sealed class RecoveryAwareVerificationPipeline : IIndependentEvidenceVerificationPipeline
+{
+    private readonly IIndependentEvidenceVerificationPipeline inner = DeterministicEvidenceVerificationFixture.Pipeline();
+
+    public async Task<EvidenceVerificationResult> VerifyAsync(
+        EvidenceVerificationRequest request, CancellationToken cancellationToken = default)
+    {
+        var result = await inner.VerifyAsync(request, cancellationToken);
+        return request.SourceText.StartsWith("We hold that ", StringComparison.Ordinal)
+            ? result with { IsVerified = true, IsDecisionAuthorized = true }
+            : result;
+    }
+}
+
 internal static class RollbackFixture
 {
     internal static readonly Guid User = Guid.NewGuid();
@@ -226,6 +523,8 @@ internal static class RollbackFixture
             Candidates: [winner], Branches: [branch], Evidence: [], FlipPoints: [], Events: [])
         {
             MatterId = Guid.NewGuid(),
+            MatterJurisdiction = "Delaware",
+            GoverningLaw = "Delaware",
         };
 
         var propNode = new DecisionGraphNodePersistence(
@@ -269,11 +568,12 @@ internal static class RollbackFixture
     internal static LegalDecisionService Service(
         RecordingDecisionRepository repo,
         IDependencyPropagationService propagation,
-        IIndependentEvidenceVerificationPipeline? verificationPipeline = null)
+        IIndependentEvidenceVerificationPipeline? verificationPipeline = null,
+        ILegalDecisionRetriever? retriever = null)
         => new(
             repo,
             new AtomicResearchNeedAiProvider(),
-            new EchoRetriever(),
+            retriever ?? new EchoRetriever(),
             propagation,
             new LegalDecisionImpactMapper(),
             new UnusedEpistemicBridge(),

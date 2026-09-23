@@ -700,6 +700,58 @@ public sealed class DecisionIntegrityTraceProjectorTests
     }
 
     [Fact]
+    public void Research_RoundDistinguishesAttemptedFrontierFromNextRecommendedFrontier()
+    {
+        var attemptedBranchId = Guid.NewGuid();
+        var nextBranchId = Guid.NewGuid();
+        var attemptedNeedId = Guid.NewGuid();
+        var selectedNeedId = Guid.NewGuid();
+        var propositionId = Guid.NewGuid();
+        var searchPlanId = Guid.NewGuid();
+        var transformation = new DecisionResearchTransformationDto(
+            attemptedBranchId, "C5.B1", "Binding agreement and authority to settle", [],
+            "C5.B1.legal-rule", "LEGAL_AUTHORITY_PREFERRED_THEN_CANDIDATE_DISCRIMINATION",
+            "settlement authority enforceability")
+        {
+            AttemptedResearchNeedId = attemptedNeedId,
+            SelectedResearchNeedId = selectedNeedId,
+            PropositionId = propositionId,
+            SearchPlanId = searchPlanId,
+        };
+        var round = new DecisionResearchRoundDto(
+            1, attemptedBranchId, "Binding agreement and authority to settle", 0.82m,
+            null, DecisionVerificationStates.Unverified, DecisionEvidenceLifecycleStates.Unsupported,
+            0, false, 0.75m, 0.75m, [])
+        {
+            Transformation = transformation,
+            NextRecommendedFrontierBranchId = nextBranchId,
+            NextRecommendedFrontierBranchCode = "C3.B1",
+            NextRecommendedFrontierLabel = "Emily's causal fault exceeds defendants' combined fault",
+        };
+        var response = BaseResponse() with
+        {
+            ResearchSummary = new DecisionResearchLoopSummaryDto(
+                true, 1, 1, 0, 1, DecisionResearchLoopStopReasons.NoStateChange, [round]),
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+        var roundChild = Assert.Single(trace.Research.Children);
+
+        Assert.Contains(roundChild.Detail, detail =>
+            detail.Label == "Attempted frontier" &&
+            detail.Value.Contains("Binding agreement and authority to settle") &&
+            detail.Value.Contains(attemptedBranchId.ToString()));
+        Assert.Contains(roundChild.Detail, detail =>
+            detail.Label == "Next recommended frontier" &&
+            detail.Value.Contains("Emily's causal fault exceeds defendants' combined fault") &&
+            detail.Value.Contains(nextBranchId.ToString()));
+        Assert.Contains(roundChild.Detail, detail => detail.Label == "Attempted Research Need ID" && detail.Value == attemptedNeedId.ToString());
+        Assert.Contains(roundChild.Detail, detail => detail.Label == "Selected Research Need ID" && detail.Value == selectedNeedId.ToString());
+        Assert.Contains(roundChild.Detail, detail => detail.Label == "Dependency Proposition ID" && detail.Value == propositionId.ToString());
+        Assert.Contains(roundChild.Detail, detail => detail.Label == "Search Plan ID" && detail.Value == searchPlanId.ToString());
+    }
+
+    [Fact]
     public void Research_EligibleButNoSummary_ReportsNotObservedExecutionResultMissing()
     {
         var response = BaseResponse() with

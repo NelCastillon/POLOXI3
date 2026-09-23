@@ -41,6 +41,55 @@ public sealed class LegalDecisionService(
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
     private const string ResearchNeedPromptCode = "DECISION_RESEARCH_NEED";
+    private const int ClarificationPromptBudget = 6000;
+
+    internal static string BuildClarificationPromptContext(
+        IEnumerable<DecisionClarificationPersistence> clarifications,
+        IReadOnlySet<Guid>? relatedBranchIds = null,
+        IReadOnlySet<Guid>? relatedCandidateIds = null,
+        IReadOnlySet<Guid>? relatedGraphNodeIds = null,
+        IReadOnlySet<Guid>? relatedGraphEdgeIds = null)
+    {
+        var applicable = clarifications
+            .Where(item => item.ScopeCode.Equals("SESSION_LINEAGE", StringComparison.OrdinalIgnoreCase)
+                || item.DecisionBranchId is { } branchId && relatedBranchIds?.Contains(branchId) == true
+                || item.DecisionCandidateId is { } candidateId && relatedCandidateIds?.Contains(candidateId) == true
+                || item.DecisionGraphNodeId is { } nodeId && relatedGraphNodeIds?.Contains(nodeId) == true
+                || item.DecisionGraphEdgeId is { } edgeId && relatedGraphEdgeIds?.Contains(edgeId) == true)
+            .OrderBy(item => item.CreatedDateUtc)
+            .ThenBy(item => item.DecisionClarificationId)
+            .ToArray();
+        if (applicable.Length == 0)
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder("\n\nEstablished user clarifications (treat as decision context, not as independently verified evidence):");
+        foreach (var item in applicable)
+        {
+            var line = $"\n- {item.Target ?? "detail"}: {item.Answer.Trim()}";
+            if (builder.Length + line.Length > ClarificationPromptBudget)
+                break;
+            builder.Append(line);
+        }
+        return builder.ToString();
+    }
+
+    private static DecisionClarificationPersistence BuildClarificationPersistence(
+        DecisionSearchRequest request,
+        Guid decisionSessionId,
+        DecisionSessionPersistence parentSession)
+    {
+        var branch = parentSession.Branches.FirstOrDefault(item =>
+            string.Equals(item.DisplayName, request.ClarificationTarget, StringComparison.OrdinalIgnoreCase));
+        var candidate = parentSession.Candidates.FirstOrDefault(item =>
+            string.Equals(item.DisplayName, request.ClarificationTarget, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(item.CandidateCode, request.ClarificationTarget, StringComparison.OrdinalIgnoreCase));
+        return new DecisionClarificationPersistence(
+            Guid.NewGuid(), decisionSessionId, parentSession.DecisionSessionId,
+            parentSession.ClarificationQuestion, request.ClarificationTarget?.Trim(), request.ClarificationAnswer!.Trim(),
+            branch?.DecisionBranchId, candidate?.DecisionCandidateId, null, null,
+            branch is not null || candidate is not null ? "RELATED_DECISION_SCOPE" : "SESSION_LINEAGE",
+            request.TenantId, request.UserId, DateTime.UtcNow);
+    }
 
     // Per-session execution guard for the bounded research loop. Concurrent runs (e.g. an inline decide
     // call racing an explicit cockpit "research" action) must not interleave mutations against the same
@@ -57,6 +106,113 @@ public sealed class LegalDecisionService(
             .Select(g => g.OrderBy(r => r.Priority).First())
             .Select(r => new DecisionModelOptionDto(r.ModelCode, r.DeploymentName, r.ProviderTypeCode))
             .ToArray();
+    }
+
+    internal static DecisionResearchRecoveryPlan BuildResearchRecoveryPlan(
+        DecisionResearchNeedPersistence researchNeed,
+        IReadOnlyCollection<EvidenceVerificationResult> verifications,
+        string? governingJurisdiction)
+    {
+        var reasons = verifications
+            .SelectMany(result => new[]
+            {
+                result.PropositionSupport.ReasonCode,
+                result.Holding.ReasonCode,
+                result.Authority.ReasonCode,
+                result.StatementRole.ReasonCode,
+            })
+            .Where(reason => !string.IsNullOrWhiteSpace(reason))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var proposition = researchNeed.PropositionToResolve?.Trim() ?? string.Empty;
+        var jurisdiction = governingJurisdiction?.Trim();
+        var authorityKinds = ParseResearchValues(researchNeed.AuthorityKindsJson);
+
+        if (reasons.Any(reason => reason.Contains("JURISDICTION", StringComparison.OrdinalIgnoreCase)))
+            return new(DecisionResearchRecoveryDiagnoses.WrongJurisdiction, "TIGHTEN_JURISDICTION_ROUTING",
+                proposition, JoinQuery(jurisdiction, proposition, "controlling authority"),
+                DecisionResearchSourceClasses.LegalAuthority, researchNeed.ResearchNeedTypeCode, authorityKinds);
+
+        if (reasons.Any(reason => reason.Contains("SOURCE_TYPE", StringComparison.OrdinalIgnoreCase)))
+            return new(DecisionResearchRecoveryDiagnoses.WrongSourceClass, "SWITCH_AUTHORITY_KIND",
+                proposition, JoinQuery(jurisdiction, proposition, "statute case law interpretation"),
+                DecisionResearchSourceClasses.LegalAuthority, researchNeed.ResearchNeedTypeCode,
+                authorityKinds.Count > 0 ? authorityKinds : ["STATUTE", "CASE"]);
+
+        if (IsBroadResearchProposition(proposition))
+        {
+            var narrowed = NarrowResearchProposition(proposition);
+            return new(DecisionResearchRecoveryDiagnoses.PropositionTooBroad, "DECOMPOSE_TO_ATOMIC_RULE",
+                narrowed, JoinQuery(jurisdiction, narrowed, "statutory text"),
+                DecisionResearchSourceClasses.LegalAuthority, DecisionResearchNeedTypes.LegalRule,
+                ["STATUTE"]);
+        }
+
+        if (reasons.Any(reason => reason.Contains("PROPOSITION", StringComparison.OrdinalIgnoreCase)
+                                  || reason.Contains("HOLDING", StringComparison.OrdinalIgnoreCase)
+                                  || reason.Contains("UNSUPPORTED", StringComparison.OrdinalIgnoreCase)))
+            return new(DecisionResearchRecoveryDiagnoses.IrrelevantPassages, "REFORMULATE_QUERY_WITH_EXACT_PROPOSITION",
+                proposition, JoinQuery(jurisdiction, proposition, "holding opinion"),
+                DecisionResearchSourceClasses.LegalAuthority, researchNeed.ResearchNeedTypeCode, authorityKinds);
+
+        return new(DecisionResearchRecoveryDiagnoses.NoSupportingAuthority, "BROADEN_BOUNDED_AUTHORITY_SEARCH",
+            proposition, JoinQuery(jurisdiction, proposition, "authority"),
+            DecisionResearchSourceClasses.LegalAuthority, researchNeed.ResearchNeedTypeCode, authorityKinds);
+    }
+
+    private static IReadOnlyCollection<string> ParseResearchValues(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try { return JsonSerializer.Deserialize<string[]>(json) ?? []; }
+        catch (JsonException) { return []; }
+    }
+
+    private static bool IsBroadResearchProposition(string proposition) =>
+        proposition.Length > 180
+        || proposition.Contains(" distinguishes ", StringComparison.OrdinalIgnoreCase)
+        || proposition.Count(character => character == ',') >= 2;
+
+    private static string NarrowResearchProposition(string proposition)
+    {
+        var marker = proposition.IndexOf(" distinguishes ", StringComparison.OrdinalIgnoreCase);
+        return marker > 0 ? proposition[..marker].Trim().TrimEnd('.') : proposition;
+    }
+
+    private static string JoinQuery(params string?[] parts)
+    {
+        var selected = new List<string>();
+        foreach (var value in parts.Where(part => !string.IsNullOrWhiteSpace(part)).Select(part => part!.Trim()))
+        {
+            var normalized = NormalizeQueryText(value);
+            if (normalized.Length == 0
+                || selected.Any(existing => ContainsQueryPhrase(NormalizeQueryText(existing), normalized)))
+                continue;
+
+            selected.RemoveAll(existing => ContainsQueryPhrase(normalized, NormalizeQueryText(existing)));
+            selected.Add(value);
+        }
+        return string.Join(' ', selected);
+    }
+
+    private static string NormalizeQueryText(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Trim(' ', '.', ',', ';', ':', '-', '–', '—')
+            .ToUpperInvariant();
+
+    private static bool ContainsQueryPhrase(string text, string phrase) =>
+        text.Equals(phrase, StringComparison.Ordinal)
+        || text.StartsWith($"{phrase} ", StringComparison.Ordinal)
+        || text.EndsWith($" {phrase}", StringComparison.Ordinal)
+        || text.Contains($" {phrase} ", StringComparison.Ordinal);
+
+    internal static bool IsUserResolvableClarification(DecisionBranchPersistence branch)
+    {
+        var proposition = string.IsNullOrWhiteSpace(branch.Interpretation)
+            ? branch.DisplayName
+            : branch.Interpretation;
+        var needType = DecisionResearchNeedFactory.ClassifyResearchNeed(proposition);
+        return needType is DecisionResearchNeedTypes.MatterFact
+            or DecisionResearchNeedTypes.MatterEvidence
+            or DecisionResearchNeedTypes.Mixed;
     }
 
     private static bool DomainApplicabilityMatches(string? configuredValue, string? matterValue)
@@ -252,6 +408,121 @@ public sealed class LegalDecisionService(
         return null;
     }
 
+    private static string? NormalizeAuthorityContext(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? ResolveCourtOrForum(DecisionMatterDto matter)
+    {
+        var values = new[] { matter.CourtSystem, matter.State, matter.CourtLevel, matter.County }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        return NormalizeAuthorityContext(string.Join(" · ", values));
+    }
+
+    private static LegalAuthorityScope ResolveMatterAuthorityContext(DecisionMatterDto matter) => new()
+    {
+        GoverningLaw=NormalizeAuthorityContext(matter.GoverningLaw??matter.State??matter.Jurisdiction),
+        CourtSystem=NormalizeAuthorityContext(matter.CourtSystem),
+        CourtOrForum=ResolveCourtOrForum(matter),
+        CourtLevel=NormalizeAuthorityContext(matter.CourtLevel),
+        SubjectMatterJurisdiction=NormalizeAuthorityContext(matter.SubjectMatterJurisdiction),
+        PersonalTerritorialJurisdiction=NormalizeAuthorityContext(matter.PersonalTerritorialJurisdiction??matter.State),
+        ProceduralLaw=NormalizeAuthorityContext(matter.ProceduralLaw),
+        AuthorityCutoffDate=matter.AuthorityCutoffDate,
+        StatusCode=LegalAuthorityScopeStatuses.PartiallyResolved,
+        ResolutionCode=LegalAuthorityScopeResolutionCodes.MatterContract,
+        ProvenanceCode=LegalAuthorityScopeResolutionCodes.MatterContract,
+    };
+
+    internal static LegalAuthorityScope ResolveAuthorityScope(
+        DecisionResearchNeedPersistence researchNeed,
+        DecisionSessionPersistence session)
+    {
+        var text=$"{researchNeed.IssueLabel} {researchNeed.ResearchQuestion} {researchNeed.PropositionToResolve}";
+        var issueScope=ResolveAuthorityIssueScope(researchNeed,text);
+        if(issueScope==LegalAuthorityIssueScopes.MatterEvidence)
+            return new()
+            {
+                IssueScopeCode=issueScope,
+                AuthorityRoleCode=LegalAuthorityRoles.Controlling,
+                SourceTypeCode=DecisionResearchSourceClasses.MatterDocument,
+                StatusCode=LegalAuthorityScopeStatuses.NotApplicable,
+                ResolutionCode=LegalAuthorityScopeStatuses.NotApplicable,
+                ProvenanceCode=LegalAuthorityScopeResolutionCodes.SessionSnapshot,
+            };
+
+        var procedural=issueScope==LegalAuthorityIssueScopes.ProceduralLaw;
+        var settlement=issueScope==LegalAuthorityIssueScopes.SettlementEnforcement;
+        var context=session.AuthorityScope;
+        var governingLaw=NormalizeAuthorityContext(context?.GoverningLaw??session.GoverningLaw??session.MatterJurisdiction);
+        var courtOrForum=NormalizeAuthorityContext(context?.CourtOrForum??session.CourtOrForum);
+        var proceduralLaw=NormalizeAuthorityContext(context?.ProceduralLaw);
+        var territorialJurisdiction=NormalizeAuthorityContext(context?.PersonalTerritorialJurisdiction);
+        var conflictingContext=governingLaw is not null&&territorialJurisdiction is not null
+            &&!governingLaw.Equals(territorialJurisdiction,StringComparison.OrdinalIgnoreCase)
+            &&context?.ResolutionCode!=LegalAuthorityScopeResolutionCodes.RequestedAssumption;
+        var resolution=governingLaw is null?LegalAuthorityScopeResolutionCodes.MissingGoverningLaw
+            :conflictingContext?LegalAuthorityScopeResolutionCodes.ConflictingLegalContext
+            :procedural&&courtOrForum is null?LegalAuthorityScopeResolutionCodes.MissingCourtOrForum
+            :procedural&&proceduralLaw is null?LegalAuthorityScopeResolutionCodes.MissingProceduralLaw
+            :LegalAuthorityScopeResolutionCodes.SessionSnapshot;
+        var status=resolution is LegalAuthorityScopeResolutionCodes.MissingGoverningLaw
+            or LegalAuthorityScopeResolutionCodes.ConflictingLegalContext
+            or LegalAuthorityScopeResolutionCodes.MissingCourtOrForum
+            or LegalAuthorityScopeResolutionCodes.MissingProceduralLaw
+            ?LegalAuthorityScopeStatuses.Unresolved
+            :courtOrForum is null?LegalAuthorityScopeStatuses.PartiallyResolved:LegalAuthorityScopeStatuses.Resolved;
+        return new()
+        {
+            IssueScopeCode=issueScope,
+            AuthorityRoleCode=ResolveAuthorityRole(researchNeed.AuthorityKind),
+            GoverningLaw=governingLaw,
+            CourtSystem=context?.CourtSystem,
+            CourtOrForum=courtOrForum,
+            CourtLevel=context?.CourtLevel,
+            SubjectMatterJurisdiction=context?.SubjectMatterJurisdiction,
+            PersonalTerritorialJurisdiction=context?.PersonalTerritorialJurisdiction,
+            ProceduralLaw=proceduralLaw,
+            ProceduralPosture=procedural||settlement?NormalizeAuthorityContext(session.QueryText):null,
+            SourceTypeCode=researchNeed.AuthorityKindsJson,
+            AuthorityCutoffDate=session.AuthorityCutoffDate,
+            StatusCode=status,
+            ResolutionCode=resolution,
+            ProvenanceCode=context?.ProvenanceCode??LegalAuthorityScopeResolutionCodes.SessionSnapshot,
+        };
+    }
+
+    private static string ResolveAuthorityRole(string? authorityKind)
+    {
+        var value=authorityKind?.Trim();
+        if(value?.Equals(LegalAuthorityRoles.Persuasive,StringComparison.OrdinalIgnoreCase)==true)
+            return LegalAuthorityRoles.Persuasive;
+        if(value?.Equals(LegalAuthorityRoles.FederalApplyingStateLaw,StringComparison.OrdinalIgnoreCase)==true)
+            return LegalAuthorityRoles.FederalApplyingStateLaw;
+        return LegalAuthorityRoles.Controlling;
+    }
+
+    private static string ResolveAuthorityIssueScope(DecisionResearchNeedPersistence researchNeed,string text)
+    {
+        if(researchNeed.SourceClassCode.Equals(DecisionResearchSourceClasses.MatterDocument,StringComparison.OrdinalIgnoreCase)
+            || DecisionResearchNeedTypes.RequiresMatterSources(researchNeed.ResearchNeedTypeCode))
+            return LegalAuthorityIssueScopes.MatterEvidence;
+        if(researchNeed.ResearchNeedTypeCode.Equals(DecisionResearchNeedTypes.ProceduralStandard,StringComparison.OrdinalIgnoreCase))
+            return LegalAuthorityIssueScopes.ProceduralLaw;
+        if(text.Contains("settlement",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("agreement",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("contract law",StringComparison.OrdinalIgnoreCase))
+            return LegalAuthorityIssueScopes.SettlementEnforcement;
+        if(text.Contains("summary judgment",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("procedure",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("procedural",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("motion",StringComparison.OrdinalIgnoreCase)
+            || text.Contains("disposition",StringComparison.OrdinalIgnoreCase))
+            return LegalAuthorityIssueScopes.ProceduralLaw;
+        return LegalAuthorityIssueScopes.SubstantiveLaw;
+    }
+
     private static string BuildPersonalInjuryQuery(
         DecisionMatterDto matter, PersonalInjuryDecisionTypeDto? decisionType,
         PersonalInjuryProfileDto? profile, string? question)
@@ -286,6 +557,21 @@ public sealed class LegalDecisionService(
     {
         var timer = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid();
+        LegalAuthorityScope? matterAuthorityContext=null;
+        if (request.MatterId is { } authorityMatterId)
+        {
+            var authorityMatter = await repository.GetMatterAsync(request.TenantId, authorityMatterId, cancellationToken);
+            if (authorityMatter is not null)
+            {
+                request = request with
+                {
+                    Jurisdiction = ResolveMatterJurisdiction(authorityMatter, null),
+                    GoverningLaw = NormalizeAuthorityContext(authorityMatter.GoverningLaw),
+                    CourtOrForum = ResolveCourtOrForum(authorityMatter),
+                };
+                matterAuthorityContext=ResolveMatterAuthorityContext(authorityMatter);
+            }
+        }
         var settings = await repository.GetCoreSettingsAsync(cancellationToken);
         var v2Settings = await repository.GetV2SettingsAsync(cancellationToken);
         var useGraph = request.UseDependencyGraph ?? v2Settings.UseDependencyGraphDefault;
@@ -296,13 +582,33 @@ public sealed class LegalDecisionService(
         void Record(string type, string stage, object? payload = null) =>
             events.Add(new DecisionEventPersistence(Guid.NewGuid(), null, sequence++, type, stage, payload is null ? null : JsonSerializer.Serialize(payload), null));
 
-        // A continued session folds the user's clarification answer into the effective query (§7 loop),
-        // so the proposal layer re-competes candidates with the disambiguating detail in hand.
+        DecisionSessionPersistence? parentSession = null;
+        IReadOnlyCollection<DecisionClarificationPersistence> priorClarifications = [];
+        if (request.ParentDecisionSessionId is { } parentSessionId)
+        {
+            parentSession = await repository.GetSessionAsync(request.TenantId, parentSessionId, cancellationToken);
+            if (parentSession is not null)
+                priorClarifications = await repository.GetClarificationLineageAsync(
+                    request.TenantId, parentSessionId, cancellationToken);
+        }
+
+        // A continued session folds the accumulated clarification lineage into the effective query (§7
+        // loop), so every proposal layer re-competes with all applicable disambiguating details in hand.
         var hasClarification = !string.IsNullOrWhiteSpace(request.ClarificationAnswer);
         var hasCounterfactual = !string.IsNullOrWhiteSpace(request.CounterfactualAssumption);
         var effectiveQuery = request.Query;
+        var currentClarification = hasClarification && parentSession is not null
+            ? BuildClarificationPersistence(request, sessionId, parentSession)
+            : null;
+        var clarificationContext = BuildClarificationPromptContext(currentClarification is null
+            ? priorClarifications
+            : priorClarifications.Append(currentClarification));
+        effectiveQuery += clarificationContext;
         if (hasClarification)
-            effectiveQuery += $"\n\nClarification ({request.ClarificationTarget ?? "detail"}): {request.ClarificationAnswer}";
+        {
+            if (parentSession is null)
+                effectiveQuery += $"\n\nClarification ({request.ClarificationTarget ?? "detail"}): {request.ClarificationAnswer}";
+        }
         if (hasCounterfactual)
             effectiveQuery += $"\n\nCounterfactual assumption (treat as established for this analysis): {request.CounterfactualAssumption}";
 
@@ -352,7 +658,8 @@ public sealed class LegalDecisionService(
         });
 
         if (!request.UsePoloxiEngine)
-            return await ComposeDirectAnswerAsync(request, sessionId, contextCode, events, timer, cancellationToken);
+            return await ComposeDirectAnswerAsync(request, sessionId, contextCode, effectiveQuery,
+                currentClarification, events, timer, cancellationToken);
 
         var retrievalSettings = await documentCorpusRepository.GetRetrievalArchitectureSettingsAsync(cancellationToken);
         LegalMatterContextResult matterContext = new(false, DecisionResearchRouteCodes.NoneDerived, [], 0, 0, "NO_MATTER");
@@ -601,8 +908,9 @@ public sealed class LegalDecisionService(
         string? clarificationTarget = null;
         if (!hasClarification && statusCode != DecisionStatusCodes.DecisionReady && entropy >= 0.85 && margin < 0.05)
         {
-            var pivot = branches.Where(b => b.IsOnFrontier).OrderByDescending(b => b.FlipPotential).FirstOrDefault()
-                ?? branches.OrderByDescending(b => b.FlipPotential).FirstOrDefault();
+            var pivot = branches.Where(b => b.IsOnFrontier && IsUserResolvableClarification(b))
+                .OrderByDescending(b => b.FlipPotential).FirstOrDefault()
+                ?? branches.Where(IsUserResolvableClarification).OrderByDescending(b => b.FlipPotential).FirstOrDefault();
             if (pivot is not null)
             {
                 statusCode = DecisionStatusCodes.UserClarificationRequired;
@@ -655,7 +963,7 @@ public sealed class LegalDecisionService(
         string? finalAnswer = null;
         if (statusCode == DecisionStatusCodes.DecisionReady || statusCode == DecisionStatusCodes.ResearchExhausted || statusCode == DecisionStatusCodes.ProvisionalDecision)
         {
-            finalAnswer = await ComposeAnswerAsync(request, candidates, branches, flipPoints, margin, entropy, cancellationToken);
+            finalAnswer = await ComposeAnswerAsync(request, effectiveQuery, candidates, branches, flipPoints, margin, entropy, cancellationToken);
             llmCalls++;
             Record("ANSWER_COMPOSED", "ANSWER", null);
         }
@@ -681,9 +989,17 @@ public sealed class LegalDecisionService(
             NextBestActionRationale = nextAction?.Rationale,
             CounterfactualAssumption = request.CounterfactualAssumption,
             ResearchStatusCode = retrieval.ResearchStatus,
-            ResearchFailureDetail = retrieval.FailureDetail
+            ResearchFailureDetail = retrieval.FailureDetail,
+            ParentDecisionSessionId = parentSession?.DecisionSessionId,
+            MatterJurisdiction = NormalizeAuthorityContext(request.Jurisdiction),
+            GoverningLaw = NormalizeAuthorityContext(request.GoverningLaw),
+            CourtOrForum = NormalizeAuthorityContext(request.CourtOrForum),
+            AuthorityCutoffDate = request.AuthorityCutoffDate,
+            AuthorityScope = matterAuthorityContext,
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
+        if (currentClarification is not null)
+            await repository.PersistClarificationAsync(currentClarification, cancellationToken);
         var persistedEvidenceVerifications = retrieval.Verifications.Select(v => ToPersistence(
             v, sessionId, request.TenantId, request.UserId, request.MatterId)).ToArray();
         var persistedVerificationsByEvidence = persistedEvidenceVerifications
@@ -1250,12 +1566,20 @@ public sealed class LegalDecisionService(
             blockers, violations, claims, narrative);
     }
 
-    private async Task<DecisionSearchResponse> ComposeDirectAnswerAsync(DecisionSearchRequest request, Guid sessionId, string contextCode, List<DecisionEventPersistence> events, Stopwatch timer, CancellationToken cancellationToken)
+    private async Task<DecisionSearchResponse> ComposeDirectAnswerAsync(
+        DecisionSearchRequest request,
+        Guid sessionId,
+        string contextCode,
+        string effectiveQuery,
+        DecisionClarificationPersistence? clarification,
+        List<DecisionEventPersistence> events,
+        Stopwatch timer,
+        CancellationToken cancellationToken)
     {
         var route = await ResolveRouteAsync(AnswerPromptCode, request.ModelCode, cancellationToken);
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{AnswerPromptCode}' decision prompt is not configured.");
-        var user = answerPrompt.UserPromptTemplate.Replace("{{ARTIFACT}}", "{}").Replace("{{QUERY}}", request.Query);
+        var user = answerPrompt.UserPromptTemplate.Replace("{{ARTIFACT}}", "{}").Replace("{{QUERY}}", effectiveQuery);
         var result = await aiProvider.GenerateAsync(new DecisionAiRequest(route, "DECISION_ANSWER", answerPrompt.SystemPrompt, user, null, request.CorrelationId), cancellationToken);
         timer.Stop();
         var persistence = new DecisionSessionPersistence(
@@ -1265,9 +1589,16 @@ public sealed class LegalDecisionService(
             [], [], [], [], events)
         {
             MatterId = request.MatterId,
-            CounterfactualAssumption = request.CounterfactualAssumption
+            CounterfactualAssumption = request.CounterfactualAssumption,
+            ParentDecisionSessionId = clarification?.ParentDecisionSessionId,
+            MatterJurisdiction = NormalizeAuthorityContext(request.Jurisdiction),
+            GoverningLaw = NormalizeAuthorityContext(request.GoverningLaw),
+            CourtOrForum = NormalizeAuthorityContext(request.CourtOrForum),
+            AuthorityCutoffDate = request.AuthorityCutoffDate,
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
+        if (clarification is not null)
+            await repository.PersistClarificationAsync(clarification, cancellationToken);
         return BuildResponse(persistence, null, []);
     }
 
@@ -1714,14 +2045,21 @@ public sealed class LegalDecisionService(
                 new DecisionResearchFailureDto(0, preRoundStage, ex.GetType().Name, ex.Message, false));
         }
 
-        // Matter jurisdiction (e.g. "California") is the AuthorityVerifier fallback when a retrieved source
-        // does not declare its own jurisdiction, so authority applicability is not left unestablished.
-        string? matterJurisdiction = null;
-        if (session.MatterId is { } researchMatterId)
+        // Prefer the immutable session snapshot. Reloading the matter is only a compatibility fallback for
+        // sessions created before the authority-context snapshot columns existed.
+        var matterJurisdiction = NormalizeAuthorityContext(session.MatterJurisdiction);
+        var governingLaw = NormalizeAuthorityContext(session.GoverningLaw);
+        var courtOrForum = NormalizeAuthorityContext(session.CourtOrForum);
+        var authorityCutoffDate = session.AuthorityCutoffDate;
+        if (matterJurisdiction is null && session.MatterId is { } researchMatterId)
         {
             var researchMatter = await repository.GetMatterAsync(tenantId, researchMatterId, cancellationToken);
             if (researchMatter is not null)
+            {
                 matterJurisdiction = ResolveMatterJurisdiction(researchMatter, null);
+                governingLaw = NormalizeAuthorityContext(researchMatter.GoverningLaw);
+                courtOrForum = ResolveCourtOrForum(researchMatter);
+            }
         }
 
         while (true)
@@ -1775,9 +2113,28 @@ public sealed class LegalDecisionService(
                         {
                             Transformation = semanticNeed.Transformation,
                         });
-                researchNeed = semanticNeed.SelectedNeed;
+                researchNeed = semanticNeed.SelectedNeed with
+                {
+                    MatterJurisdiction = matterJurisdiction,
+                    GoverningLaw = governingLaw,
+                    CourtOrForum = courtOrForum,
+                    AuthorityCutoffDate = authorityCutoffDate,
+                };
+                researchNeed = researchNeed with { AuthorityScope = ResolveAuthorityScope(researchNeed,session) };
                 foreach (var plannedNeed in semanticNeed.Needs)
-                    await repository.PersistResearchNeedAsync(plannedNeed, cancellationToken);
+                {
+                    var scopedNeed=plannedNeed with
+                    {
+                        MatterJurisdiction = matterJurisdiction,
+                        GoverningLaw = governingLaw,
+                        CourtOrForum = courtOrForum,
+                        AuthorityCutoffDate = authorityCutoffDate,
+                    };
+                    await repository.PersistResearchNeedAsync(scopedNeed with
+                    {
+                        AuthorityScope=ResolveAuthorityScope(scopedNeed,session),
+                    }, cancellationToken);
+                }
 
                 // Resolve causality independently from research eligibility. Missing typed lineage must not
                 // prevent retrieval; it only means a verified result cannot yet be propagated through V2.
@@ -1785,6 +2142,10 @@ public sealed class LegalDecisionService(
                 var currentGraph = await repository.GetGraphAsync(tenantId, decisionSessionId, cancellationToken) ?? graph;
                 dependencyPath = ResolveDependencyPathForBranch(
                     currentGraph, target.DecisionBranchId, edgesVerifiedThisRun);
+                researchTransformation = researchTransformation with
+                {
+                    PropositionId = ResolvePropositionId(currentGraph, dependencyPath),
+                };
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1798,6 +2159,18 @@ public sealed class LegalDecisionService(
             var narrative = new List<string>();
             var proposition = researchNeed.PropositionToResolve
                 ?? throw new InvalidOperationException("The accepted research need has no proposition.");
+            if (researchNeed.SourceClassCode.Equals(DecisionResearchSourceClasses.LegalAuthority, StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrWhiteSpace(researchNeed.MatterJurisdiction))
+            {
+                return await DoneAsync(roundNumber, totalRetrievals,
+                    DecisionResearchLoopStopReasons.ResearchNeedUnresolved,
+                    new DecisionResearchFailureDto(roundNumber, "AUTHORITY_CONTEXT_RESOLUTION",
+                        "AUTHORITY_JURISDICTION_NOT_ESTABLISHED",
+                        "Legal-authority research was deferred because the authoritative decision contract does not establish matter jurisdiction.", false)
+                    {
+                        Transformation = researchTransformation,
+                    });
+            }
             var searchQuery = string.IsNullOrWhiteSpace(researchNeed.SearchQuery)
                 ? proposition
                 : researchNeed.SearchQuery;
@@ -1818,7 +2191,12 @@ public sealed class LegalDecisionService(
             {
                 // 1) Route the accepted need to its authoritative source boundary, then retrieve.
                 IReadOnlyCollection<DecisionRetrievedSource> sources;
-                var route = researchSourceRouter.Route(researchNeed, matterJurisdiction);
+                DecisionRetrievalResult? retrievalDiagnostics = null;
+                LegalAuthorityRetrievalResult? authorityRetrieval = null;
+                var route = researchSourceRouter.Route(
+                    researchNeed,
+                    researchNeed.MatterJurisdiction,
+                    researchNeed.AuthorityCutoffDate?.ToDateTime(TimeOnly.MinValue));
                 var retrievalTimer = Stopwatch.StartNew();
                 if (!route.RetrievalRequired)
                 {
@@ -1850,14 +2228,36 @@ public sealed class LegalDecisionService(
                 }
                 else try
                 {
-                    sources = await retriever.RetrieveAsync(
-                        new DecisionRetrievalRequest(DecisionContexts.Legal, searchQuery, 5)
+                    authorityRetrieval=await retriever.RetrieveResearchNeedAsync(new(
+                        tenantId,decisionSessionId,researchNeed,route.Jurisdiction,
+                        route.AuthorityCutoffDate is { } cutoff?DateOnly.FromDateTime(cutoff):DateOnly.MaxValue,
+                        Math.Max(1,loop.MaxRetrievals-totalRetrievals),5),cancellationToken);
+                    if(authorityRetrieval.Plan.LegalSearchPlanId==Guid.Empty)
+                    {
+                        authorityRetrieval=null;
+                        retrievalDiagnostics=await retriever.RetrieveWithDiagnosticsAsync(
+                            new DecisionRetrievalRequest(DecisionContexts.Legal,searchQuery,5)
+                            {
+                                TenantId=tenantId,
+                                Jurisdiction=route.Jurisdiction,
+                                AuthorityKinds=route.AuthorityKinds,
+                                AuthorityCutoffDate=route.AuthorityCutoffDate,
+                            },cancellationToken);
+                        sources=retrievalDiagnostics.Sources;
+                    }
+                    else
+                    {
+                        await repository.PersistLegalResearchExecutionAsync(authorityRetrieval.Plan,authorityRetrieval,cancellationToken);
+                        researchTransformation = researchTransformation with
                         {
-                            TenantId = tenantId,
-                            Jurisdiction = route.Jurisdiction,
-                            AuthorityKinds = route.AuthorityKinds,
-                            AuthorityCutoffDate = route.AuthorityCutoffDate
-                        }, cancellationToken);
+                            SearchPlanId = authorityRetrieval.Plan.LegalSearchPlanId,
+                        };
+                        sources=authorityRetrieval.Authorities.Select(authority=>authority.ToRetrievedSource()).ToArray();
+                        retrievalDiagnostics=new(sources,authorityRetrieval.ProviderAttempts.Sum(attempt=>attempt.RawResultCount),0,0,
+                            authorityRetrieval.ProviderAttempts.Select(attempt=>new LegalProviderRetrievalDiagnostic(
+                                attempt.ProviderCode,true,attempt.Outcome.ToString().ToUpperInvariant(),attempt.RawResultCount,
+                                attempt.ReturnedCount,attempt.Detail)).ToArray());
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -1874,8 +2274,44 @@ public sealed class LegalDecisionService(
                         new DecisionRetrievalTelemetry(
                             Guid.NewGuid(), decisionSessionId, current.MatterId, DecisionRetrievalStages.DecisionResearch,
                             "RESEARCH_SOURCE_ROUTED", route.RouteCode, true,
-                            sources.Count, 0, sources.Count, route.ResearchNeedTypeCode, route.SourceClassCode,
-                            route.Jurisdiction, JsonSerializer.Serialize(new { route.Reason, route.AuthorityKinds, route.DocumentTypeCodes, configuredRoutingFlag = retrievalArchitecture.Stage3AuthoritativeRoutingEnabled, routingMandatory = true }),
+                            retrievalDiagnostics?.RawResultCount ?? sources.Count,
+                            (retrievalDiagnostics?.AuthorityKindFilteredCount ?? 0) + (retrievalDiagnostics?.AuthorityDateFilteredCount ?? 0),
+                            sources.Count, route.ResearchNeedTypeCode, route.SourceClassCode,
+                            route.Jurisdiction, JsonSerializer.Serialize(new
+                            {
+                                targetBranchId = target.DecisionBranchId,
+                                target.BranchCode,
+                                researchNeed.DecisionResearchNeedId,
+                                researchNeed.ResearchKey,
+                                researchNeed.ResearchQuestion,
+                                proposition,
+                                searchQuery,
+                                route.Reason,
+                                route.AuthorityKinds,
+                                route.DocumentTypeCodes,
+                                providers = retrievalDiagnostics?.Providers ?? [],
+                                rawResultCount = retrievalDiagnostics?.RawResultCount ?? sources.Count,
+                                authorityKindFilteredCount = retrievalDiagnostics?.AuthorityKindFilteredCount ?? 0,
+                                authorityDateFilteredCount = retrievalDiagnostics?.AuthorityDateFilteredCount ?? 0,
+                                finalResultCount = sources.Count,
+                                retrievalOutcome = authorityRetrieval?.Outcome.ToString().ToUpperInvariant(),
+                                attempts = authorityRetrieval?.ProviderAttempts.Select(attempt => new
+                                {
+                                    attempt.LegalSearchPlanId,
+                                    attempt.LegalSearchOperationId,
+                                    operationKind = attempt.OperationKind?.ToString().ToUpperInvariant(),
+                                    attempt.Query,
+                                    attempt.ProviderCode,
+                                    outcome = attempt.Outcome.ToString().ToUpperInvariant(),
+                                    attempt.RawResultCount,
+                                    attempt.ReturnedCount,
+                                    attempt.RecoveryActionCode,
+                                    attempt.Detail,
+                                    attempt.DurationMilliseconds,
+                                }) ?? [],
+                                configuredRoutingFlag = retrievalArchitecture.Stage3AuthoritativeRoutingEnabled,
+                                routingMandatory = true
+                            }),
                             retrievalTimer.ElapsedMilliseconds),
                         cancellationToken);
                 }
@@ -1890,11 +2326,26 @@ public sealed class LegalDecisionService(
                         SupportedObjective = proposition
                     })
                     .ToList();
-                var proposedAttachments = retrievedEvidence.Select(e => new DecisionEvidenceAttachmentPersistence(
-                    Guid.NewGuid(), decisionSessionId, tenantId, userId, current.MatterId,
-                    researchNeed.DecisionResearchNeedId, target.DecisionBranchId, e.DecisionEvidenceId,
-                    proposition, DecisionEvidenceAttachmentStates.ProposedSupportFor,
-                    dependencyPath?.EdgeId, IsAuthoritative: false, AssessmentReason: null)).ToList();
+                var atomicPropositionId = researchNeed.AtomicPropositionId == Guid.Empty
+                    ? researchNeed.DecisionResearchNeedId
+                    : researchNeed.AtomicPropositionId;
+                var proposedAttachments = sources.Zip(retrievedEvidence, (source, evidenceItem) =>
+                    new DecisionEvidenceAttachmentPersistence(
+                        Guid.NewGuid(), decisionSessionId, tenantId, userId, current.MatterId,
+                        researchNeed.DecisionResearchNeedId, target.DecisionBranchId, evidenceItem.DecisionEvidenceId,
+                        proposition, DecisionEvidenceAttachmentStates.ProposedSupportFor,
+                        dependencyPath?.EdgeId, IsAuthoritative: false, AssessmentReason: null)
+                    {
+                        AtomicPropositionId = source.AtomicPropositionId == Guid.Empty
+                            ? atomicPropositionId
+                            : source.AtomicPropositionId,
+                        LegalSearchPlanId = source.LegalSearchPlanId == Guid.Empty ? null : source.LegalSearchPlanId,
+                        NormalizedAuthorityId = source.NormalizedAuthorityId,
+                        NormalizedAuthorityIdentity = source.NormalizedAuthorityIdentity,
+                        PassageRef = source.PassageIdentity,
+                        PropositionSelectionScore = source.PropositionSelectionScore,
+                        PropositionSelectionRank = source.PropositionSelectionRank,
+                    }).ToList();
                 await repository.PersistResearchEvidenceAsync(
                     tenantId, userId, decisionSessionId, retrievedEvidence, cancellationToken);
                 await repository.PersistEvidenceAttachmentsAsync(proposedAttachments, cancellationToken);
@@ -1903,19 +2354,133 @@ public sealed class LegalDecisionService(
                 currentStage = "VERIFICATION";
                 var verificationResults = new List<EvidenceVerificationResult>(sources.Count);
                 var verified = new List<DecisionEvidencePersistence>(sources.Count);
+                var recoveryAttempts = new List<DecisionRetrievalAttemptDto>();
+                DecisionResearchRecoveryDto? recovery = null;
                 foreach (var (source, persisted) in sources.Zip(retrievedEvidence))
                 {
                     var result = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
                         persisted.DecisionEvidenceId, target.DecisionBranchId, proposition,
                         source.SourceRef, source.Title, source.Snippet, source.SourceType,
-                        string.IsNullOrWhiteSpace(source.Jurisdiction) ? matterJurisdiction : source.Jurisdiction, source.AuthorityDate)
+                        source.Jurisdiction, source.AuthorityDate, DecisionMaterial: true)
                     {
                         SourceProvider = source.SourceProvider,
                         SourceVersion = source.SourceVersion,
                         ProviderIdentityVerified = source.ProviderIdentityVerified,
+                        GoverningJurisdiction = researchNeed.MatterJurisdiction,
                     }, cancellationToken);
                     verificationResults.Add(result);
                     verified.Add(ToEvidencePersistence(source, proposition, target.DecisionBranchId, result));
+                }
+                if (verificationResults.Count > 0
+                    && verificationResults.All(result => !result.IsDecisionAuthorized)
+                    && route.RouteCode == DecisionResearchRouteCodes.LegalAuthority
+                    && totalRetrievals < loop.MaxRetrievals)
+                {
+                    var recoveryPlan = BuildResearchRecoveryPlan(
+                        researchNeed, verificationResults, researchNeed.MatterJurisdiction);
+                    var recoveryNeedId = Guid.NewGuid();
+                    var recoveryNeed = researchNeed with
+                    {
+                        DecisionResearchNeedId = recoveryNeedId,
+                        AtomicPropositionId = recoveryNeedId,
+                        PropositionToResolve = recoveryPlan.Proposition,
+                        ResearchNeedTypeCode = recoveryPlan.ResearchNeedTypeCode,
+                        SourceClassCode = recoveryPlan.SourceClassCode,
+                        SearchQuery = recoveryPlan.Query,
+                        AuthorityKindsJson = JsonSerializer.Serialize(recoveryPlan.AuthorityKinds),
+                        ParentResearchKey = researchNeed.ResearchKey,
+                        ResearchKey = $"{researchNeed.ResearchKey ?? researchNeed.DecisionResearchNeedId.ToString("N")}.recovery",
+                        SemanticProposalStatusCode = "RECOVERY",
+                        SemanticProposalReasonCode = recoveryPlan.DiagnosisCode,
+                        StatusCode = "OPEN",
+                    };
+                    await repository.PersistResearchNeedAsync(recoveryNeed, cancellationToken);
+                    narrative.Add($"Verification feedback diagnosed {recoveryPlan.DiagnosisCode}; bounded recovery action {recoveryPlan.ActionCode}.");
+
+                    var recoveryRoute = researchSourceRouter.Route(
+                        recoveryNeed,
+                        recoveryNeed.MatterJurisdiction,
+                        recoveryNeed.AuthorityCutoffDate?.ToDateTime(TimeOnly.MinValue));
+                    var recoveryResult = await retriever.RetrieveResearchNeedAsync(new(
+                        tenantId, decisionSessionId, recoveryNeed, recoveryRoute.Jurisdiction,
+                        recoveryRoute.AuthorityCutoffDate is { } recoveryCutoff
+                            ? DateOnly.FromDateTime(recoveryCutoff)
+                            : DateOnly.MaxValue,
+                        1, 5), cancellationToken);
+                    totalRetrievals++;
+                    if (recoveryResult.Plan.LegalSearchPlanId != Guid.Empty)
+                        await repository.PersistLegalResearchExecutionAsync(recoveryResult.Plan, recoveryResult, cancellationToken);
+
+                    recoveryAttempts.AddRange(recoveryResult.ProviderAttempts.Select(attempt => new DecisionRetrievalAttemptDto(
+                        attempt.LegalSearchPlanId, attempt.LegalSearchOperationId,
+                        attempt.OperationKind?.ToString().ToUpperInvariant(), attempt.Query ?? recoveryPlan.Query,
+                        attempt.ProviderCode, attempt.Outcome.ToString().ToUpperInvariant(), attempt.RawResultCount,
+                        attempt.ReturnedCount, attempt.RecoveryActionCode, attempt.Detail, attempt.DurationMilliseconds)));
+                    var recoverySources = recoveryResult.Authorities.Select(authority => authority.ToRetrievedSource()).ToArray();
+                    var recoveryEvidence = recoverySources.Select(source => new DecisionEvidencePersistence(
+                        Guid.NewGuid(), target.DecisionBranchId, source.SourceRef, source.Title, source.Snippet,
+                        0m, 0m, 0m, 0m, 0m, 0m, DecisionVerificationStates.Unverified)
+                    {
+                        SupportedObjective = recoveryPlan.Proposition,
+                    }).ToList();
+                    var recoveryAttachments = recoverySources.Zip(recoveryEvidence, (source, evidenceItem) =>
+                        new DecisionEvidenceAttachmentPersistence(
+                            Guid.NewGuid(), decisionSessionId, tenantId, userId, current.MatterId,
+                            recoveryNeed.DecisionResearchNeedId, target.DecisionBranchId, evidenceItem.DecisionEvidenceId,
+                            recoveryPlan.Proposition, DecisionEvidenceAttachmentStates.ProposedSupportFor,
+                            dependencyPath?.EdgeId, IsAuthoritative: false, AssessmentReason: null)
+                        {
+                            AtomicPropositionId = source.AtomicPropositionId == Guid.Empty
+                                ? recoveryNeed.AtomicPropositionId
+                                : source.AtomicPropositionId,
+                            LegalSearchPlanId = source.LegalSearchPlanId == Guid.Empty ? null : source.LegalSearchPlanId,
+                            NormalizedAuthorityId = source.NormalizedAuthorityId,
+                            NormalizedAuthorityIdentity = source.NormalizedAuthorityIdentity,
+                            PassageRef = source.PassageIdentity,
+                            PropositionSelectionScore = source.PropositionSelectionScore,
+                            PropositionSelectionRank = source.PropositionSelectionRank,
+                        }).ToList();
+                    await repository.PersistResearchEvidenceAsync(
+                        tenantId, userId, decisionSessionId, recoveryEvidence, cancellationToken);
+                    await repository.PersistEvidenceAttachmentsAsync(recoveryAttachments, cancellationToken);
+
+                    var recoveryVerificationResults = new List<EvidenceVerificationResult>(recoverySources.Length);
+                    foreach (var (source, persisted) in recoverySources.Zip(recoveryEvidence))
+                    {
+                        var result = await evidenceVerificationPipeline.VerifyAsync(new EvidenceVerificationRequest(
+                            persisted.DecisionEvidenceId, target.DecisionBranchId, recoveryPlan.Proposition,
+                            source.SourceRef, source.Title, source.Snippet, source.SourceType,
+                            source.Jurisdiction, source.AuthorityDate, DecisionMaterial: true)
+                        {
+                            SourceProvider = source.SourceProvider,
+                            SourceVersion = source.SourceVersion,
+                            ProviderIdentityVerified = source.ProviderIdentityVerified,
+                            GoverningJurisdiction = recoveryNeed.MatterJurisdiction,
+                        }, cancellationToken);
+                        recoveryVerificationResults.Add(result);
+                        verified.Add(ToEvidencePersistence(source, recoveryPlan.Proposition, target.DecisionBranchId, result));
+                    }
+                    verificationResults.AddRange(recoveryVerificationResults);
+                    retrievedEvidence.AddRange(recoveryEvidence);
+                    proposedAttachments.AddRange(recoveryAttachments);
+                    var recoveryAuthorized = recoveryVerificationResults.Count(result => result.IsDecisionAuthorized);
+                    recovery = new DecisionResearchRecoveryDto(
+                        true, recoveryPlan.DiagnosisCode, recoveryPlan.ActionCode, proposition,
+                        recoveryPlan.Proposition, recoveryPlan.Query, recoverySources.Length,
+                        recoveryVerificationResults.Count, recoveryAuthorized,
+                        recoveryAuthorized > 0 ? "RECOVERED" : "UNRESOLVED_RESEARCH_GAP");
+                    narrative.Add(recoveryAuthorized > 0
+                        ? $"Bounded recovery produced {recoveryAuthorized} decision-authorized source(s)."
+                        : "Bounded recovery exhausted without decision-authorized support; the research gap remains unresolved.");
+
+                    var recoveryVerifiedPropositions = recoveryResult.Authorities.Zip(recoveryVerificationResults)
+                        .Where(pair => pair.Second.IsDecisionAuthorized)
+                        .Select(pair => new VerifiedLegalProposition(
+                            recoveryNeed.DecisionResearchNeedId, target.DecisionBranchId,
+                            recoveryPlan.Proposition, pair.First, pair.Second))
+                        .ToArray();
+                    await repository.PersistVerifiedLegalPropositionsAsync(
+                        tenantId, decisionSessionId, recoveryVerifiedPropositions, cancellationToken);
                 }
                 var anyVerified = verified.Any(e =>
                     string.Equals(e.VerificationStatus, DecisionVerificationStates.Verified, StringComparison.OrdinalIgnoreCase));
@@ -1927,6 +2492,16 @@ public sealed class LegalDecisionService(
                     v, decisionSessionId, tenantId, userId, current.MatterId)).ToArray();
                 await repository.PersistEvidenceVerificationsAsync(persistedVerifications, cancellationToken);
                 var verificationByEvidence = persistedVerifications.ToDictionary(v => v.DecisionEvidenceId);
+                if(authorityRetrieval is not null)
+                {
+                    var verifiedPropositions=authorityRetrieval.Authorities.Zip(verificationResults)
+                        .Where(pair=>pair.Second.IsDecisionAuthorized)
+                        .Select(pair=>new VerifiedLegalProposition(
+                            researchNeed.DecisionResearchNeedId,target.DecisionBranchId,proposition,pair.First,pair.Second))
+                        .ToArray();
+                    await repository.PersistVerifiedLegalPropositionsAsync(
+                        tenantId,decisionSessionId,verifiedPropositions,cancellationToken);
+                }
 
                 // 3) The verified evidence resolves the supporting edge: VERIFIED strengthens the dependency,
                 //    a contradiction invalidates it; anything else leaves it unverified (still an open frontier).
@@ -1959,7 +2534,7 @@ public sealed class LegalDecisionService(
                         IsAuthoritative = verification.IsDecisionAuthorized,
                         DecisionEvidenceVerificationId = verificationByEvidence[verification.DecisionEvidenceId].DecisionEvidenceVerificationId,
                         SourceSnapshotId = verification.SourceSnapshot?.SourceSnapshotId,
-                        PassageRef = verification.SourceSnapshot?.PassageRef,
+                        PassageRef = verification.SourceSnapshot?.PassageRef ?? attachment.PassageRef,
                         AssessmentReason = verification.BlockingReasons.Count == 0
                             ? "All required independent verification factors passed."
                             : string.Join("; ", verification.BlockingReasons)
@@ -1971,6 +2546,10 @@ public sealed class LegalDecisionService(
 
                 var entropyBefore = current.CandidateEntropy;
                 var winnerChanged = false;
+                var dependencyStateChanged = false;
+                var recompetitionTriggered = false;
+                var impactOutcome = "NO_VERIFIED_DECISION_SIGNAL";
+                string? impactDetail = "No independently verified proposition support was admitted.";
 
                 // 4) Drive the existing single-iteration closed loop with this edge verification change. A
                 //    unique idempotency key per round guarantees each research round applies exactly once.
@@ -1991,22 +2570,42 @@ public sealed class LegalDecisionService(
 
                     var loopResult = await ApplyVerificationChangeAsync(tenantId, userId, decisionSessionId, changeRequest, cancellationToken);
                     winnerChanged = loopResult.Recompetition?.WinnerChanged ?? false;
+                    dependencyStateChanged = loopResult.Impact.AffectedBranchIds.Count>0||loopResult.Impact.ChangedEdgeIds.Count>0;
+                    recompetitionTriggered = loopResult.Recompetition is not null;
+                    impactOutcome = winnerChanged
+                        ? "WINNER_CHANGED"
+                        : dependencyStateChanged
+                            ? "DEPENDENCY_CHANGED_WINNER_STABLE"
+                            : "VERIFIED_SIGNAL_NO_STATE_CHANGE";
+                    impactDetail = loopResult.AuditNarrative.LastOrDefault();
                     foreach (var line in loopResult.AuditNarrative)
                         narrative.Add(line);
                 }
                 else if (!string.Equals(newStatus, DecisionVerificationStates.Unverified, StringComparison.OrdinalIgnoreCase))
                 {
                     narrative.Add("Authoritative evidence was retained, but no typed dependency path was available for propagation.");
+                    impactOutcome = "VERIFIED_SIGNAL_NO_DEPENDENCY_PATH";
+                    impactDetail = "Independent verification authorized the proposition, but no typed dependency path was available.";
                 }
                 else
                 {
                     narrative.Add("No authoritative evidence support was produced this round.");
+                    if (recovery is { OutcomeCode: "UNRESOLVED_RESEARCH_GAP" })
+                    {
+                        impactOutcome = "UNRESOLVED_RESEARCH_GAP";
+                        impactDetail = $"{recovery.DiagnosisCode}: bounded recovery '{recovery.ActionCode}' produced no decision-authorized evidence.";
+                    }
                 }
 
                 currentStage = "POST_COMMIT_READBACK";
                 var after = await repository.GetSessionAsync(tenantId, decisionSessionId, cancellationToken)
                     ?? throw new InvalidOperationException("Session state unavailable after research round.");
                 var entropyAfter = after.CandidateEntropy;
+                var nextRecommendedFrontier = SelectFrontier(after.Branches, loop.MinFrontierInformationValue);
+                await repository.PersistLegalDecisionImpactAsync(tenantId,decisionSessionId,new(
+                    researchNeed.DecisionResearchNeedId,target.DecisionBranchId,
+                    finalizedAttachments.Any(attachment=>attachment.IsAuthoritative),dependencyStateChanged,
+                    recompetitionTriggered,winnerChanged,impactOutcome,impactDetail),cancellationToken);
 
                 var verificationDispositionCounts = verified
                     .GroupBy(e => e.LifecycleState ?? e.VerificationStatus, StringComparer.OrdinalIgnoreCase)
@@ -2017,7 +2616,8 @@ public sealed class LegalDecisionService(
 
                 rounds.Add(new DecisionResearchRoundDto(
                     roundNumber, target.DecisionBranchId, target.DisplayName, target.InformationValue,
-                    dependencyPath?.EdgeId, newStatus, lifecycleState, sources.Count, winnerChanged,
+                    dependencyPath?.EdgeId, newStatus, lifecycleState,
+                    sources.Count + (recovery?.SourcesRetrieved ?? 0), winnerChanged,
                     entropyBefore, entropyAfter, narrative)
                 {
                     PropositionToResolve = researchNeed.PropositionToResolve,
@@ -2026,6 +2626,38 @@ public sealed class LegalDecisionService(
                     AttachmentStateCounts = attachmentStateCounts,
                     AuthoritativeChanges = finalizedAttachments.Count(a => a.IsAuthoritative),
                     Transformation = researchTransformation,
+                    NextRecommendedFrontierBranchId = nextRecommendedFrontier?.DecisionBranchId,
+                    NextRecommendedFrontierBranchCode = nextRecommendedFrontier?.BranchCode,
+                    NextRecommendedFrontierLabel = nextRecommendedFrontier?.DisplayName,
+                    RetrievalOutcomeCode = authorityRetrieval?.Outcome.ToString().ToUpperInvariant()
+                        ?? AggregateLegacyRetrievalOutcome(retrievalDiagnostics, sources.Count),
+                    RetrievalAttempts = (authorityRetrieval?.ProviderAttempts.Select(attempt => new DecisionRetrievalAttemptDto(
+                        attempt.LegalSearchPlanId,
+                        attempt.LegalSearchOperationId,
+                        attempt.OperationKind?.ToString().ToUpperInvariant(),
+                        attempt.Query ?? searchQuery,
+                        attempt.ProviderCode,
+                        attempt.Outcome.ToString().ToUpperInvariant(),
+                        attempt.RawResultCount,
+                        attempt.ReturnedCount,
+                        attempt.RecoveryActionCode,
+                        attempt.Detail,
+                        attempt.DurationMilliseconds)).ToArray()
+                        ?? retrievalDiagnostics?.Providers.Select(provider => new DecisionRetrievalAttemptDto(
+                            null,null,null,searchQuery,provider.ProviderCode,provider.OutcomeCode,
+                            provider.RawResultCount,provider.ReturnedCount,"LEGACY_PATH_NO_RECOVERY_METADATA",
+                            provider.Detail,0)).ToArray()
+                        ?? []).Concat(recoveryAttempts).ToArray(),
+                    Recovery = recovery,
+                    AtomicPropositionId = researchNeed.AtomicPropositionId == Guid.Empty
+                        ? researchNeed.DecisionResearchNeedId
+                        : researchNeed.AtomicPropositionId,
+                    SearchPlanId = authorityRetrieval?.Plan.LegalSearchPlanId,
+                    AuthorityScope = researchNeed.AuthorityScope,
+                    SelectedPassages = sources.Select(source => new DecisionRetrievedPassageLineageDto(
+                        source.SourceRef, source.PassageIdentity, source.SourceProvider,
+                        source.PropositionSelectionScore, source.PropositionSelectionRank,
+                        source.NormalizedAuthorityId)).ToArray(),
                 });
 
                 // Stop: no material state change (|Δentropy| below epsilon AND no winner flip).
@@ -2086,6 +2718,43 @@ public sealed class LegalDecisionService(
             .FirstOrDefault();
     }
 
+    private static string AggregateLegacyRetrievalOutcome(
+        DecisionRetrievalResult? diagnostics,
+        int sourceCount)
+    {
+        if(sourceCount>0)return "RESULTS_FOUND";
+        if(diagnostics is null||diagnostics.Providers.Count==0)return "NO_DIAGNOSTICS";
+        var codes=diagnostics.Providers.Select(provider=>provider.OutcomeCode.ToUpperInvariant()).ToArray();
+        if(codes.Any(code=>code.Contains("PARSE")||code.Contains("EXTRACT")))return "PARSING_FAILURE";
+        if(diagnostics.RawResultCount>0)return "FILTERED_OUT";
+        if(codes.Any(code=>code.Contains("FAIL")||code.Contains("ERROR")||code.Contains("TIMEOUT")))return "PROVIDER_FAILURE";
+        if(codes.All(code=>code.Contains("DISABLED")||code.Contains("COVERAGE")))return "COVERAGE_GAP";
+        return "NO_RESULTS";
+    }
+
+    private static Guid? ResolvePropositionId(
+        DecisionGraphPersistence graph,
+        DecisionGraphEdgePersistence? dependencyPath)
+    {
+        if (dependencyPath is null)
+            return null;
+
+        return graph.Nodes.FirstOrDefault(node =>
+            node.NodeId == dependencyPath.SourceNodeId &&
+            node.NodeKind.Equals(DecisionGraphNodeKinds.Proposition, StringComparison.OrdinalIgnoreCase))?.NodeId
+            ?? graph.Nodes.FirstOrDefault(node =>
+                node.NodeId == dependencyPath.TargetNodeId &&
+                node.NodeKind.Equals(DecisionGraphNodeKinds.Proposition, StringComparison.OrdinalIgnoreCase))?.NodeId;
+    }
+
+    private static DecisionBranchPersistence? SelectFrontier(
+        IReadOnlyCollection<DecisionBranchPersistence> branches,
+        double minimumInformationValue) => branches
+            .Where(branch => branch.IsOnFrontier && (double)branch.InformationValue >= minimumInformationValue)
+            .OrderByDescending(branch => branch.InformationValue)
+            .ThenByDescending(branch => branch.AdvScore)
+            .FirstOrDefault();
+
     private async Task<DecisionModelRouteDto> ResolveRouteAsync(string featureCode, string? modelCode, CancellationToken cancellationToken)
     {
         var routes = await repository.GetModelRoutesAsync(cancellationToken);
@@ -2117,8 +2786,14 @@ public sealed class LegalDecisionService(
             frontier.FlipPotential,
             frontier.EvidenceAvailability,
         });
+        var clarificationLineage = await repository.GetClarificationLineageAsync(
+            session.TenantId, session.DecisionSessionId, cancellationToken);
+        var clarificationContext = BuildClarificationPromptContext(
+            clarificationLineage,
+            new HashSet<Guid> { frontier.DecisionBranchId },
+            session.Candidates.Select(candidate => candidate.DecisionCandidateId).ToHashSet());
         var userPrompt = prompt.UserPromptTemplate
-            .Replace("{{QUERY}}", session.QueryText)
+            .Replace("{{QUERY}}", session.QueryText + clarificationContext)
             .Replace("{{CANDIDATES}}", candidates)
             .Replace("{{FRONTIER}}", frontierArtifact);
         var gate = new DecisionResearchabilityGate();
@@ -2127,14 +2802,19 @@ public sealed class LegalDecisionService(
         DecisionResearchTransformationDto Transformation(
             string? selectedResearchKey = null,
             string? selectionReason = null,
-            string? searchQuery = null) => new(
+            string? searchQuery = null,
+            Guid? selectedResearchNeedId = null) => new(
                 frontier.DecisionBranchId,
                 frontier.BranchCode,
                 frontier.DisplayName,
                 attempts.ToArray(),
                 selectedResearchKey,
                 selectionReason,
-                searchQuery);
+                searchQuery)
+            {
+                AttemptedResearchNeedId = frontierNeed.DecisionResearchNeedId,
+                SelectedResearchNeedId = selectedResearchNeedId,
+            };
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
@@ -2188,7 +2868,8 @@ public sealed class LegalDecisionService(
                 return (needs, selectedNeed, null, Transformation(
                     selectedLeaf.ResearchKey,
                     "LEGAL_AUTHORITY_PREFERRED_THEN_CANDIDATE_DISCRIMINATION",
-                    selectedLeaf.SearchQuery));
+                    selectedLeaf.SearchQuery,
+                    selectedNeed.DecisionResearchNeedId));
             }
 
             var disposition = parseSucceeded
@@ -2928,7 +3609,8 @@ public sealed class LegalDecisionService(
         // if the candidate it belongs to is different from the current winner. A high-flip-potential
         // branch that belongs to the winner itself is important but is NOT a winner flip (it must never
         // render as "Winner: Deny → for Deny"). Never derive FlipsWinner from FlipPotential/ADV/text.
-        var winnerCode = candidates.OrderBy(c => c.RankOrder).FirstOrDefault()?.CandidateCode;
+        var winner = candidates.OrderBy(c => c.RankOrder).FirstOrDefault();
+        var winnerCode = winner?.CandidateCode;
         return branches
             .Where(b => b.IsOnFrontier && b.FlipPotential > 0)
             .OrderByDescending(b => b.FlipPotential)
@@ -2937,13 +3619,15 @@ public sealed class LegalDecisionService(
             {
                 // A branch belongs to a candidate via its code prefix ("<CandidateCode>.<...>").
                 var branchCandidateCode = b.BranchCode.Split('.', 2)[0];
+                var targetCandidate = candidates.SingleOrDefault(candidate =>
+                    candidate.CandidateCode.Equals(branchCandidateCode, StringComparison.OrdinalIgnoreCase));
                 var belongsToWinner = winnerCode is not null
-                    && string.Equals(branchCandidateCode, winnerCode, StringComparison.OrdinalIgnoreCase);
+                    && targetCandidate?.DecisionCandidateId == winner?.DecisionCandidateId;
                 // A flip that changes the winner is, at minimum, a swap of the top two candidates,
                 // i.e. an ordinal rank displacement of 1. RankDelta must never be 0 when the winner
                 // changes, otherwise "Δrank 0 · flips winner" is self-contradictory. A branch owned by
                 // the winner can never be a winner flip regardless of how high its flip potential is.
-                var winnerChanges = !belongsToWinner && b.FlipPotential >= 0.5m;
+                var winnerChanges = targetCandidate is not null && !belongsToWinner && b.FlipPotential >= 0.5m;
                 var rankDelta = winnerChanges ? 1 : 0;
                 // Reserve "could change the outcome" for modeled winner flips. When the ranking does
                 // not move (RankDelta 0), the honest statement is that resolving the branch reinforces
@@ -2954,7 +3638,14 @@ public sealed class LegalDecisionService(
                 return new DecisionFlipPointPersistence(
                     Guid.NewGuid(), b.DecisionBranchId,
                     description,
-                    b.Cost, winnerChanges, rankDelta);
+                    b.Cost, winnerChanges, rankDelta)
+                {
+                    TargetCandidateId = targetCandidate?.DecisionCandidateId,
+                    TargetCandidateCode = targetCandidate?.CandidateCode,
+                    PolarityCode = winnerChanges ? "TOWARD_TARGET_CANDIDATE"
+                        : belongsToWinner ? "REINFORCES_CURRENT_WINNER"
+                        : "UNRESOLVED",
+                };
             })
             .ToList();
     }
@@ -2996,7 +3687,7 @@ public sealed class LegalDecisionService(
         return (DecisionStatusCodes.DecisionReady, DecisionStatusCodes.DecisionReady, "CONVERGED_SINGLE_PASS");
     }
 
-    private async Task<string?> ComposeAnswerAsync(DecisionSearchRequest request, IReadOnlyList<DecisionCandidatePersistence> candidates, IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionFlipPointPersistence> flipPoints, double margin, double entropy, CancellationToken cancellationToken)
+    private async Task<string?> ComposeAnswerAsync(DecisionSearchRequest request, string effectiveQuery, IReadOnlyList<DecisionCandidatePersistence> candidates, IReadOnlyList<DecisionBranchPersistence> branches, IReadOnlyList<DecisionFlipPointPersistence> flipPoints, double margin, double entropy, CancellationToken cancellationToken)
     {
         var route = await ResolveRouteAsync(AnswerPromptCode, request.ModelCode, cancellationToken);
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken);
@@ -3017,7 +3708,7 @@ public sealed class LegalDecisionService(
         };
         var user = answerPrompt.UserPromptTemplate
             .Replace("{{ARTIFACT}}", JsonSerializer.Serialize(artifact))
-            .Replace("{{QUERY}}", request.Query);
+            .Replace("{{QUERY}}", effectiveQuery);
         var result = await aiProvider.GenerateAsync(new DecisionAiRequest(route, "DECISION_ANSWER", answerPrompt.SystemPrompt, user, null, request.CorrelationId), cancellationToken);
         return result.Content;
     }
@@ -3052,18 +3743,12 @@ public sealed class LegalDecisionService(
             + ". These claims may NOT be relied upon as established until external evidence is retrieved and "
             + "verified. The reasoning below is reproduced for transparency but must be read as pending research.";
 
-        // Claim-level disposition manifest (§34/§35). POLOXI decided each disposition; this makes the
-        // per-claim decisions explicit so the reader (and any downstream composer) can see exactly which
-        // propositions were qualified as uncertainty, suppressed, or flagged for correction.
-        var manifest = BuildDispositionManifest(audit.Authorizations);
-
         if (string.IsNullOrWhiteSpace(finalAnswer))
         {
-            var prefaceOnly = string.IsNullOrEmpty(manifest) ? preface : preface + "\n\n" + manifest;
             var required = audit.Authorizations.Count(a =>
                 a.Disposition != Features.Intelligence.Epistemic.OutputClaimDisposition.Allow
                 && !string.IsNullOrWhiteSpace(a.ClaimText));
-            return new OutputEnforcementResult(prefaceOnly, [], required, 0);
+            return new OutputEnforcementResult(preface, [], required, 0);
         }
 
         // Rewrite the prose itself so each qualified/suppressed/corrected claim is reconciled with its
@@ -3073,8 +3758,7 @@ public sealed class LegalDecisionService(
         var transform = Features.Intelligence.Epistemic.OutputProseTransformer.TransformDetailed(
             finalAnswer, audit.Authorizations);
 
-        var body = preface + "\n\n" + transform.Text;
-        var answer = string.IsNullOrEmpty(manifest) ? body : body + "\n\n" + manifest;
+        var answer = preface + "\n\n" + transform.Text;
         return new OutputEnforcementResult(
             answer, transform.AppliedClaimIds, transform.RequiredCount, transform.AppliedCount);
     }
@@ -3133,7 +3817,12 @@ public sealed class LegalDecisionService(
                 SupportingPassage = e.SupportingPassage,
                 LifecycleState = e.LifecycleState
             }).ToArray(),
-            p.FlipPoints.Select(f => new DecisionFlipPointDto(f.DecisionFlipPointId, f.DecisionBranchId, f.Description, f.ChangeCost, f.WinnerChanges, f.RankDelta)).ToArray(),
+            p.FlipPoints.Select(f => new DecisionFlipPointDto(f.DecisionFlipPointId, f.DecisionBranchId, f.Description, f.ChangeCost, f.WinnerChanges, f.RankDelta)
+            {
+                TargetCandidateId = f.TargetCandidateId,
+                TargetCandidateCode = f.TargetCandidateCode,
+                PolarityCode = f.PolarityCode,
+            }).ToArray(),
             p.DurationMs)
         {
             ClarificationQuestion = p.ClarificationQuestion,

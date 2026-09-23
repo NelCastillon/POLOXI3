@@ -173,7 +173,7 @@ public sealed class IndependentEvidenceVerificationPipeline(
                 "PASSAGE_PREREQUISITE_NOT_PASSED", provenance: provenance, citation: citation, passage: passage);
 
         var preScreen = candidatePreScreen.Evaluate(request, sourceType);
-        if (!preScreen.ShouldVerify)
+        if (preScreen.Disposition == VerificationCandidatePreScreenDisposition.RejectIrrelevant)
         {
             var semanticNotEvaluated = SemanticNotEvaluated(request.Proposition, preScreen.ReasonCode,
                 "Candidate pre-screen rejected semantic token expenditure; no support conclusion was inferred.");
@@ -187,7 +187,26 @@ public sealed class IndependentEvidenceVerificationPipeline(
                 authorityNotEvaluated) with
             {
                 SourceSnapshot = CreateSnapshot(request, passage),
-                Telemetry = new VerificationTelemetry { MechanicalVerificationCount = 4, PreScreenRejectedCount = 1 },
+                Telemetry = new VerificationTelemetry { RetrievedCount = 1, MechanicalVerificationCount = 4, PreScreenRejectedCount = 1 },
+            };
+        }
+
+        if (preScreen.Disposition == VerificationCandidatePreScreenDisposition.UncertainRequiresDeeperScreen
+            && !request.DecisionMaterial)
+        {
+            var semanticNotEvaluated = SemanticNotEvaluated(request.Proposition, preScreen.ReasonCode,
+                "Candidate relevance was uncertain and the source was not decision-material; bounded semantic expenditure was not authorized.");
+            var authorityNotEvaluated = profile.RequireAuthority
+                ? VerificationCheckResult.NotEvaluated(preScreen.ReasonCode, "Authority was not evaluated because uncertain relevance did not qualify for bounded semantic screening.")
+                : VerificationCheckResult.NotApplicable("AUTHORITY_NOT_REQUIRED", "Authority applicability is not required by this source profile.");
+            return aggregator.Aggregate(request, sourceType, profile, identity, provenance, citation, passage,
+                semanticNotEvaluated.PropositionSupport,
+                profile.RequireStatementRole ? semanticNotEvaluated.StatementRole : VerificationCheckResult.NotApplicable("STATEMENT_ROLE_NOT_REQUIRED", "Statement role is not applicable to this source profile."),
+                profile.RequireHolding ? semanticNotEvaluated.Holding : VerificationCheckResult.NotApplicable("HOLDING_NOT_REQUIRED", "Holding is not applicable to this source profile."),
+                authorityNotEvaluated) with
+            {
+                SourceSnapshot = CreateSnapshot(request, passage),
+                Telemetry = new VerificationTelemetry { RetrievedCount = 1, MechanicalVerificationCount = 4 },
             };
         }
 
@@ -293,7 +312,10 @@ public sealed class IndependentEvidenceVerificationPipeline(
             ? VerificationCheckResult.NotEvaluated(reasonCode, "Statement role was not evaluated because a prerequisite did not pass.")
             : VerificationCheckResult.NotApplicable("STATEMENT_ROLE_NOT_REQUIRED", "Statement role is not required by the source profile.");
         return aggregator.Aggregate(request, sourceType, profile, identity, provenance, citation, passage,
-            proposition, statementRole, holding, authority);
+            proposition, statementRole, holding, authority) with
+        {
+            Telemetry = new VerificationTelemetry { RetrievedCount = 1 },
+        };
     }
 
     private static async Task<VerificationCheckResult> SafeCheckAsync(

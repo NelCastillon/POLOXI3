@@ -95,11 +95,7 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [HttpGet("matters/{matterId:guid}/documents")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterDocuments(Guid matterId, CancellationToken cancellationToken)
-    {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
-        if (denied is not null) return denied;
-        return Ok(await documentCorpusRepository.GetMatterDocumentsAsync(TenantId, matterId, cancellationToken));
-    }
+        => Ok(await documentCorpusRepository.GetMatterDocumentsAsync(TenantId, matterId, cancellationToken));
 
     [HttpPost("matters/{matterId:guid}/documents")]
     [Consumes("multipart/form-data")]
@@ -137,19 +133,13 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     {
         var matterId = await documentCorpusRepository.GetDocumentMatterIdAsync(TenantId, documentVersionId, cancellationToken);
         if (matterId is null) return NotFound();
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
-        if (denied is not null) return denied;
         return Ok(await documentCorpusRepository.GetDocumentPassagesAsync(TenantId, documentVersionId, cancellationToken));
     }
 
     [HttpGet("matters/{matterId:guid}/retrieval-telemetry")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterRetrievalTelemetry(Guid matterId, CancellationToken cancellationToken)
-    {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
-        if (denied is not null) return denied;
-        return Ok(await documentCorpusRepository.GetRetrievalTelemetryAsync(TenantId, matterId, null, cancellationToken));
-    }
+        => Ok(await documentCorpusRepository.GetRetrievalTelemetryAsync(TenantId, matterId, null, cancellationToken));
 
     [HttpPut("matters/{matterId:guid}")]
     [Authorize(Policy = IntelligencePolicies.Search)]
@@ -184,11 +174,6 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     {
         var session = await service.GetSessionResultAsync(TenantId, sessionId, cancellationToken);
         if (session is null) return NotFound();
-        if (session.MatterId is { } matterId)
-        {
-            var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, $"timeline:{sessionId:N}", cancellationToken);
-            if (denied is not null) return denied;
-        }
         return Ok(await service.GetTimelineAsync(TenantId, sessionId, cancellationToken));
     }
 
@@ -198,11 +183,6 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     {
         var session = await service.GetSessionResultAsync(TenantId, sessionId, cancellationToken);
         if (session is null) return NotFound();
-        if (session.MatterId is { } matterId)
-        {
-            var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, $"retrieval-telemetry:{sessionId:N}", cancellationToken);
-            if (denied is not null) return denied;
-        }
         return Ok(await documentCorpusRepository.GetRetrievalTelemetryAsync(TenantId, null, sessionId, cancellationToken));
     }
 
@@ -213,11 +193,6 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     {
         var result = await service.GetSessionResultAsync(TenantId, sessionId, cancellationToken);
         if (result is null) return NotFound();
-        if (result.MatterId is { } matterId)
-        {
-            var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, $"session:{sessionId:N}", cancellationToken);
-            if (denied is not null) return denied;
-        }
         return Ok(result);
     }
 

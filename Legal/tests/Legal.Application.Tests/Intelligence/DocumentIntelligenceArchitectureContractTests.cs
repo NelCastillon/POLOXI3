@@ -160,6 +160,7 @@ public sealed class DocumentIntelligenceArchitectureContractTests
         Assert.Contains("COL_LENGTH", leaseRepair, StringComparison.Ordinal);
         Assert.Contains("ProcessingStartedDateUtc", leaseRepair, StringComparison.Ordinal);
         Assert.Contains("DATEADD(minute,-10", dispatcher, StringComparison.Ordinal);
+        Assert.Contains("READPAST,ROWLOCK,READCOMMITTEDLOCK", dispatcher, StringComparison.Ordinal);
         Assert.Contains("DEAD_LETTER", dispatcher, StringComparison.Ordinal);
         Assert.Contains("CreateOrUpdateIndexAsync", dispatcher, StringComparison.Ordinal);
         Assert.Contains("SimpleField(IsFilterable = true)] Guid TenantId", dispatcher, StringComparison.Ordinal);

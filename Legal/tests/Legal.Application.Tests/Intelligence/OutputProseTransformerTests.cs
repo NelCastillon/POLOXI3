@@ -41,7 +41,7 @@ public sealed class OutputProseTransformerTests
     }
 
     [Fact]
-    public void Suppress_RemovesClaimText_AndInsertsWithheldMarker()
+    public void Suppress_RemovesClaimText_WithoutExposingAuditMarker()
     {
         const string claim = "The small-vehicle exception restores overtime eligibility.";
         var answer = $"Intro. {claim} Conclusion.";
@@ -49,13 +49,13 @@ public sealed class OutputProseTransformerTests
         var result = OutputProseTransformer.Transform(answer, [Auth(claim, OutputClaimDisposition.Suppress)]);
 
         Assert.DoesNotContain(claim, result);
-        Assert.Contains("CLAIM WITHHELD", result);
+        Assert.DoesNotContain("CLAIM WITHHELD", result);
         Assert.Contains("Intro.", result);
         Assert.Contains("Conclusion.", result);
     }
 
     [Fact]
-    public void Correct_RemovesClaimText_AndInsertsRemovedMarker()
+    public void Correct_RemovesClaimText_WithoutExposingAuditMarker()
     {
         const string claim = "The exemption clearly applies as a matter of law.";
         var answer = $"Lead. {claim} Trail.";
@@ -63,7 +63,7 @@ public sealed class OutputProseTransformerTests
         var result = OutputProseTransformer.Transform(answer, [Auth(claim, OutputClaimDisposition.Correct)]);
 
         Assert.DoesNotContain(claim, result);
-        Assert.Contains("CLAIM REMOVED", result);
+        Assert.DoesNotContain("CLAIM REMOVED", result);
     }
 
     [Fact]
@@ -106,7 +106,7 @@ public sealed class OutputProseTransformerTests
         var result = OutputProseTransformer.Transform(answer, [Auth(claim, OutputClaimDisposition.Suppress)]);
 
         Assert.DoesNotContain("the driver is exempt", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("CLAIM WITHHELD", result);
+        Assert.DoesNotContain("CLAIM WITHHELD", result);
     }
 
     [Fact]

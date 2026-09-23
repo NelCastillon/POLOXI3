@@ -28,7 +28,7 @@ public sealed class IndependentEvidenceVerificationBenchmarkTests
     }
 
     [Fact]
-    public async Task CandidatePreScreen_UnrelatedPassageRejectsSemanticSpendWithoutGrantingAuthority()
+    public async Task CandidatePreScreen_UncertainNonMaterialPassageDefersSemanticSpendWithoutGrantingAuthority()
     {
         var result = await DeterministicEvidenceVerificationFixture.Pipeline().VerifyAsync(Request(
             title: "Unrelated business record",
@@ -38,8 +38,10 @@ public sealed class IndependentEvidenceVerificationBenchmarkTests
         Assert.Equal(EvidenceSupportDisposition.Unverifiable, result.Disposition);
         Assert.False(result.IsVerified);
         Assert.False(result.IsDecisionAuthorized);
-        Assert.Equal(1, result.Telemetry.PreScreenRejectedCount);
+        Assert.Equal(1, result.Telemetry.RetrievedCount);
+        Assert.Equal(0, result.Telemetry.PreScreenRejectedCount);
         Assert.Equal(0, result.Telemetry.SemanticVerificationCount);
+        Assert.Equal("PRESCREEN_RELEVANCE_UNCERTAIN", result.PropositionSupport.ReasonCode);
     }
 
     [Fact]
@@ -50,6 +52,54 @@ public sealed class IndependentEvidenceVerificationBenchmarkTests
         Assert.Equal(0, result.Telemetry.PreScreenRejectedCount);
         Assert.Equal(1, result.Telemetry.SemanticVerificationCount);
         Assert.True(result.IsDecisionAuthorized);
+    }
+
+    [Fact]
+    public async Task CandidatePreScreen_UncertainDecisionMaterialPassageReceivesBoundedSemanticEvaluation()
+    {
+        var result = await DeterministicEvidenceVerificationFixture.Pipeline().VerifyAsync(Request(
+            title: "Topically ambiguous authority",
+            text: "The tribunal considered compensation records and workplace scheduling practices.",
+            decisionMaterial: true));
+
+        Assert.Equal(1, result.Telemetry.RetrievedCount);
+        Assert.Equal(0, result.Telemetry.PreScreenRejectedCount);
+        Assert.Equal(1, result.Telemetry.SemanticVerificationCount);
+        Assert.False(result.IsDecisionAuthorized);
+    }
+
+    [Fact]
+    public async Task CandidatePreScreen_WrongJurisdictionRejectsBeforeSemanticSpendAndRecordsCounters()
+    {
+        var result = await DeterministicEvidenceVerificationFixture.Pipeline().VerifyAsync(Request(
+            title: "California overtime authority",
+            text: "We hold that employees worked overtime hours for which they were not compensated.",
+            sourceType: EvidenceSourceType.CaseLaw,
+            decisionMaterial: true) with
+        {
+            Jurisdiction = "California",
+            GoverningJurisdiction = "Delaware",
+        });
+
+        Assert.Equal(1, result.Telemetry.RetrievedCount);
+        Assert.Equal(1, result.Telemetry.PreScreenRejectedCount);
+        Assert.Equal(0, result.Telemetry.SemanticVerificationCount);
+        Assert.Equal("PRESCREEN_JURISDICTION_MISMATCH", result.PropositionSupport.ReasonCode);
+        Assert.False(result.IsDecisionAuthorized);
+    }
+
+    [Fact]
+    public void ClarificationRouting_ExcludesLegalRuleButAllowsMatterFactAndProcedureRecord()
+    {
+        Assert.False(LegalDecisionService.IsUserResolvableClarification(Branch(
+            "Threshold exceeded rather than merely met",
+            "The statutory rule requires negligence greater than the combined defendants' negligence.")));
+        Assert.True(LegalDecisionService.IsUserResolvableClarification(Branch(
+            "Collision evidence",
+            "Video and witness records may establish what happened in the accident.")));
+        Assert.True(LegalDecisionService.IsUserResolvableClarification(Branch(
+            "Requested procedural relief",
+            "The motion and litigation record do not identify which procedural relief is requested.")));
     }
 
     [Fact]
@@ -310,6 +360,10 @@ public sealed class IndependentEvidenceVerificationBenchmarkTests
             Guid.NewGuid(), null, Proposition, sourceRef, title, text, sourceType,
             Jurisdiction: "US", AuthorityDate: new DateOnly(2024, 1, 1), CutoffDate: new DateOnly(2025, 1, 1),
             DecisionMaterial: decisionMaterial);
+
+    private static DecisionBranchPersistence Branch(string displayName,string interpretation)=>new(
+        Guid.NewGuid(),null,1,"C1.B1",displayName,interpretation,DecisionBranchStates.Active,
+        0.8m,0.9m,0.9m,0.2m,0.7m,0.1m,true,null,1);
 
     private static VerificationCheckResult Passed() => new()
     {

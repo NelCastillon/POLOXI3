@@ -1,4 +1,5 @@
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Abstractions.Intelligence;
 
 namespace Legal.Application.Abstractions.Persistence;
 
@@ -14,6 +15,8 @@ public interface ILegalDecisionRepository
     Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default);
     Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default);
     Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default);
+    Task PersistClarificationAsync(DecisionClarificationPersistence clarification, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionClarificationPersistence>> GetClarificationLineageAsync(Guid tenantId, Guid parentDecisionSessionId, CancellationToken cancellationToken = default);
     // Appends additional timeline events to an already-persisted session (e.g. the B3 solver's
     // post-persistence recompetition stages). Sequence numbers continue from the session's events.
     Task AppendSessionEventsAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEventPersistence> events, CancellationToken cancellationToken = default);
@@ -62,6 +65,9 @@ public interface ILegalDecisionRepository
     Task PersistDependencyEventAsync(DecisionDependencyEventPersistence dependencyEvent, CancellationToken cancellationToken = default);
     Task PersistRecompetitionAsync(DecisionRecompetitionPersistence recompetition, CancellationToken cancellationToken = default);
     Task PersistResearchNeedAsync(DecisionResearchNeedPersistence researchNeed, CancellationToken cancellationToken = default);
+    Task PersistLegalResearchExecutionAsync(LegalSearchPlan plan, LegalAuthorityRetrievalResult result, CancellationToken cancellationToken = default);
+    Task PersistVerifiedLegalPropositionsAsync(Guid tenantId,Guid decisionSessionId,IReadOnlyCollection<VerifiedLegalProposition> propositions,CancellationToken cancellationToken=default);
+    Task PersistLegalDecisionImpactAsync(Guid tenantId, Guid decisionSessionId, LegalDecisionImpactResult impact, CancellationToken cancellationToken = default);
     Task PersistEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default);
     Task UpdateEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default);
     Task PersistFrontierSnapshotAsync(DecisionFrontierSnapshotPersistence snapshot, CancellationToken cancellationToken = default);

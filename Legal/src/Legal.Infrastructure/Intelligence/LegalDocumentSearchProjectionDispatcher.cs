@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Data;
 using Azure;
 using Azure.Identity;
 using Azure.Search.Documents;
@@ -23,12 +24,13 @@ public sealed class LegalDocumentSearchProjectionDispatcher(
     public async Task<int> ProcessBatchAsync(int batchSize, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var claimTransaction = connection.BeginTransaction(IsolationLevel.ReadCommitted);
         var items = (await connection.QueryAsync<ProjectionItem>(new CommandDefinition(
             """
             ;WITH claim AS
             (
                 SELECT TOP (@BatchSize) *
-                FROM POLOXI.Legal_DocumentSearchProjectionOutbox WITH (UPDLOCK,READPAST,ROWLOCK)
+                FROM POLOXI.Legal_DocumentSearchProjectionOutbox WITH (UPDLOCK,READPAST,ROWLOCK,READCOMMITTEDLOCK)
                 WHERE IsDeleted=0 AND AttemptCount<12 AND
                       ((StatusCode IN (N'PENDING',N'FAILED') AND NextAttemptDateUtc<=SYSUTCDATETIME()) OR
                        (StatusCode=N'PROCESSING' AND ProcessingStartedDateUtc<DATEADD(minute,-10,SYSUTCDATETIME())))
@@ -36,7 +38,8 @@ public sealed class LegalDocumentSearchProjectionDispatcher(
             )
             UPDATE claim SET StatusCode=N'PROCESSING',AttemptCount=AttemptCount+1,ProcessingStartedDateUtc=SYSUTCDATETIME()
             OUTPUT inserted.LegalDocumentSearchProjectionOutboxId,inserted.TenantId,inserted.LegalDocumentVersionId,inserted.AttemptCount;
-            """, new { BatchSize = Math.Clamp(batchSize, 1, 100) }, cancellationToken: cancellationToken))).ToArray();
+            """, new { BatchSize = Math.Clamp(batchSize, 1, 100) }, claimTransaction, cancellationToken: cancellationToken))).ToArray();
+        claimTransaction.Commit();
 
         foreach (var item in items)
         {

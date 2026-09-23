@@ -1,4 +1,5 @@
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Application.Abstractions.Intelligence;
 
@@ -13,6 +14,27 @@ public enum LegalAuthorityKind
     Regulation=3
 }
 
+public sealed record LegalProviderRetrievalDiagnostic(
+    string ProviderCode,
+    bool Selected,
+    string OutcomeCode,
+    int RawResultCount,
+    int ReturnedCount,
+    string? Detail = null);
+
+public sealed record LegalProviderRetrievalResult(
+    IReadOnlyCollection<WideExternalKnowledgeSnippet> Snippets,
+    LegalProviderRetrievalDiagnostic Diagnostic);
+
+public sealed record LegalRetrievalResult(
+    IReadOnlyCollection<WideExternalKnowledgeSnippet> Snippets,
+    IReadOnlyCollection<LegalProviderRetrievalDiagnostic> Providers);
+
+public sealed record LegalProviderSearchRequest(
+    string Query,
+    LegalAuthorityKind AuthorityKind,
+    LegalAuthorityScope? AuthorityScope);
+
 // Live legal-source retrieval used to ground the Wide pipeline when the LEGAL search context is
 // selected. Implementations retrieve from authoritative legal sources (e.g. CourtListener case law
 // and GovInfo/eCFR statutes and regulations) and must be fail-soft: return an empty collection on
@@ -21,4 +43,13 @@ public enum LegalAuthorityKind
 public interface ILegalRetriever
 {
     Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> SearchAsync(string query,WideLegalGroundingConfiguration configuration,LegalAuthorityKind kind=LegalAuthorityKind.Any,CancellationToken cancellationToken=default);
+
+    Task<LegalRetrievalResult> SearchScopedAsync(LegalProviderSearchRequest request,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default) =>
+        SearchWithDiagnosticsAsync(request.Query,configuration,request.AuthorityKind,cancellationToken);
+
+    async Task<LegalRetrievalResult> SearchWithDiagnosticsAsync(string query,WideLegalGroundingConfiguration configuration,LegalAuthorityKind kind=LegalAuthorityKind.Any,CancellationToken cancellationToken=default)
+    {
+        var snippets = await SearchAsync(query, configuration, kind, cancellationToken);
+        return new(snippets, [new("AGGREGATE", true, snippets.Count > 0 ? "SUCCEEDED" : "NO_RESULTS", snippets.Count, snippets.Count)]);
+    }
 }

@@ -219,6 +219,7 @@ public sealed record DecisionRetrievalTelemetryDto(
     string? ResearchNeedTypeCode,
     string? SourceClassCode,
     string? Jurisdiction,
+    string? DetailJson,
     long DurationMilliseconds,
     DateTime CreatedDateUtc);
 

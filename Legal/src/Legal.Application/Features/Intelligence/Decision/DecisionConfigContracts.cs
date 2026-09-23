@@ -150,7 +150,29 @@ public sealed record DecisionSessionPersistence(
     // decision can distinguish RETRIEVAL_FAILED / SEARCH_NO_RESULTS / RETRIEVED / NOT_NEEDED.
     public string? ResearchStatusCode { get; init; }
     public string? ResearchFailureDetail { get; init; }
+    public Guid? ParentDecisionSessionId { get; init; }
+    public string? MatterJurisdiction { get; init; }
+    public string? GoverningLaw { get; init; }
+    public string? CourtOrForum { get; init; }
+    public DateOnly? AuthorityCutoffDate { get; init; }
+    public LegalAuthorityScope? AuthorityScope { get; init; }
 }
+
+public sealed record DecisionClarificationPersistence(
+    Guid DecisionClarificationId,
+    Guid DecisionSessionId,
+    Guid ParentDecisionSessionId,
+    string? Question,
+    string? Target,
+    string Answer,
+    Guid? DecisionBranchId,
+    Guid? DecisionCandidateId,
+    Guid? DecisionGraphNodeId,
+    Guid? DecisionGraphEdgeId,
+    string ScopeCode,
+    Guid TenantId,
+    Guid? ActorUserId,
+    DateTime CreatedDateUtc);
 
 public sealed record DecisionEvidenceVerificationFactorPersistence(
     Guid DecisionEvidenceVerificationFactorId,
@@ -318,6 +340,12 @@ public sealed record DecisionEvidenceAttachmentPersistence(
     public Guid? DecisionEvidenceVerificationId { get; init; }
     public Guid? SourceSnapshotId { get; init; }
     public string? PassageRef { get; init; }
+    public Guid AtomicPropositionId { get; init; }
+    public Guid? LegalSearchPlanId { get; init; }
+    public Guid? NormalizedAuthorityId { get; init; }
+    public string? NormalizedAuthorityIdentity { get; init; }
+    public decimal? PropositionSelectionScore { get; init; }
+    public int? PropositionSelectionRank { get; init; }
 }
 
 public sealed record DecisionFlipPointPersistence(
@@ -326,7 +354,12 @@ public sealed record DecisionFlipPointPersistence(
     string Description,
     decimal ChangeCost,
     bool WinnerChanges,
-    int RankDelta);
+    int RankDelta)
+{
+    public Guid? TargetCandidateId { get; init; }
+    public string? TargetCandidateCode { get; init; }
+    public string PolarityCode { get; init; } = "UNRESOLVED";
+}
 
 public sealed record DecisionEventPersistence(
     Guid DecisionEventId,
