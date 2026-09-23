@@ -1,0 +1,319 @@
+@page "/legal/math/solve"
+@using Legal.Application.Features.Intelligence.Science
+@inject ApiClient Api
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="poloxi-page">
+        <header class="poloxi-hero">
+            <div class="poloxi-hero-icon"><i class="bi bi-calculator"></i></div>
+            <div>
+                <span>POLOXI Scientific Reasoning — Mathematics V1</span>
+                <h1>Math Solver</h1>
+                <p>Discovery is proposed by the LLM, but acceptance is owned by deterministic C# verification. The result below is the honest outcome plus the full proof-obligation trail — never a bare answer.</p>
+            </div>
+        </header>
+
+        <section class="poloxi-composer" aria-label="Math problem">
+            <div class="poloxi-composer-input">
+                <i class="bi bi-pencil-square" aria-hidden="true"></i>
+                <textarea id="math-problem" class="poloxi-query-area" rows="4"
+                          placeholder="State a mathematical problem or claim. Example: Prove that x^2 >= 0 for all real x, or Show 2 + 2 = 4."
+                          @bind="_problem" @bind:event="oninput"></textarea>
+            </div>
+            <div class="poloxi-composer-footer">
+                <span class="poloxi-composer-hint">Acceptance is decided by deterministic verification, not model confidence.</span>
+                <label class="poloxi-model-select" title="Choose the language model that proposes the solution. Auto lets the platform router select the best available deployment. Acceptance is always owned by deterministic C# verification regardless of the model.">
+                    <i class="bi bi-cpu" aria-hidden="true"></i>
+                    <select @bind="_modelCode" aria-label="Model" disabled="@(_loading || _modelsLoading)">
+                        <option value="">@(_modelsLoading ? "Loading models…" : "Auto (platform router)")</option>
+                        @foreach (var model in _models)
+                        {
+                            <option value="@model.ModelCode">@model.DeploymentName@(string.IsNullOrWhiteSpace(model.ModelFamily) ? "" : $" · {model.ModelFamily}")</option>
+                        }
+                    </select>
+                </label>
+                <button class="um-btn um-btn-primary" @onclick="SolveAsync" disabled="@(_loading || string.IsNullOrWhiteSpace(_problem))"><i class="bi bi-stars"></i> Solve &amp; Verify</button>
+            </div>
+        </section>
+
+        @if (_loading)
+        {
+            <section class="poloxi-loading" role="status" aria-live="polite">
+                <i class="bi bi-water poloxi-spinner"></i>
+                <div>
+                    <strong>Running the deterministic verification pipeline…</strong>
+                    <p>Proposing a structured contract, deriving proof obligations, and verifying each in C#.</p>
+                    <div class="poloxi-loading-track"><span></span></div>
+                </div>
+            </section>
+        }
+        else if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545;">@_error</div>
+        }
+        else if (_response is not null)
+        {
+            <section class="poloxi-explanation">
+                <div class="poloxi-explanation-body">
+                    <div class="poloxi-panel-header">
+                        <div><span>Correlation @_response.CorrelationId</span><h2>@_response.Outcome</h2></div>
+                        <span class="poloxi-status">@_response.VerificationStatus</span>
+                    </div>
+
+                    @if (!_response.ModelAvailable)
+                    {
+                        <div class="poloxi-degraded" role="alert">
+                            <strong>Degraded run:</strong> no active CHAT model route is configured for this tenant and feature,
+                            so the AI proposal stages were skipped and only deterministic verification ran. Configure an active
+                            CHAT model deployment for <code>INTELLIGENCE_MATH_SOLVE</code> in the Configuration Center to enable full reasoning.
+                        </div>
+                    }
+
+                    <p><strong>Final answer:</strong> @(_response.FinalAnswer ?? "—")
+                        @if (!string.IsNullOrWhiteSpace(_response.CanonicalAnswer))
+                        {
+                            <span> (canonical: @_response.CanonicalAnswer)</span>
+                        }
+                    </p>
+                    @if (!string.IsNullOrWhiteSpace(_response.SolutionSummary))
+                    {
+                        <p><strong>Summary:</strong> @_response.SolutionSummary</p>
+                    }
+                    <p>
+                        <strong>Discovery confidence:</strong> @_response.DiscoveryConfidence.ToString("0.####")
+                        &middot; <strong>Self-consistency:</strong> @_response.SelfConsistencyAgreement.ToString("0.####")
+                    </p>
+
+                    <div class="poloxi-epistemic">
+                        <div class="poloxi-epistemic-label">Epistemic state: <strong>@(_response.EpistemicStateLabel ?? "—")</strong></div>
+                        <div class="poloxi-epistemic-grid">
+                            <div class="poloxi-epistemic-cell">
+                                <span>Research priority</span>
+                                <strong>@_response.ResearchPriority.ToString("0.##")</strong>
+                            </div>
+                            <div class="poloxi-epistemic-cell">
+                                <span>Evidence support</span>
+                                <strong>@_response.EvidenceSupport.ToString("0.##")</strong>
+                            </div>
+                            <div class="poloxi-epistemic-cell">
+                                <span>Mathematical verification</span>
+                                <strong>@_response.MathematicalVerification.ToString("0.##")</strong>
+                            </div>
+                            <div class="poloxi-epistemic-cell">
+                                <span>Falsification coverage</span>
+                                <strong>@_response.FalsificationCoverage.ToString("0.##")</strong>
+                            </div>
+                        </div>
+                        <p class="poloxi-epistemic-note">Research priority and evidence are tracked separately from mathematical verification — a highly-researched claim is not the same as a proven one.</p>
+                    </div>
+
+                    @if (_response.ClaimWarnings.Count > 0)
+                    {
+                        <div class="poloxi-degraded" role="alert">
+                            <strong>Claim-vs-proof warnings:</strong>
+                            <ul>
+                                @foreach (var warning in _response.ClaimWarnings)
+                                {
+                                    <li>@warning</li>
+                                }
+                            </ul>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_response.RemainingUncertainty))
+                    {
+                        <p><strong>Remaining uncertainty:</strong> @_response.RemainingUncertainty</p>
+                    }
+
+                    @if (_response.VerifiedFacts.Count > 0 || _response.EliminatedRoutes.Count > 0
+                        || _response.OpenObligations.Count > 0 || _response.SurvivingCandidates.Count > 0
+                        || !string.IsNullOrWhiteSpace(_response.NextHighestInformationTest))
+                    {
+                        <h3>Research state</h3>
+                        <div class="poloxi-research-grid">
+                            <div class="poloxi-research-block">
+                                <h4>Verified facts</h4>
+                                @if (_response.VerifiedFacts.Count == 0)
+                                {
+                                    <p class="poloxi-muted">None established yet.</p>
+                                }
+                                else
+                                {
+                                    <ul>@foreach (var f in _response.VerifiedFacts) { <li>@f</li> }</ul>
+                                }
+                            </div>
+                            <div class="poloxi-research-block">
+                                <h4>Eliminated routes</h4>
+                                @if (_response.EliminatedRoutes.Count == 0)
+                                {
+                                    <p class="poloxi-muted">Nothing eliminated.</p>
+                                }
+                                else
+                                {
+                                    <ul>@foreach (var r in _response.EliminatedRoutes) { <li>@r</li> }</ul>
+                                }
+                            </div>
+                            <div class="poloxi-research-block">
+                                <h4>Surviving candidates</h4>
+                                @if (_response.SurvivingCandidates.Count == 0)
+                                {
+                                    <p class="poloxi-muted">No surviving candidates.</p>
+                                }
+                                else
+                                {
+                                    <ul>@foreach (var s in _response.SurvivingCandidates) { <li>@s</li> }</ul>
+                                }
+                            </div>
+                            <div class="poloxi-research-block">
+                                <h4>Open obligations</h4>
+                                @if (_response.OpenObligations.Count == 0)
+                                {
+                                    <p class="poloxi-muted">No open obligations.</p>
+                                }
+                                else
+                                {
+                                    <ul>@foreach (var o in _response.OpenObligations) { <li>@o</li> }</ul>
+                                }
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(_response.NextHighestInformationTest))
+                        {
+                            <p class="poloxi-next-test"><i class="bi bi-signpost-split" aria-hidden="true"></i> <strong>Next highest-information test:</strong> @_response.NextHighestInformationTest</p>
+                        }
+                    }
+
+                    @if (_response.KeySteps.Count > 0)
+                    {
+                        <h3>Key steps</h3>
+                        <ol>
+                            @foreach (var step in _response.KeySteps)
+                            {
+                                <li>@step</li>
+                            }
+                        </ol>
+                    }
+
+                    <h3>Obligations</h3>
+                    @if (_response.Obligations.Count == 0)
+                    {
+                        <p>No obligations recorded.</p>
+                    }
+                    else
+                    {
+                        <div class="poloxi-table-scroll">
+                        <table class="br-table" style="width:100%;">
+                            <thead><tr><th>Statement</th><th>Method</th><th>Status</th><th>Counterexample</th></tr></thead>
+                            <tbody>
+                                @foreach (var o in _response.Obligations)
+                                {
+                                    <tr>
+                                        <td>@o.Statement</td>
+                                        <td>@o.VerificationMethod</td>
+                                        <td>@o.Status</td>
+                                        <td>@o.CounterexampleStatus</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        </div>
+                    }
+
+                    <h3>Candidates</h3>
+                    @if (_response.Candidates.Count == 0)
+                    {
+                        <p>No candidates recorded.</p>
+                    }
+                    else
+                    {
+                        <div class="poloxi-table-scroll">
+                        <table class="br-table" style="width:100%;">
+                            <thead><tr><th>Name</th><th>Type</th><th>Verification</th><th>Confidence</th></tr></thead>
+                            <tbody>
+                                @foreach (var c in _response.Candidates)
+                                {
+                                    <tr>
+                                        <td>@c.Name</td>
+                                        <td>@c.ObjectType</td>
+                                        <td>@c.VerificationStatus</td>
+                                        <td>@c.DiscoveryConfidence.ToString("0.####")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        </div>
+                    }
+
+                    <p style="margin-top:1rem;">
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="GoToHistory"><i class="bi bi-clock-history"></i> View run history</button>
+                    </p>
+                </div>
+            </section>
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    private string _problem = string.Empty;
+    private string? _modelCode;
+    private IReadOnlyCollection<WideModelOptionDto> _models = [];
+    private bool _modelsLoading = true;
+    private MathSolveResponse? _response;
+    private bool _loading;
+    private string? _error;
+
+    // Prefilled Proof Contract handoff coming from the Formalization Gate (Research → Formalize → Math).
+    [Microsoft.AspNetCore.Components.SupplyParameterFromQuery(Name = "problem")]
+    private string? ProblemFromQuery { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(ProblemFromQuery))
+        {
+            _problem = ProblemFromQuery;
+        }
+
+        try
+        {
+            _models = await Api.GetIntelligenceWideModelsAsync();
+        }
+        catch
+        {
+            _models = [];
+        }
+        finally
+        {
+            _modelsLoading = false;
+        }
+    }
+
+    private async Task SolveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_problem))
+        {
+            return;
+        }
+
+        _loading = true;
+        _error = null;
+        _response = null;
+        try
+        {
+            var request = new MathSolveRequest(Guid.Empty, Guid.Empty, _problem.Trim(), Guid.NewGuid().ToString("N"))
+            {
+                ModelCode = string.IsNullOrWhiteSpace(_modelCode) ? null : _modelCode.Trim(),
+            };
+            _response = await Api.SolveMathAsync(request);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void GoToHistory() => Navigation.NavigateTo("/legal/math/runs");
+}

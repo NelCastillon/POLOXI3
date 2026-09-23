@@ -1,0 +1,274 @@
+@using Legal.Application.Features.Intelligence.Decision
+
+@* ────────────────────────────────────────────────────────────────────────────────────────────────
+   POLOXI Legal — Decision Integrity Trace (cockpit component).
+
+   A compact, expandable projection of the DecisionIntegrityTraceDto. It shows, at a glance, whether
+   POLOXI moved from a valid proposal through research/verification to a decision-safe output, and
+   whether its internal state is coherent. It renders THREE independent concepts side by side —
+   System Integrity, Decision Readiness, Output Integrity — so a HEALTHY + NOT READY run never looks
+   like a fault. Purely presentational: no recomputation of any decision semantics happens here.
+   ──────────────────────────────────────────────────────────────────────────────────────────────── *@
+
+@if (Trace is not null)
+{
+    <section class="dit">
+        <div class="dit-header">
+            <div class="dit-header-copy">
+                <span class="dit-eyebrow">Decision Integrity Trace</span>
+                <h2>Did POLOXI reason soundly?</h2>
+            </div>
+            <div class="dit-top-states">
+                <span class="dit-state dit-state-@IntegrityClass(Trace.Integrity)" title="Did the machinery execute soundly?">
+                    <i class="bi @IntegrityIcon(Trace.Integrity)"></i> @IntegrityLabel(Trace.Integrity)
+                </span>
+                <span class="dit-state dit-state-@ReadinessClass(Trace.Readiness)" title="Is there enough verified support to decide? Independent of system integrity.">
+                    <i class="bi bi-clipboard-check"></i> @ReadinessLabel(Trace.Readiness)
+                </span>
+                <span class="dit-state dit-state-@OutputClass(Trace.OutputIntegrity)" title="Is the emitted answer free of unauthorized assertions?">
+                    <i class="bi bi-shield-check"></i> @OutputLabel(Trace.OutputIntegrity)
+                </span>
+                @if (Trace.Consistency == StateConsistency.Invalid)
+                {
+                    <span class="dit-state dit-state-fail" title="Internal state is not coherent across evidence, graph, candidates and output.">
+                        <i class="bi bi-exclamation-octagon"></i> STATE INCONSISTENT
+                    </span>
+                }
+            </div>
+        </div>
+
+        @* ── Nine-stage rail ─────────────────────────────────────────────────────────────────── *@
+        <ol class="dit-rail">
+            @foreach (var stage in Trace.Stages)
+            {
+                var expanded = _expanded.Contains(stage.Key)
+                    || (stage.Key == "RESEARCH" && stage.Status == IntegrityTraceStatus.Failed && !_collapsed.Contains(stage.Key));
+                var hasDrill = stage.Detail.Count > 0 || stage.Children.Count > 0;
+                <li class="dit-stage dit-stage-@StatusClass(stage.Status)">
+                    <button type="button" class="dit-stage-head" disabled="@(!hasDrill)" @onclick="() => Toggle(stage.Key)">
+                        <span class="dit-stage-glyph" title="@StatusLabel(stage.Status)">@StatusGlyph(stage.Status)</span>
+                        <span class="dit-stage-label">@stage.Label</span>
+                        <span class="dit-stage-summary">@stage.CompactSummary</span>
+                        @if (hasDrill)
+                        {
+                            <i class="bi @(expanded ? "bi-chevron-up" : "bi-chevron-down") dit-stage-chevron"></i>
+                        }
+                    </button>
+                    @if (expanded)
+                    {
+                        <div class="dit-stage-detail">
+                            @if (stage.Detail.Count > 0)
+                            {
+                                <dl class="dit-kv">
+                                    @foreach (var d in stage.Detail)
+                                    {
+                                        <div class="dit-kv-row"><dt>@d.Label</dt><dd>@d.Value</dd></div>
+                                    }
+                                </dl>
+                            }
+                            @if (stage.Children.Count > 0)
+                            {
+                                <ul class="dit-children">
+                                    @foreach (var child in stage.Children)
+                                    {
+                                        <li class="dit-child dit-child-@StatusClass(child.Status)">
+                                            <div class="dit-child-head">
+                                                <span class="dit-child-glyph">@StatusGlyph(child.Status)</span>
+                                                <span class="dit-child-title">@child.Title</span>
+                                                @if (!string.IsNullOrWhiteSpace(child.Summary))
+                                                {
+                                                    <span class="dit-child-summary">@child.Summary</span>
+                                                }
+                                            </div>
+                                            @if (child.Detail.Count > 0)
+                                            {
+                                                <dl class="dit-kv dit-kv-child">
+                                                    @foreach (var d in child.Detail)
+                                                    {
+                                                        <div class="dit-kv-row"><dt>@d.Label</dt><dd>@d.Value</dd></div>
+                                                    }
+                                                </dl>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    }
+                </li>
+            }
+        </ol>
+
+        @* ── Decision movement + next research target ────────────────────────────────────────── *@
+        @if (Trace.DecisionMovement is { } move)
+        {
+            <div class="dit-movement">
+                <span class="dit-movement-label">Decision movement</span>
+                <span class="dit-movement-body">
+                    @(move.PreviousLeaderLabel ?? "—")
+                    <i class="bi bi-arrow-right"></i>
+                    @(move.CurrentLeaderLabel ?? "—")
+                    <span class="dit-movement-tag @(move.LeaderChanged ? "changed" : "stable")">
+                        @(move.LeaderChanged ? "LEADER CHANGED" : "LEADER STABLE")
+                    </span>
+                    <span class="dit-movement-metric">entropy @move.PreviousEntropy.ToString("0.###") → @move.CurrentEntropy.ToString("0.###")</span>
+                </span>
+            </div>
+        }
+        @if (!string.IsNullOrWhiteSpace(Trace.NextResearchTarget))
+        {
+            <div class="dit-next">
+                <i class="bi bi-compass"></i>
+                <span>Next research target: <strong>@Trace.NextResearchTarget</strong></span>
+                @if (!string.IsNullOrWhiteSpace(Trace.ResearchStopReason))
+                {
+                    <span class="dit-next-stop">stop: @Trace.ResearchStopReason</span>
+                }
+            </div>
+        }
+
+        @* ── Diagnostics (developer/admin only) ──────────────────────────────────────────────── *@
+        @if (ShowDiagnostics && Trace.Diagnostics is { } diag)
+        {
+            <div class="dit-diagnostics">
+                <button type="button" class="dit-diag-toggle" @onclick="ToggleDiagnostics">
+                    <i class="bi @(_diagnosticsOpen ? "bi-chevron-up" : "bi-chevron-down")"></i>
+                    Diagnostics
+                </button>
+                @if (_diagnosticsOpen)
+                {
+                    <dl class="dit-kv">
+                        <div class="dit-kv-row"><dt>Session</dt><dd>@diag.SessionId</dd></div>
+                        <div class="dit-kv-row"><dt>Decision state version</dt><dd>@diag.DecisionStateVersion</dd></div>
+                        <div class="dit-kv-row"><dt>Total duration</dt><dd>@diag.TotalDurationMs ms</dd></div>
+                        @foreach (var t in diag.PhaseTimings)
+                        {
+                            <div class="dit-kv-row"><dt>@t.Label</dt><dd>@t.Value</dd></div>
+                        }
+                    </dl>
+                }
+            </div>
+        }
+    </section>
+}
+
+@code {
+    [Parameter] public DecisionIntegrityTraceDto? Trace { get; set; }
+
+    // Diagnostics are developer/admin-only and off by default (never shown in attorney mode).
+    [Parameter] public bool ShowDiagnostics { get; set; }
+
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _collapsed = new(StringComparer.Ordinal);
+    private bool _diagnosticsOpen;
+
+    private void Toggle(string key)
+    {
+        if (_expanded.Remove(key))
+        {
+            _collapsed.Add(key);
+        }
+        else if (_collapsed.Remove(key))
+        {
+            _expanded.Add(key);
+        }
+        else if (key == "RESEARCH" && Trace?.Research.Status == IntegrityTraceStatus.Failed)
+        {
+            _collapsed.Add(key);
+        }
+        else
+        {
+            _expanded.Add(key);
+        }
+    }
+
+    private void ToggleDiagnostics() => _diagnosticsOpen = !_diagnosticsOpen;
+
+    // ── Status glyphs/labels (text carries meaning; never color alone) ─────────────────────────
+    private static string StatusGlyph(IntegrityTraceStatus s) => s switch
+    {
+        IntegrityTraceStatus.Passed => "✓",
+        IntegrityTraceStatus.Partial => "◐",
+        IntegrityTraceStatus.Running => "●",
+        IntegrityTraceStatus.Failed => "✕",
+        IntegrityTraceStatus.RolledBack => "↶",
+        IntegrityTraceStatus.Skipped => "○",
+        _ => "–"
+    };
+
+    private static string StatusLabel(IntegrityTraceStatus s) => s switch
+    {
+        IntegrityTraceStatus.Passed => "Passed",
+        IntegrityTraceStatus.Partial => "Partial",
+        IntegrityTraceStatus.Running => "Running",
+        IntegrityTraceStatus.Failed => "Failed",
+        IntegrityTraceStatus.RolledBack => "Rolled back",
+        IntegrityTraceStatus.Skipped => "Skipped",
+        _ => "Not run"
+    };
+
+    private static string StatusClass(IntegrityTraceStatus s) => s switch
+    {
+        IntegrityTraceStatus.Passed => "pass",
+        IntegrityTraceStatus.Partial => "partial",
+        IntegrityTraceStatus.Running => "running",
+        IntegrityTraceStatus.Failed => "fail",
+        IntegrityTraceStatus.RolledBack => "rolledback",
+        IntegrityTraceStatus.Skipped => "skipped",
+        _ => "notrun"
+    };
+
+    private static string IntegrityLabel(IntegrityState s) => s switch
+    {
+        IntegrityState.Healthy => "HEALTHY",
+        IntegrityState.Incomplete => "INCOMPLETE",
+        IntegrityState.AttentionRequired => "ATTENTION",
+        _ => "FAILED"
+    };
+
+    private static string IntegrityClass(IntegrityState s) => s switch
+    {
+        IntegrityState.Healthy => "healthy",
+        IntegrityState.Incomplete => "neutral",
+        IntegrityState.AttentionRequired => "attention",
+        _ => "fail"
+    };
+
+    private static string IntegrityIcon(IntegrityState s) => s switch
+    {
+        IntegrityState.Healthy => "bi-check-circle-fill",
+        IntegrityState.Incomplete => "bi-dash-circle-fill",
+        IntegrityState.AttentionRequired => "bi-exclamation-triangle-fill",
+        _ => "bi-x-octagon-fill"
+    };
+
+    private static string ReadinessLabel(TraceReadinessState s) => s switch
+    {
+        TraceReadinessState.Ready => "READY",
+        TraceReadinessState.Provisional => "PROVISIONAL",
+        TraceReadinessState.NotReady => "NOT READY",
+        _ => "UNKNOWN"
+    };
+
+    private static string ReadinessClass(TraceReadinessState s) => s switch
+    {
+        TraceReadinessState.Ready => "healthy",
+        TraceReadinessState.Provisional => "attention",
+        TraceReadinessState.NotReady => "neutral",
+        _ => "neutral"
+    };
+
+    private static string OutputLabel(OutputIntegrityState s) => s switch
+    {
+        OutputIntegrityState.Clean => "OUTPUT CLEAN",
+        OutputIntegrityState.AttentionRequired => "OUTPUT ATTENTION",
+        _ => "OUTPUT NOT EVALUATED"
+    };
+
+    private static string OutputClass(OutputIntegrityState s) => s switch
+    {
+        OutputIntegrityState.Clean => "healthy",
+        OutputIntegrityState.AttentionRequired => "attention",
+        _ => "neutral"
+    };
+}

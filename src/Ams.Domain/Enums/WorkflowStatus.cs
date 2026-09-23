@@ -1,1 +1,0 @@
-namespace Ams.Domain.Enums; public enum WorkflowStatus { Submitted = 1, Pending = 2, Approved = 3, Rejected = 4, Returned = 5 }

@@ -2,6 +2,7 @@
 
 ## Project Guidelines
 - **Number one priority for all pages:** build and verify in `Table/API/UI` order. Confirm the database table/schema first, then align API/backend contracts and persistence, then implement or update the UI.
+- Use **ARL** to mean **Adaptive Retrieval Logic** for the universal retrieval, recovery, ranking-completion, and deterministic fallback reliability layer. Do not use GRIND/GRIMD terminology for this layer.
 - Use the naming convention `ApiClients.CrmConfiguration*.cs` for CRM Configuration ApiClient sealed partial class files.
 - Use existing `enterprise.css` styles for UI; do not add workflow functionality unless explicitly requested. For UI fixes in this codebase, prefer native Blazor markup plus scoped Razor CSS so CSS isolation applies correctly. For app-wide Blazor visual/theme fixes, use the global CSS layer instead of CSS-isolation ::deep overrides in layout/component scoped CSS. When removing or altering stylesheet rules or other UI dependencies, scope those removals/changes to the specific page requested; do not modify or remove global styles or shared UI dependencies unless the user explicitly requests a global change.
 - Do not use third-party grid/dialog/toast CSS frameworks in this repository; use native Blazor components, custom AMS components, and existing `enterprise.css` patterns instead.
@@ -36,9 +37,15 @@
 - In light theme, secondary buttons placed on pale or gradient headers must use dark text and a visibly contrasting border/background rather than white text.
 - Do not suggest performance or code changes unless supported by measurements or high-confidence evidence; avoid speculative recommendations because unnecessary runs waste money and time.
 - **POLOXI Wide pipeline results must never be inferior to the raw single-shot LLM answer:** when candidates from the raw/interpretive answer lack evidence attribution, the pipeline must attempt targeted evidence retrieval for those candidate names (earning support) rather than silently delivering a shorter/worse ranking; evidence admission gates are never lowered.
+- When fixing POLOXI pipeline issues, prefer logical/general pipeline fixes over hardcoded case-specific UI masking, and avoid changes that eliminate or weaken the core ranking/narrowing logic for future prompts.
+- For POLOXI Wide ranking, L1 disambiguation branches returned by the model should not automatically be treated as the best or authoritative candidate-scoring criteria; only branches that represent actual user decision criteria should influence Candidate × Branch competition.
+- When changing POLOXI prompts, evaluate the full prompt chain and any newly introduced prompts together, and only add or version a prompt when it improves end-to-end result quality without conflicting with other prompt stages.
+- For POLOXI design and implementation, prioritize semantic correctness of query contracts, branch roles, candidate identity, and scoring criteria because better semantics should produce better retrieval, scoring, and final results; do not treat additional latency or pipeline depth as a substitute for semantic quality.
+- For POLOXI evidence verification, do not change LLM prompts, semantic thresholds, proposition-support logic, or deepening when failures occur before semantic execution. Identity verification must use a provider chain where authoritative provider metadata/stable IDs/APIs/immutable snapshots/HTTP precede Playwright, with Playwright only as fallback. Systemic verification infrastructure failures should surface as ATTENTION and technical stop reasons, not HEALTHY or generic NO_STATE_CHANGE.
+- Preserve both graph layers and all existing POLOXI logic when making code changes; extend behavior minimally without replacing, bypassing, or collapsing existing graph semantics.
 
 ## CRMConfiguration Guidelines
-- CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
+- CRM Configuration pages are Blzor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
 - Use `enterprise.css` design-system classes for CRM Configuration UI. Do not add one-off page styles unless the class is reusable and belongs in `enterprise.css`. When removing or altering stylesheet rules or UI dependencies for CRM Configuration pages, scope changes to the specific page requested and avoid global removals unless explicitly requested.
 - Keep the database as the source of truth for CRM Configuration schema, DTOs, requests, repositories, and form models. Update C# code to match the DB schema when mismatches are found.
 - CRM Configuration DTOs, requests, and Blazor form models must include validation consistent with database constraints. Required DB fields must be required in requests and form models.
@@ -129,3 +136,13 @@
 
 ## Troubleshooting Guidelines
 - When troubleshooting, provide direct instructions tied to the exact current log/state; avoid mixing alternative paths or unnecessary background details.
+- **Do not use profiling tools; keep diagnostic work tightly scoped and avoid new paid model calls.**
+- For focused UI bug reports, inspect and modify only the directly affected page/component unless evidence requires broader investigation.
+
+## Landing Page Guidelines
+- For the landing page mobile hero, keep the background image centered rather than top-aligned, and use a moderate overlay instead of heavy darkening.
+
+## Legal and Admin Pages
+- In user-facing content under all `/legal/*` and `/admin/*` pages, capitalize the product name as "Judz" rather than "judz".
+- For the `/admin/users` member activity dialog, System Admins expect to see a selected member's complete relevant history, including actions performed on that member by administrators and that member's login activity—not only events where the member is the actor.
+- **Do not show the blue programmatic focus outline around page H1 headings after Blazor navigation; preserve focus indicators for interactive controls.**

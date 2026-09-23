@@ -1,0 +1,198 @@
+@page "/admin/activity"
+@using Legal.Application.Features.Saas
+@inject ApiClient Api
+
+<LegalWorkspace>
+<div class="intel-page">
+    <header class="intel-header">
+        <div>
+            <span>Administration · Activity</span>
+            <h1>Activity &amp; Audit</h1>
+            <p>Review authentication history, audit events, and usage for your tenant. Data is read-only and scoped to your organization for security and compliance review.</p>
+        </div>
+        <div class="um-header-actions">
+            <select class="um-input" @bind="_days" @bind:after="LoadAsync">
+                <option value="7">Last 7 days</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 90 days</option>
+                <option value="365">Last 365 days</option>
+            </select>
+            <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+        </div>
+    </header>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+    }
+
+    <section class="intel-kpis">
+        <article class="intel-kpi-link @(_tab == Tab.Logins ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                 title="Show login history" @onclick="() => _tab = Tab.Logins">
+            <span>Login attempts</span><strong>@_logins.Count</strong>
+        </article>
+        <article class="intel-kpi-link @(_tab == Tab.Audit ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                 title="Show audit events" @onclick="() => _tab = Tab.Audit">
+            <span>Audit events</span><strong>@_audit.Count</strong>
+        </article>
+        <article class="intel-kpi-link @(_tab == Tab.Usage ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                 title="Show usage totals" @onclick="() => _tab = Tab.Usage">
+            <span>Usage meters</span><strong>@_usage.Count</strong>
+        </article>
+    </section>
+
+    @if (_loading)
+    {
+        <div class="intel-state">Loading activity…</div>
+    }
+    else if (_tab == Tab.Logins)
+    {
+        @if (_logins.Count == 0)
+        {
+            <div class="intel-state">No login attempts in this window.</div>
+        }
+        else
+        {
+            <section class="intel-panel">
+                <table class="um-table">
+                    <thead>
+                        <tr><th>When (PDT)</th><th>Email</th><th>Outcome</th><th>Result</th><th>IP address</th><th>User agent</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var l in _logins)
+                        {
+                            <tr>
+                                <td>@ToPdt(l.OccurredAtUtc)</td>
+                                <td>@Display(l.Email)</td>
+                                <td>@Display(l.OutcomeCode)</td>
+                                <td>@(l.IsSuccess ? "Success" : "Failed")</td>
+                                <td>@Display(l.IpAddress)</td>
+                                <td class="um-cell-truncate" title="@l.UserAgent">@Display(l.UserAgent)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+    else if (_tab == Tab.Audit)
+    {
+        @if (_audit.Count == 0)
+        {
+            <div class="intel-state">No audit events in this window.</div>
+        }
+        else
+        {
+            <section class="intel-panel">
+                <table class="um-table">
+                    <thead>
+                        <tr><th>When (PDT)</th><th>Event type</th><th>Resource</th><th>Resource id</th><th>Correlation</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in _audit)
+                        {
+                            <tr>
+                                <td>@ToPdt(a.OccurredAtUtc)</td>
+                                <td>@Display(a.EventType)</td>
+                                <td>@Display(a.ResourceType)</td>
+                                <td>@Display(a.ResourceId?.ToString())</td>
+                                <td>@Display(a.CorrelationId)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+    else
+    {
+        @if (_usage.Count == 0)
+        {
+            <div class="intel-state">No usage recorded in this window.</div>
+        }
+        else
+        {
+            <section class="intel-panel">
+                <table class="um-table">
+                    <thead>
+                        <tr><th>Meter</th><th>Class</th><th>Total quantity</th><th>Events</th><th>Last (PDT)</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var u in _usage)
+                        {
+                            <tr>
+                                <td>@Display(u.MeterCode)</td>
+                                <td>@Display(u.UsageClass)</td>
+                                <td>@u.TotalQuantity</td>
+                                <td>@u.EventCount</td>
+                                <td>@(u.LastOccurredAtUtc is { } lu ? ToPdt(lu) : Dash)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    }
+</div>
+</LegalWorkspace>
+
+@code {
+    private enum Tab { Logins, Audit, Usage }
+
+    private const string Dash = "—";
+
+    // Pacific time (handles PST/PDT automatically). Fall back to UTC if unavailable.
+    private static readonly TimeZoneInfo PacificZone = ResolvePacificZone();
+
+    private Tab _tab = Tab.Logins;
+    private int _days = 30;
+    private bool _loading = true;
+    private string? _error;
+
+    private IReadOnlyList<LoginHistoryDto> _logins = [];
+    private IReadOnlyList<AuditEventDto> _audit = [];
+    private IReadOnlyList<UsageSummaryDto> _usage = [];
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _logins = await Api.GetActivityLoginHistoryAsync(_days);
+            _audit = await Api.GetActivityAuditEventsAsync(_days);
+            _usage = await Api.GetActivityUsageAsync(_days);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load activity: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? Dash : value;
+
+    private static string ToPdt(DateTime utc)
+    {
+        var utcKind = DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        var pacific = TimeZoneInfo.ConvertTimeFromUtc(utcKind, PacificZone);
+        var abbrev = PacificZone.IsDaylightSavingTime(pacific) ? "PDT" : "PST";
+        return $"{pacific:yyyy-MM-dd HH:mm:ss} {abbrev}";
+    }
+
+    private static TimeZoneInfo ResolvePacificZone()
+    {
+        foreach (var id in new[] { "Pacific Standard Time", "America/Los_Angeles" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+        return TimeZoneInfo.Utc;
+    }
+}

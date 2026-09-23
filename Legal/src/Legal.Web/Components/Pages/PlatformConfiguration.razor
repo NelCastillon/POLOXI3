@@ -1,0 +1,264 @@
+@page "/platform/configuration"
+@using Legal.Application.Features.Saas
+@inject ApiClient Api
+
+<LegalWorkspace>
+<div class="intel-page">
+    <header class="intel-header">
+        <div>
+            <span>Platform · Control plane</span>
+            <h1>Platform Configuration</h1>
+            <p>Platform-wide defaults every tenant inherits. Configuration never grants access — it only shapes how already-permitted capabilities behave. Editing a value here changes the default for all tenants unless a tenant overrides it. Super Admin only.</p>
+        </div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </header>
+
+    @if (_loading)
+    {
+        <div class="intel-state">Loading platform configuration…</div>
+    }
+    else
+    {
+        @if (_error is not null)
+        {
+            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+        }
+
+        <section class="intel-kpis">
+            <article class="intel-kpi-link @(_activeCategory is null ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                     title="Show all configuration" @onclick="() => SetCategory(null)">
+                <span>All settings</span><strong>@_categories.Sum(c => c.Items.Count)</strong>
+            </article>
+            @foreach (var category in _categories)
+            {
+                <article class="intel-kpi-link @(_activeCategory == category.Category ? "intel-kpi-active" : null)" role="button" tabindex="0"
+                         title="@($"Show {category.Category} settings")" @onclick="() => SetCategory(category.Category)">
+                    <span>@category.Category</span><strong>@category.Items.Count</strong>
+                </article>
+            }
+        </section>
+
+        @if (_categories.Count == 0)
+        {
+            <div class="intel-state">No configuration definitions are defined.</div>
+        }
+
+        @foreach (var category in _categories.Where(c => _activeCategory is null || c.Category == _activeCategory))
+        {
+            <section class="intel-panel">
+                <div class="intel-toolbar"><h2>@category.Category</h2></div>
+                @foreach (var item in category.Items)
+                {
+                    <div class="intel-row cfg-row">
+                        <div class="cfg-meta">
+                            <strong>@item.DisplayName</strong>
+                            <small>@item.Key</small>
+                            @if (!string.IsNullOrWhiteSpace(item.Description))
+                            {
+                                <span>@item.Description</span>
+                            }
+                            <span class="cfg-source">
+                                Effective: <code>@Display(item, _drafts[item.Key])</code>
+                                @if (item.IsOverridden)
+                                {
+                                    <AppStatusBadge Status="PLATFORM" />
+                                }
+                                else
+                                {
+                                    <span class="cfg-source-tag">System default</span>
+                                }
+                                @if (!item.TenantCanOverride)
+                                {
+                                    <span class="cfg-locked" title="Tenants cannot override this value; the platform value is authoritative."><i class="bi bi-lock-fill"></i> Enforced for tenants</span>
+                                }
+                            </span>
+                        </div>
+                        <div class="cfg-editor">
+                            @if (item.Sensitive)
+                            {
+                                <span class="cfg-readonly">Managed securely</span>
+                            }
+                            else
+                            {
+                                @switch (item.ValueType)
+                                {
+                                    case "Boolean":
+                                        <label class="cfg-switch"><input type="checkbox" checked="@(_drafts[item.Key] == "true")"
+                                            @onchange="e => OnBoolChange(item.Key, e)" /> @(_drafts[item.Key] == "true" ? "On" : "Off")</label>
+                                        break;
+                                    case "Integer":
+                                    case "Decimal":
+                                        <input type="number" step="@(item.ValueType == "Decimal" ? "0.01" : "1")"
+                                            min="@(item.Min?.ToString())" max="@(item.Max?.ToString())"
+                                            value="@_drafts[item.Key]" @onchange="e => OnValueChange(item.Key, e)" />
+                                        break;
+                                    case "Enum" when item.Options is { Count: > 0 }:
+                                        <select value="@_drafts[item.Key]" @onchange="e => OnValueChange(item.Key, e)">
+                                            @foreach (var option in item.Options)
+                                            {
+                                                <option value="@option" selected="@(_drafts[item.Key] == option)">@option</option>
+                                            }
+                                        </select>
+                                        break;
+                                    default:
+                                        <input type="text" value="@_drafts[item.Key]" @onchange="e => OnValueChange(item.Key, e)" />
+                                        break;
+                                }
+                                <button class="um-btn um-btn-primary um-btn-sm" @onclick="() => SaveAsync(item)" disabled="@_saving">Save</button>
+                                @if (item.IsOverridden)
+                                {
+                                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => ResetAsync(item)" disabled="@_saving" title="Remove the platform override and inherit the code default.">Reset</button>
+                                }
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+        }
+
+        <section class="intel-panel">
+            <div class="intel-toolbar"><h2>Legal Agreements</h2></div>
+            <p class="cfg-legal-note">
+                Versioned, DB-authoritative clickwrap documents users accept at signup. Bodies are tamper-evident:
+                each row stores a SHA-256 hash of the exact text accepted. The Privacy Policy discloses IP-address
+                collection, which is the lawful basis for storing IP addresses on consent and login-history records.
+            </p>
+            @if (_agreements.Count == 0)
+            {
+                <div class="intel-state">No active legal agreements are configured.</div>
+            }
+            else
+            {
+                @foreach (var agreement in _agreements)
+                {
+                    <div class="intel-row cfg-row">
+                        <div class="cfg-meta">
+                            <strong>@agreement.Title</strong>
+                            <small>@agreement.AgreementType</small>
+                            <span class="cfg-source">
+                                Version <code>@agreement.Version</code>
+                                @if (agreement.RequiresConsent)
+                                {
+                                    <AppStatusBadge Status="CONSENT REQUIRED" />
+                                }
+                                <span class="cfg-source-tag">Effective @agreement.EffectiveAtUtc.ToString("yyyy-MM-dd")</span>
+                            </span>
+                            <span class="cfg-hash" title="SHA-256 of the exact accepted body"><i class="bi bi-fingerprint"></i> @agreement.ContentHash</span>
+                        </div>
+                        <div class="cfg-editor">
+                            <a class="um-btn um-btn-ghost um-btn-sm"
+                               href="@(agreement.AgreementType == "PrivacyPolicy" ? "/legal/privacy" : "/legal/terms")"
+                               target="_blank" rel="noopener">
+                                <i class="bi bi-box-arrow-up-right"></i> View
+                            </a>
+                        </div>
+                    </div>
+                }
+            }
+        </section>
+    }
+</div>
+</LegalWorkspace>
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private string? _error;
+    private string? _activeCategory;
+    private IReadOnlyList<PlatformConfigurationCategoryDto> _categories = [];
+    private IReadOnlyList<LegalAgreementDto> _agreements = [];
+    private readonly Dictionary<string, string> _drafts = new(StringComparer.Ordinal);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _categories = await Api.GetPlatformConfigurationAsync();
+            _agreements = await Api.GetActiveAgreementsAsync();
+            _drafts.Clear();
+            foreach (var item in _categories.SelectMany(c => c.Items))
+                _drafts[item.Key] = ToDisplayValue(item.EffectiveValueJson ?? item.DefaultValueJson, item.ValueType);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Failed to load configuration: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void SetCategory(string? category) => _activeCategory = category;
+
+    private void OnValueChange(string key, ChangeEventArgs e) => _drafts[key] = e.Value?.ToString() ?? string.Empty;
+
+    private void OnBoolChange(string key, ChangeEventArgs e) => _drafts[key] = (e.Value is bool b && b) ? "true" : "false";
+
+    private async Task SaveAsync(PlatformConfigurationItemDto item)
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            var json = ToJson(_drafts[item.Key], item.ValueType);
+            await Api.SetPlatformConfigurationValueAsync(item.Key, json);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ResetAsync(PlatformConfigurationItemDto item)
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Api.SetPlatformConfigurationValueAsync(item.Key, null);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Reset failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private string Display(PlatformConfigurationItemDto item, string draft) => draft;
+
+    // Convert stored JSON to a plain editable value (strip quotes for strings/enums).
+    private static string ToDisplayValue(string json, string valueType)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return string.Empty;
+        return valueType switch
+        {
+            "String" or "Enum" => json.Length >= 2 && json.StartsWith('"') && json.EndsWith('"')
+                ? System.Text.Json.JsonSerializer.Deserialize<string>(json) ?? string.Empty
+                : json,
+            _ => json
+        };
+    }
+
+    // Convert an edited plain value back to JSON for storage.
+    private static string ToJson(string value, string valueType) => valueType switch
+    {
+        "String" or "Enum" => System.Text.Json.JsonSerializer.Serialize(value),
+        "Boolean" => value == "true" ? "true" : "false",
+        _ => string.IsNullOrWhiteSpace(value) ? "0" : value
+    };
+}

@@ -1,1 +1,0 @@
-namespace Ams.Domain.Enums; public enum OpportunityStatus { Open = 1, ClosedWon = 2, ClosedLost = 3 }

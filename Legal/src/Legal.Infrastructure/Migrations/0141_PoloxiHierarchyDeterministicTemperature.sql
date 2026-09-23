@@ -1,0 +1,17 @@
+﻿SET NOCOUNT ON;
+SET XACT_ABORT ON;
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+BEGIN TRANSACTION;
+
+-- The POLOXI hierarchy proposal must be as deterministic as possible so the same
+-- question yields the same approved branch set and stable result counts.
+IF OBJECT_ID(N'AI.Legal_FeaturePolicy',N'U') IS NOT NULL
+BEGIN
+	UPDATE AI.Legal_FeaturePolicy
+	SET Temperature=CONVERT(decimal(4,3),0.000),
+		ModifiedDateUtc=SYSUTCDATETIME()
+	WHERE FeatureCode=N'INTELLIGENCE_POLOXI_HIERARCHY' AND IsDeleted=0 AND Temperature<>CONVERT(decimal(4,3),0.000);
+END;
+
+COMMIT TRANSACTION;

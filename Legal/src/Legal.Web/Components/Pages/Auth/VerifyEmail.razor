@@ -1,0 +1,122 @@
+@page "/verify-email"
+@attribute [AllowAnonymous]
+@inject ApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Verify your email</PageTitle>
+
+<div class="auth-shell">
+    <div class="auth-card">
+        <div class="auth-brand">
+            <img src="image/JudzLogo.png" alt="judz.ai" class="auth-logo" />
+            <span class="auth-word"><strong>judz<span>.ai</span></strong><small>EARLY ACCESS</small></span>
+        </div>
+        <h1 class="auth-title">Verify your email</h1>
+        <p class="auth-subtitle">Enter the 6-digit code we sent to <strong>@(_form.Email)</strong>.</p>
+
+        @if (_error is not null)
+        {
+            <div class="auth-alert" role="alert"><i class="bi bi-exclamation-triangle"></i> @_error</div>
+        }
+        @if (_info is not null)
+        {
+            <div class="auth-note" role="status"><i class="bi bi-info-circle"></i> @_info</div>
+        }
+
+        <EditForm Model="_form" OnValidSubmit="SubmitAsync">
+            <DataAnnotationsValidator />
+            @if (string.IsNullOrWhiteSpace(_prefilledEmail))
+            {
+                <div class="auth-field">
+                    <label>Email</label>
+                    <InputText @bind-Value="_form.Email" class="auth-input" type="email" autocomplete="email" />
+                </div>
+            }
+            <div class="auth-field">
+                <label>Verification code</label>
+                <InputText @bind-Value="_form.Code" class="auth-input auth-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" />
+            </div>
+            <button type="submit" class="auth-btn" disabled="@_busy">
+                @(_busy ? "Verifying…" : "Verify email")
+            </button>
+        </EditForm>
+
+        <p class="auth-foot">
+            Didn't get a code?
+            <button type="button" class="auth-link" disabled="@_busy" @onclick="ResendAsync">Resend code</button>
+        </p>
+    </div>
+</div>
+
+@code {
+    private readonly VerifyForm _form = new();
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+    private string? _prefilledEmail;
+
+    protected override void OnInitialized()
+    {
+        var uri = Navigation.ToAbsoluteUri(Navigation.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("email", out var email) && !string.IsNullOrWhiteSpace(email))
+        {
+            _prefilledEmail = email!;
+            _form.Email = email!;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var result = await Api.VerifyEmailAsync(new VerifyEmailRequest(_form.Email, _form.Code));
+            if (!result.Succeeded)
+            {
+                _error = result.Message;
+                return;
+            }
+            Navigation.NavigateTo($"/login?email={Uri.EscapeDataString(_form.Email)}&verified=1");
+        }
+        catch (Exception ex)
+        {
+            _error = $"Verification failed: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ResendAsync()
+    {
+        _busy = true;
+        _error = null;
+        _info = null;
+        try
+        {
+            var result = await Api.ResendVerificationAsync(new ResendVerificationRequest(_form.Email));
+            _info = result.Message ?? "If the email requires verification, a new code has been sent.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not resend code: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class VerifyForm
+    {
+        [Required, EmailAddress, StringLength(256)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required, StringLength(6, MinimumLength = 6), RegularExpression("^[0-9]{6}$", ErrorMessage = "Enter the 6-digit code.")]
+        public string Code { get; set; } = string.Empty;
+    }
+}
