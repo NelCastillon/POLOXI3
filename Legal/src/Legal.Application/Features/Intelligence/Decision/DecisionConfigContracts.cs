@@ -367,6 +367,15 @@ public sealed record DecisionSessionPersistence(
     // Execution mode (DEV / PROD) frozen into the immutable session snapshot at creation. A continued
     // (clarification) session inherits the parent's ModeCode so the run cannot silently switch modes.
     public string? ModeCode { get; init; }
+
+    // DECISION_DISCOVERY_V2 enrichment (§4,§5,§6): Candidate × Branch relationship edges and the typed
+    // dependency nodes (unresolved propositions + fact provenance). Empty for the legacy v1 path.
+    public IReadOnlyCollection<DecisionCandidateBranchRelationPersistence> CandidateBranchRelations { get; init; } = [];
+    public IReadOnlyCollection<DecisionDependencyPersistence> Dependencies { get; init; } = [];
+
+    // DECISION_DISCOVERY_V2 (§1): the first-class structured DecisionIntent proposed by Astra (the
+    // specific decision + its scope). Null for the legacy v1 path or when no intent was proposed.
+    public DecisionIntentPersistence? DecisionIntent { get; init; }
 }
 
 public sealed record DecisionClarificationPersistence(
@@ -461,7 +470,17 @@ public sealed record DecisionCandidatePersistence(
     decimal DecisionSupportCeiling,
     int RankOrder,
     bool IsWinner,
-    bool IsEliminated);
+    bool IsEliminated)
+{
+    // Branch-first (V2) provenance: the LLM-proposed stable candidateId, carried so Candidate × Branch
+    // relations resolve to this persisted candidate. Null for the legacy candidate-first path.
+    public string? SemanticCandidateId { get; init; }
+
+    // Branch-first (V2) advisory score in [0,1] proposed by Astra and consumed by POLOXI Core for
+    // further reasoning. Advisory only — Core still owns the authoritative CompositeScore/verdict.
+    // Null on the legacy candidate-first path or when the proposal omitted a score.
+    public decimal? ProposedScore { get; init; }
+}
 
 public sealed record DecisionBranchPersistence(
     Guid DecisionBranchId,
@@ -499,7 +518,52 @@ public sealed record DecisionBranchPersistence(
     public decimal? GuardrailMatchScore { get; init; }
     public string? GuardrailActionCode { get; init; }
     public int? GuardrailVersion { get; init; }
+
+    // Branch-first (DECISION_DISCOVERY_V2) provenance: the stable LLM-proposed branchId (e.g. B1.1),
+    // carried so Candidate × Branch relations and unresolved propositions can resolve to this branch.
+    public string? SemanticBranchId { get; init; }
 }
+
+// ── DECISION_DISCOVERY_V2 enrichment records (§4,§5,§6). These are PROPOSAL-stage semantic assertions
+//    only; POLOXI Core owns all scoring, evidence admission, competition, and readiness. ──
+
+// §4 Candidate × Branch relationship: the SEMANTIC role a candidate plays against a SHARED branch.
+public sealed record DecisionCandidateBranchRelationPersistence(
+    Guid DecisionCandidateBranchRelationId,
+    Guid DecisionCandidateId,
+    Guid DecisionBranchId,
+    string RelationTypeCode,
+    string? Rationale);
+
+// §1 First-class DecisionIntent: the specific decision and its scope Astra proposed. Descriptive
+// proposal-stage content; POLOXI Core still validates it before candidate discovery and hierarchy
+// registration. Persisted one-per-session in POLOXI.Legal_DecisionIntent.
+public sealed record DecisionIntentPersistence(
+    Guid DecisionIntentId,
+    string? DecisionTarget,
+    string? DecisionType,
+    string? RequestedDisposition,
+    string? CurrentOutcome,
+    string? DecisionScope,
+    string? TimeHorizon,
+    string? ProceduralStage,
+    string? UserConstraints,
+    string? MaterialAmbiguity);
+
+// §5/§6 Unresolved proposition + fact provenance, persisted as typed Legal_DecisionDependency nodes.
+public sealed record DecisionDependencyPersistence(
+    Guid DecisionDependencyId,
+    Guid? DecisionCandidateId,
+    string NodeKind,
+    string Statement,
+    decimal Support,
+    bool IsEssential,
+    string? FailureCode,
+    string? ProvenanceCode,
+    string? EvidenceNeeded,
+    string? AuthorityNeeded,
+    bool IsVerified,
+    string? LinkedBranchCode);
 
 public sealed record DecisionEvidencePersistence(
     Guid DecisionEvidenceId,

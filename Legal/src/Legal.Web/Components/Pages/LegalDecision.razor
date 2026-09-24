@@ -736,6 +736,105 @@
                 </section>
             }
 
+            @if (_response.DecisionIntent is { } intent)
+            {
+                <section class="decision-panel">
+                    <div class="decision-panel-header"><div><span>Decision intent (branch-first discovery §1)</span><h2>@(string.IsNullOrWhiteSpace(intent.DecisionTarget) ? "Proposed decision" : intent.DecisionTarget)</h2></div></div>
+                    <div class="decision-table-wrap">
+                        <table class="decision-table">
+                            <tbody>
+                                <tr><th>Decision type</th><td>@(string.IsNullOrWhiteSpace(intent.DecisionType) ? "—" : intent.DecisionType)</td></tr>
+                                <tr><th>Requested disposition</th><td>@(string.IsNullOrWhiteSpace(intent.RequestedDisposition) ? "—" : intent.RequestedDisposition)</td></tr>
+                                <tr><th>Current outcome</th><td>@(string.IsNullOrWhiteSpace(intent.CurrentOutcome) ? "—" : intent.CurrentOutcome)</td></tr>
+                                <tr><th>Scope</th><td>@(string.IsNullOrWhiteSpace(intent.DecisionScope) ? "—" : intent.DecisionScope)</td></tr>
+                                <tr><th>Time horizon</th><td>@(string.IsNullOrWhiteSpace(intent.TimeHorizon) ? "—" : intent.TimeHorizon)</td></tr>
+                                <tr><th>Procedural stage</th><td>@(string.IsNullOrWhiteSpace(intent.ProceduralStage) ? "—" : intent.ProceduralStage)</td></tr>
+                                <tr><th>User constraints</th><td>@(string.IsNullOrWhiteSpace(intent.UserConstraints) ? "—" : intent.UserConstraints)</td></tr>
+                                @if (!string.IsNullOrWhiteSpace(intent.MaterialAmbiguity))
+                                {
+                                    <tr><th>Material ambiguity</th><td>@intent.MaterialAmbiguity</td></tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            }
+
+            @if (_response.CandidateBranchRelations.Count > 0)
+            {
+                <section class="decision-panel">
+                    <div class="decision-panel-header"><div><span>Candidate × Branch relationships (branch-first discovery)</span><h2>@_response.CandidateBranchRelations.Count semantic role assertions</h2></div></div>
+                    <div class="decision-table-wrap">
+                        <table class="decision-table">
+                            <thead><tr><th>Candidate</th><th>Branch</th><th>Relation</th><th>Rationale</th></tr></thead>
+                            <tbody>
+                                @foreach (var r in _response.CandidateBranchRelations)
+                                {
+                                    <tr>
+                                        <td>@CandidateNameFor(r.DecisionCandidateId)</td>
+                                        <td>@BranchNameForId(r.DecisionBranchId)</td>
+                                        <td><span class="decision-chip">@r.RelationTypeCode</span></td>
+                                        <td>@(string.IsNullOrWhiteSpace(r.Rationale) ? "—" : r.Rationale)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            }
+
+            @if (_response.Dependencies.Count > 0)
+            {
+                var unresolved = _response.Dependencies.Where(d => string.Equals(d.NodeKind, "UNRESOLVED_PROPOSITION", StringComparison.OrdinalIgnoreCase)).ToArray();
+                var provenance = _response.Dependencies.Where(d => string.Equals(d.NodeKind, "FACT_PROVENANCE", StringComparison.OrdinalIgnoreCase)).ToArray();
+
+                @if (unresolved.Length > 0)
+                {
+                    <section class="decision-panel">
+                        <div class="decision-panel-header"><div><span>Unresolved propositions · evidence &amp; legal authority needed</span><h2>@unresolved.Length open proposition@(unresolved.Length == 1 ? "" : "s")</h2></div></div>
+                        <div class="decision-table-wrap">
+                            <table class="decision-table">
+                                <thead><tr><th>Proposition</th><th>Branch</th><th>Evidence needed</th><th>Authority needed</th><th>Provenance</th></tr></thead>
+                                <tbody>
+                                    @foreach (var d in unresolved)
+                                    {
+                                        <tr>
+                                            <td>@d.Statement</td>
+                                            <td>@(string.IsNullOrWhiteSpace(d.LinkedBranchCode) ? "—" : d.LinkedBranchCode)</td>
+                                            <td>@(string.IsNullOrWhiteSpace(d.EvidenceNeeded) ? "—" : d.EvidenceNeeded)</td>
+                                            <td>@(string.IsNullOrWhiteSpace(d.AuthorityNeeded) ? "—" : d.AuthorityNeeded)</td>
+                                            <td><span class="decision-chip">@(string.IsNullOrWhiteSpace(d.ProvenanceCode) ? "—" : d.ProvenanceCode)</span></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+
+                @if (provenance.Length > 0)
+                {
+                    <section class="decision-panel">
+                        <div class="decision-panel-header"><div><span>Fact provenance · supplied vs independently verified</span><h2>@provenance.Length fact@(provenance.Length == 1 ? "" : "s")</h2></div></div>
+                        <div class="decision-table-wrap">
+                            <table class="decision-table">
+                                <thead><tr><th>Fact</th><th>Source</th><th>Verified</th></tr></thead>
+                                <tbody>
+                                    @foreach (var d in provenance)
+                                    {
+                                        <tr>
+                                            <td>@d.Statement</td>
+                                            <td><span class="decision-chip">@(string.IsNullOrWhiteSpace(d.ProvenanceCode) ? "—" : d.ProvenanceCode)</span></td>
+                                            <td>@(d.IsVerified ? "✓" : "—")</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                }
+            }
+
             @if (_response.Evidence.Count > 0)
             {
                 <section class="decision-panel">
@@ -914,6 +1013,24 @@
             return null;
         var label = string.IsNullOrWhiteSpace(candidate.DisplayName) ? candidate.Outcome : candidate.DisplayName;
         return string.IsNullOrWhiteSpace(label) ? null : $"for {label}";
+    }
+
+    // Branch-first (DECISION_DISCOVERY_V2) enrichment display helpers. Read-only lookups; never score.
+    private string CandidateNameFor(Guid candidateId)
+    {
+        var candidate = _response?.Candidates.FirstOrDefault(c => c.DecisionCandidateId == candidateId);
+        if (candidate is null)
+            return "—";
+        var label = string.IsNullOrWhiteSpace(candidate.DisplayName) ? candidate.Outcome : candidate.DisplayName;
+        return string.IsNullOrWhiteSpace(label) ? candidate.CandidateCode : label!;
+    }
+
+    private string BranchNameForId(Guid branchId)
+    {
+        var branch = _response?.Branches.FirstOrDefault(b => b.DecisionBranchId == branchId);
+        if (branch is null)
+            return "—";
+        return string.IsNullOrWhiteSpace(branch.DisplayName) ? branch.BranchCode : branch.DisplayName;
     }
 
     // Counterfactual classification (presentation-only): map a flip point's persisted effect onto a

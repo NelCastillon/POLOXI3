@@ -72,6 +72,29 @@ public sealed record DecisionSearchRequest(
     // semantics (terminology, decision-hierarchy dimensions, evidence types, verification profiles)
     // to the decision. Advisory only: POLOXI Core reasoning is unchanged. Null = no domain pack.
     [StringLength(60)] public string? DomainPackCode { get; init; }
+
+    // First-class, immutable Personal Injury Profile projection. When present it is projected into the
+    // discovery proposal as a distinct STRUCTURED context section (not buried in free text) so Astra can
+    // identify incident-specific legal/factual dependencies. Supplied allegations, NOT verified evidence.
+    public PersonalInjuryProfileSnapshot? PersonalInjuryProfile { get; init; }
+}
+
+// Immutable structured projection of the database-backed Personal Injury Profile fields, threaded onto
+// the Decision Contract so the proposal stage receives the same PI facts at every stage. These are
+// SUPPLIED ALLEGATIONS/CONTEXT, not independently verified evidence; they identify propositions that
+// still need investigation. Uses existing DB-backed fields; no new profile structure is invented.
+public sealed record PersonalInjuryProfileSnapshot(
+    string? IncidentTypeCode,
+    DateOnly? IncidentDate,
+    string? IncidentState,
+    string? LiabilitySummary,
+    string? InjurySummary,
+    string? DamagesSummary)
+{
+    public string? IncidentCounty { get; init; }
+    public string? IncidentCity { get; init; }
+    public string? IncidentLocation { get; init; }
+    public string? IncidentSummary { get; init; }
 }
 
 // DB-backed model option for the decision Model dropdown.
@@ -130,7 +153,13 @@ public sealed record DecisionCandidateDto(
     decimal DecisionSupportCeiling,
     int RankOrder,
     bool IsWinner,
-    bool IsEliminated);
+    bool IsEliminated)
+{
+    // Branch-first (DECISION_DISCOVERY_V2) advisory proposal-stage score in [0,1] Astra proposed and
+    // POLOXI Core consumes for further reasoning. Advisory only; Core owns the authoritative
+    // CompositeScore/verdict above. Null on the legacy candidate-first path or when omitted.
+    public decimal? ProposedScore { get; init; }
+}
 
 public sealed record DecisionBranchDto(
     Guid DecisionBranchId,
@@ -156,6 +185,48 @@ public sealed record DecisionBranchDto(
     public string? GuardrailActionCode { get; init; }
     public int? GuardrailVersion { get; init; }
 }
+
+// ── Branch-first (DECISION_DISCOVERY_V2) enrichment projections (§4,§5,§6). Descriptive only; POLOXI
+//    Core still owns all scoring. Empty on the legacy candidate-first path. ──
+
+// An explicit Candidate × Branch semantic role assertion (required / supporting / opposing /
+// conditional / distinguishing / non_applicable) against the shared branch forest.
+public sealed record DecisionCandidateBranchRelationDto(
+    Guid DecisionCandidateBranchRelationId,
+    Guid DecisionCandidateId,
+    Guid DecisionBranchId,
+    string RelationTypeCode,
+    string? Rationale);
+
+// A dependency-graph node projected from the enriched discovery: unresolved propositions (with the
+// evidence / legal authority needed to resolve them) and supplied vs verified fact provenance.
+public sealed record DecisionDependencyDto(
+    Guid DecisionDependencyId,
+    Guid? DecisionCandidateId,
+    string NodeKind,
+    string Statement,
+    string ProvenanceCode,
+    bool IsEssential,
+    bool IsVerified,
+    string? EvidenceNeeded,
+    string? AuthorityNeeded,
+    string? LinkedBranchCode,
+    string? FailureCode);
+
+// §1 First-class DecisionIntent projection: the specific decision Astra proposed and its scope.
+// Descriptive proposal-stage content; POLOXI Core validates it before candidate discovery and
+// hierarchy registration. Null on the legacy candidate-first path or when no intent was proposed.
+public sealed record DecisionIntentDto(
+    Guid DecisionIntentId,
+    string? DecisionTarget,
+    string? DecisionType,
+    string? RequestedDisposition,
+    string? CurrentOutcome,
+    string? DecisionScope,
+    string? TimeHorizon,
+    string? ProceduralStage,
+    string? UserConstraints,
+    string? MaterialAmbiguity);
 
 public static class DecisionBranchGenerationOrigins
 {
@@ -298,7 +369,16 @@ public sealed record DecisionSearchResponse(
     // Persisted factor-by-factor evidence verification diagnostics. Read-only and non-scoring.
     public IReadOnlyCollection<DecisionEvidenceVerificationDto> EvidenceVerifications { get; init; } = [];
 
-    // ── POLOXI Legal B3 (Hallucination Solver) shadow/what-if snapshot. Populated when the solver
+    // ── Branch-first (DECISION_DISCOVERY_V2) enrichment (§4,§5,§6). Descriptive read-only projections;
+    //    POLOXI Core still owns all scoring. Empty on the legacy candidate-first discovery path. ──
+    public IReadOnlyCollection<DecisionCandidateBranchRelationDto> CandidateBranchRelations { get; init; } = [];
+    public IReadOnlyCollection<DecisionDependencyDto> Dependencies { get; init; } = [];
+
+    // §1 First-class DecisionIntent (the specific decision + its scope) proposed by Astra. Null on the
+    // legacy candidate-first path or when no intent was proposed. Descriptive; Core still validates it.
+    public DecisionIntentDto? DecisionIntent { get; init; }
+
+    // ── POLOXI Legal B3 (Hallucination Solver) shadow/what-if snapshot.
     // ran and recompeted the ranking on verified evidence. In ADVISORY mode this is a NON-DESTRUCTIVE
     // "what-if": the returned decision above is the original (B2) result, and this snapshot shows what
     // the ranking WOULD become if unsupported material support were removed. In ENFORCED mode the

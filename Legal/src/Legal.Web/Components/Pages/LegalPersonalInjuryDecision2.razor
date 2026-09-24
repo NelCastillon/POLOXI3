@@ -24,9 +24,27 @@
 
         @if (_matter is not null)
         {
-            <div class="poloxi-matter-context">
-                <i class="bi bi-briefcase"></i>
-                <span>Deciding in matter <a href="@($"/legal/matters/{_matter.DecisionMatterId}")"><strong>@_matter.Title</strong></a></span>
+            <div class="decision-matter-banner">
+                <i class="bi bi-folder2-open"></i>
+                <div class="decision-matter-banner-body">
+                    <span>Deciding within matter</span>
+                    <a href="@($"/legal/personalinjury/{_matter.DecisionMatterId}/wizard")"><strong>@_matter.Title</strong></a>
+                </div>
+                <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@($"/legal/personalinjury/{_matter.DecisionMatterId}/wizard")">
+                    <i class="bi bi-box-arrow-up-right"></i> Matter
+                </a>
+            </div>
+            <div class="decision-matter-banner mt-2">
+                <i class="bi bi-file-earmark-arrow-up"></i>
+                <div class="decision-matter-banner-body">
+                    <span>Matter corpus</span>
+                    <strong>@_documents.Count document(s)</strong>
+                </div>
+                <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" class="form-control form-control-sm ms-auto" style="max-width: 320px" />
+                @if (_uploading)
+                {
+                    <span class="decision-chip">Scanning and extracting…</span>
+                }
             </div>
         }
 
@@ -425,6 +443,10 @@
                                     <div class="poloxi-branch-body">
                                         <strong>@BranchDisplayWithLevel(branch)</strong>
                                         <p>@branch.Interpretation</p>
+                                        <div class="poloxi-branch-assessment">
+                                            <span class="decision-chip" title="Assessment of this reasoning branch based on information value, decision relevance and flip potential.">@(BranchAssessment(branch))</span>
+                                            <small class="poloxi-branch-why" title="Why this branch received the assessment above.">@(BranchAssessmentWhy(branch))</small>
+                                        </div>
                                         <small>@(branch.IsEliminated ? branch.EliminationReason : branch.GroundingStatusCode == "GROUNDED" ? $"Grounded · {branch.EvidenceCount} evidence" : "Interpretive reasoning path (not enterprise-grounded)")@(branch.StopReason is not null ? $" · {branch.StopReason}" : null)</small>
                                         @if (_response.QueryContract is { } hierarchyContract)
                                         {
@@ -799,6 +821,30 @@
     public Guid? MatterId { get; set; }
 
     private DecisionMatterDto? _matter;
+    private IReadOnlyCollection<LegalDocumentDto> _documents = [];
+    private bool _uploading;
+
+    private async Task UploadDocumentAsync(InputFileChangeEventArgs args)
+    {
+        if (MatterId is not { } matterId || _uploading)
+            return;
+        _uploading = true;
+        _error = null;
+        try
+        {
+            await Api.UploadLegalMatterDocumentAsync(matterId, args.File, null, DecisionDomainPackCodes.PersonalInjury);
+            _documents = await Api.GetLegalMatterDocumentsAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Document upload failed: {ex.Message}";
+        }
+        finally
+        {
+            _uploading = false;
+            StateHasChanged();
+        }
+    }
     // POLOXI ABV (Actionable Business Value): advisory next-action panel. The LLM proposes intent only;
     // impact/urgency/owner/action resolve deterministically from a database-backed Domain Pack, each with
     // provenance. Review-only in phase 1 (ExecutionAllowed=false, human approval required).
@@ -1769,6 +1815,39 @@
     };
     private int ActiveBranchCount => SurvivingBranches.Count(x => x.BranchStateCode == "ACTIVE");
 
+    // ── Assessment / Why for every generated L1..Ln branch, mirroring /personalinjury_decision.
+    // The Wide engine exposes a three-score model (interpretation prior · evidence support · POLOXI
+    // confidence) plus grounding/evidence, so the same qualitative buckets are derived from those factors.
+    private static string BranchAssessment(WideBranchDto branch)
+    {
+        if (branch.IsEliminated || branch.BranchStateCode == "PRUNED")
+            return "Ruled out";
+        var evidenceSupport = branch.EvidenceSupport;
+        var confidence = branch.PoloxiConfidence > 0 ? branch.PoloxiConfidence : branch.Confidence;
+        var grounded = branch.GroundingStatusCode == "GROUNDED";
+        if (grounded && evidenceSupport >= 0.75m && confidence >= 0.8m)
+            return "Very good";
+        if (grounded && evidenceSupport >= 0.55m && confidence >= 0.6m)
+            return branch.EvidenceCount < 2 ? "Good, but broad" : "Good";
+        if (confidence >= 0.6m)
+            return "Relevant, but limited";
+        return "Needs refinement";
+    }
+
+    private static string BranchAssessmentWhy(WideBranchDto branch)
+    {
+        if (branch.IsEliminated && !string.IsNullOrWhiteSpace(branch.EliminationReason))
+            return branch.EliminationReason!;
+        var confidence = branch.PoloxiConfidence > 0 ? branch.PoloxiConfidence : branch.Confidence;
+        if (branch.GroundingStatusCode == "GROUNDED" && branch.EvidenceSupport >= 0.75m)
+            return $"Strongly supported by evidence (support {branch.EvidenceSupport:P0}; {branch.EvidenceCount} evidence; confidence {confidence:P0}).";
+        if (branch.GroundingStatusCode == "GROUNDED")
+            return $"Grounded in {branch.EvidenceCount} evidence item(s), but support is partial (support {branch.EvidenceSupport:P0}; confidence {confidence:P0}).";
+        if (branch.InterpretationPrior >= 0.6m)
+            return $"Plausible interpretive path (LLM prior {branch.InterpretationPrior:P0}), but not yet enterprise-grounded.";
+        return "Interpretive reasoning path with limited support; less likely to change the current ranking.";
+    }
+
     protected override async Task OnInitializedAsync()
     {
         Breadcrumbs.SetCrumbs(new("Home", "/"), new("Intelligence", "/intelligence"), new("Personal Injury Decision 2", "/legal/personalinjury_decision2"));
@@ -1777,6 +1856,7 @@
             try
             {
                 _matter = await Api.GetLegalDecisionMatterAsync(matterId);
+                try { _documents = await Api.GetLegalMatterDocumentsAsync(matterId); } catch { _documents = []; }
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
                     // Seed only a readable default question from the matter title. The full structured

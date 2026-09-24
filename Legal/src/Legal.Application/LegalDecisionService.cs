@@ -341,6 +341,37 @@ public sealed class LegalDecisionService(
             + "and do not convert retrieved context directly into authoritative POLOXI state.";
     }
 
+    // Projects the immutable Personal Injury Profile as a distinct STRUCTURED proposal input (a first-class
+    // part of the Matter Context Snapshot), not free text. Astra uses these fields to identify incident-
+    // specific legal/factual dependencies (liability, defenses, injury causation, damages, recovery). The
+    // fields are SUPPLIED ALLEGATIONS/CONTEXT, not independently verified evidence, and they must not be
+    // converted into authoritative POLOXI state. Incident location is preserved as distinct from governing
+    // law, jurisdiction, and forum.
+    private static string BuildPersonalInjuryProfileProposalContext(PersonalInjuryProfileSnapshot profile)
+    {
+        var snapshot = JsonSerializer.Serialize(new
+        {
+            Policy = "PI_PROFILE_IS_SUPPLIED_ALLEGATION_CONTEXT_NOT_VERIFIED_EVIDENCE",
+            profile.IncidentTypeCode,
+            IncidentDate = profile.IncidentDate?.ToString("yyyy-MM-dd"),
+            profile.IncidentState,
+            profile.IncidentCounty,
+            profile.IncidentCity,
+            profile.IncidentLocation,
+            profile.IncidentSummary,
+            profile.LiabilitySummary,
+            profile.InjurySummary,
+            profile.DamagesSummary
+        });
+        return "\n\nPERSONAL INJURY PROFILE (immutable structured Matter Context Snapshot input):\n"
+            + snapshot
+            + "\nUse these fields to identify incident-specific legal and factual dependencies (liability, defenses, "
+            + "injury causation, damages, and recovery considerations). Treat them as supplied allegations/context, "
+            + "not independently verified evidence: they tell you which propositions need investigation. Preserve the "
+            + "distinction between governing law, jurisdiction, forum, and incident location. Do not convert these "
+            + "fields into authoritative POLOXI state, and do not assume any claimed injury, liability, or damage is established.";
+    }
+
     public async Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => await repository.GetContextsAsync(cancellationToken);
 
@@ -441,7 +472,8 @@ public sealed class LegalDecisionService(
             Jurisdiction = ResolveMatterJurisdiction(matter, profile),
             DomainPackCode = string.IsNullOrWhiteSpace(matter.DomainPackCode)
                 ? DecisionDomainPackCodes.PersonalInjury
-                : matter.DomainPackCode
+                : matter.DomainPackCode,
+            PersonalInjuryProfile = BuildPersonalInjuryProfileSnapshot(profile)
         };
 
         return await DecideAsync(request, cancellationToken);
@@ -612,6 +644,45 @@ public sealed class LegalDecisionService(
         }
 
         return sb.ToString();
+    }
+
+    // Projects the database-backed PI Profile fields into an immutable structured snapshot that rides
+    // on the Decision Contract. This is what makes the PI Profile a first-class proposal input instead
+    // of free text: the same projected facts are available to every LLM stage. Supplied allegations,
+    // NOT verified evidence. Returns null when there is no profile or no material PI field.
+    private static PersonalInjuryProfileSnapshot? BuildPersonalInjuryProfileSnapshot(PersonalInjuryProfileDto? profile)
+    {
+        if (profile is null)
+            return null;
+
+        var hasMaterial =
+            !string.IsNullOrWhiteSpace(profile.IncidentTypeCode)
+            || profile.IncidentDate is not null
+            || !string.IsNullOrWhiteSpace(profile.IncidentState)
+            || !string.IsNullOrWhiteSpace(profile.LiabilitySummary)
+            || !string.IsNullOrWhiteSpace(profile.InjurySummary)
+            || !string.IsNullOrWhiteSpace(profile.DamagesSummary)
+            || !string.IsNullOrWhiteSpace(profile.IncidentSummary)
+            || !string.IsNullOrWhiteSpace(profile.IncidentLocation)
+            || !string.IsNullOrWhiteSpace(profile.IncidentCity)
+            || !string.IsNullOrWhiteSpace(profile.IncidentCounty);
+
+        if (!hasMaterial)
+            return null;
+
+        return new PersonalInjuryProfileSnapshot(
+            profile.IncidentTypeCode?.Trim(),
+            profile.IncidentDate,
+            profile.IncidentState?.Trim(),
+            profile.LiabilitySummary?.Trim(),
+            profile.InjurySummary?.Trim(),
+            profile.DamagesSummary?.Trim())
+        {
+            IncidentCounty = profile.IncidentCounty?.Trim(),
+            IncidentCity = profile.IncidentCity?.Trim(),
+            IncidentLocation = profile.IncidentLocation?.Trim(),
+            IncidentSummary = profile.IncidentSummary?.Trim()
+        };
     }
 
     public async Task<DecisionSearchResponse> DecideAsync(DecisionSearchRequest request, CancellationToken cancellationToken = default)
@@ -802,6 +873,8 @@ public sealed class LegalDecisionService(
             discoveryUser += BuildDomainGuardrailProposalContext(domainPack, applicableDomainConcepts, applicableDomainRelations);
         if (matterContext.Items.Count > 0)
             discoveryUser += BuildMatterContextProposalContext(matterContext);
+        if (request.PersonalInjuryProfile is { } piProfile)
+            discoveryUser += BuildPersonalInjuryProfileProposalContext(piProfile);
         var discovery = await aiProvider.GenerateAsync(
             new DecisionAiRequest(route, discoveryPromptCode, discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
@@ -814,6 +887,13 @@ public sealed class LegalDecisionService(
         var proposal = branchFirstDiscovery
             ? AdaptSemanticProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates)
             : ParseProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates);
+
+        // Branch-first (v2) enrichment (§4,§5,§6): Candidate × Branch relations, unresolved propositions,
+        // and fact provenance are SEMANTIC assertions only (no scores). Captured here and persisted after
+        // Core scoring/competition; empty for the legacy candidate-first path.
+        var proposalEnrichment = branchFirstDiscovery
+            ? AdaptSemanticEnrichment(discovery.StructuredOutputJson ?? discovery.Content)
+            : SemanticProposalEnrichment.Empty;
 
         // ── Proposal Integrity Gate V2 (shadow-default, disposition-driven targeted recovery) ──────
         // The LLM only PROPOSES a semantic representation; POLOXI decides whether that representation is
@@ -898,6 +978,8 @@ public sealed class LegalDecisionService(
             {
                 proposal = recovered;
                 integrity = recoveredIntegrity;
+                if (branchFirstDiscovery)
+                    proposalEnrichment = AdaptSemanticEnrichment(recovery.StructuredOutputJson ?? recovery.Content);
                 diagnostics = recoveredDiagnostics with
                 {
                     RecoveryTriggered = true,
@@ -1085,6 +1167,18 @@ public sealed class LegalDecisionService(
         var nextAction = BuildNextBestAction(branches, statusCode);
         var readiness = BuildReadiness(candidates, branches, evidence, margin, entropy, statusCode, retrieval.ResearchStatus);
 
+        // Branch-first (V2) enrichment (§4,§5,§6): resolve the semantic relations/propositions/provenance
+        // to persisted GUIDs now that Core has assigned candidate/branch identities. Empty for legacy v1.
+        var (candidateBranchRelations, semanticDependencies) =
+            MaterializeSemanticEnrichment(proposalEnrichment, candidates, branches);
+        if (candidateBranchRelations.Count > 0 || semanticDependencies.Count > 0)
+            Record("PROPOSAL_ENRICHMENT_MATERIALIZED", "COMPETITION", new
+            {
+                relationCount = candidateBranchRelations.Count,
+                unresolvedPropositionCount = semanticDependencies.Count(d => d.NodeKind == "UNRESOLVED_PROPOSITION"),
+                factProvenanceCount = semanticDependencies.Count(d => d.NodeKind == "FACT_PROVENANCE"),
+            });
+
         var persistence = new DecisionSessionPersistence(
             sessionId, request.TenantId, request.UserId, request.Query, contextCode, route.ModelCode, true,
             statusCode, terminalState, reason, winner?.DecisionCandidateId,
@@ -1107,6 +1201,9 @@ public sealed class LegalDecisionService(
             AuthorityCutoffDate = request.AuthorityCutoffDate,
             AuthorityScope = matterAuthorityContext,
             ModeCode = effectiveMode.ExecutionModeCode,
+            CandidateBranchRelations = candidateBranchRelations,
+            Dependencies = semanticDependencies,
+            DecisionIntent = MaterializeDecisionIntent(proposalEnrichment),
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
         if (currentClarification is not null)
@@ -1359,7 +1456,7 @@ public sealed class LegalDecisionService(
                             (decimal)recompete.PreviousEntropy, (decimal)recompete.CurrentEntropy,
                             (decimal)recompete.PreviousMargin, (decimal)recompete.CurrentMargin,
                             projected.Count, recompete.ReopenedBranchCount,
-                            recompete.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
+                            recompete.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated) { ProposedScore = c.ProposedScore }).ToArray(),
                             recompete.Branches.Select(MapBranch).ToArray());
 
                         // The shadow snapshot is always built (above) so both rankings are visible.
@@ -3544,7 +3641,11 @@ public sealed class LegalDecisionService(
                         LegalSupport: 0.5d, FactSupport: 0.5d, EvidenceSupport: 0.5d,
                         AuthoritySupport: 0.5d, Verification: 0.5d,
                         Discrimination: 0.5d, RankingImpact: 0.5d,
-                        Branches: sharedBranches));
+                        Branches: sharedBranches)
+                    {
+                        SemanticCandidateId = GetNullableString(c, "candidateId"),
+                        ProposedScore = GetNullableNumber(c, "score") is { } s ? Math.Clamp(s, 0d, 1d) : null,
+                    });
                     if (results.Count >= maxCandidates)
                         break;
                 }
@@ -3572,7 +3673,128 @@ public sealed class LegalDecisionService(
         return new ProposedBranch(
             GetString(node, "label"), interpretation,
             DecisionRelevance: 0.5d, FlipPotential: 0.5d, EvidenceAvailability: 0.5d,
-            children);
+            children)
+        {
+            SemanticBranchId = GetNullableString(node, "branchId") ?? GetNullableString(node, "rootId"),
+        };
+    }
+
+    // Branch-first (V2) enrichment parser (§4,§5,§6). Reads the enriched DECISION_DISCOVERY_V2 arrays —
+    // candidateBranchRelations, unresolvedPropositions, factProvenance — into neutral semantic records.
+    // Purely descriptive: no scores, no winner. Missing/legacy shapes yield SemanticProposalEnrichment.Empty.
+    internal static SemanticProposalEnrichment AdaptSemanticEnrichment(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            var relations = new List<SemanticCandidateBranchRelation>();
+            if (root.TryGetProperty("candidateBranchRelations", out var relNode) && relNode.ValueKind == JsonValueKind.Array)
+                foreach (var r in relNode.EnumerateArray())
+                {
+                    var candidateId = GetString(r, "candidateId");
+                    var branchId = GetString(r, "branchId");
+                    if (string.IsNullOrWhiteSpace(candidateId) || string.IsNullOrWhiteSpace(branchId))
+                        continue;
+                    relations.Add(new SemanticCandidateBranchRelation(
+                        candidateId, branchId,
+                        NormalizeRelationType(GetString(r, "relationType")),
+                        GetNullableString(r, "rationale")));
+                }
+
+            var propositions = new List<SemanticUnresolvedProposition>();
+            if (root.TryGetProperty("unresolvedPropositions", out var propNode) && propNode.ValueKind == JsonValueKind.Array)
+                foreach (var p in propNode.EnumerateArray())
+                {
+                    var statement = GetString(p, "statement");
+                    if (string.IsNullOrWhiteSpace(statement))
+                        continue;
+                    propositions.Add(new SemanticUnresolvedProposition(
+                        GetString(p, "propositionId"), statement,
+                        GetNullableString(p, "linkedBranchId"),
+                        GetNullableString(p, "evidenceNeeded"),
+                        GetNullableString(p, "authorityNeeded"),
+                        GetNullableString(p, "provenance")));
+                }
+
+            var facts = new List<SemanticFactProvenance>();
+            if (root.TryGetProperty("factProvenance", out var factNode) && factNode.ValueKind == JsonValueKind.Array)
+                foreach (var f in factNode.EnumerateArray())
+                {
+                    var statement = GetString(f, "statement");
+                    if (string.IsNullOrWhiteSpace(statement))
+                        continue;
+                    var source = GetString(f, "source");
+                    var isVerified = (f.TryGetProperty("isVerified", out var v) && v.ValueKind == JsonValueKind.True)
+                        || string.Equals(source, "verified", StringComparison.OrdinalIgnoreCase);
+                    facts.Add(new SemanticFactProvenance(
+                        GetString(f, "factId"), statement,
+                        string.IsNullOrWhiteSpace(source) ? "asserted" : source.ToLowerInvariant(),
+                        isVerified));
+                }
+
+            if (relations.Count == 0 && propositions.Count == 0 && facts.Count == 0)
+            {
+                var intentOnly = ParseDecisionIntent(root);
+                return intentOnly is null
+                    ? SemanticProposalEnrichment.Empty
+                    : SemanticProposalEnrichment.Empty with { DecisionIntent = intentOnly };
+            }
+            return new SemanticProposalEnrichment(relations, propositions, facts)
+            {
+                DecisionIntent = ParseDecisionIntent(root),
+            };
+        }
+        catch (JsonException)
+        {
+            return SemanticProposalEnrichment.Empty;
+        }
+    }
+
+    // Branch-first (V2 §1) parser: reads the first-class decisionIntent object into a neutral record.
+    // Returns null when the object is missing (legacy shape) or carries no meaningful content.
+    private static SemanticDecisionIntent? ParseDecisionIntent(JsonElement root)
+    {
+        if (!root.TryGetProperty("decisionIntent", out var intent) || intent.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var constraints = new List<string>();
+        if (intent.TryGetProperty("userConstraints", out var uc) && uc.ValueKind == JsonValueKind.Array)
+            foreach (var c in uc.EnumerateArray())
+                if (c.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(c.GetString()))
+                    constraints.Add(c.GetString()!);
+
+        var result = new SemanticDecisionIntent(
+            GetNullableString(intent, "decisionTarget"),
+            GetNullableString(intent, "decisionType"),
+            GetNullableString(intent, "requestedDisposition"),
+            GetNullableString(intent, "currentOutcome"),
+            GetNullableString(intent, "decisionScope"),
+            GetNullableString(intent, "timeHorizon"),
+            GetNullableString(intent, "proceduralStage"),
+            constraints,
+            GetNullableString(intent, "materialAmbiguity"));
+
+        var empty = result.DecisionTarget is null && result.DecisionType is null
+            && result.RequestedDisposition is null && result.CurrentOutcome is null
+            && result.DecisionScope is null && result.TimeHorizon is null
+            && result.ProceduralStage is null && result.MaterialAmbiguity is null
+            && constraints.Count == 0;
+        return empty ? null : result;
+    }
+
+    // The six proposal-layer relation roles (§4). Anything unrecognized degrades to "supporting" so a
+    // malformed relationType never silently drops the edge or invents an authoritative meaning.
+    private static string NormalizeRelationType(string relationType)
+    {
+        var normalized = (relationType ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return normalized switch
+        {
+            "required" or "supporting" or "opposing" or "conditional" or "distinguishing" or "non_applicable" => normalized,
+            "not_applicable" or "na" or "n_a" => "non_applicable",
+            _ => "supporting",
+        };
     }
 
     // a coarse branch with a "subBranches" (or "branches") array of decisive sub-questions; these feed
@@ -3610,7 +3832,11 @@ public sealed class LegalDecisionService(
                 (decimal)DecisionCoreMath.Clamp01(p.Verification), (decimal)DecisionCoreMath.Clamp01(uncertainty),
                 (decimal)DecisionCoreMath.Clamp01(p.Discrimination), (decimal)DecisionCoreMath.Clamp01(p.RankingImpact),
                 (decimal)DecisionCoreMath.Clamp01(1d - redundancy), (decimal)DecisionCoreMath.Clamp01(redundancy),
-                (decimal)Math.Min(composite, ceiling), (decimal)ceiling, 0, false, false));
+                (decimal)Math.Min(composite, ceiling), (decimal)ceiling, 0, false, false)
+            {
+                SemanticCandidateId = p.SemanticCandidateId,
+                ProposedScore = p.ProposedScore is { } ps ? (decimal)DecisionCoreMath.Clamp01(ps) : null,
+            });
 
             var branchIndex = 0;
             foreach (var b in p.Branches)
@@ -3650,7 +3876,10 @@ public sealed class LegalDecisionService(
             branchId, parentBranchId, level, branchCode, b.DisplayName, b.Interpretation,
             DecisionBranchStates.Active, (decimal)iv, (decimal)DecisionCoreMath.Clamp01(b.DecisionRelevance),
             (decimal)DecisionCoreMath.Clamp01(b.FlipPotential), (decimal)DecisionCoreMath.Clamp01(b.EvidenceAvailability),
-            (decimal)adv, (decimal)cost, onFrontier, onFrontier ? null : "BELOW_FRONTIER_THRESHOLD", sortSeed));
+            (decimal)adv, (decimal)cost, onFrontier, onFrontier ? null : "BELOW_FRONTIER_THRESHOLD", sortSeed)
+        {
+            SemanticBranchId = b.SemanticBranchId,
+        });
 
         // Deepening gate: bounded by MaxDepth, driven by frontier membership and flip potential.
         var shouldDeepen = b.Children.Count > 0
@@ -3673,6 +3902,90 @@ public sealed class LegalDecisionService(
         int MatchedBranchCount,
         int NovelBranchCount,
         int FallbackBranchCount);
+
+    // Branch-first (V2 §1) materialization: maps the proposed SemanticDecisionIntent into a persistence
+    // record with a fresh id. Returns null when no intent was proposed. Descriptive proposal-stage
+    // content; POLOXI Core still validates the intent before candidate discovery and registration.
+    internal static DecisionIntentPersistence? MaterializeDecisionIntent(SemanticProposalEnrichment? enrichment)
+    {
+        var intent = enrichment?.DecisionIntent;
+        if (intent is null)
+            return null;
+        var constraints = intent.UserConstraints.Count == 0
+            ? null
+            : string.Join("\n", intent.UserConstraints);
+        return new DecisionIntentPersistence(
+            Guid.NewGuid(),
+            intent.DecisionTarget, intent.DecisionType, intent.RequestedDisposition, intent.CurrentOutcome,
+            intent.DecisionScope, intent.TimeHorizon, intent.ProceduralStage, constraints, intent.MaterialAmbiguity);
+    }
+
+    // Branch-first (V2) enrichment materialization (§4,§5,§6). Resolves the LLM's semantic candidateId /
+    // branchId strings to the persisted GUIDs assigned by Core, producing:
+    //   • Candidate × Branch relation edges (only where BOTH endpoints resolve to a competed entity), and
+    //   • typed dependency nodes for unresolved propositions and supplied/verified fact provenance.
+    // Purely descriptive; POLOXI Core still owns all scoring, admission, competition, and readiness.
+    internal static (IReadOnlyList<DecisionCandidateBranchRelationPersistence> Relations,
+                     IReadOnlyList<DecisionDependencyPersistence> Dependencies) MaterializeSemanticEnrichment(
+        SemanticProposalEnrichment enrichment,
+        IReadOnlyList<DecisionCandidatePersistence> candidates,
+        IReadOnlyList<DecisionBranchPersistence> branches)
+    {
+        if (enrichment is null
+            || (enrichment.CandidateBranchRelations.Count == 0
+                && enrichment.UnresolvedPropositions.Count == 0
+                && enrichment.FactProvenance.Count == 0))
+            return ([], []);
+
+        var candidateBySemanticId = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in candidates)
+            if (!string.IsNullOrWhiteSpace(c.SemanticCandidateId))
+                candidateBySemanticId[c.SemanticCandidateId!] = c.DecisionCandidateId;
+
+        // A shared branchId can be materialized once per candidate (BranchCode prefixed C{n}); collect
+        // ALL persisted GUIDs for a given semantic branchId so a relation fans out to every instance.
+        var branchesBySemanticId = new Dictionary<string, List<Guid>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in branches)
+            if (!string.IsNullOrWhiteSpace(b.SemanticBranchId))
+            {
+                if (!branchesBySemanticId.TryGetValue(b.SemanticBranchId!, out var list))
+                    branchesBySemanticId[b.SemanticBranchId!] = list = [];
+                list.Add(b.DecisionBranchId);
+            }
+
+        var relations = new List<DecisionCandidateBranchRelationPersistence>();
+        foreach (var r in enrichment.CandidateBranchRelations)
+        {
+            if (!candidateBySemanticId.TryGetValue(r.CandidateId, out var candidateGuid))
+                continue;
+            if (!branchesBySemanticId.TryGetValue(r.BranchId, out var branchGuids))
+                continue;
+            foreach (var branchGuid in branchGuids)
+                relations.Add(new DecisionCandidateBranchRelationPersistence(
+                    Guid.NewGuid(), candidateGuid, branchGuid, r.RelationType, r.Rationale));
+        }
+
+        var dependencies = new List<DecisionDependencyPersistence>();
+        foreach (var p in enrichment.UnresolvedPropositions)
+            dependencies.Add(new DecisionDependencyPersistence(
+                Guid.NewGuid(), DecisionCandidateId: null,
+                NodeKind: "UNRESOLVED_PROPOSITION", Statement: p.Statement,
+                Support: 0m, IsEssential: true, FailureCode: "UNRESOLVED",
+                ProvenanceCode: string.IsNullOrWhiteSpace(p.Provenance) ? "unverified" : p.Provenance!.ToLowerInvariant(),
+                EvidenceNeeded: p.EvidenceNeeded, AuthorityNeeded: p.AuthorityNeeded,
+                IsVerified: false, LinkedBranchCode: p.LinkedBranchId));
+
+        foreach (var f in enrichment.FactProvenance)
+            dependencies.Add(new DecisionDependencyPersistence(
+                Guid.NewGuid(), DecisionCandidateId: null,
+                NodeKind: "FACT_PROVENANCE", Statement: f.Statement,
+                Support: 0m, IsEssential: false, FailureCode: null,
+                ProvenanceCode: string.IsNullOrWhiteSpace(f.Source) ? "asserted" : f.Source.ToLowerInvariant(),
+                EvidenceNeeded: null, AuthorityNeeded: null,
+                IsVerified: f.IsVerified, LinkedBranchCode: null));
+
+        return (relations, dependencies);
+    }
 
     internal static DomainGuardrailGovernanceResult ApplyDomainGuardrails(
         string query,
@@ -4230,7 +4543,7 @@ public sealed class LegalDecisionService(
             p.DecisionSessionId, p.QueryText, p.StatusCode, p.TerminalStateCode, p.TerminationReason,
             p.DepthReached, p.LlmCallCount, p.CandidateEntropy, p.DecisionMargin, p.ContractCompleteness,
             p.FinalAnswer, p.WinnerCandidateId,
-            p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated)).ToArray(),
+            p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated) { ProposedScore = c.ProposedScore }).ToArray(),
             p.Branches.Select(MapBranch).ToArray(),
             p.Evidence.Select(e => new DecisionEvidenceDto(e.DecisionEvidenceId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet, e.VerificationValue, e.VerificationStatus)
             {
@@ -4260,7 +4573,15 @@ public sealed class LegalDecisionService(
             LosingSideTest = v2?.LosingSideTest,
             ReadinessVerdict = v2?.ReadinessVerdict,
             GovernanceVerdict = governanceVerdict,
-            SolverShadow = solverShadow
+            SolverShadow = solverShadow,
+            CandidateBranchRelations = p.CandidateBranchRelations.Select(r => new Features.Intelligence.Decision.DecisionCandidateBranchRelationDto(
+                r.DecisionCandidateBranchRelationId, r.DecisionCandidateId, r.DecisionBranchId, r.RelationTypeCode, r.Rationale)).ToArray(),
+            Dependencies = p.Dependencies.Select(d => new Features.Intelligence.Decision.DecisionDependencyDto(
+                d.DecisionDependencyId, d.DecisionCandidateId, d.NodeKind, d.Statement, d.ProvenanceCode ?? string.Empty,
+                d.IsEssential, d.IsVerified, d.EvidenceNeeded, d.AuthorityNeeded, d.LinkedBranchCode, d.FailureCode)).ToArray(),
+            DecisionIntent = p.DecisionIntent is { } di ? new Features.Intelligence.Decision.DecisionIntentDto(
+                di.DecisionIntentId, di.DecisionTarget, di.DecisionType, di.RequestedDisposition, di.CurrentOutcome,
+                di.DecisionScope, di.TimeHorizon, di.ProceduralStage, di.UserConstraints, di.MaterialAmbiguity) : null
         };
 
     private static DecisionBranchDto MapBranch(DecisionBranchPersistence branch) =>
@@ -4787,8 +5108,17 @@ public sealed class LegalDecisionService(
     private static string GetString(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : string.Empty;
 
+    private static string? GetNullableString(JsonElement element, string name)
+    {
+        var value = GetString(element, name);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
     private static double GetNumber(JsonElement element, string name)
         => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) ? number : 0d;
+
+    private static double? GetNullableNumber(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) ? number : null;
 
     private enum ProposalDisposition { Accept, Repair, Expand, Regenerate, Clarify, Degraded }
 
@@ -4818,6 +5148,43 @@ public sealed class LegalDecisionService(
         bool RecoveryTriggered,
         string? RecoveryReason,
         bool? RecoverySucceeded);
-    private sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches);
-    internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children);
+    private sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches)
+    {
+        // Branch-first (V2) only: the LLM-proposed stable candidateId, carried so Candidate × Branch
+        // relations resolve to the persisted candidate. Null for the legacy candidate-first path.
+        public string? SemanticCandidateId { get; init; }
+
+        // Branch-first (V2) only: the advisory score in [0,1] Astra proposed for POLOXI Core to consume.
+        // Advisory only; Core owns the authoritative composite score/verdict. Null when omitted.
+        public double? ProposedScore { get; init; }
+    }
+    internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children)
+    {
+        // Branch-first (V2) only: the LLM-proposed stable branchId (e.g. B1.1). Null for legacy path.
+        public string? SemanticBranchId { get; init; }
+    }
+
+    // Branch-first (V2) enrichment (§4,§5,§6): the raw semantic relations/propositions/provenance the
+    // LLM proposed, keyed by the LLM's own candidateId/branchId strings. Resolved to persisted GUIDs
+    // downstream. All fields are SEMANTIC assertions only; POLOXI Core owns every score and verdict.
+    internal sealed record SemanticCandidateBranchRelation(string CandidateId, string BranchId, string RelationType, string? Rationale);
+    internal sealed record SemanticUnresolvedProposition(string PropositionId, string Statement, string? LinkedBranchId, string? EvidenceNeeded, string? AuthorityNeeded, string? Provenance);
+    internal sealed record SemanticFactProvenance(string FactId, string Statement, string Source, bool IsVerified);
+
+    // Branch-first (V2 §1): the first-class DecisionIntent Astra proposed (the specific decision + its
+    // scope). Descriptive proposal-stage content; POLOXI Core validates it before candidate discovery.
+    internal sealed record SemanticDecisionIntent(
+        string? DecisionTarget, string? DecisionType, string? RequestedDisposition, string? CurrentOutcome,
+        string? DecisionScope, string? TimeHorizon, string? ProceduralStage,
+        IReadOnlyList<string> UserConstraints, string? MaterialAmbiguity);
+
+    internal sealed record SemanticProposalEnrichment(
+        IReadOnlyList<SemanticCandidateBranchRelation> CandidateBranchRelations,
+        IReadOnlyList<SemanticUnresolvedProposition> UnresolvedPropositions,
+        IReadOnlyList<SemanticFactProvenance> FactProvenance)
+    {
+        public SemanticDecisionIntent? DecisionIntent { get; init; }
+
+        public static readonly SemanticProposalEnrichment Empty = new([], [], []);
+    }
 }

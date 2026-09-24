@@ -712,18 +712,18 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 INSERT INTO POLOXI.Legal_DecisionCandidate
                     (DecisionCandidateId, DecisionSessionId, CandidateCode, DisplayName, Outcome, LegalSupport, FactSupport,
                      EvidenceSupport, AuthoritySupport, VerificationScore, Uncertainty, Discrimination, RankingImpact, Diversity,
-                     RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, TenantId, CreatedByUserId)
+                     RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore, TenantId, CreatedByUserId)
                 VALUES
                     (@DecisionCandidateId, @DecisionSessionId, @CandidateCode, @DisplayName, @Outcome, @LegalSupport, @FactSupport,
                      @EvidenceSupport, @AuthoritySupport, @Verification, @Uncertainty, @Discrimination, @RankingImpact, @Diversity,
-                     @RedundancyPenalty, @CompositeScore, @DecisionSupportCeiling, @RankOrder, @IsWinner, @IsEliminated, @TenantId, @ActorUserId);
+                     @RedundancyPenalty, @CompositeScore, @DecisionSupportCeiling, @RankOrder, @IsWinner, @IsEliminated, @ProposedScore, @TenantId, @ActorUserId);
                 """,
                 session.Candidates.Select(c => new
                 {
                     c.DecisionCandidateId, session.DecisionSessionId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport,
                     c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination,
                     c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder,
-                    c.IsWinner, c.IsEliminated, session.TenantId, session.ActorUserId
+                    c.IsWinner, c.IsEliminated, c.ProposedScore, session.TenantId, session.ActorUserId
                 }),
                 transaction, cancellationToken: cancellationToken));
 
@@ -799,6 +799,62 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                     ev.DecisionEventId, session.DecisionSessionId, ev.ParentDecisionEventId, ev.SequenceNumber, ev.EventType,
                     ev.StageCode, ev.PayloadJson, ev.ProvenanceJson, session.TenantId, session.ActorUserId
                 }),
+                transaction, cancellationToken: cancellationToken));
+
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§4): explicit Candidate × Branch relations.
+        if (session.CandidateBranchRelations.Count > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionCandidateBranchRelation
+                    (DecisionCandidateBranchRelationId, DecisionSessionId, DecisionCandidateId, DecisionBranchId, RelationTypeCode, Rationale, TenantId, CreatedByUserId)
+                VALUES
+                    (@DecisionCandidateBranchRelationId, @DecisionSessionId, @DecisionCandidateId, @DecisionBranchId, @RelationTypeCode, @Rationale, @TenantId, @ActorUserId);
+                """,
+                session.CandidateBranchRelations.Select(r => new
+                {
+                    r.DecisionCandidateBranchRelationId, session.DecisionSessionId, r.DecisionCandidateId, r.DecisionBranchId,
+                    r.RelationTypeCode, r.Rationale, session.TenantId, session.ActorUserId
+                }),
+                transaction, cancellationToken: cancellationToken));
+
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§5,§6): unresolved propositions + fact
+        // provenance persisted as typed dependency nodes carrying evidence/authority needs & verification.
+        if (session.Dependencies.Count > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionDependency
+                    (DecisionDependencyId, DecisionSessionId, DecisionCandidateId, NodeKind, Statement, Support, IsEssential, FailureCode,
+                     ProvenanceCode, EvidenceNeeded, AuthorityNeeded, IsVerified, LinkedBranchCode, TenantId, CreatedByUserId)
+                VALUES
+                    (@DecisionDependencyId, @DecisionSessionId, @DecisionCandidateId, @NodeKind, @Statement, @Support, @IsEssential, @FailureCode,
+                     @ProvenanceCode, @EvidenceNeeded, @AuthorityNeeded, @IsVerified, @LinkedBranchCode, @TenantId, @ActorUserId);
+                """,
+                session.Dependencies.Select(d => new
+                {
+                    d.DecisionDependencyId, session.DecisionSessionId, d.DecisionCandidateId, d.NodeKind, d.Statement, d.Support,
+                    d.IsEssential, d.FailureCode, d.ProvenanceCode, d.EvidenceNeeded, d.AuthorityNeeded, d.IsVerified,
+                    d.LinkedBranchCode, session.TenantId, session.ActorUserId
+                }),
+                transaction, cancellationToken: cancellationToken));
+
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§1): the first-class DecisionIntent (the
+        // specific decision + its scope) persisted one-per-session. Descriptive proposal-stage content.
+        if (session.DecisionIntent is { } intent)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionIntent
+                    (DecisionIntentId, DecisionSessionId, DecisionTarget, DecisionType, RequestedDisposition, CurrentOutcome,
+                     DecisionScope, TimeHorizon, ProceduralStage, UserConstraints, MaterialAmbiguity, TenantId, CreatedByUserId)
+                VALUES
+                    (@DecisionIntentId, @DecisionSessionId, @DecisionTarget, @DecisionType, @RequestedDisposition, @CurrentOutcome,
+                     @DecisionScope, @TimeHorizon, @ProceduralStage, @UserConstraints, @MaterialAmbiguity, @TenantId, @ActorUserId);
+                """,
+                new
+                {
+                    intent.DecisionIntentId, session.DecisionSessionId, intent.DecisionTarget, intent.DecisionType,
+                    intent.RequestedDisposition, intent.CurrentOutcome, intent.DecisionScope, intent.TimeHorizon,
+                    intent.ProceduralStage, intent.UserConstraints, intent.MaterialAmbiguity, session.TenantId, session.ActorUserId
+                },
                 transaction, cancellationToken: cancellationToken));
 
         transaction.Commit();
@@ -920,7 +976,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             SELECT DecisionCandidateId, CandidateCode, DisplayName, Outcome, LegalSupport, FactSupport, EvidenceSupport,
                    AuthoritySupport, VerificationScore AS Verification, Uncertainty, Discrimination, RankingImpact, Diversity,
-                   RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated
+                   RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore
             FROM POLOXI.Legal_DecisionCandidate WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId ORDER BY RankOrder;
             """,
             new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
@@ -959,6 +1015,34 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             PolarityCode = string.IsNullOrWhiteSpace(row.PolarityCode) ? "UNRESOLVED" : row.PolarityCode,
         }).ToArray();
 
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§4): Candidate × Branch relation edges.
+        var candidateBranchRelations = (await connection.QueryAsync<DecisionCandidateBranchRelationPersistence>(new CommandDefinition(
+            """
+            SELECT DecisionCandidateBranchRelationId, DecisionCandidateId, DecisionBranchId, RelationTypeCode, Rationale
+            FROM POLOXI.Legal_DecisionCandidateBranchRelation WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId;
+            """,
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§5,§6): unresolved propositions + fact provenance.
+        var dependencies = (await connection.QueryAsync<DecisionDependencyPersistence>(new CommandDefinition(
+            """
+            SELECT DecisionDependencyId, DecisionCandidateId, NodeKind, Statement, Support, IsEssential, FailureCode,
+                   ProvenanceCode, EvidenceNeeded, AuthorityNeeded, IsVerified, LinkedBranchCode
+            FROM POLOXI.Legal_DecisionDependency WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId
+              AND NodeKind IN (N'UNRESOLVED_PROPOSITION', N'FACT_PROVENANCE');
+            """,
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+
+        // Branch-first (DECISION_DISCOVERY_V2) enrichment (§1): the first-class DecisionIntent (one per session).
+        var decisionIntent = (await connection.QueryAsync<DecisionIntentPersistence>(new CommandDefinition(
+            """
+            SELECT TOP (1) DecisionIntentId, DecisionTarget, DecisionType, RequestedDisposition, CurrentOutcome,
+                   DecisionScope, TimeHorizon, ProceduralStage, UserConstraints, MaterialAmbiguity
+            FROM POLOXI.Legal_DecisionIntent WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId
+            ORDER BY CreatedDateUtc DESC;
+            """,
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).FirstOrDefault();
+
         return new DecisionSessionPersistence(
             session.DecisionSessionId, session.TenantId, session.ActorUserId, session.QueryText, session.ContextCode,
             session.ModelCode, session.UsePoloxiEngine, session.StatusCode, session.TerminalStateCode, session.TerminationReason,
@@ -981,6 +1065,9 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 : null,
             AuthorityScope = DeserializeAuthorityScope(session.AuthorityScopeJson),
             ModeCode = session.ModeCode,
+            CandidateBranchRelations = candidateBranchRelations,
+            Dependencies = dependencies,
+            DecisionIntent = decisionIntent,
         };
     }
 
