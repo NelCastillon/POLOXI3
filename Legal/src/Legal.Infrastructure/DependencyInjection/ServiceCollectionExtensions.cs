@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<IIntelligenceRepository, IntelligenceRepository>();
         services.AddScoped<IIntelligenceWideRepository, IntelligenceWideRepository>();
+        services.AddScoped<IIntelligenceWide2Repository, IntelligenceWide2Repository>();
         services.AddScoped<IMathReasoningRepository, MathReasoningRepository>();
         services.AddScoped<IAiProviderRouteRepository, AiProviderRouteRepository>();
         services.AddScoped<IEpistemicClaimRepository, EpistemicClaimRepository>();
@@ -166,6 +167,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IAmbiguityResolutionEngine, Legal.Application.Features.Intelligence.Ambiguity.AmbiguityResolutionEngine>();
 
         services.AddScoped<IIntelligenceWideService, IntelligenceWideService>();
+        services.AddScoped<IIntelligenceWide2Service, IntelligenceWide2Service>();
 
         // POLOXI Scientific Reasoning — Mathematics V1 pack.
         services.AddScoped<IMathReasoningService, MathReasoningService>();
@@ -253,3 +255,4 @@ internal sealed class NullEpistemicTenantAccessor : IEpistemicTenantAccessor
 {
     public Guid? TenantId => null;
 }
+

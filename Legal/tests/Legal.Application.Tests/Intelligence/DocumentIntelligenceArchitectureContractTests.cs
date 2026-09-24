@@ -27,7 +27,7 @@ public sealed class DocumentIntelligenceArchitectureContractTests
     {
         var source = Read("src", "Legal.Application", "LegalDecisionService.cs");
         var matterContext = source.IndexOf("matterContextRetriever.RetrieveAsync", StringComparison.Ordinal);
-        var discovery = source.IndexOf("new DecisionAiRequest(route, \"DECISION_DISCOVERY\"", StringComparison.Ordinal);
+        var discovery = source.IndexOf("new DecisionAiRequest(route, discoveryPromptCode", StringComparison.Ordinal);
 
         Assert.True(matterContext >= 0 && discovery > matterContext);
         Assert.DoesNotContain("RetrieveEvidenceAsync(", source, StringComparison.Ordinal);

@@ -51,6 +51,48 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyCollection<WideSearchContextDto>> GetIntelligenceSearchContextsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchContextDto>>("api/intelligence_wide/contexts",token)??[];
 
+    // ── POLOXI Wide2 pipeline (isolated clone backing /legal/personalinjury_decision2) ──────────────
+    // Same start+poll transport as the Wide search, but every call targets the isolated api/intelligence_wide2
+    // controller/service so changes to /legal/search never affect /legal/personalinjury_decision2.
+    public async Task<WideSearchResponse?> IntelligentSearchWide2DynamicAsync(WideSearchRequest request,CancellationToken token=default)
+    {
+        using var startResponse=await _httpClient.PostAsJsonAsync("api/intelligence_wide2/search/dynamic/start",request,token);
+        startResponse.EnsureSuccessStatusCode();
+        var start=await startResponse.Content.ReadFromJsonAsync<WideSearchOperationStartResponse>(cancellationToken:token)??throw new InvalidOperationException("The wide search operation could not be started.");
+        try
+        {
+            while(true)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2),token);
+                var status=await _httpClient.GetFromJsonAsync<WideSearchOperationStatusResponse>($"api/intelligence_wide2/search/dynamic/status/{start.OperationId}",token)??throw new InvalidOperationException("The wide search operation is no longer available.");
+                if(status.StatusCode=="COMPLETED")return status.Response??throw new InvalidOperationException("The wide search completed without a result.");
+                if(status.StatusCode=="CANCELLED")throw new OperationCanceledException("The wide search was cancelled.");
+                if(status.StatusCode=="FAILED")throw new InvalidOperationException(status.ErrorMessage??"The wide search failed.");
+                if(status.StatusCode!="RUNNING")throw new InvalidOperationException($"The wide search returned an unexpected status: {status.StatusCode}.");
+            }
+        }
+        catch(OperationCanceledException)when(token.IsCancellationRequested)
+        {
+            using var stopTimeout=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                using var stop=await _httpClient.PostAsync($"api/intelligence_wide2/search/dynamic/cancel/{start.OperationId}",null,stopTimeout.Token);
+                await EnsureSuccessWithDetailAsync(stop,stopTimeout.Token);
+            }
+            catch(Exception ex)
+            {
+                throw new InvalidOperationException($"Stopped waiting for results, but server cancellation could not be confirmed: {ex.Message}",ex);
+            }
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyCollection<WideModelOptionDto>> GetIntelligenceWide2ModelsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideModelOptionDto>>("api/intelligence_wide2/models",token)??[];
+
+    public async Task<IReadOnlyCollection<WideSearchContextDto>> GetIntelligenceSearch2ContextsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<WideSearchContextDto>>("api/intelligence_wide2/contexts",token)??[];
+
+    public async Task<bool> GetSearch2ShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide2/show-pipeline",token);
+
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
     public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default)
     {

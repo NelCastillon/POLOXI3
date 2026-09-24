@@ -376,7 +376,8 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             D("Decision.V2.Readiness.LosingSideMargin", 0.05),
             I("Decision.V2.Propagation.MaxDepth", 6),
             I("Decision.V2.Readiness.MaxHighImpactFrontier", 0),
-            B("Decision.V2.ApplyVerifiedSignalsToRanking", false));
+            B("Decision.V2.ApplyVerifiedSignalsToRanking", false),
+            B("Decision.Discovery.BranchFirst.Enabled", false));
     }
 
     public async Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(CancellationToken cancellationToken = default)

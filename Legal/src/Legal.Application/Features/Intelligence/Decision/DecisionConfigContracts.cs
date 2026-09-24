@@ -309,7 +309,13 @@ public sealed record DecisionV2Settings(
     // which one is authoritative: false = Advisory (original decision stays authoritative; recomputed
     // shown as what-if) — the default; true = Enforced (recomputed ranking replaces the returned
     // decision). Advisory reproduces the frozen ASPEN_B2 returned baseline while still exposing B3.
-    bool ApplyVerifiedSignalsToRanking = false);
+    bool ApplyVerifiedSignalsToRanking = false,
+    // Branch-first discovery (v2). false = the legacy candidate-first DECISION_DISCOVERY path (LLM
+    // proposes candidates that own their branches and supplies its own composite). true = the
+    // DECISION_DISCOVERY_V2 path: the LLM proposes a SHARED L1→L3 branch tree + one GLOBAL candidate
+    // universe + a candidate×branch matrix, and POLOXI Core derives each candidate composite and the
+    // flip points from that matrix. Default false keeps v1 byte-identical for rollback.
+    bool BranchFirstDiscoveryEnabled = false);
 
 // Full authoritative snapshot persisted at the end of a session (§35,§39).
 public sealed record DecisionSessionPersistence(

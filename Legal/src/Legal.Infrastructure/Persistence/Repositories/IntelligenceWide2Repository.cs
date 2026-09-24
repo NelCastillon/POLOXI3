@@ -1,0 +1,896 @@
+using Legal.Application.Abstractions.Persistence;
+using Legal.Application.Features.Intelligence;
+using Dapper;
+using System.Text.Json;
+
+namespace Legal.Infrastructure.Persistence.Repositories;
+
+// Dapper persistence for the isolated Wide dynamic disambiguation pipeline.
+public sealed class IntelligenceWide2Repository(ISqlConnectionFactory connectionFactory):IIntelligenceWide2Repository
+{
+    public async Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT model.ModelCode,model.DeploymentName,model.ModelFamily
+FROM AI.Legal_ModelDeployment model
+JOIN AI.Legal_Provider provider ON provider.ProviderId=model.ProviderId AND provider.IsActive=1 AND provider.IsDeleted=0
+WHERE model.CapabilityCode=N'CHAT' AND model.IsActive=1 AND model.IsDeleted=0 AND (model.TenantId=@TenantId OR model.TenantId IS NULL)
+ORDER BY model.Priority,model.ModelCode;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<WideModelOptionDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
+    public async Task UpsertLegalAuthoritySourceAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+MERGE POLOXI.Legal_AuthoritySource WITH (HOLDLOCK) AS target
+USING (SELECT @ProviderCode ProviderCode,@JurisdictionCode JurisdictionCode,@AuthorityKindCode AuthorityKindCode) AS source
+ON target.ProviderCode=source.ProviderCode AND target.JurisdictionCode=source.JurisdictionCode
+AND target.AuthorityKindCode=source.AuthorityKindCode AND target.TenantId IS NULL AND target.IsDeleted=0
+WHEN MATCHED THEN UPDATE SET
+    CitationPattern=@CitationPattern,BaseUrl=@BaseUrl,DocumentUrlTemplate=@DocumentUrlTemplate,
+    SectionAnchorTemplate=@SectionAnchorTemplate,ExtractionStrategyCode=@ExtractionStrategyCode,
+    Priority=@Priority,DiscoveryMethodCode=@DiscoveryMethodCode,DiscoveryEvidenceUrl=@DiscoveryEvidenceUrl,
+    VerifiedDateUtc=@VerifiedDateUtc,IsEnabled=1,ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN INSERT
+    (LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,BaseUrl,
+     DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,DiscoveryMethodCode,
+     DiscoveryEvidenceUrl,VerifiedDateUtc,Priority,IsEnabled,TenantId,CreatedDateUtc,IsDeleted)
+VALUES
+    (NEWID(),@ProviderCode,@JurisdictionCode,@AuthorityKindCode,@CitationPattern,@BaseUrl,
+     @DocumentUrlTemplate,@SectionAnchorTemplate,@ExtractionStrategyCode,@DiscoveryMethodCode,
+     @DiscoveryEvidenceUrl,@VerifiedDateUtc,@Priority,1,NULL,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,registration,cancellationToken:cancellationToken));
+    }
+
+    public async Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetLegalAuthoritySourcesAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+WITH RankedSources AS
+(
+    SELECT LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,
+           BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority,
+           ROW_NUMBER() OVER
+           (
+               PARTITION BY ProviderCode,JurisdictionCode,AuthorityKindCode
+               ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END
+           ) SourceRank
+    FROM POLOXI.Legal_AuthoritySource
+    WHERE IsEnabled=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
+)
+SELECT LegalAuthoritySourceId,ProviderCode,JurisdictionCode,AuthorityKindCode,CitationPattern,
+       BaseUrl,DocumentUrlTemplate,SectionAnchorTemplate,ExtractionStrategyCode,Priority
+FROM RankedSources
+WHERE SourceRank=1
+ORDER BY Priority,ProviderCode;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<LegalAuthoritySourceDescriptor>(new CommandDefinition(
+            sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
+    public async Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT ContextCode,DisplayName,Description,IsDefault
+FROM POLOXI.Legal_SearchContext
+WHERE IsActive=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
+ORDER BY SortOrder,DisplayName;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<WideSearchContextDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
+    public async Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') Enabled,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.MaximumQueriesPerExecution' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MaximumQueriesPerExecution,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.MaximumSnippetsPerQuery' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),5) MaximumSnippetsPerQuery,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CacheHours' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),24) CacheHours,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.TimeoutSeconds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),15) TimeoutSeconds,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CourtListener.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') CourtListenerEnabled,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CourtListener.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.courtlistener.com') CourtListenerBaseUrl,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CourtListener.ApiToken' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'') CourtListenerApiToken,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.GovInfo.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') GovInfoEnabled,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.GovInfo.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://api.govinfo.gov') GovInfoBaseUrl,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.GovInfo.ApiKey' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'') GovInfoApiKey,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.Ecfr.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.ecfr.gov') EcfrBaseUrl,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CornellLii.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') CornellLiiEnabled,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalGrounding.CornellLii.BaseUrl' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'https://www.law.cornell.edu') CornellLiiBaseUrl;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleAsync<LegalGroundingConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        return new(
+            string.Equals(row.Enabled,"true",StringComparison.OrdinalIgnoreCase),
+            Math.Clamp(row.MaximumQueriesPerExecution,1,20),
+            Math.Clamp(row.MaximumSnippetsPerQuery,1,20),
+            Math.Clamp(row.CacheHours,1,720),
+            Math.Clamp(row.TimeoutSeconds,1,120),
+            string.Equals(row.CourtListenerEnabled,"true",StringComparison.OrdinalIgnoreCase),
+            row.CourtListenerBaseUrl,
+            row.CourtListenerApiToken,
+            string.Equals(row.GovInfoEnabled,"true",StringComparison.OrdinalIgnoreCase),
+            row.GovInfoBaseUrl,
+            row.GovInfoApiKey,
+            row.EcfrBaseUrl,
+            string.Equals(row.CornellLiiEnabled,"true",StringComparison.OrdinalIgnoreCase),
+            row.CornellLiiBaseUrl);
+    }
+
+    private sealed record LegalGroundingConfigurationRow(
+        string Enabled,
+        int MaximumQueriesPerExecution,
+        int MaximumSnippetsPerQuery,
+        int CacheHours,
+        int TimeoutSeconds,
+        string CourtListenerEnabled,
+        string CourtListenerBaseUrl,
+        string CourtListenerApiToken,
+        string GovInfoEnabled,
+        string GovInfoBaseUrl,
+        string GovInfoApiKey,
+        string EcfrBaseUrl,
+        string CornellLiiEnabled,
+        string CornellLiiBaseUrl);
+
+    public async Task<IReadOnlyCollection<WideLegalConceptAuthorityDto>> GetLegalConceptAuthoritiesAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT ConceptKeywords,CitationText,AuthorityKindCode,VerificationTokens,SourceLabel,DisplayName,ContextAnchors
+FROM POLOXI.Legal_LegalConceptAuthority
+WHERE IsActive=1 AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL)
+ORDER BY SortOrder,ConceptKeywords;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<WideLegalConceptAuthorityDto>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken))).AsList();
+    }
+
+    private const string LegalGroundingSettingPrefix="Intelligence.SearchWide.LegalGrounding.";
+    private const string LegalGroundingSettingMask="********";
+
+    public async Task<IReadOnlyCollection<LegalGroundingSettingDto>> GetLegalGroundingSettingsAsync(CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT SettingKey,
+       CASE WHEN IsEncrypted=1 AND COALESCE(SettingValue,N'')<>N'' THEN N'********' ELSE COALESCE(SettingValue,N'') END AS SettingValue,
+       DataTypeCode,
+       Description,
+       IsEncrypted
+FROM Core.ConfigurationSetting
+WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey LIKE @Prefix + N'%'
+ORDER BY SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return (await connection.QueryAsync<LegalGroundingSettingDto>(new CommandDefinition(sql,new{Prefix=LegalGroundingSettingPrefix},cancellationToken:cancellationToken))).AsList();
+    }
+
+    public async Task SaveLegalGroundingSettingAsync(SaveLegalGroundingSettingRequest request,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        // Preserve the stored encrypted value when the UI submits the masked placeholder unchanged.
+        var keepExisting=request.IsEncrypted && request.SettingValue==LegalGroundingSettingMask;
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON target.TenantId IS NULL AND target.ScopeCode=N'Platform' AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=CASE WHEN @KeepExisting=1 THEN target.SettingValue ELSE @SettingValue END,
+        target.DataTypeCode=@DataTypeCode,
+        target.Description=@Description,
+        target.IsEncrypted=@IsEncrypted,
+        target.IsReadOnly=0,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),NULL,N'Platform',N'Intelligence',@SettingKey,CASE WHEN @KeepExisting=1 THEN N'' ELSE @SettingValue END,N'',@DataTypeCode,@Description,@IsEncrypted,0,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            SettingKey=request.SettingKey.StartsWith(LegalGroundingSettingPrefix,StringComparison.OrdinalIgnoreCase)?request.SettingKey:LegalGroundingSettingPrefix+request.SettingKey,
+            SettingValue=request.SettingValue??string.Empty,
+            request.DataTypeCode,
+            Description=request.Description??string.Empty,
+            request.IsEncrypted,
+            KeepExisting=keepExisting
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task DeleteLegalGroundingSettingAsync(string settingKey,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE Core.ConfigurationSetting
+SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey=@SettingKey AND SettingKey LIKE @Prefix + N'%';
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=settingKey,Prefix=LegalGroundingSettingPrefix},cancellationToken:cancellationToken));
+    }
+
+    // ── Epistemic Authority (POLOXI EA) configuration ────────────────────────────────────────────
+    private const string EpistemicSettingPrefix="Intelligence.Epistemic.";
+
+    private sealed record EpistemicSettingRow(string SettingKey,string? PlatformValue,string? TenantValue,string DataTypeCode,string? Description);
+
+    public async Task<IReadOnlyCollection<EpistemicSettingDto>> GetEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT plat.SettingKey,
+       plat.SettingValue AS PlatformValue,
+       tnt.SettingValue  AS TenantValue,
+       plat.DataTypeCode,
+       plat.Description
+FROM Core.ConfigurationSetting plat
+LEFT JOIN Core.ConfigurationSetting tnt
+       ON tnt.TenantId=@TenantId AND tnt.ScopeCode=N'Tenant' AND tnt.IsDeleted=0 AND tnt.SettingKey=plat.SettingKey
+WHERE plat.TenantId IS NULL AND plat.ScopeCode=N'Platform' AND plat.IsDeleted=0 AND plat.SettingKey LIKE @Prefix + N'%'
+ORDER BY plat.SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<EpistemicSettingRow>(new CommandDefinition(sql,new{TenantId=tenantId,Prefix=EpistemicSettingPrefix},cancellationToken:cancellationToken));
+        return rows.Select(r=>new EpistemicSettingDto(
+            r.SettingKey,
+            r.TenantValue??r.PlatformValue??string.Empty,
+            r.PlatformValue??string.Empty,
+            r.DataTypeCode,
+            r.Description,
+            r.TenantValue is not null)).ToArray();
+    }
+
+    public async Task SaveEpistemicSettingAsync(SaveEpistemicSettingRequest request,Guid tenantId,Guid actorUserId,CancellationToken cancellationToken=default)
+    {
+        var key=request.SettingKey.StartsWith(EpistemicSettingPrefix,StringComparison.OrdinalIgnoreCase)?request.SettingKey:EpistemicSettingPrefix+request.SettingKey;
+        var isTenant=string.Equals(request.Scope,"Tenant",StringComparison.OrdinalIgnoreCase);
+        // Tenant overrides upsert against (TenantId, Scope='Tenant'); platform edits upsert the shared default.
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON ((@IsTenant=1 AND target.TenantId=@TenantId AND target.ScopeCode=N'Tenant')
+    OR (@IsTenant=0 AND target.TenantId IS NULL AND target.ScopeCode=N'Platform'))
+  AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=@SettingValue,
+        target.DataTypeCode=COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=source.SettingKey AND p.IsDeleted=0),target.DataTypeCode),
+        target.IsReadOnly=0,
+        target.ModifiedByUserId=@ActorUserId,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedByUserId,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),CASE WHEN @IsTenant=1 THEN @TenantId ELSE NULL END,CASE WHEN @IsTenant=1 THEN N'Tenant' ELSE N'Platform' END,N'Intelligence',@SettingKey,@SettingValue,
+        COALESCE((SELECT TOP 1 p.DefaultValue FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),@SettingValue),
+        COALESCE((SELECT TOP 1 p.DataTypeCode FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N'String'),
+        COALESCE((SELECT TOP 1 p.Description FROM Core.ConfigurationSetting p WHERE p.TenantId IS NULL AND p.ScopeCode=N'Platform' AND p.SettingKey=@SettingKey AND p.IsDeleted=0),N''),0,0,@ActorUserId,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new
+        {
+            SettingKey=key,
+            SettingValue=request.SettingValue??string.Empty,
+            IsTenant=isTenant?1:0,
+            TenantId=tenantId,
+            ActorUserId=actorUserId
+        },cancellationToken:cancellationToken));
+    }
+
+    public async Task<Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings> ResolveEpistemicSettingsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        var settings=await GetEpistemicSettingsAsync(tenantId,cancellationToken);
+        var map=settings.ToDictionary(s=>s.SettingKey,s=>s.EffectiveValue,StringComparer.OrdinalIgnoreCase);
+        var d=new Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings();
+
+        bool Bool(string key,bool fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&bool.TryParse(v,out var b)?b:fallback;
+        int Int(string key,int fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&int.TryParse(v,System.Globalization.NumberStyles.Integer,System.Globalization.CultureInfo.InvariantCulture,out var i)?i:fallback;
+        decimal Dec(string key,decimal fallback)=>map.TryGetValue(EpistemicSettingPrefix+key,out var v)&&decimal.TryParse(v,System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var m)?m:fallback;
+
+        var mode=map.TryGetValue(EpistemicSettingPrefix+"OverrideMode",out var mv)
+            ?Legal.Application.Features.Intelligence.Epistemic.EpistemicOverrideModes.Parse(mv)
+            :d.OverrideMode;
+
+        return new Legal.Application.Features.Intelligence.Epistemic.EpistemicAuthoritySettings
+        {
+            UseClaimAuthorityGate=Bool("UseClaimAuthorityGate",d.UseClaimAuthorityGate),
+            UseMaterialClaimVerification=Bool("UseMaterialClaimVerification",d.UseMaterialClaimVerification),
+            UseClaimDependencyPropagation=Bool("UseClaimDependencyPropagation",d.UseClaimDependencyPropagation),
+            UseClaimReadinessBlocking=Bool("UseClaimReadinessBlocking",d.UseClaimReadinessBlocking),
+            UseOutputClaimAudit=Bool("UseOutputClaimAudit",d.UseOutputClaimAudit),
+            UseEpistemicDecisionBridge=Bool("UseEpistemicDecisionBridge",d.UseEpistemicDecisionBridge),
+            OverrideMode=mode,
+            MaxVerificationActionsPerRound=Int("MaxVerificationActionsPerRound",d.MaxVerificationActionsPerRound),
+            MaxOutputRepairAttempts=Int("MaxOutputRepairAttempts",d.MaxOutputRepairAttempts),
+            MinimumVerificationIV=Dec("MinimumVerificationIV",d.MinimumVerificationIV),
+            MaterialityThreshold=Dec("MaterialityThreshold",d.MaterialityThreshold),
+            FullAuthorityStrengthThreshold=Dec("FullAuthorityStrengthThreshold",d.FullAuthorityStrengthThreshold),
+            VerificationAdequacyThreshold=Dec("VerificationAdequacyThreshold",d.VerificationAdequacyThreshold),
+        };
+    }
+
+    private const string ShowPipelineSettingKey="Intelligence.SearchWide.ShowPipeline";
+
+    public async Task<bool> GetShowPipelineAsync(CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT TOP 1 SettingValue
+FROM Core.ConfigurationSetting
+WHERE TenantId IS NULL AND ScopeCode=N'Platform' AND IsDeleted=0 AND SettingKey=@SettingKey;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var value=await connection.QueryFirstOrDefaultAsync<string>(new CommandDefinition(sql,new{SettingKey=ShowPipelineSettingKey},cancellationToken:cancellationToken));
+        return string.Equals(value?.Trim(),"true",StringComparison.OrdinalIgnoreCase);
+    }
+
+    public async Task SaveShowPipelineAsync(bool showPipeline,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+MERGE Core.ConfigurationSetting AS target
+USING (SELECT @SettingKey AS SettingKey) AS source
+   ON target.TenantId IS NULL AND target.ScopeCode=N'Platform' AND target.SettingKey=source.SettingKey AND target.IsDeleted=0
+WHEN MATCHED THEN
+    UPDATE SET
+        target.ModuleCode=N'Intelligence',
+        target.SettingValue=@SettingValue,
+        target.DataTypeCode=N'Boolean',
+        target.IsReadOnly=0,
+        target.ModifiedDateUtc=SYSUTCDATETIME()
+WHEN NOT MATCHED THEN
+    INSERT(SettingId,TenantId,ScopeCode,ModuleCode,SettingKey,SettingValue,DefaultValue,DataTypeCode,Description,IsEncrypted,IsReadOnly,CreatedDateUtc,IsDeleted)
+    VALUES(NEWID(),NULL,N'Platform',N'Intelligence',@SettingKey,@SettingValue,N'false',N'Boolean',N'When enabled, the Wide search result page shows the End-to-end POLOXI pipeline diagnostics section.',0,0,SYSUTCDATETIME(),0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=ShowPipelineSettingKey,SettingValue=showPipeline?"true":"false"},cancellationToken:cancellationToken));
+    }
+
+    public async Task SavePoloxiBranchOutcomesAsync(Guid tenantId,Guid userId,Guid poloxiExecutionId,IReadOnlyCollection<PoloxiBranchOutcomeRecord> outcomes,CancellationToken cancellationToken=default)
+    {
+        if(outcomes.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_ExecutionBranchOutcome(ExecutionBranchOutcomeId,TenantId,PoloxiExecutionId,HierarchyBranchId,OutcomeCode,RawEvidenceCount,KeptEvidenceCount,RecoveredEvidenceCount,AlternateSearchText,CreatedDateUtc,CreatedByUserId)
+VALUES(NEWID(),@TenantId,@PoloxiExecutionId,@HierarchyBranchId,@OutcomeCode,@RawEvidenceCount,@KeptEvidenceCount,@RecoveredEvidenceCount,@AlternateSearchText,SYSUTCDATETIME(),@UserId);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,outcomes.Select(outcome=>new{TenantId=tenantId,PoloxiExecutionId=poloxiExecutionId,outcome.HierarchyBranchId,outcome.OutcomeCode,outcome.RawEvidenceCount,outcome.KeptEvidenceCount,outcome.RecoveredEvidenceCount,outcome.AlternateSearchText,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task<WideConfiguration> GetWideConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.TargetConfidence' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.85) TargetConfidence,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MinimumBranchConfidence' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) MinimumBranchConfidence,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumBranchesPerLevel' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),5) MaximumBranchesPerLevel,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.AbsoluteDepthCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),25) AbsoluteDepthCeiling,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumTotalLlmCalls' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),30) MaximumTotalLlmCalls,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.SecondaryBranchThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) SecondaryBranchThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.DormantBranchThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) DormantBranchThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.PriorWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.45) PriorWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidenceWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.55) EvidenceWeight,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumCandidates' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),10) MaximumCandidates,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableQueryContract' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableQueryContract,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GroundingConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) GroundingConcurrency,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalRetrievalConcurrency' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) ExternalRetrievalConcurrency,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableInformationValue,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableLegalAuthorityProposal' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableLegalAuthorityProposal,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueTriggerEntropy' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.45) InformationValueTriggerEntropy,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumInformationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MaximumInformationRounds,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumInformationTargetsPerRound' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) MaximumInformationTargetsPerRound,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MinimumInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.55) MinimumInformationValue,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MinimumActualInformationGain' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) MinimumActualInformationGain,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationNoProgressRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) InformationNoProgressRounds,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueLlmWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) InformationValueLlmWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueEvidenceGapWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) InformationValueEvidenceGapWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueBranchWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) InformationValueBranchWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.InformationValueCandidateNeedWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) InformationValueCandidateNeedWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionUncertaintyWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) CriterionUncertaintyWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionRankingImpactWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) CriterionRankingImpactWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionDiscriminationWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) CriterionDiscriminationWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionEvidenceAvailabilityWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) CriterionEvidenceAvailabilityWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionNoveltyWeight' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) CriterionNoveltyWeight,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.CriterionRedundancyPenalty' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) CriterionRedundancyPenalty,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.VeryLowInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) VeryLowInformationValue,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LowInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.40) LowInformationValue,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MediumInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) MediumInformationValue,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.HighInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.80) HighInformationValue,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.VeryHighInformationValue' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1.00) VeryHighInformationValue,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidencePriorityMinimumDepth' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) EvidencePriorityMinimumDepth,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidencePriorityCoverageFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) EvidencePriorityCoverageFloor,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MinimumCandidateDimensionSupport' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) MinimumCandidateDimensionSupport,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableClarificationGate' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableClarificationGate,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ClarificationConfidenceThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.65) ClarificationConfidenceThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ClarificationWinnerStabilityThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) ClarificationWinnerStabilityThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ClarificationMarginThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ClarificationMarginThreshold,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumClarificationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) MaximumClarificationRounds,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MinimumClarificationGain' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) MinimumClarificationGain,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableAdaptiveNarrowing' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableAdaptiveNarrowing,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingBranchCoverageFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) NarrowingBranchCoverageFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingInformationValueFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) NarrowingInformationValueFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnterpriseSupportBase' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) EnterpriseSupportBase,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnterpriseSupportIncrement' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) EnterpriseSupportIncrement,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnterpriseSupportCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.90) EnterpriseSupportCeiling,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalSupportBase' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) ExternalSupportBase,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalSupportIncrement' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ExternalSupportIncrement,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalRetrievalRelevanceFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.60) LegalRetrievalRelevanceFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.LegalSupportFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) LegalSupportFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.AuthoritativeSourceBonus' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) AuthoritativeSourceBonus,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EvidenceConsensusThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.25) EvidenceConsensusThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalOnlySupportDiscount' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.70) ExternalOnlySupportDiscount,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingReopenSupportDelta' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.15) NarrowingReopenSupportDelta,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingCandidateCoverageFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) NarrowingCandidateCoverageFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingCandidateScoreGap' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.40) NarrowingCandidateScoreGap,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.NarrowingDiscoveryMinimumSupport' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) NarrowingDiscoveryMinimumSupport,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MaximumCandidateAdmissionsPerRound' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),5) MaximumCandidateAdmissionsPerRound,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableAnswerKindRouting' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableAnswerKindRouting,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableDeliverableSynthesis' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableDeliverableSynthesis,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.DeliverableSynthesisIndicators' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'') DeliverableSynthesisIndicators,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ContentEnumerationDepthCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) ContentEnumerationDepthCeiling,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ContentEnumerationMaxInformationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),1) ContentEnumerationMaxInformationRounds,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.SingleAnswerDepthCeiling' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) SingleAnswerDepthCeiling,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.SingleAnswerMaxInformationRounds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0) SingleAnswerMaxInformationRounds,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ClarificationReweightBoost' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.35) ClarificationReweightBoost,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableChallengeRound' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableChallengeRound,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableAbv' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableAbv,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGroundingBudgetSeconds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),120) ExternalGroundingBudgetSeconds,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableTieredModelRouting' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableTieredModelRouting,
+COALESCE(NULLIF((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.FastModelCode' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N''),N'gpt-4.1-mini') FastModelCode,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ChallengeMarginThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.10) ChallengeMarginThreshold,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableGuardrailPenalty' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableGuardrailPenalty,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailVetoThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.20) GuardrailVetoThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailAcceptableThreshold' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.65) GuardrailAcceptableThreshold,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.GuardrailPenaltyExponent' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.50) GuardrailPenaltyExponent,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableMarginalValueStopping' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'true') EnableMarginalValueStopping,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalValueMinimumDepth' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MarginalValueMinimumDepth,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalCoverageDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.05) MarginalCoverageDeltaFloor,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.MarginalConfidenceDeltaFloor' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),.03) MarginalConfidenceDeltaFloor,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.EnableResolutionDeepening' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') EnableResolutionDeepening,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMinConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),2) ResolutionDeepeningMinConditions,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ResolutionDeepeningMaxConditions' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),4) ResolutionDeepeningMaxConditions;
+-- V3.3 POLOXI.Legal_AnswerKind lookup (tenant rows override global rows with the same code).
+SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition
+FROM(SELECT AnswerKindCode,DepthCeiling,MaxInformationRounds,RunsCandidateCompetition,
+     ROW_NUMBER()OVER(PARTITION BY AnswerKindCode ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)Rn
+     FROM POLOXI.Legal_AnswerKind WHERE IsDeleted=0 AND(TenantId=@TenantId OR TenantId IS NULL))ranked
+WHERE Rn=1 ORDER BY AnswerKindCode;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi=await connection.QueryMultipleAsync(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        var row=await multi.ReadSingleAsync<WideConfigurationRow>();
+        var answerKinds=(await multi.ReadAsync<WideAnswerKindRow>())
+            .Select(kind=>new WideAnswerKindDefinition(kind.AnswerKindCode.Trim().ToUpperInvariant(),Math.Clamp(kind.DepthCeiling,0,100),kind.MaxInformationRounds is{}rounds?Math.Clamp(rounds,0,10):null,kind.RunsCandidateCompetition))
+            .ToArray();
+        return new(Math.Clamp(row.TargetConfidence,0,1),Math.Clamp(row.MinimumBranchConfidence,0,1),Math.Clamp(row.MaximumBranchesPerLevel,1,12),Math.Clamp(row.AbsoluteDepthCeiling,1,100),Math.Clamp(row.MaximumTotalLlmCalls,1,200))
+        {
+            SecondaryBranchThreshold=Math.Clamp(row.SecondaryBranchThreshold,0,1),
+            DormantBranchThreshold=Math.Clamp(row.DormantBranchThreshold,0,1),
+            PriorWeight=Math.Clamp(row.PriorWeight,0,1),
+            EvidenceWeight=Math.Clamp(row.EvidenceWeight,0,1),
+            MaximumCandidates=Math.Clamp(row.MaximumCandidates,1,50),
+            EnableQueryContract=string.Equals(row.EnableQueryContract,"true",StringComparison.OrdinalIgnoreCase),
+            GroundingConcurrency=Math.Clamp(row.GroundingConcurrency,1,16),
+            ExternalRetrievalConcurrency=Math.Clamp(row.ExternalRetrievalConcurrency,1,16),
+            EnableInformationValue=string.Equals(row.EnableInformationValue,"true",StringComparison.OrdinalIgnoreCase),
+            EnableLegalAuthorityProposal=string.Equals(row.EnableLegalAuthorityProposal,"true",StringComparison.OrdinalIgnoreCase),
+            InformationValueTriggerEntropy=Math.Clamp(row.InformationValueTriggerEntropy,0,1),
+            MaximumInformationRounds=Math.Clamp(row.MaximumInformationRounds,0,10),
+            MaximumInformationTargetsPerRound=Math.Clamp(row.MaximumInformationTargetsPerRound,1,8),
+            MinimumInformationValue=Math.Clamp(row.MinimumInformationValue,0,1),
+            MinimumActualInformationGain=Math.Clamp(row.MinimumActualInformationGain,0,1),
+            InformationNoProgressRounds=Math.Clamp(row.InformationNoProgressRounds,1,10),
+            InformationValueLlmWeight=Math.Clamp(row.InformationValueLlmWeight,0,1),
+            InformationValueEvidenceGapWeight=Math.Clamp(row.InformationValueEvidenceGapWeight,0,1),
+            InformationValueBranchWeight=Math.Clamp(row.InformationValueBranchWeight,0,1),
+            InformationValueCandidateNeedWeight=Math.Clamp(row.InformationValueCandidateNeedWeight,0,1),
+            CriterionUncertaintyWeight=Math.Clamp(row.CriterionUncertaintyWeight,0,1),
+            CriterionRankingImpactWeight=Math.Clamp(row.CriterionRankingImpactWeight,0,1),
+            CriterionDiscriminationWeight=Math.Clamp(row.CriterionDiscriminationWeight,0,1),
+            CriterionEvidenceAvailabilityWeight=Math.Clamp(row.CriterionEvidenceAvailabilityWeight,0,1),
+            CriterionNoveltyWeight=Math.Clamp(row.CriterionNoveltyWeight,0,1),
+            CriterionRedundancyPenalty=Math.Clamp(row.CriterionRedundancyPenalty,0,1),
+            VeryLowInformationValue=Math.Clamp(row.VeryLowInformationValue,0,1),
+            LowInformationValue=Math.Clamp(row.LowInformationValue,0,1),
+            MediumInformationValue=Math.Clamp(row.MediumInformationValue,0,1),
+            HighInformationValue=Math.Clamp(row.HighInformationValue,0,1),
+            VeryHighInformationValue=Math.Clamp(row.VeryHighInformationValue,0,1),
+            EvidencePriorityMinimumDepth=Math.Clamp(row.EvidencePriorityMinimumDepth,1,100),
+            EvidencePriorityCoverageFloor=Math.Clamp(row.EvidencePriorityCoverageFloor,0,1),
+            MinimumCandidateDimensionSupport=Math.Clamp(row.MinimumCandidateDimensionSupport,1,10),
+            EnableClarificationGate=string.Equals(row.EnableClarificationGate,"true",StringComparison.OrdinalIgnoreCase),
+            ClarificationConfidenceThreshold=Math.Clamp(row.ClarificationConfidenceThreshold,0,1),
+            ClarificationWinnerStabilityThreshold=Math.Clamp(row.ClarificationWinnerStabilityThreshold,0,1),
+            ClarificationMarginThreshold=Math.Clamp(row.ClarificationMarginThreshold,0,1),
+            MaximumClarificationRounds=Math.Clamp(row.MaximumClarificationRounds,0,10),
+            MinimumClarificationGain=Math.Clamp(row.MinimumClarificationGain,0,1),
+            EnableAdaptiveNarrowing=string.Equals(row.EnableAdaptiveNarrowing,"true",StringComparison.OrdinalIgnoreCase),
+            NarrowingBranchCoverageFloor=Math.Clamp(row.NarrowingBranchCoverageFloor,0,1),
+            NarrowingInformationValueFloor=Math.Clamp(row.NarrowingInformationValueFloor,0,1),
+            EnterpriseSupportBase=Math.Clamp(row.EnterpriseSupportBase,0,1),
+            EnterpriseSupportIncrement=Math.Clamp(row.EnterpriseSupportIncrement,0,1),
+            EnterpriseSupportCeiling=Math.Clamp(row.EnterpriseSupportCeiling,0,1),
+            ExternalSupportBase=Math.Clamp(row.ExternalSupportBase,0,1),
+            ExternalSupportIncrement=Math.Clamp(row.ExternalSupportIncrement,0,1),
+            LegalRetrievalRelevanceFloor=Math.Clamp(row.LegalRetrievalRelevanceFloor,0,1),
+            LegalSupportFloor=Math.Clamp(row.LegalSupportFloor,0,1),
+            AuthoritativeSourceBonus=Math.Clamp(row.AuthoritativeSourceBonus,0,1),
+            EvidenceConsensusThreshold=Math.Clamp(row.EvidenceConsensusThreshold,0,1),
+            ExternalOnlySupportDiscount=Math.Clamp(row.ExternalOnlySupportDiscount,0,1),
+            NarrowingReopenSupportDelta=Math.Clamp(row.NarrowingReopenSupportDelta,0,1),
+            NarrowingCandidateCoverageFloor=Math.Clamp(row.NarrowingCandidateCoverageFloor,0,1),
+            NarrowingCandidateScoreGap=Math.Clamp(row.NarrowingCandidateScoreGap,0,1),
+            NarrowingDiscoveryMinimumSupport=Math.Clamp(row.NarrowingDiscoveryMinimumSupport,1,10),
+            MaximumCandidateAdmissionsPerRound=Math.Clamp(row.MaximumCandidateAdmissionsPerRound,1,25),
+            EnableAnswerKindRouting=string.Equals(row.EnableAnswerKindRouting,"true",StringComparison.OrdinalIgnoreCase),
+            EnableDeliverableSynthesis=string.Equals(row.EnableDeliverableSynthesis,"true",StringComparison.OrdinalIgnoreCase),
+            DeliverableSynthesisIndicators=ParseDelimitedSetting(row.DeliverableSynthesisIndicators),
+            ContentEnumerationDepthCeiling=Math.Clamp(row.ContentEnumerationDepthCeiling,0,100),
+            ContentEnumerationMaxInformationRounds=Math.Clamp(row.ContentEnumerationMaxInformationRounds,0,10),
+            SingleAnswerDepthCeiling=Math.Clamp(row.SingleAnswerDepthCeiling,0,100),
+            SingleAnswerMaxInformationRounds=Math.Clamp(row.SingleAnswerMaxInformationRounds,0,10),
+            AnswerKinds=answerKinds,
+            ClarificationReweightBoost=Math.Clamp(row.ClarificationReweightBoost,0,1),
+            EnableChallengeRound=string.Equals(row.EnableChallengeRound,"true",StringComparison.OrdinalIgnoreCase),
+            EnableAbv=string.Equals(row.EnableAbv,"true",StringComparison.OrdinalIgnoreCase),
+            ExternalGroundingBudgetSeconds=Math.Clamp(row.ExternalGroundingBudgetSeconds,0,3600),
+            EnableTieredModelRouting=string.Equals(row.EnableTieredModelRouting,"true",StringComparison.OrdinalIgnoreCase),
+            FastModelCode=string.IsNullOrWhiteSpace(row.FastModelCode)?"gpt-4.1-mini":row.FastModelCode.Trim(),
+            ChallengeMarginThreshold=Math.Clamp(row.ChallengeMarginThreshold,0,1),
+            EnableGuardrailPenalty=string.Equals(row.EnableGuardrailPenalty,"true",StringComparison.OrdinalIgnoreCase),
+            GuardrailVetoThreshold=Math.Clamp(row.GuardrailVetoThreshold,0,1),
+            GuardrailAcceptableThreshold=Math.Clamp(row.GuardrailAcceptableThreshold,0,1),
+            GuardrailPenaltyExponent=Math.Clamp(row.GuardrailPenaltyExponent,.01m,5m),
+            EnableMarginalValueStopping=string.Equals(row.EnableMarginalValueStopping,"true",StringComparison.OrdinalIgnoreCase),
+            MarginalValueMinimumDepth=Math.Clamp(row.MarginalValueMinimumDepth,2,100),
+            MarginalCoverageDeltaFloor=Math.Clamp(row.MarginalCoverageDeltaFloor,0,1),
+            MarginalConfidenceDeltaFloor=Math.Clamp(row.MarginalConfidenceDeltaFloor,0,1),
+            EnableResolutionDeepening=string.Equals(row.EnableResolutionDeepening,"true",StringComparison.OrdinalIgnoreCase),
+            ResolutionDeepeningMinConditions=Math.Clamp(row.ResolutionDeepeningMinConditions,1,10),
+            ResolutionDeepeningMaxConditions=Math.Clamp(row.ResolutionDeepeningMaxConditions,1,10)
+        };
+    }
+
+    public async Task<Guid> StartWideExecutionAsync(WideExecutionStart start,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+DECLARE @WideExecutionId UNIQUEIDENTIFIER=NEWID();
+INSERT POLOXI.Legal_WideExecution(WideExecutionId,TenantId,UserId,QueryText,CorrelationId,StatusCode,ParentWideExecutionId,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideExecutionId,@TenantId,@UserId,@QueryText,@CorrelationId,N'RUNNING',@ParentWideExecutionId,SYSUTCDATETIME(),@UserId,0);
+SELECT @WideExecutionId;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.ExecuteScalarAsync<Guid>(new CommandDefinition(sql,new{start.TenantId,start.UserId,start.QueryText,start.CorrelationId,start.ParentWideExecutionId},cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveWideBranchesAsync(IReadOnlyCollection<WideBranchRecord> branches,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(branches.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideBranch(WideBranchId,WideExecutionId,ParentWideBranchId,TenantId,LevelNumber,BranchCode,DisplayName,Interpretation,CapabilityCode,SearchText,GroundingStatusCode,EvidenceCount,Confidence,ContinueNarrowing,StopReason,IsEliminated,EliminationReason,SortOrder,BranchStateCode,SemanticTypeCode,BranchRoleCode,InterpretationPrior,EvidenceSupport,PoloxiConfidence,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideBranchId,@WideExecutionId,@ParentWideBranchId,@TenantId,@LevelNumber,@BranchCode,@DisplayName,@Interpretation,@CapabilityCode,@SearchText,@GroundingStatusCode,@EvidenceCount,@Confidence,@ContinueNarrowing,@StopReason,@IsEliminated,@EliminationReason,@SortOrder,@BranchStateCode,@SemanticTypeCode,@BranchRoleCode,@InterpretationPrior,@EvidenceSupport,@PoloxiConfidence,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        foreach(var branch in branches)
+            await connection.ExecuteAsync(new CommandDefinition(sql,new{branch.WideBranchId,branch.WideExecutionId,branch.ParentWideBranchId,branch.TenantId,branch.LevelNumber,branch.BranchCode,branch.DisplayName,branch.Interpretation,branch.CapabilityCode,branch.SearchText,branch.GroundingStatusCode,branch.EvidenceCount,branch.Confidence,branch.ContinueNarrowing,branch.StopReason,branch.IsEliminated,branch.EliminationReason,branch.SortOrder,branch.BranchStateCode,branch.SemanticTypeCode,branch.BranchRoleCode,branch.InterpretationPrior,branch.EvidenceSupport,branch.PoloxiConfidence,UserId=userId},cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideBranchOutcomeAsync(Guid tenantId,Guid wideBranchId,string groundingStatusCode,int evidenceCount,bool isEliminated,string? eliminationReason,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,GroundingStatusCode=groundingStatusCode,EvidenceCount=evidenceCount,IsEliminated=isEliminated,EliminationReason=eliminationReason},cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideBranchOutcomesAsync(Guid tenantId,IReadOnlyCollection<WideBranchOutcomeUpdate> outcomes,CancellationToken cancellationToken=default)
+    {
+        if(outcomes.Count==0)return;
+        const string sql="""
+UPDATE POLOXI.Legal_WideBranch SET GroundingStatusCode=@GroundingStatusCode,EvidenceCount=@EvidenceCount,IsEliminated=@IsEliminated,EliminationReason=@EliminationReason,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,outcomes.Select(o=>new{TenantId=tenantId,o.WideBranchId,o.GroundingStatusCode,o.EvidenceCount,o.IsEliminated,o.EliminationReason}),cancellationToken:cancellationToken));
+    }
+
+    public async Task CompleteWideExecutionAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string statusCode,string terminationReasonCode,int depthReached,int llmCallCount,decimal finalConfidence,string answerVerificationCode,string? finalAnswer,long durationMilliseconds,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideExecution SET StatusCode=@StatusCode,TerminationReasonCode=@TerminationReasonCode,DepthReached=@DepthReached,LlmCallCount=@LlmCallCount,FinalConfidence=@FinalConfidence,AnswerVerificationCode=@AnswerVerificationCode,FinalAnswer=@FinalAnswer,DurationMilliseconds=@DurationMilliseconds,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,StatusCode=statusCode,TerminationReasonCode=terminationReasonCode,DepthReached=depthReached,LlmCallCount=llmCallCount,FinalConfidence=finalConfidence,AnswerVerificationCode=answerVerificationCode,FinalAnswer=finalAnswer,DurationMilliseconds=durationMilliseconds},cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideBranchScoresAsync(Guid tenantId,Guid wideBranchId,string branchStateCode,decimal interpretationPrior,decimal evidenceSupport,decimal poloxiConfidence,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,PoloxiConfidence=@PoloxiConfidence,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,WideBranchId=wideBranchId,BranchStateCode=branchStateCode,InterpretationPrior=interpretationPrior,EvidenceSupport=evidenceSupport,PoloxiConfidence=poloxiConfidence},cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideBranchScoresAsync(Guid tenantId,IReadOnlyCollection<WideBranchScoreUpdate> scores,CancellationToken cancellationToken=default)
+    {
+        if(scores.Count==0)return;
+        const string sql="""
+UPDATE POLOXI.Legal_WideBranch SET BranchStateCode=@BranchStateCode,InterpretationPrior=@InterpretationPrior,EvidenceSupport=@EvidenceSupport,PoloxiConfidence=@PoloxiConfidence,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,scores.Select(s=>new{TenantId=tenantId,s.WideBranchId,s.BranchStateCode,s.InterpretationPrior,s.EvidenceSupport,s.PoloxiConfidence}),cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveWideCandidatesAsync(IReadOnlyCollection<WideCandidateRecord> candidates,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(candidates.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,SYSUTCDATETIME(),UserId,0
+FROM OPENJSON(@CandidateRowsJson)
+WITH
+(
+    WideCandidateId UNIQUEIDENTIFIER '$.WideCandidateId',
+    WideExecutionId UNIQUEIDENTIFIER '$.WideExecutionId',
+    TenantId UNIQUEIDENTIFIER '$.TenantId',
+    DisplayName NVARCHAR(300) '$.DisplayName',
+    Detail NVARCHAR(1000) '$.Detail',
+    CompositeScore DECIMAL(9,4) '$.CompositeScore',
+    RankNumber INT '$.RankNumber',
+    IsConstraintViolation BIT '$.IsConstraintViolation',
+    ConstraintViolationReason NVARCHAR(400) '$.ConstraintViolationReason',
+    UserId UNIQUEIDENTIFIER '$.UserId'
+);
+
+INSERT POLOXI.Legal_WideCandidateBranchScore(WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT WideCandidateBranchScoreId,WideCandidateId,WideBranchId,TenantId,BranchDisplayName,EvidenceScore,SYSUTCDATETIME(),UserId,0
+FROM OPENJSON(@ScoreRowsJson)
+WITH
+(
+    WideCandidateBranchScoreId UNIQUEIDENTIFIER '$.WideCandidateBranchScoreId',
+    WideCandidateId UNIQUEIDENTIFIER '$.WideCandidateId',
+    WideBranchId UNIQUEIDENTIFIER '$.WideBranchId',
+    TenantId UNIQUEIDENTIFIER '$.TenantId',
+    BranchDisplayName NVARCHAR(300) '$.BranchDisplayName',
+    EvidenceScore DECIMAL(9,4) '$.EvidenceScore',
+    UserId UNIQUEIDENTIFIER '$.UserId'
+);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction=connection.BeginTransaction();
+        var candidateRows=candidates.Select(candidate=>new{candidate.WideCandidateId,candidate.WideExecutionId,candidate.TenantId,candidate.DisplayName,candidate.Detail,candidate.CompositeScore,candidate.RankNumber,candidate.IsConstraintViolation,candidate.ConstraintViolationReason,UserId=userId}).ToArray();
+        var scoreRows=candidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>new{score.WideCandidateBranchScoreId,score.WideCandidateId,score.WideBranchId,score.TenantId,score.BranchDisplayName,score.EvidenceScore,UserId=userId})).ToArray();
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{CandidateRowsJson=JsonSerializer.Serialize(candidateRows),ScoreRowsJson=JsonSerializer.Serialize(scoreRows)},transaction,cancellationToken:cancellationToken));
+        transaction.Commit();
+    }
+
+    public async Task UpdateWideExecutionContractAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string? queryContractJson,decimal evidenceCoverage,int externalEvidenceCount,int enterpriseEvidenceCount,int candidateCount,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideExecution SET QueryContractJson=@QueryContractJson,EvidenceCoverage=@EvidenceCoverage,ExternalEvidenceCount=@ExternalEvidenceCount,EnterpriseEvidenceCount=@EnterpriseEvidenceCount,CandidateCount=@CandidateCount,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,QueryContractJson=queryContractJson,EvidenceCoverage=evidenceCoverage,ExternalEvidenceCount=externalEvidenceCount,EnterpriseEvidenceCount=enterpriseEvidenceCount,CandidateCount=candidateCount},cancellationToken:cancellationToken));
+    }
+
+    // V3.2: persists the governing Stage 0 AnswerKind classification for audit and misclassification measurement.
+    public async Task UpdateWideExecutionAnswerKindAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string answerKindCode,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideExecution SET AnswerKindCode=@AnswerKindCode,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,AnswerKindCode=answerKindCode},cancellationToken:cancellationToken));
+    }
+
+    // Phase 2a: persists the WATCH-ONLY challenge-the-winner outcome for audit (never affects the answer).
+    public async Task UpdateWideExecutionChallengeOutcomeAsync(Guid tenantId,Guid userId,Guid wideExecutionId,string challengeOutcomeJson,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideExecution SET ChallengeOutcomeJson=@ChallengeOutcomeJson,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideExecutionId=wideExecutionId,ChallengeOutcomeJson=challengeOutcomeJson},cancellationToken:cancellationToken));
+    }
+
+    private static IReadOnlyCollection<string> ParseDelimitedSetting(string? value)=>
+        string.IsNullOrWhiteSpace(value)?[]:value.Split(['|',',',';'],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries).Where(item=>item.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    private sealed record WideConfigurationRow(
+        decimal TargetConfidence,decimal MinimumBranchConfidence,int MaximumBranchesPerLevel,int AbsoluteDepthCeiling,int MaximumTotalLlmCalls,decimal SecondaryBranchThreshold,decimal DormantBranchThreshold,decimal PriorWeight,decimal EvidenceWeight,int MaximumCandidates,string EnableQueryContract,
+        int GroundingConcurrency,int ExternalRetrievalConcurrency,string EnableInformationValue,string EnableLegalAuthorityProposal,decimal InformationValueTriggerEntropy,int MaximumInformationRounds,int MaximumInformationTargetsPerRound,decimal MinimumInformationValue,decimal MinimumActualInformationGain,int InformationNoProgressRounds,
+        decimal InformationValueLlmWeight,decimal InformationValueEvidenceGapWeight,decimal InformationValueBranchWeight,decimal InformationValueCandidateNeedWeight,decimal CriterionUncertaintyWeight,decimal CriterionRankingImpactWeight,decimal CriterionDiscriminationWeight,decimal CriterionEvidenceAvailabilityWeight,decimal CriterionNoveltyWeight,decimal CriterionRedundancyPenalty,
+        decimal VeryLowInformationValue,decimal LowInformationValue,decimal MediumInformationValue,decimal HighInformationValue,decimal VeryHighInformationValue,int EvidencePriorityMinimumDepth,decimal EvidencePriorityCoverageFloor,int MinimumCandidateDimensionSupport,string EnableClarificationGate,decimal ClarificationConfidenceThreshold,decimal ClarificationWinnerStabilityThreshold,decimal ClarificationMarginThreshold,int MaximumClarificationRounds,decimal MinimumClarificationGain,
+        string EnableAdaptiveNarrowing,decimal NarrowingBranchCoverageFloor,decimal NarrowingInformationValueFloor,decimal EnterpriseSupportBase,decimal EnterpriseSupportIncrement,decimal EnterpriseSupportCeiling,decimal ExternalSupportBase,decimal ExternalSupportIncrement,decimal LegalRetrievalRelevanceFloor,decimal LegalSupportFloor,decimal AuthoritativeSourceBonus,decimal EvidenceConsensusThreshold,decimal ExternalOnlySupportDiscount,decimal NarrowingReopenSupportDelta,decimal NarrowingCandidateCoverageFloor,decimal NarrowingCandidateScoreGap,int NarrowingDiscoveryMinimumSupport,int MaximumCandidateAdmissionsPerRound,
+        string EnableAnswerKindRouting,string EnableDeliverableSynthesis,string DeliverableSynthesisIndicators,int ContentEnumerationDepthCeiling,int ContentEnumerationMaxInformationRounds,int SingleAnswerDepthCeiling,int SingleAnswerMaxInformationRounds,decimal ClarificationReweightBoost,string EnableChallengeRound,string EnableAbv,int ExternalGroundingBudgetSeconds,string EnableTieredModelRouting,string FastModelCode,decimal ChallengeMarginThreshold,string EnableGuardrailPenalty,decimal GuardrailVetoThreshold,decimal GuardrailAcceptableThreshold,decimal GuardrailPenaltyExponent,
+        string EnableMarginalValueStopping,int MarginalValueMinimumDepth,decimal MarginalCoverageDeltaFloor,decimal MarginalConfidenceDeltaFloor,string EnableResolutionDeepening,int ResolutionDeepeningMinConditions,int ResolutionDeepeningMaxConditions);
+
+    private sealed record WideAnswerKindRow(string AnswerKindCode,int DepthCeiling,int? MaxInformationRounds,bool RunsCandidateCompetition);
+
+    // V3.0: persists one adaptive-narrowing evaluation with its full transition provenance (never deleted).
+    public async Task SaveNarrowingIterationAsync(WideNarrowingIterationRecord iteration,Guid userId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+INSERT POLOXI.Legal_WideNarrowingIteration(WideNarrowingIterationId,WideExecutionId,TenantId,RoundNumber,TrendCode,ActiveBranchCountBefore,ActiveBranchCountAfter,CandidateCountBefore,CandidateCountAfter,NormalizedEntropyBefore,NormalizedEntropyAfter,ActualInformationGain,ResolvedBranchCount,ReopenedBranchCount,AdmittedCandidateCount,DiscoveredNotAdmittedCount,TransitionsJson,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideNarrowingIterationId,@WideExecutionId,@TenantId,@RoundNumber,@TrendCode,@ActiveBranchCountBefore,@ActiveBranchCountAfter,@CandidateCountBefore,@CandidateCountAfter,@NormalizedEntropyBefore,@NormalizedEntropyAfter,@ActualInformationGain,@ResolvedBranchCount,@ReopenedBranchCount,@AdmittedCandidateCount,@DiscoveredNotAdmittedCount,@TransitionsJson,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{iteration.WideNarrowingIterationId,iteration.WideExecutionId,iteration.TenantId,iteration.RoundNumber,iteration.TrendCode,iteration.ActiveBranchCountBefore,iteration.ActiveBranchCountAfter,iteration.CandidateCountBefore,iteration.CandidateCountAfter,iteration.NormalizedEntropyBefore,iteration.NormalizedEntropyAfter,iteration.ActualInformationGain,iteration.ResolvedBranchCount,iteration.ReopenedBranchCount,iteration.AdmittedCandidateCount,iteration.DiscoveredNotAdmittedCount,iteration.TransitionsJson,UserId=userId},cancellationToken:cancellationToken));
+    }
+
+    public async Task<WideExternalGroundingConfiguration> GetExternalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.Enabled' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'false') Enabled,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.ProviderCode' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'TAVILY') ProviderCode,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.ApiKey' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'') ApiKey,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.MaximumQueriesPerExecution' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),3) MaximumQueriesPerExecution,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.MaximumSnippetsPerQuery' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),5) MaximumSnippetsPerQuery,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.CacheHours' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),24) CacheHours,
+COALESCE(TRY_CONVERT(int,(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.SearchWide.ExternalGrounding.TimeoutSeconds' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),10) TimeoutSeconds;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleAsync<ExternalGroundingConfigurationRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        return new(string.Equals(row.Enabled,"true",StringComparison.OrdinalIgnoreCase),row.ProviderCode,row.ApiKey,Math.Clamp(row.MaximumQueriesPerExecution,1,20),Math.Clamp(row.MaximumSnippetsPerQuery,1,20),Math.Clamp(row.CacheHours,1,720),Math.Clamp(row.TimeoutSeconds,1,120));
+    }
+
+    public async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GetCachedExternalKnowledgeAsync(Guid tenantId,string normalizedQuery,DateTime notBeforeUtc,CancellationToken cancellationToken=default)
+    {
+        // COALESCE the non-nullable value-type columns (AuthorityIdentityVerified bit,
+        // PropositionSupportScore decimal): legacy rows written before the legal verification columns
+        // existed can be NULL, and Dapper throws InvalidOperationException assigning DBNull to a
+        // non-nullable bool/decimal. That crash fired before LegalRetriever ran, silently zeroing all
+        // legal grounding evidence via the per-branch fail-soft catch.
+        const string sql="""
+SELECT NormalizedQuery Query,Title,Url,Snippet,Score,RetrievedDateUtc,BranchId,BranchDisplayName,AuthorityKind,COALESCE(AuthorityIdentityVerified,CAST(0 AS BIT)) AuthorityIdentityVerified,COALESCE(PropositionSupportScore,CAST(0 AS DECIMAL(9,4))) PropositionSupportScore,PropositionSupportStatus
+FROM POLOXI.Legal_ExternalKnowledge
+WHERE TenantId=@TenantId AND NormalizedQuery=@NormalizedQuery AND RetrievedDateUtc>=@NotBeforeUtc AND IsDeleted=0
+ORDER BY Score DESC,RetrievedDateUtc DESC;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<ExternalKnowledgeRow>(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=TruncateCacheKey(normalizedQuery),NotBeforeUtc=notBeforeUtc},cancellationToken:cancellationToken));
+        return rows.Select(MapExternalKnowledgeSnippet).ToList();
+    }
+
+    // Dapper cannot pick a constructor for the Application-layer WideExternalKnowledgeSnippet record: it
+    // exposes two public constructors (parameterless + 6-arg positional) and the cache SELECT returns 12
+    // columns, matching neither, so Dapper throws instead of falling back to the parameterless one. This
+    // flat positional row has a single primary constructor Dapper binds unambiguously by name; the result
+    // is then projected onto the domain record via its 6-arg constructor plus settable properties.
+    private sealed record ExternalKnowledgeRow(string Query,string Title,string Url,string Snippet,decimal Score,DateTime RetrievedDateUtc,Guid? BranchId,string? BranchDisplayName,string? AuthorityKind,bool AuthorityIdentityVerified,decimal PropositionSupportScore,string? PropositionSupportStatus);
+
+    private static WideExternalKnowledgeSnippet MapExternalKnowledgeSnippet(ExternalKnowledgeRow row)=>
+        new(row.Query,row.Title,row.Url,row.Snippet,row.Score,row.RetrievedDateUtc)
+        {
+            BranchId=row.BranchId,
+            BranchDisplayName=row.BranchDisplayName,
+            AuthorityKind=row.AuthorityKind,
+            AuthorityIdentityVerified=row.AuthorityIdentityVerified,
+            PropositionSupportScore=row.PropositionSupportScore,
+            PropositionSupportStatus=row.PropositionSupportStatus,
+        };
+
+    // POLOXI.Legal_ExternalKnowledge.NormalizedQuery is NVARCHAR(400) (index key size limit); queries may
+    // now be up to 4,000 characters, so the cache key is deterministically capped to the column size.
+    private static string TruncateCacheKey(string normalizedQuery)=>normalizedQuery.Length<=400?normalizedQuery:normalizedQuery[..400];
+
+    public async Task SaveExternalKnowledgeAsync(Guid tenantId,Guid userId,string normalizedQuery,IReadOnlyCollection<WideExternalKnowledgeSnippet> snippets,Guid? wideExecutionId=null,CancellationToken cancellationToken=default)
+    {
+        if(snippets.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_ExternalKnowledge(ExternalKnowledgeId,TenantId,NormalizedQuery,Title,Url,Snippet,Score,RetrievedDateUtc,WideExecutionId,BranchId,BranchDisplayName,AuthorityKind,AuthorityIdentityVerified,PropositionSupportScore,PropositionSupportStatus,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(NEWID(),@TenantId,@NormalizedQuery,@Title,@Url,@Snippet,@Score,@RetrievedDateUtc,@WideExecutionId,@BranchId,@BranchDisplayName,@AuthorityKind,@AuthorityIdentityVerified,@PropositionSupportScore,@PropositionSupportStatus,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        foreach(var snippet in snippets)
+            await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,NormalizedQuery=TruncateCacheKey(normalizedQuery),snippet.Title,snippet.Url,snippet.Snippet,snippet.Score,snippet.RetrievedDateUtc,WideExecutionId=wideExecutionId,snippet.BranchId,snippet.BranchDisplayName,snippet.AuthorityKind,snippet.AuthorityIdentityVerified,snippet.PropositionSupportScore,snippet.PropositionSupportStatus,UserId=userId},cancellationToken:cancellationToken));
+    }
+
+    // V3.4: tenant-scoped continuation state from the parent execution row. Null when not found -
+    // the service falls back to client-carried fields (legacy clients) rather than failing.
+    public async Task<WideContinuationState?> GetWideContinuationStateAsync(Guid tenantId,Guid wideExecutionId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+SELECT WideExecutionId,QueryText,ClarificationRound,IntentEntropy,AnswerKindCode,ClarificationTarget
+FROM POLOXI.Legal_WideExecution
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<WideContinuationState>(new CommandDefinition(sql,new{TenantId=tenantId,WideExecutionId=wideExecutionId},cancellationToken:cancellationToken));
+    }
+
+    // V3.4: every snippet a specific execution retrieved, for evidence reuse across continuation runs.
+    public async Task<IReadOnlyCollection<WideExternalKnowledgeSnippet>> GetExecutionExternalKnowledgeAsync(Guid tenantId,Guid wideExecutionId,CancellationToken cancellationToken=default)
+    {
+        // COALESCE the non-nullable value-type columns for the same reason as
+        // GetCachedExternalKnowledgeAsync: NULL legacy rows must not throw during Dapper materialization.
+        const string sql="""
+SELECT NormalizedQuery Query,Title,Url,Snippet,Score,RetrievedDateUtc,BranchId,BranchDisplayName,AuthorityKind,COALESCE(AuthorityIdentityVerified,CAST(0 AS BIT)) AuthorityIdentityVerified,COALESCE(PropositionSupportScore,CAST(0 AS DECIMAL(9,4))) PropositionSupportScore,PropositionSupportStatus
+FROM POLOXI.Legal_ExternalKnowledge
+WHERE TenantId=@TenantId AND WideExecutionId=@WideExecutionId AND IsDeleted=0
+ORDER BY Score DESC,RetrievedDateUtc DESC;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows=await connection.QueryAsync<ExternalKnowledgeRow>(new CommandDefinition(sql,new{TenantId=tenantId,WideExecutionId=wideExecutionId},cancellationToken:cancellationToken));
+        return rows.Select(MapExternalKnowledgeSnippet).ToList();
+    }
+
+    private sealed record ExternalGroundingConfigurationRow(string Enabled,string ProviderCode,string ApiKey,int MaximumQueriesPerExecution,int MaximumSnippetsPerQuery,int CacheHours,int TimeoutSeconds);
+
+    // ── V2.2 Information-Directed Exploration persistence ─────────────────────
+
+    public async Task SaveInformationRoundAsync(WideInformationRoundRecord round,Guid userId,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+INSERT POLOXI.Legal_WideInformationRound(WideInformationRoundId,WideExecutionId,TenantId,RoundNumber,EntropyBefore,NormalizedEntropyBefore,EntropyBasisCode,MaxEntropyBefore,PopulationCountBefore,SelectedTargetCount,StartedDateUtc,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideInformationRoundId,@WideExecutionId,@TenantId,@RoundNumber,@EntropyBefore,@NormalizedEntropyBefore,@EntropyBasisCode,@MaxEntropyBefore,@PopulationCountBefore,@SelectedTargetCount,@StartedDateUtc,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{round.WideInformationRoundId,round.WideExecutionId,round.TenantId,round.RoundNumber,round.EntropyBefore,round.NormalizedEntropyBefore,round.EntropyBasisCode,round.MaxEntropyBefore,round.PopulationCountBefore,round.SelectedTargetCount,round.StartedDateUtc,UserId=userId},cancellationToken:cancellationToken));
+    }
+
+    public async Task CompleteInformationRoundAsync(Guid tenantId,Guid userId,Guid wideInformationRoundId,decimal entropyAfter,decimal normalizedEntropyAfter,decimal actualInformationGain,decimal rawEntropyDelta,int selectedTargetCount,decimal maxEntropyAfter,int populationCountAfter,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideInformationRound SET EntropyAfter=@EntropyAfter,NormalizedEntropyAfter=@NormalizedEntropyAfter,ActualInformationGain=@ActualInformationGain,RawEntropyDelta=@RawEntropyDelta,SelectedTargetCount=@SelectedTargetCount,MaxEntropyAfter=@MaxEntropyAfter,PopulationCountAfter=@PopulationCountAfter,CompletedDateUtc=SYSUTCDATETIME(),ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideInformationRoundId=@WideInformationRoundId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,WideInformationRoundId=wideInformationRoundId,EntropyAfter=entropyAfter,NormalizedEntropyAfter=normalizedEntropyAfter,ActualInformationGain=actualInformationGain,RawEntropyDelta=rawEntropyDelta,SelectedTargetCount=selectedTargetCount,MaxEntropyAfter=maxEntropyAfter,PopulationCountAfter=populationCountAfter},cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveInformationTargetsAsync(IReadOnlyCollection<WideInformationTargetRecord> targets,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(targets.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideInformationTarget(WideInformationTargetId,WideInformationRoundId,WideBranchId,TenantId,UncertaintyCode,RankingImpactCode,CandidateDiscriminationCode,EvidenceAvailabilityCode,NoveltyCode,RedundancyCode,RawEstimatedInformationValue,AdjustedInformationValue,CalibrationFactor,ExpectedRetrievalCost,InformationValuePerCost,WasSelected,SelectionRank,EvidenceTarget,Rationale,PredictedRankingImpactCount,PredictedUpCount,PredictedDownCount,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideInformationTargetId,@WideInformationRoundId,@WideBranchId,@TenantId,@UncertaintyCode,@RankingImpactCode,@CandidateDiscriminationCode,@EvidenceAvailabilityCode,@NoveltyCode,@RedundancyCode,@RawEstimatedInformationValue,@AdjustedInformationValue,@CalibrationFactor,@ExpectedRetrievalCost,@InformationValuePerCost,@WasSelected,@SelectionRank,@EvidenceTarget,@Rationale,@PredictedRankingImpactCount,@PredictedUpCount,@PredictedDownCount,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,targets.Select(t=>new{t.WideInformationTargetId,t.WideInformationRoundId,t.WideBranchId,t.TenantId,t.UncertaintyCode,t.RankingImpactCode,t.CandidateDiscriminationCode,t.EvidenceAvailabilityCode,t.NoveltyCode,t.RedundancyCode,t.RawEstimatedInformationValue,t.AdjustedInformationValue,t.CalibrationFactor,t.ExpectedRetrievalCost,t.InformationValuePerCost,t.WasSelected,t.SelectionRank,t.EvidenceTarget,t.Rationale,t.PredictedRankingImpactCount,t.PredictedUpCount,t.PredictedDownCount,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task SaveInformationPredictionsAsync(IReadOnlyCollection<WideInformationPredictionRecord> predictions,Guid userId,CancellationToken cancellationToken=default)
+    {
+        if(predictions.Count==0)return;
+        const string sql="""
+INSERT POLOXI.Legal_WideInformationPrediction(WideInformationPredictionId,WideInformationTargetId,TenantId,CandidateName,PredictedDirection,PredictedMagnitude,ScoreBefore,RankBefore,CreatedDateUtc,CreatedByUserId,IsDeleted)
+VALUES(@WideInformationPredictionId,@WideInformationTargetId,@TenantId,@CandidateName,@PredictedDirection,@PredictedMagnitude,@ScoreBefore,@RankBefore,SYSUTCDATETIME(),@UserId,0);
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,predictions.Select(p=>new{p.WideInformationPredictionId,p.WideInformationTargetId,p.TenantId,p.CandidateName,p.PredictedDirection,p.PredictedMagnitude,p.ScoreBefore,p.RankBefore,UserId=userId}),cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateInformationPredictionOutcomesAsync(Guid tenantId,IReadOnlyCollection<WideInformationPredictionRecord> outcomes,CancellationToken cancellationToken=default)
+    {
+        if(outcomes.Count==0)return;
+        const string sql="""
+UPDATE POLOXI.Legal_WideInformationPrediction SET ScoreAfter=@ScoreAfter,RankAfter=@RankAfter,ActualDirection=@ActualDirection,ActualMagnitude=@ActualMagnitude,DirectionCorrect=@DirectionCorrect,MagnitudeCorrect=@MagnitudeCorrect,ModifiedDateUtc=SYSUTCDATETIME()
+WHERE WideInformationPredictionId=@WideInformationPredictionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,outcomes.Select(o=>new{TenantId=tenantId,o.WideInformationPredictionId,o.ScoreAfter,o.RankAfter,o.ActualDirection,o.ActualMagnitude,o.DirectionCorrect,o.MagnitudeCorrect}),cancellationToken:cancellationToken));
+    }
+
+    public async Task UpdateWideExecutionEntropyAsync(Guid tenantId,Guid userId,WideExecutionEntropyUpdate update,CancellationToken cancellationToken=default)
+    {
+        const string sql="""
+UPDATE POLOXI.Legal_WideExecution SET InitialEntropy=@InitialEntropy,FinalEntropy=@FinalEntropy,InitialNormalizedEntropy=@InitialNormalizedEntropy,FinalNormalizedEntropy=@FinalNormalizedEntropy,TotalActualInformationGain=@TotalActualInformationGain,InformationRoundCount=@InformationRoundCount,InformationTargetCount=@InformationTargetCount,InformationRetrievalCount=@InformationRetrievalCount,EntropyBasisCode=@EntropyBasisCode,DecisionConfidence=@DecisionConfidence,ClarificationTarget=@ClarificationTarget,ClarificationQuestion=@ClarificationQuestion,IntentEntropy=@IntentEntropy,PriorIntentEntropy=@PriorIntentEntropy,ClarificationGain=@ClarificationGain,ClarificationRound=@ClarificationRound,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+WHERE WideExecutionId=@WideExecutionId AND TenantId=@TenantId AND IsDeleted=0;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(sql,new{TenantId=tenantId,UserId=userId,update.WideExecutionId,update.InitialEntropy,update.FinalEntropy,update.InitialNormalizedEntropy,update.FinalNormalizedEntropy,update.TotalActualInformationGain,update.InformationRoundCount,update.InformationTargetCount,update.InformationRetrievalCount,update.EntropyBasisCode,update.DecisionConfidence,update.ClarificationTarget,update.ClarificationQuestion,update.IntentEntropy,update.PriorIntentEntropy,update.ClarificationGain,update.ClarificationRound},cancellationToken:cancellationToken));
+    }
+}
+

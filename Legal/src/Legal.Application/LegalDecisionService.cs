@@ -38,6 +38,10 @@ public sealed class LegalDecisionService(
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
+    // Branch-first (v2) discovery prompt. Emits a SHARED L1→L3 branch tree + one GLOBAL candidate
+    // universe + a candidate×branch competition matrix, matching the Wide/semantic pipeline. Selected
+    // only when the Decision.Discovery.BranchFirst.Enabled feature flag is on; v1 stays the default.
+    private const string DiscoveryPromptCodeV2 = "DECISION_DISCOVERY_V2";
     private const string AnswerPromptCode = "DECISION_ANSWER";
     private const string GraphPromptCode = "DECISION_GRAPH";
     private const string VerifyPromptCode = "DECISION_VERIFY";
@@ -656,7 +660,13 @@ public sealed class LegalDecisionService(
             request.Mode, parentSession?.ModeCode, cancellationToken);
         // When the caller did not pin a model, fall back to the mode's DB-configured default model.
         var routeModelCode = string.IsNullOrWhiteSpace(request.ModelCode) ? modeDefaultModelCode : request.ModelCode;
-        var route = await ResolveRouteAsync(DiscoveryPromptCode, routeModelCode, cancellationToken);
+        // Branch-first discovery (v2): mirrors the /legal/search Wide semantic pipeline. When enabled,
+        // discovery loads DECISION_DISCOVERY_V2 (a shared semantic root/branch forest + a scoreless
+        // global candidate universe) and adapts it into the same ProposedCandidate shape the legacy
+        // candidate-first path produces, so Core scoring/ranking/retrieval stay unchanged. Default off.
+        var branchFirstDiscovery = v2Settings.BranchFirstDiscoveryEnabled;
+        var discoveryPromptCode = branchFirstDiscovery ? DiscoveryPromptCodeV2 : DiscoveryPromptCode;
+        var route = await ResolveRouteAsync(discoveryPromptCode, routeModelCode, cancellationToken);
         // A continued session folds the accumulated clarification lineage into the effective query (§7
         // loop), so every proposal layer re-competes with all applicable disambiguating details in hand.
         var hasClarification = !string.IsNullOrWhiteSpace(request.ClarificationAnswer);
@@ -783,8 +793,8 @@ public sealed class LegalDecisionService(
         }
 
         // ── Candidate Discovery (LLM proposal only) ─────────────────────────────────────────────
-        var discoveryPrompt = await repository.GetPromptAsync(DiscoveryPromptCode, cancellationToken)
-            ?? throw new InvalidOperationException($"The '{DiscoveryPromptCode}' decision prompt is not configured in POLOXI.Legal_DecisionPrompt.");
+        var discoveryPrompt = await repository.GetPromptAsync(discoveryPromptCode, cancellationToken)
+            ?? throw new InvalidOperationException($"The '{discoveryPromptCode}' decision prompt is not configured in POLOXI.Legal_DecisionPrompt.");
         var discoveryUser = discoveryPrompt.UserPromptTemplate
             .Replace("{{QUERY}}", effectiveQuery)
             .Replace("{{CONTEXT}}", contextCode);
@@ -793,12 +803,17 @@ public sealed class LegalDecisionService(
         if (matterContext.Items.Count > 0)
             discoveryUser += BuildMatterContextProposalContext(matterContext);
         var discovery = await aiProvider.GenerateAsync(
-            new DecisionAiRequest(route, "DECISION_DISCOVERY", discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
+            new DecisionAiRequest(route, discoveryPromptCode, discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
         var llmCalls = 1;
-        Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount });
+        Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount, branchFirst = branchFirstDiscovery });
 
-        var proposal = ParseProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates);
+        // Branch-first (v2) emits the /legal/search Wide semantic shape (semanticRoots + scoreless global
+        // candidates) and is adapted into the same ProposedCandidate shape so everything downstream is
+        // identical. The legacy candidate-first path parses candidates-own-branches directly.
+        var proposal = branchFirstDiscovery
+            ? AdaptSemanticProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates)
+            : ParseProposal(discovery.StructuredOutputJson ?? discovery.Content, settings.MaxCandidates);
 
         // ── Proposal Integrity Gate V2 (shadow-default, disposition-driven targeted recovery) ──────
         // The LLM only PROPOSES a semantic representation; POLOXI decides whether that representation is
@@ -869,10 +884,12 @@ public sealed class LegalDecisionService(
             proposalTraceRecoveryAttempted = true;
             proposalTraceAttempt = 2;
             var recovery = await aiProvider.GenerateAsync(
-                new DecisionAiRequest(route, "DECISION_DISCOVERY", discoveryPrompt.SystemPrompt, recoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
+                new DecisionAiRequest(route, discoveryPromptCode, discoveryPrompt.SystemPrompt, recoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
                 cancellationToken);
             llmCalls++;
-            var recovered = ParseProposal(recovery.StructuredOutputJson ?? recovery.Content, settings.MaxCandidates);
+            var recovered = branchFirstDiscovery
+                ? AdaptSemanticProposal(recovery.StructuredOutputJson ?? recovery.Content, settings.MaxCandidates)
+                : ParseProposal(recovery.StructuredOutputJson ?? recovery.Content, settings.MaxCandidates);
             var recoveredIntegrity = EvaluateProposalIntegrity(recovered);
             var recoveredDiagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, recovered, recoveredIntegrity);
             var (recoveredDisposition, recoveredDefects) = DiagnoseProposal(recoveredDiagnostics);
@@ -3488,7 +3505,76 @@ public sealed class LegalDecisionService(
         return results;
     }
 
-    // Recursively parses a proposed branch and any nested sub-branches. The discovery LLM may return
+    // Branch-first (v2) adapter — mirrors IntelligenceWideService's semantic-to-legacy adaptation for
+    // /legal/search. DECISION_DISCOVERY_V2 emits the Wide semantic shape: a SHARED "semanticRoots"
+    // forest (each root carries nested "children" branches) plus one GLOBAL "candidates" universe that
+    // carries NO scores. To keep all downstream Core scoring/ranking/retrieval identical to the legacy
+    // path, this flattens the shared forest into ProposedBranch objects ONCE and attaches that SAME
+    // shared branch set to EVERY candidate (a branch is a shared axis of competition, owned by no
+    // candidate). Because the LLM emits no numbers, branch/candidate signals are seeded neutrally
+    // (0.5) — honest "unknown until evidence", since Core derives the real scores downstream from
+    // retrieved evidence, exactly as the Wide pipeline does.
+    private static IReadOnlyList<ProposedCandidate> AdaptSemanticProposal(string json, int maxCandidates)
+    {
+        var results = new List<ProposedCandidate>();
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+
+            // 1) Flatten the SHARED semantic root/branch forest into a neutral ProposedBranch tree.
+            var sharedBranches = new List<ProposedBranch>();
+            if (root.TryGetProperty("semanticRoots", out var rootsNode) && rootsNode.ValueKind == JsonValueKind.Array)
+                foreach (var r in rootsNode.EnumerateArray())
+                    sharedBranches.Add(AdaptSemanticBranch(r));
+
+            // 2) Read the GLOBAL candidate universe (scoreless). Seed neutral support and attach the
+            //    same shared branch forest to each candidate so Core competes them on identical axes.
+            if (root.TryGetProperty("candidates", out var candidatesNode) && candidatesNode.ValueKind == JsonValueKind.Array)
+                foreach (var c in candidatesNode.EnumerateArray())
+                {
+                    var resolution = GetString(c, "resolution");
+                    var display = string.IsNullOrWhiteSpace(GetString(c, "candidateType"))
+                        ? resolution
+                        : $"{GetString(c, "candidateType")}: {resolution}";
+                    var rationale = GetString(c, "rationaleSummary");
+                    results.Add(new ProposedCandidate(
+                        string.IsNullOrWhiteSpace(display) ? resolution : display,
+                        string.IsNullOrWhiteSpace(rationale) ? resolution : rationale,
+                        LegalSupport: 0.5d, FactSupport: 0.5d, EvidenceSupport: 0.5d,
+                        AuthoritySupport: 0.5d, Verification: 0.5d,
+                        Discrimination: 0.5d, RankingImpact: 0.5d,
+                        Branches: sharedBranches));
+                    if (results.Count >= maxCandidates)
+                        break;
+                }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON proposal ⇒ no candidates; the caller surfaces this as a failed proposal.
+        }
+        return results;
+    }
+
+    // Recursively adapts a Wide semantic root/branch node into a neutral ProposedBranch. Roots and
+    // branches share the same "children" recursion; a root's identifying text comes from "label",
+    // interpretation from "semanticQuestion"/"interpretation". Numeric signals are seeded neutrally
+    // because the branch-first contract intentionally emits no scores.
+    private static ProposedBranch AdaptSemanticBranch(JsonElement node)
+    {
+        var children = new List<ProposedBranch>();
+        if (node.TryGetProperty("children", out var childNode) && childNode.ValueKind == JsonValueKind.Array)
+            foreach (var child in childNode.EnumerateArray())
+                children.Add(AdaptSemanticBranch(child));
+        var interpretation = GetString(node, "interpretation");
+        if (string.IsNullOrWhiteSpace(interpretation))
+            interpretation = GetString(node, "semanticQuestion");
+        return new ProposedBranch(
+            GetString(node, "label"), interpretation,
+            DecisionRelevance: 0.5d, FlipPotential: 0.5d, EvidenceAvailability: 0.5d,
+            children);
+    }
+
     // a coarse branch with a "subBranches" (or "branches") array of decisive sub-questions; these feed
     // the bounded adaptive-deepening pass. When absent, Children is empty and nothing deepens.
     private static ProposedBranch ParseBranch(JsonElement b)

@@ -55,6 +55,8 @@ builder.Services.AddScoped<Legal.Application.Abstractions.Services.IEpistemicTen
 builder.Services.AddSingleton<Legal.Application.Abstractions.Services.IExecutionEnvironment, Legal.Api.Security.HostExecutionEnvironment>();
 // Async start+poll transport for long-running POLOXI Wide searches (transport only; pipeline unchanged).
 builder.Services.AddSingleton<Legal.Api.Services.WideSearchOperationStore>();
+// Isolated Wide2 transport backing /legal/personalinjury_decision2 (separate code path).
+builder.Services.AddSingleton<Legal.Api.Services.Wide2SearchOperationStore>();
 // Transactional outbox drain worker
 builder.Services.AddHostedService<Legal.Api.Services.OutboxDrainHostedService>();
 builder.Services.AddHostedService<Legal.Api.Services.LegalDocumentSearchProjectionHostedService>();
