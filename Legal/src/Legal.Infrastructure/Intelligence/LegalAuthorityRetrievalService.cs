@@ -31,8 +31,24 @@ public sealed class LegalAuthorityRetrievalService(
 
         var attempts=new List<LegalProviderAttempt>();
         var authorities=new Dictionary<string,AuthorityAccumulator>(StringComparer.OrdinalIgnoreCase);
+        // The plan scope is constant across every planned operation. If a provider reports the scope
+        // mapping is unsupported once, retrying the identical mapping across the remaining strategies
+        // (lexical, semantic, citation-expansion, targeted-fallback) can only reproduce the same
+        // failure. Cache that outcome and short-circuit so a single invalid mapping is not retried.
+        var scopeUnsupported=false;
         foreach(var operation in plan.Operations.Take(request.MaximumOperations))
         {
+            if(scopeUnsupported)
+            {
+                attempts.Add(new(Guid.NewGuid(),plan.LegalSearchPlanId,operation.LegalSearchOperationId,"AGGREGATE",
+                    LegalRetrievalOutcome.ScopeUnsupported,0,0,"Skipped: provider reported the enforced authority scope is unsupported; not retrying the identical mapping.",0)
+                {
+                    OperationKind=operation.Kind,
+                    Query=operation.Query,
+                    RecoveryActionCode="STOP_SCOPE_UNSUPPORTED_CACHED",
+                });
+                continue;
+            }
             var timer=Stopwatch.StartNew();
             LegalRetrievalResult result;
             try
@@ -58,6 +74,7 @@ public sealed class LegalAuthorityRetrievalService(
             foreach(var diagnostic in result.Providers)
             {
                 var providerOutcome=MapOutcome(diagnostic);
+                if(providerOutcome==LegalRetrievalOutcome.ScopeUnsupported)scopeUnsupported=true;
                 attempts.Add(new(Guid.NewGuid(),plan.LegalSearchPlanId,operation.LegalSearchOperationId,diagnostic.ProviderCode,
                     providerOutcome,diagnostic.RawResultCount,diagnostic.ReturnedCount,diagnostic.Detail,timer.ElapsedMilliseconds)
                 {
@@ -77,6 +94,9 @@ public sealed class LegalAuthorityRetrievalService(
                 }
                 accumulator.OperationIds.Add(operation.LegalSearchOperationId);
             }
+            // If this operation still produced usable snippets, the scope is not a hard dead-end; do
+            // not short-circuit on an unsupported diagnostic from a single provider.
+            if(result.Snippets.Count>0)scopeUnsupported=false;
             // Keep a bounded candidate pool across planned operations. Do not stop at the first provider
             // page: early provider order is not evidence that a passage supports the atomic proposition.
             if(authorities.Count>=Math.Clamp(request.MaximumAuthorities*4,request.MaximumAuthorities,50))break;

@@ -34,6 +34,7 @@ public sealed class LegalDecisionService(
     ILegalDocumentCorpusRepository documentCorpusRepository,
     ILegalMatterContextRetriever matterContextRetriever,
     IDecisionResearchSourceRouter researchSourceRouter,
+    IExecutionEnvironment executionEnvironment,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -107,6 +108,14 @@ public sealed class LegalDecisionService(
             .Select(r => new DecisionModelOptionDto(r.ModelCode, r.DeploymentName, r.ProviderTypeCode))
             .ToArray();
     }
+
+    // ── Configuration Mode admin surface (DB-backed execution settings per mode) ──────────────────
+    public Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetExecutionModesAsync(cancellationToken);
+
+    public Task SaveExecutionModeAsync(Guid tenantId, Guid actorUserId, SaveDecisionExecutionModeRequest request, CancellationToken cancellationToken = default)
+        => repository.SaveExecutionModeAsync(request, actorUserId, cancellationToken);
+
 
     internal static DecisionResearchRecoveryPlan BuildResearchRecoveryPlan(
         DecisionResearchNeedPersistence researchNeed,
@@ -215,6 +224,36 @@ public sealed class LegalDecisionService(
             or DecisionResearchNeedTypes.Mixed;
     }
 
+    // Builds an ACTIONABLE clarification for the attorney instead of restating the branch label.
+    // The question asks for the specific facts / documents / choice that would resolve the blocking
+    // dependency, and states how supplying it moves the competing outcomes. The phrasing adapts to the
+    // kind of missing input (matter evidence vs matter fact vs mixed fact+law) so the next execution
+    // has something concrete to consume rather than "can you clarify 'X'?".
+    internal static string BuildActionableClarification(DecisionBranchPersistence pivot, int competingOutcomeCount)
+    {
+        var proposition = string.IsNullOrWhiteSpace(pivot.Interpretation)
+            ? pivot.DisplayName
+            : pivot.Interpretation!.Trim();
+        var needType = DecisionResearchNeedFactory.ClassifyResearchNeed(proposition);
+        var subject = string.IsNullOrWhiteSpace(pivot.DisplayName) ? proposition : pivot.DisplayName.Trim();
+
+        var effect = competingOutcomeCount > 1
+            ? $" This is the pivotal fact separating the {competingOutcomeCount} competing outcomes: supplying it lets the analysis rank them; leaving it open keeps the leading outcome conditional rather than established."
+            : " Supplying it lets the analysis promote the leading outcome from conditional to established.";
+
+        var ask = needType switch
+        {
+            DecisionResearchNeedTypes.MatterEvidence =>
+                $"What evidence establishes \u201C{subject}\u201D? Please identify or upload the relevant records, correspondence, declarations, expert reports, or other documents. If it is disputed, identify the disputed items and the competing explanation.",
+            DecisionResearchNeedTypes.Mixed =>
+                $"What facts and supporting documents establish \u201C{subject}\u201D? Please identify or upload the relevant evidence, and note any legal standard you want applied. If it is disputed, identify the disputed items and the opposing position.",
+            _ =>
+                $"Can you confirm the facts for \u201C{subject}\u201D? Please state what actually occurred and identify any documents or witnesses that support it. If it is disputed, describe the competing version.",
+        };
+
+        return ask + effect;
+    }
+
     private static bool DomainApplicabilityMatches(string? configuredValue, string? matterValue)
     {
         if (string.IsNullOrWhiteSpace(configuredValue))
@@ -304,6 +343,9 @@ public sealed class LegalDecisionService(
     public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default)
         => repository.GetMattersAsync(tenantId, cancellationToken);
 
+    public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default)
+        => repository.GetMattersAsync(tenantId, includeAllTenants, cancellationToken);
+
     public Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
         => repository.GetMatterAsync(tenantId, decisionMatterId, cancellationToken);
 
@@ -335,6 +377,9 @@ public sealed class LegalDecisionService(
 
     public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
         => repository.GetDomainPackAsync(tenantId, packCode, cancellationToken);
+
+    public Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => repository.GetDomainPacksAsync(tenantId, cancellationToken);
 
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) support ──
     public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default)
@@ -385,6 +430,8 @@ public sealed class LegalDecisionService(
             ModelCode = context.ModelCode,
             ContextCode = string.IsNullOrWhiteSpace(context.ContextCode) ? "LEGAL" : context.ContextCode,
             MatterId = context.DecisionMatterId,
+            Mode = context.Mode,
+            EnableReplay = context.EnableReplay,
             Posture = matter.Posture,
             MotionTarget = matter.MotionTarget,
             Jurisdiction = ResolveMatterJurisdiction(matter, profile),
@@ -422,9 +469,10 @@ public sealed class LegalDecisionService(
 
     private static LegalAuthorityScope ResolveMatterAuthorityContext(DecisionMatterDto matter) => new()
     {
-        GoverningLaw=NormalizeAuthorityContext(matter.GoverningLaw??matter.State??matter.Jurisdiction),
+        GoverningLaw=LegalJurisdictionScope.ResolveGoverningLaw(NormalizeAuthorityContext(matter.GoverningLaw??matter.State??matter.Jurisdiction)),
         CourtSystem=NormalizeAuthorityContext(matter.CourtSystem),
         CourtOrForum=ResolveCourtOrForum(matter),
+        SourceCourt=ResolveCourtOrForum(matter),
         CourtLevel=NormalizeAuthorityContext(matter.CourtLevel),
         SubjectMatterJurisdiction=NormalizeAuthorityContext(matter.SubjectMatterJurisdiction),
         PersonalTerritorialJurisdiction=NormalizeAuthorityContext(matter.PersonalTerritorialJurisdiction??matter.State),
@@ -455,8 +503,13 @@ public sealed class LegalDecisionService(
         var procedural=issueScope==LegalAuthorityIssueScopes.ProceduralLaw;
         var settlement=issueScope==LegalAuthorityIssueScopes.SettlementEnforcement;
         var context=session.AuthorityScope;
-        var governingLaw=NormalizeAuthorityContext(context?.GoverningLaw??session.GoverningLaw??session.MatterJurisdiction);
+        var rawGoverningLaw=NormalizeAuthorityContext(context?.GoverningLaw??session.GoverningLaw??session.MatterJurisdiction);
+        var governingLaw=LegalJurisdictionScope.ResolveGoverningLaw(rawGoverningLaw);
+        // If the governing-law value was actually a court/forum caption, retain the caption as the
+        // court/forum so it is not lost when the sovereign is extracted for provider translation.
         var courtOrForum=NormalizeAuthorityContext(context?.CourtOrForum??session.CourtOrForum);
+        if(courtOrForum is null&&LegalJurisdictionScope.LooksLikeCourtCaption(rawGoverningLaw))
+            courtOrForum=rawGoverningLaw;
         var proceduralLaw=NormalizeAuthorityContext(context?.ProceduralLaw);
         var territorialJurisdiction=NormalizeAuthorityContext(context?.PersonalTerritorialJurisdiction);
         var conflictingContext=governingLaw is not null&&territorialJurisdiction is not null
@@ -480,6 +533,10 @@ public sealed class LegalDecisionService(
             GoverningLaw=governingLaw,
             CourtSystem=context?.CourtSystem,
             CourtOrForum=courtOrForum,
+            // Provider-native court-slug resolution consumes SourceCourt only. Prefer an explicitly
+            // supplied source court, otherwise fall back to the court/forum caption. The governing-law
+            // sovereign is intentionally NOT used here so \u0022California\u0022 is never treated as a court id.
+            SourceCourt=NormalizeAuthorityContext(context?.SourceCourt)??courtOrForum,
             CourtLevel=context?.CourtLevel,
             SubjectMatterJurisdiction=context?.SubjectMatterJurisdiction,
             PersonalTerritorialJurisdiction=context?.PersonalTerritorialJurisdiction,
@@ -575,7 +632,6 @@ public sealed class LegalDecisionService(
         var settings = await repository.GetCoreSettingsAsync(cancellationToken);
         var v2Settings = await repository.GetV2SettingsAsync(cancellationToken);
         var useGraph = request.UseDependencyGraph ?? v2Settings.UseDependencyGraphDefault;
-        var route = await ResolveRouteAsync(DiscoveryPromptCode, request.ModelCode, cancellationToken);
         var contextCode = string.IsNullOrWhiteSpace(request.ContextCode) ? DecisionContexts.General : request.ContextCode!.Trim().ToUpperInvariant();
         var events = new List<DecisionEventPersistence>();
         var sequence = 0;
@@ -592,6 +648,15 @@ public sealed class LegalDecisionService(
                     request.TenantId, parentSessionId, cancellationToken);
         }
 
+        // Resolve the frozen execution mode ONCE for this decision. A continuation must keep the mode
+        // the original session was created under (immutable snapshot), so the parent's ModeCode wins;
+        // otherwise the request's Mode is honored, then validated against DB policy and the deployment
+        // environment (DEV Logic is rejected server-side in Production).
+        var (effectiveMode, modeDefaultModelCode) = await ResolveExecutionModeAsync(
+            request.Mode, parentSession?.ModeCode, cancellationToken);
+        // When the caller did not pin a model, fall back to the mode's DB-configured default model.
+        var routeModelCode = string.IsNullOrWhiteSpace(request.ModelCode) ? modeDefaultModelCode : request.ModelCode;
+        var route = await ResolveRouteAsync(DiscoveryPromptCode, routeModelCode, cancellationToken);
         // A continued session folds the accumulated clarification lineage into the effective query (§7
         // loop), so every proposal layer re-competes with all applicable disambiguating details in hand.
         var hasClarification = !string.IsNullOrWhiteSpace(request.ClarificationAnswer);
@@ -659,7 +724,30 @@ public sealed class LegalDecisionService(
 
         if (!request.UsePoloxiEngine)
             return await ComposeDirectAnswerAsync(request, sessionId, contextCode, effectiveQuery,
-                currentClarification, events, timer, cancellationToken);
+                currentClarification, events, timer, effectiveMode.ExecutionModeCode, routeModelCode, cancellationToken);
+
+        // ── Additive Decision-Contract completeness PREFLIGHT (§ clarification eligibility gate) ──────
+        // Catches an ESSENTIAL missing instruction/fact BEFORE paying for the full discovery/graph/
+        // verification pipeline. Off by default and deliberately conservative: it never fires on a
+        // continuation that already carries a clarification answer, never on an explicit hypothetical
+        // (counterfactual) request, and (per settings) not on "zero documents" alone — a fact-bearing
+        // query is still allowed a valid hypothetical analysis. This does NOT replace POLOXI's dynamic
+        // clarification logic; ambiguities that only surface after candidate competition are still
+        // handled later by the post-competition clarification gate.
+        if (settings.Preflight.Enabled && !hasClarification && !hasCounterfactual
+            && TryBuildPreflightClarification(settings.Preflight, request, effectiveQuery, out var preflightTarget, out var preflightQuestion))
+        {
+            Record("PREFLIGHT_CLARIFICATION_GATED", "CLARIFICATION_REQUIRED", new
+            {
+                cause = "ESSENTIAL_DECISION_CONTRACT_INPUT_MISSING",
+                target = preflightTarget,
+                hasPosture = !string.IsNullOrWhiteSpace(request.Posture),
+                hasMotionTarget = !string.IsNullOrWhiteSpace(request.MotionTarget),
+                effectiveQueryLength = effectiveQuery.Length
+            });
+            return await ComposePreflightClarificationAsync(request, sessionId, contextCode,
+                currentClarification, preflightTarget, preflightQuestion, events, timer, effectiveMode.ExecutionModeCode, cancellationToken);
+        }
 
         var retrievalSettings = await documentCorpusRepository.GetRetrievalArchitectureSettingsAsync(cancellationToken);
         LegalMatterContextResult matterContext = new(false, DecisionResearchRouteCodes.NoneDerived, [], 0, 0, "NO_MATTER");
@@ -917,9 +1005,7 @@ public sealed class LegalDecisionService(
                 terminalState = DecisionStatusCodes.UserClarificationRequired;
                 reason = "AMBIGUOUS_TIE_NEEDS_USER_INPUT";
                 clarificationTarget = pivot.DisplayName;
-                clarificationQuestion = string.IsNullOrWhiteSpace(pivot.Interpretation)
-                    ? $"To decide between the leading outcomes, can you clarify '{pivot.DisplayName}'?"
-                    : $"To decide between the leading outcomes, can you clarify '{pivot.DisplayName}'? {pivot.Interpretation}";
+                clarificationQuestion = BuildActionableClarification(pivot, candidates.Count);
 
                 // Gate diagnostics (§7): records WHY the clarification gate fired so a genuine tie can be
                 // told apart from thin/unverified evidence at a glance in the timeline. The gate itself is
@@ -970,8 +1056,15 @@ public sealed class LegalDecisionService(
 
         timer.Stop();
 
-        // ── Next Best Action (§ next action): the single highest-impact open investigation, derived
-        // deterministically from the decision frontier. Null when nothing open can move the decision. ──
+        // TELEMETRY SCOPE (persisted LlmCallCount / DurationMs): these capture ONLY the V1 core loop
+        // up to session persistence — discovery (1) + optional proposal recovery + optional answer
+        // composition. The timer is stopped here, BEFORE the POLOXI Legal V2 dependency-graph pass
+        // (RunDependencyGraphAsync: DECISION_GRAPH + DECISION_VERIFY) and the epistemic governance
+        // overlay run further below. Those additional Azure AI calls are therefore NOT included in the
+        // persisted count/duration, which is why server logs can show more LLM calls and higher wall
+        // time than this session row reports. This is intentional scoping (core-loop metrics), not a
+        // miscount; the V2/governance work is separately traced in the integrity trace stages.
+
         var nextAction = BuildNextBestAction(branches, statusCode);
         var readiness = BuildReadiness(candidates, branches, evidence, margin, entropy, statusCode, retrieval.ResearchStatus);
 
@@ -996,6 +1089,7 @@ public sealed class LegalDecisionService(
             CourtOrForum = NormalizeAuthorityContext(request.CourtOrForum),
             AuthorityCutoffDate = request.AuthorityCutoffDate,
             AuthorityScope = matterAuthorityContext,
+            ModeCode = effectiveMode.ExecutionModeCode,
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
         if (currentClarification is not null)
@@ -1574,9 +1668,11 @@ public sealed class LegalDecisionService(
         DecisionClarificationPersistence? clarification,
         List<DecisionEventPersistence> events,
         Stopwatch timer,
+        string modeCode,
+        string? routeModelCode,
         CancellationToken cancellationToken)
     {
-        var route = await ResolveRouteAsync(AnswerPromptCode, request.ModelCode, cancellationToken);
+        var route = await ResolveRouteAsync(AnswerPromptCode, routeModelCode, cancellationToken);
         var answerPrompt = await repository.GetPromptAsync(AnswerPromptCode, cancellationToken)
             ?? throw new InvalidOperationException($"The '{AnswerPromptCode}' decision prompt is not configured.");
         var user = answerPrompt.UserPromptTemplate.Replace("{{ARTIFACT}}", "{}").Replace("{{QUERY}}", effectiveQuery);
@@ -1595,11 +1691,103 @@ public sealed class LegalDecisionService(
             GoverningLaw = NormalizeAuthorityContext(request.GoverningLaw),
             CourtOrForum = NormalizeAuthorityContext(request.CourtOrForum),
             AuthorityCutoffDate = request.AuthorityCutoffDate,
+            ModeCode = modeCode,
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
         if (clarification is not null)
             await repository.PersistClarificationAsync(clarification, cancellationToken);
         return BuildResponse(persistence, null, []);
+    }
+
+    // Deterministic Decision-Contract completeness test used by the additive preflight gate. Returns
+    // true (with an actionable target/question) ONLY when an ESSENTIAL input is missing per settings.
+    // Conservative by design: today the single essential-input rule is "no explicit procedural relief/
+    // instruction" (both Posture and MotionTarget empty). When RequireFactsWhenProcedureMissing is on,
+    // the gate additionally requires the query to be fact-thin, so a hypothetical fact-bearing question
+    // is never blocked.
+    internal static bool TryBuildPreflightClarification(
+        DecisionPreflightSettings preflight,
+        DecisionSearchRequest request,
+        string effectiveQuery,
+        out string clarificationTarget,
+        out string clarificationQuestion)
+    {
+        clarificationTarget = string.Empty;
+        clarificationQuestion = string.Empty;
+
+        if (preflight.RequireProceduralInstruction)
+        {
+            var hasProceduralInstruction = !string.IsNullOrWhiteSpace(request.Posture)
+                || !string.IsNullOrWhiteSpace(request.MotionTarget);
+            if (!hasProceduralInstruction)
+            {
+                var factsSupplied = (effectiveQuery?.Trim().Length ?? 0) >= preflight.MinimumFactsQueryLength;
+                // Only gate when facts are also thin (unless the tenant opted to gate on procedure alone).
+                if (!preflight.RequireFactsWhenProcedureMissing || !factsSupplied)
+                {
+                    clarificationTarget = "Requested procedural relief / decision instruction";
+                    clarificationQuestion =
+                        "Before this analysis runs, what decision or procedural relief should it resolve? "
+                        + "Please identify the specific motion, procedural vehicle, and the party who bears the "
+                        + "burden (for example, \u201Cwhether to grant defendant\u2019s motion for summary judgment\u201D). "
+                        + "This defines the decision contract: without it the analysis cannot frame the competing "
+                        + "outcomes or the applicable burden, so any leading outcome would be conditional rather than established.";
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Lightweight short-circuit return for the preflight gate: persists a USER_CLARIFICATION_REQUIRED
+    // session carrying the actionable question WITHOUT running discovery/graph/verification, so the run
+    // does not pay for a decision that cannot become ready. Mirrors ComposeDirectAnswerAsync's shape.
+    private async Task<DecisionSearchResponse> ComposePreflightClarificationAsync(
+        DecisionSearchRequest request,
+        Guid sessionId,
+        string contextCode,
+        DecisionClarificationPersistence? clarification,
+        string clarificationTarget,
+        string clarificationQuestion,
+        List<DecisionEventPersistence> events,
+        Stopwatch timer,
+        string modeCode,
+        CancellationToken cancellationToken)
+    {
+        timer.Stop();
+        var nextAction = new DecisionNextActionDto(
+            $"Provide the missing information: {clarificationTarget}",
+            "VERY HIGH",
+            "The decision contract is incomplete: an essential instruction is missing that only you can supply. "
+            + "Providing it lets the analysis frame the competing outcomes and the applicable burden before any "
+            + "expensive research runs. This is a clarification need, not a researchable legal question.",
+            null, 0m, 0m);
+        var persistence = new DecisionSessionPersistence(
+            sessionId, request.TenantId, request.UserId, request.Query, contextCode, null, true,
+            DecisionStatusCodes.UserClarificationRequired, DecisionStatusCodes.UserClarificationRequired,
+            "ESSENTIAL_DECISION_CONTRACT_INPUT_MISSING", null,
+            0, 0, 0, 0, 0, timer.ElapsedMilliseconds,
+            null, clarificationQuestion, clarificationTarget, request.CorrelationId,
+            [], [], [], [], events)
+        {
+            MatterId = request.MatterId,
+            NextBestActionText = nextAction.Title,
+            NextBestActionImpactCode = nextAction.ImpactCode,
+            NextBestActionRationale = nextAction.Rationale,
+            CounterfactualAssumption = request.CounterfactualAssumption,
+            ResearchStatusCode = DecisionResearchStates.NotNeeded,
+            ParentDecisionSessionId = clarification?.ParentDecisionSessionId,
+            MatterJurisdiction = NormalizeAuthorityContext(request.Jurisdiction),
+            GoverningLaw = NormalizeAuthorityContext(request.GoverningLaw),
+            CourtOrForum = NormalizeAuthorityContext(request.CourtOrForum),
+            AuthorityCutoffDate = request.AuthorityCutoffDate,
+            ModeCode = modeCode,
+        };
+        await repository.PersistSessionAsync(persistence, cancellationToken);
+        if (clarification is not null)
+            await repository.PersistClarificationAsync(clarification, cancellationToken);
+        return BuildResponse(persistence, nextAction, []);
     }
 
     // ── Read-back: project a persisted session (and its V2 graph, if any) into a response ──────────
@@ -2316,6 +2504,38 @@ public sealed class LegalDecisionService(
                         cancellationToken);
                 }
 
+                // Retrieval is the prerequisite for verification and candidate recompetition. A round
+                // with no usable source must stop here; continuing would create empty evidence rows and
+                // allow competition to appear to progress without any retrieved authority.
+                if (route.RetrievalRequired && sources.Count == 0)
+                {
+                    var retrievalOutcome = authorityRetrieval?.Outcome.ToString().ToUpperInvariant()
+                        ?? AggregateLegacyRetrievalOutcome(retrievalDiagnostics, sources.Count);
+                    var retrievalDetail = authorityRetrieval?.ProviderAttempts
+                        .Where(attempt => !string.IsNullOrWhiteSpace(attempt.Detail))
+                        .Select(attempt => $"{attempt.ProviderCode}: {attempt.Detail}")
+                        .FirstOrDefault()
+                        ?? retrievalDiagnostics?.Providers
+                            .Where(provider => !string.IsNullOrWhiteSpace(provider.Detail))
+                            .Select(provider => $"{provider.ProviderCode}: {provider.Detail}")
+                            .FirstOrDefault()
+                        ?? "No configured retrieval provider returned a usable authority passage.";
+
+                    logger.LogWarning(
+                        "Research loop stopped before verification because retrieval returned no usable sources for session {SessionId}, branch {BranchCode}. Outcome={Outcome} Detail={Detail}",
+                        decisionSessionId, target.BranchCode, retrievalOutcome, retrievalDetail);
+
+                    return await DoneAsync(roundNumber, totalRetrievals,
+                        DecisionResearchLoopStopReasons.RetrievalNoResults,
+                        new DecisionResearchFailureDto(
+                            roundNumber, currentStage, "RETRIEVAL_NO_RESULTS",
+                            $"Retrieval returned no usable evidence. {retrievalDetail}",
+                            AuthoritativeStateChanged: false)
+                        {
+                            Transformation = researchTransformation,
+                        });
+                }
+
                 // Persist every attempt before verification. The attachment is explicitly non-authoritative
                 // until the verifier finalizes its support state below.
                 var retrievedEvidence = sources
@@ -2761,6 +2981,40 @@ public sealed class LegalDecisionService(
         return DecisionModelRouteSelector.Select(routes, featureCode, modelCode);
     }
 
+    // Resolves the frozen execution mode for a decision session. Continuations inherit the parent's
+    // ModeCode (immutable snapshot); new sessions use the requested mode. The resolved mode is validated
+    // against DB-backed policy and the deployment environment: DEV Logic (IsProductionAllowed = false)
+    // is rejected server-side in a Production deployment even if the request/UI selects it.
+    private async Task<(DecisionExecutionModeDto Mode, string? DefaultModelCode)> ResolveExecutionModeAsync(
+        DecisionExecutionMode requestedMode, string? inheritedModeCode, CancellationToken cancellationToken)
+    {
+        var modes = await repository.GetExecutionModesAsync(cancellationToken);
+        if (modes.Count == 0)
+            throw new InvalidOperationException("No decision execution modes are configured (POLOXI.Legal_DecisionExecutionMode).");
+
+        var desiredCode = !string.IsNullOrWhiteSpace(inheritedModeCode)
+            ? inheritedModeCode!.Trim().ToUpperInvariant()
+            : requestedMode == DecisionExecutionMode.Prod ? "PROD" : "DEV";
+
+        var mode = modes.FirstOrDefault(m => string.Equals(m.ExecutionModeCode, desiredCode, StringComparison.OrdinalIgnoreCase))
+            ?? modes.FirstOrDefault(m => string.Equals(m.ExecutionModeCode, "PROD", StringComparison.OrdinalIgnoreCase))
+            ?? modes.First();
+
+        if (!mode.IsProductionAllowed && executionEnvironment.IsProduction)
+        {
+            var prod = modes.FirstOrDefault(m => m.IsProductionAllowed)
+                ?? throw new InvalidOperationException(
+                    $"Execution mode '{mode.ExecutionModeCode}' is not permitted in the '{executionEnvironment.EnvironmentName}' environment and no production-allowed mode is configured.");
+            logger.LogWarning(
+                "Execution mode {Requested} is not allowed in {Environment}; falling back to {Fallback}.",
+                mode.ExecutionModeCode, executionEnvironment.EnvironmentName, prod.ExecutionModeCode);
+            mode = prod;
+        }
+
+        var defaultModelCode = string.IsNullOrWhiteSpace(mode.DefaultModelCode) ? null : mode.DefaultModelCode;
+        return (mode, defaultModelCode);
+    }
+
     private async Task<(IReadOnlyList<DecisionResearchNeedPersistence> Needs, DecisionResearchNeedPersistence? SelectedNeed, string? Reason, DecisionResearchTransformationDto Transformation)> GenerateResearchNeedAsync(
         DecisionSessionPersistence session,
         DecisionBranchPersistence frontier,
@@ -2836,8 +3090,16 @@ public sealed class LegalDecisionService(
                 return ([], null, $"UNRESOLVED: MODEL_CALL_FAILED:{ex.GetType().Name}", Transformation());
             }
 
-            var parseSucceeded = TryParseResearchSemanticProposal(
-                response.StructuredOutputJson ?? response.Content, out var proposal);
+            var rawProposal = response.StructuredOutputJson ?? response.Content;
+            var parseSucceeded = TryParseResearchSemanticProposal(rawProposal, out var proposal,
+                out var outputClassification);
+            var outputIntegrityFailure = !parseSucceeded
+                || outputClassification != DecisionModelOutputClassifications.StructuredProposal;
+            // Deterministically self-heal recoverable MATTER-DOCUMENT retrieval fields (SearchQuery /
+            // SearchConcepts) before the gate evaluates the proposal. This never invents evidence and never
+            // touches legal-authority leaves; it only stops one matter leaf's missing search expression from
+            // blocking an independently valid legal-authority leaf from reaching retrieval.
+            proposal = DecisionResearchNeedContractNormalizer.Normalize(proposal);
             var evaluation = gate.Evaluate(proposal);
             if (evaluation.IsAcceptable)
             {
@@ -2872,18 +3134,25 @@ public sealed class LegalDecisionService(
                     selectedNeed.DecisionResearchNeedId));
             }
 
-            var disposition = parseSucceeded
-                ? DecisionResearchNeedRepairPlanner.Diagnose(evaluation.Defects)
+            var disposition = outputIntegrityFailure
+                ? DecisionResearchNeedDisposition.Repair
+                : parseSucceeded
+                ? DecisionResearchNeedRepairPlanner.Diagnose(evaluation)
                 : DecisionResearchNeedDisposition.Repair;
-            var status = parseSucceeded ? "GATE_REJECTED" : "MALFORMED_JSON";
-            var defects = parseSucceeded ? evaluation.Defects : ["JSON_PARSE_FAILED", .. evaluation.Defects];
+            var status = outputIntegrityFailure ? "MODEL_OUTPUT_INTEGRITY_FAILURE" : "GATE_REJECTED";
+            var defects = !outputIntegrityFailure
+                ? evaluation.Defects
+                : ["MODEL_OUTPUT_INTEGRITY_FAILURE", outputClassification, .. evaluation.Defects];
             attempts.Add(BuildResearchTransformationAttempt(
                 attempt, route.ModelCode, status, disposition.ToString().ToUpperInvariant(), proposal,
-                evaluation with { Defects = defects }));
+                evaluation with { Defects = defects }, outputClassification,
+                outputClassification == DecisionModelOutputClassifications.ModelReturnedClarificationQuestion
+                    ? "The model returned a clarification question instead of the required structured Decision Contract."
+                    : "The model response did not satisfy the required structured Decision Contract."));
             logger.LogInformation(
-                "Research need transformation rejected for session {SessionId}, branch {BranchCode}, attempt {Attempt}, status={Status}, disposition={Disposition}, leaves={Leaves}, defects={Defects}.",
+                "Research need transformation rejected for session {SessionId}, branch {BranchCode}, attempt {Attempt}, status={Status}, outputClassification={OutputClassification}, disposition={Disposition}, leaves={Leaves}, defects={Defects}.",
                 session.DecisionSessionId, frontier.BranchCode, attempt, status, disposition,
-                proposal.Leaves.Count, string.Join("; ", defects));
+                outputClassification, proposal.Leaves.Count, string.Join("; ", defects));
 
             // Do not spend the bounded repair attempt on an unrecoverable structural failure.
             if (attempt == 1 && disposition != DecisionResearchNeedDisposition.Unresolved)
@@ -2892,26 +3161,86 @@ public sealed class LegalDecisionService(
                 continue;
             }
 
+            // Partial progression: the bounded repair did not fully satisfy the gate, but valid researchable
+            // leaves exist and every residual defect is confined to the derived/application synthesis leaf.
+            // Progress retrieval with the valid legal-authority/matter leaves rather than discarding them; the
+            // defective application leaf is preserved as UNRESOLVED (no fabricated evidence or conclusion).
+            if (parseSucceeded && evaluation.CanProgressWithResearchableLeaves)
+            {
+                var researchableKeys = evaluation.ResearchableLeaves
+                    .Select(item => item.ResearchKey)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var selectedLeaf = evaluation.ResearchableLeaves
+                    .Where(item => item.SourceClass.Equals(DecisionResearchSourceClasses.LegalAuthority, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(item => item.CandidateDiscrimination.Count)
+                    .ThenBy(item => item.ResearchKey, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault()
+                    ?? evaluation.ResearchableLeaves
+                        .OrderByDescending(item => item.CandidateDiscrimination.Count)
+                        .ThenBy(item => item.ResearchKey, StringComparer.OrdinalIgnoreCase)
+                        .First();
+                var needs = proposal.Leaves
+                    .Select(leaf =>
+                    {
+                        var isResearchable = researchableKeys.Contains(leaf.ResearchKey);
+                        var statusCode = isResearchable
+                            ? (leaf.ResearchKey.Equals(selectedLeaf.ResearchKey, StringComparison.OrdinalIgnoreCase) ? "OPEN" : "PLANNED")
+                            : "UNRESOLVED";
+                        var leafStatus = isResearchable ? "PARTIAL_REPAIRED" : "UNRESOLVED_DEPENDENCY";
+                        return DecisionResearchNeedFactory.CreateFromLeaf(
+                            frontierNeed, leaf, leafStatus, "APPLICATION_LEAF_UNRESOLVED_RESEARCHABLE_LEAVES_PROGRESSED", statusCode);
+                    })
+                    .ToArray();
+                var selectedNeed = needs.Single(need =>
+                    need.ResearchKey!.Equals(selectedLeaf.ResearchKey, StringComparison.OrdinalIgnoreCase));
+                logger.LogInformation(
+                    "Research need transformation progressed with researchable leaves for session {SessionId}, branch {BranchCode}, attempt {Attempt}, selected={SelectedResearchKey}, unresolvedApplicationDefects={Defects}.",
+                    session.DecisionSessionId, frontier.BranchCode, attempt, selectedLeaf.ResearchKey,
+                    string.Join("; ", evaluation.ApplicationLeafDefects));
+                return (needs, selectedNeed, null, Transformation(
+                    selectedLeaf.ResearchKey,
+                    "RESEARCHABLE_LEAVES_PROGRESSED_APPLICATION_UNRESOLVED",
+                    selectedLeaf.SearchQuery,
+                    selectedNeed.DecisionResearchNeedId));
+            }
+
             return ([], null, $"{disposition.ToString().ToUpperInvariant()}: {string.Join("; ", defects)}", Transformation());
         }
 
         return ([], null, "RESEARCHABILITY_GATE_UNRESOLVED", Transformation());
     }
 
-    private static bool TryParseResearchSemanticProposal(string json, out DecisionResearchSemanticProposal proposal)
+    private static bool TryParseResearchSemanticProposal(
+        string json,
+        out DecisionResearchSemanticProposal proposal,
+        out string outputClassification)
     {
         try
         {
             proposal = JsonSerializer.Deserialize<DecisionResearchSemanticProposal>(json,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? new DecisionResearchSemanticProposal();
+            outputClassification = proposal.Leaves.Count == 0
+                ? ClassifyEmptyResearchProposal(json)
+                : DecisionModelOutputClassifications.StructuredProposal;
             return true;
         }
         catch (JsonException)
         {
             proposal = new DecisionResearchSemanticProposal();
+            outputClassification = ClassifyEmptyResearchProposal(json);
             return false;
         }
+    }
+
+    private static string ClassifyEmptyResearchProposal(string? raw)
+    {
+        if (!string.IsNullOrWhiteSpace(raw)
+            && (raw.Contains("clarif", StringComparison.OrdinalIgnoreCase)
+                || raw.Contains("question", StringComparison.OrdinalIgnoreCase)
+                || raw.Contains('?')))
+            return DecisionModelOutputClassifications.ModelReturnedClarificationQuestion;
+        return DecisionModelOutputClassifications.IncompleteStructuredProposal;
     }
 
     private static DecisionResearchTransformationAttemptDto BuildResearchTransformationAttempt(
@@ -2920,7 +3249,9 @@ public sealed class LegalDecisionService(
         string status,
         string disposition,
         DecisionResearchSemanticProposal proposal,
-        DecisionResearchabilityResult evaluation)
+        DecisionResearchabilityResult evaluation,
+        string outputClassification = DecisionModelOutputClassifications.StructuredProposal,
+        string? blockingReason = null)
     {
         var researchableKeys = evaluation.ResearchableLeaves
             .Select(leaf => leaf.ResearchKey)
@@ -2946,7 +3277,11 @@ public sealed class LegalDecisionService(
 
         return new DecisionResearchTransformationAttemptDto(
             attempt, modelCode, status, proposal.Leaves.Count, disposition,
-            evaluation.Defects, leaves);
+            evaluation.Defects, leaves)
+        {
+            OutputClassification = outputClassification,
+            BlockingReason = blockingReason,
+        };
     }
 
     // Deterministic integrity check for a parsed proposal. The LLM proposes structure but cannot be
@@ -3890,6 +4225,26 @@ public sealed class LegalDecisionService(
             .OrderByDescending(b => b.InformationValue)
             .ThenByDescending(b => b.FlipPotential)
             .FirstOrDefault();
+
+        // Clarification takes priority: when the run is blocked on an ESSENTIAL matter-specific fact or
+        // document the attorney must supply, the next action is to provide it (a user-clarification need),
+        // NOT a researchable legal question. Prefer the highest-flip pivot the user can actually resolve so
+        // the panel and the clarification prompt point at the same blocking dependency.
+        if (statusCode == DecisionStatusCodes.UserClarificationRequired)
+        {
+            var pivot = branches.Where(b => b.IsOnFrontier && IsUserResolvableClarification(b))
+                .OrderByDescending(b => b.FlipPotential).FirstOrDefault()
+                ?? branches.Where(IsUserResolvableClarification).OrderByDescending(b => b.FlipPotential).FirstOrDefault()
+                ?? candidate;
+            if (pivot is not null)
+                return new DecisionNextActionDto(
+                    $"Provide the missing information: {pivot.DisplayName}",
+                    "VERY HIGH",
+                    $"The decision is blocked on a matter-specific input only you can supply. Identify or upload the facts/documents that establish '{pivot.DisplayName}'. This is a clarification need, not a researchable legal question \u2014 resolving it lets the competing outcomes be ranked.",
+                    pivot.DecisionBranchId,
+                    pivot.InformationValue,
+                    pivot.FlipPotential);
+        }
 
         // When the decision is ready, or nothing remains on the frontier, surface a
         // confirm/monitor action instead of hiding the panel so the attorney always has a

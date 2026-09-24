@@ -27,8 +27,13 @@ public interface ILegalDecisionService
     Task<IReadOnlyCollection<DecisionModelOptionDto>> GetModelsAsync(Guid tenantId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
+    // Configuration Mode admin surface (DB-backed execution settings per mode).
+    Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task SaveExecutionModeAsync(Guid tenantId, Guid actorUserId, SaveDecisionExecutionModeRequest request, CancellationToken cancellationToken = default);
+
     // Matter dashboard / cockpit support.
     Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default);
     Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
@@ -40,6 +45,7 @@ public interface ILegalDecisionService
 
     // Domain Pack (practice-area domain semantics) retrieval.
     Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default);
 
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) support ──
     Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);

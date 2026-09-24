@@ -57,6 +57,58 @@ public sealed class OfficialLegalAuthorityRetrieverTests
         Assert.Equal(0,handler.RequestCount);
     }
 
+    [Fact]
+    public async Task SearchAsync_WhenMatchedCitationIsForbidden_SurfacesAccessDeniedNotNoResults()
+    {
+        var descriptor=Descriptor("EXAMPLE",@"EX (?<section>\d+)","https://law.example","/{section}");
+        var handler=new StubHandler(_=>new HttpResponseMessage(HttpStatusCode.Forbidden));
+        var sut=Create(descriptor,handler);
+
+        var result=await sut.SearchAsync("Apply EX 456",Configuration());
+
+        Assert.Empty(result.Snippets);
+        Assert.Equal("ACCESS_DENIED",result.Diagnostic.OutcomeCode);
+        Assert.Equal(1,handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task SearchAsync_WhenMatchedCitationExtractsNothing_SurfacesExtractionOutcomeNotNoResults()
+    {
+        var descriptor=Descriptor("EXAMPLE",@"EX (?<section>\d+)","https://law.example","/{section}");
+        var handler=new StubHandler(_=>Html("<article id=\"999\">Unrelated section.</article>"));
+        var sut=Create(descriptor,handler);
+
+        var result=await sut.SearchAsync("Apply EX 456",Configuration());
+
+        Assert.Empty(result.Snippets);
+        Assert.Equal("EXTRACTION_EMPTY",result.Diagnostic.OutcomeCode);
+    }
+
+    [Fact]
+    public async Task SearchAsync_ExactCaliforniaStatute_ResolvesViaBuiltInLeginfoSourceWhenRegistryHasNoMatch()
+    {
+        // Regression: an exact California statutory citation (California Vehicle Code § 22350) had no
+        // configured adapter and returned COVERAGE_GAP. The built-in leginfo sources must resolve it to
+        // the authoritative California Legislative Information host without any tenant configuration.
+        var unrelated=Descriptor("EXAMPLE",@"EX (?<section>\d+)","https://law.example","/{section}");
+        Uri? requested=null;
+        var handler=new StubHandler(request=>
+        {
+            requested=request.RequestUri;
+            return Html("California Vehicle Code Section 22350. No person shall drive a vehicle at a speed greater than is reasonable or prudent.");
+        });
+        var sut=Create(unrelated,handler);
+
+        var result=await sut.SearchAsync("Apply California Vehicle Code § 22350",Configuration());
+
+        var snippet=Assert.Single(result.Snippets);
+        Assert.Equal("RESULTS_FOUND",result.Diagnostic.OutcomeCode);
+        Assert.StartsWith("CA_LEGINFO_VEH:",snippet.SourceVersion);
+        Assert.Contains("leginfo.legislature.ca.gov",requested!.AbsoluteUri);
+        Assert.Contains("lawCode=VEH",requested.AbsoluteUri);
+        Assert.Contains("sectionNum=22350",requested.AbsoluteUri);
+    }
+
     private static OfficialLegalAuthorityRetriever Create(LegalAuthoritySourceDescriptor descriptor,StubHandler handler) =>
         new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 

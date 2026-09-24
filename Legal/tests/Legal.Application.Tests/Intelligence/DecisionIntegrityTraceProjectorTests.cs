@@ -62,6 +62,67 @@ public sealed class DecisionIntegrityTraceProjectorTests
     }
 
     [Fact]
+    public void Project_HealthyRunWithoutEvidence_ReportsNoVerifiedSupport()
+    {
+        // A HEALTHY / CLEAN run that retrieved nothing must NOT be presented as evidence-sufficient:
+        // pipeline integrity is distinct from whether the answer is actually supported.
+        var response = BaseResponse() with
+        {
+            GovernanceVerdict = Verdict(outputClean: true, violations: []),
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(EvidenceSufficiencyState.NoVerifiedSupport, trace.EvidenceSufficiency);
+    }
+
+    [Fact]
+    public void Project_MalformedFinalAnswer_ReportsRenderAttention_WithoutWeakeningOutputIntegrity()
+    {
+        // The audit is CLEAN (zero unauthorized assertions) but the rendered prose contains malformed
+        // fragments ("...10." orphaned list marker). Render readability must flag ATTENTION while output
+        // integrity stays CLEAN — the two concepts are independent.
+        var response = BaseResponse() with
+        {
+            FinalAnswer = "The driver breached the duty of care ...10. and is therefore liable.",
+            GovernanceVerdict = Verdict(outputClean: true, violations: []),
+            OutputAuthorizations =
+            [
+                new DecisionOutputAuthorizationDto(
+                    Guid.NewGuid(), "claim", "SUPPORTED", "FULL", "ALLOW", false, "ok", false),
+            ],
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(OutputReadabilityState.AttentionRequired, trace.OutputReadability);
+        Assert.Equal(OutputIntegrityState.Clean, trace.OutputIntegrity);
+    }
+
+    [Fact]
+    public void Project_WellFormedFinalAnswer_ReportsRenderClean()
+    {
+        var response = BaseResponse() with
+        {
+            FinalAnswer = "The driver breached the duty of care and is therefore liable.",
+        };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(OutputReadabilityState.Clean, trace.OutputReadability);
+    }
+
+    [Fact]
+    public void Project_NoFinalAnswer_ReportsRenderNotRun()
+    {
+        var response = BaseResponse() with { FinalAnswer = null };
+
+        var trace = DecisionIntegrityTraceProjector.Project(response);
+
+        Assert.Equal(OutputReadabilityState.NotRun, trace.OutputReadability);
+    }
+
+    [Fact]
     public void Project_RolledBackResearchRound_IsHealthyAndReportedAsRolledBack()
     {
         var response = BaseResponse() with

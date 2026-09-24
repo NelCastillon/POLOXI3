@@ -334,4 +334,10 @@ public sealed record PersonalInjuryDecisionContext(
     [StringLength(4000)] public string? Question { get; init; }
     [StringLength(120)] public string? ModelCode { get; init; }
     [StringLength(120)] public string? ContextCode { get; init; }
+
+    // Execution mode (DEV Logic / PROD Logic) forwarded from the PI decision UI. Defaults to Dev.
+    public DecisionExecutionMode Mode { get; init; } = DecisionExecutionMode.Dev;
+
+    // Opt-in deterministic AI response replay (honored only when the resolved mode allows replay).
+    public bool EnableReplay { get; init; }
 }

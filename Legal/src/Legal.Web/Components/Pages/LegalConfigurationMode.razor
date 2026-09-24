@@ -1,0 +1,314 @@
+@page "/legal/configuration/mode"
+@using System.ComponentModel.DataAnnotations
+@using Legal.Application.Features.Intelligence
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject IJSRuntime Js
+
+<LegalWorkspace>
+<div class="intel-page">
+<header class="intel-header">
+    <div><span>Control plane</span><h1>Configuration Mode</h1><p>Edit the DB-backed execution settings that drive the POLOXI decision pipeline for each mode. Leave overrides blank to keep the existing Auto/route-resolved behavior.</p></div>
+    <div class="intel-header-actions">
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
+</header>
+
+@if(_loading){<div class="intel-state">Loading configuration modes...</div>}
+else
+{
+    @if(_loadError is not null){<div class="intel-error" style="border-left: 4px solid #dc3545;">@_loadError</div>}
+    @if(_saveMessage is not null){<div class="intel-state">@_saveMessage</div>}
+
+    <section class="intel-kpis">
+        @foreach(var mode in _modes)
+        {
+            <article class="intel-kpi-link @(_activeCode==mode.ExecutionModeCode?"intel-kpi-active":null)" role="button" tabindex="0" title="@($"Focus {mode.DisplayName}")" @onclick="@(()=>FocusModeAsync(mode.ExecutionModeCode))"><span>@mode.DisplayName</span><strong>@(mode.IsProductionAllowed?"Prod-allowed":"Dev-only")</strong></article>
+        }
+    </section>
+
+    @foreach(var mode in _modes)
+    {
+        var form = _forms[mode.ExecutionModeCode];
+        <section id="@($"intel-section-mode-{mode.ExecutionModeCode}")" class="intel-panel @(_activeCode==mode.ExecutionModeCode?"intel-panel-focus":null)">
+            <div class="intel-toolbar">
+                <h2><i class="bi bi-toggles"></i> @mode.DisplayName</h2>
+                <span>@mode.ExecutionModeCode · @(mode.IsProductionAllowed?"Production allowed":"Development only")</span>
+            </div>
+            @if(!string.IsNullOrWhiteSpace(mode.Description)){<p class="intel-help">@mode.Description</p>}
+
+            <EditForm Model="form" OnValidSubmit="@(()=>SaveAsync(mode.ExecutionModeCode))">
+                <DataAnnotationsValidator />
+                <div class="intel-form-grid">
+                    <div class="intel-field">
+                        <label>Display name</label>
+                        <InputText @bind-Value="form.DisplayName" />
+                        <ValidationMessage For="() => form.DisplayName" class="text-danger" />
+                    </div>
+                    <div class="intel-field intel-field-wide">
+                        <label>Description</label>
+                        <InputTextArea @bind-Value="form.Description" rows="2" />
+                        <ValidationMessage For="() => form.Description" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>Model used</label>
+                        <InputSelect @bind-Value="form.DefaultModelCode">
+                            <option value="">Auto (highest-priority route)</option>
+                            @foreach(var m in _models){<option value="@m.ModelCode">@m.ModelCode — @m.DeploymentName</option>}
+                        </InputSelect>
+                        <ValidationMessage For="() => form.DefaultModelCode" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>API / provider</label>
+                        <InputSelect @bind-Value="form.ProviderTypeCode">
+                            <option value="">Auto (route provider)</option>
+                            @foreach(var p in _providerTypes){<option value="@p">@p</option>}
+                        </InputSelect>
+                        <ValidationMessage For="() => form.ProviderTypeCode" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>Endpoint override</label>
+                        <InputText @bind-Value="form.EndpointReference" placeholder="Leave blank to use routed endpoint" />
+                        <ValidationMessage For="() => form.EndpointReference" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>API version</label>
+                        <InputText @bind-Value="form.ApiVersion" placeholder="Leave blank to use routed version" />
+                        <ValidationMessage For="() => form.ApiVersion" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>Temperature</label>
+                        <InputNumber @bind-Value="form.Temperature" step="0.01" placeholder="Route default" />
+                        <ValidationMessage For="() => form.Temperature" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>Max output tokens</label>
+                        <InputNumber @bind-Value="form.MaxOutputTokens" placeholder="Route default" />
+                        <ValidationMessage For="() => form.MaxOutputTokens" class="text-danger" />
+                    </div>
+                    <div class="intel-field">
+                        <label>Timeout (seconds)</label>
+                        <InputNumber @bind-Value="form.TimeoutSeconds" placeholder="Route default" />
+                        <ValidationMessage For="() => form.TimeoutSeconds" class="text-danger" />
+                    </div>
+                    <div class="intel-field intel-field-check">
+                        <label><InputCheckbox @bind-Value="form.AllowReplay" /> Allow deterministic AI response replay</label>
+                    </div>
+                    <div class="intel-field intel-field-check">
+                        <label><InputCheckbox @bind-Value="form.IsProductionAllowed" /> May run in Production</label>
+                    </div>
+                </div>
+                <div class="intel-form-actions">
+                    <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save @mode.DisplayName</button>
+                </div>
+            </EditForm>
+        </section>
+    }
+
+    <section class="intel-panel">
+        <div class="intel-toolbar">
+            <h2><i class="bi bi-chat-left-text"></i> LLM Prompts (by pipeline order)</h2>
+            <span>@_prompts.Count prompt@(_prompts.Count==1?"":"s") · shared by both modes</span>
+        </div>
+        <p class="intel-help">Every LLM prompt the POLOXI decision pipeline runs, listed in execution order. These prompt families are shared by DEV Logic and PROD Logic; only the resolved model/route differs per mode.</p>
+        @if(_prompts.Count == 0){<div class="intel-state">No decision prompts are configured.</div>}
+        else
+        {
+            <table class="intel-table">
+                <thead>
+                    <tr><th>#</th><th>Stage</th><th>Prompt code</th><th>Output schema</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    @{ var order = 0; }
+                    @foreach(var p in _prompts)
+                    {
+                        order++;
+                        <tr>
+                            <td>@order</td>
+                            <td>@p.StageCode</td>
+                            <td><code>@p.PromptCode</code></td>
+                            <td>@(string.IsNullOrWhiteSpace(p.OutputSchemaJson) ? "—" : "JSON")</td>
+                            <td>@(p.IsActive ? "Active" : "Inactive")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+
+    <section class="intel-panel">
+        <div class="intel-toolbar">
+            <h2><i class="bi bi-diagram-3"></i> Domain Pack tables</h2>
+            <span>@_domainPacks.Count pack@(_domainPacks.Count==1?"":"s") · advisory domain configuration</span>
+        </div>
+        <p class="intel-help">Database-backed Domain Packs supply practice-area terminology, decision dimensions, evidence classifications, verification profiles, matter-type taxonomy, and concept relations. POLOXI Core owns all reasoning; packs are advisory configuration only.</p>
+        @if(_domainPacks.Count == 0){<div class="intel-state">No domain packs are configured.</div>}
+        else
+        {
+            @foreach(var pack in _domainPacks)
+            {
+                <div class="intel-subpanel">
+                    <h3><i class="bi bi-box-seam"></i> @pack.Name <small>(@pack.PackCode · @pack.PracticeAreaCode)</small></h3>
+                    @if(!string.IsNullOrWhiteSpace(pack.Description)){<p class="intel-help">@pack.Description</p>}
+                    <table class="intel-table">
+                        <thead><tr><th>Domain Pack table</th><th>Rows</th></tr></thead>
+                        <tbody>
+                            <tr><td>Legal_DecisionDomainPackDimension</td><td>@pack.Dimensions.Count</td></tr>
+                            <tr><td>Legal_DecisionDomainPackEvidenceType</td><td>@pack.EvidenceTypes.Count</td></tr>
+                            <tr><td>Legal_DecisionDomainPackVerificationProfile</td><td>@pack.VerificationProfiles.Count</td></tr>
+                            <tr><td>Legal_DecisionDomainPackMatterType</td><td>@pack.MatterTypes.Count</td></tr>
+                            <tr><td>Legal_DecisionDomainConcept</td><td>@pack.Concepts.Count</td></tr>
+                            <tr><td>Legal_DecisionDomainConceptRelation</td><td>@pack.ConceptRelations.Count</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </section>
+}
+</div>
+</LegalWorkspace>
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private string? _loadError;
+    private string? _saveMessage;
+    private string? _activeCode;
+    private IReadOnlyList<DecisionExecutionModeDto> _modes = [];
+    private IReadOnlyList<DecisionModelOptionDto> _models = [];
+    private IReadOnlyList<string> _providerTypes = [];
+    private IReadOnlyList<DecisionPromptConfigurationDto> _prompts = [];
+    private IReadOnlyList<DecisionDomainPackDto> _domainPacks = [];
+    private readonly Dictionary<string, ModeForm> _forms = new(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Breadcrumbs.SetCrumbs(new("Home", "/"), new("Administration"), new("Configuration Mode", "/legal/configuration/mode"));
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _loadError = null;
+        try
+        {
+            var modes = await Api.GetLegalDecisionExecutionModesAsync();
+            _modes = modes.OrderBy(m => m.SortOrder).ToArray();
+            _models = (await Api.GetLegalDecisionModelsAsync()).ToArray();
+            _providerTypes = (await Api.GetIntelligenceProvidersAsync())
+                .Select(p => p.ProviderTypeCode)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            _prompts = (await Api.GetDecisionPromptConfigurationsAsync())
+                .OrderBy(p => PipelineOrder(p.StageCode))
+                .ThenBy(p => p.PromptCode, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            _domainPacks = (await Api.GetLegalDecisionDomainPacksAsync()).ToArray();
+
+            _forms.Clear();
+            foreach (var mode in _modes)
+                _forms[mode.ExecutionModeCode] = ModeForm.From(mode);
+
+            _activeCode ??= _modes.FirstOrDefault()?.ExecutionModeCode;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load configuration modes: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task FocusModeAsync(string code)
+    {
+        _activeCode = code;
+        await Js.InvokeVoidAsync("amsScrollToElement", $"intel-section-mode-{code}");
+    }
+
+    // Pipeline execution order for the shared POLOXI decision stages. Unknown stages sort last.
+    private static int PipelineOrder(string? stageCode) => (stageCode ?? string.Empty).ToUpperInvariant() switch
+    {
+        "DISCOVERY" => 1,
+        "RESEARCH_NEED" => 2,
+        "ANSWER" => 3,
+        "GRAPH" => 4,
+        "VERIFY" => 5,
+        _ => 99,
+    };
+
+    private async Task SaveAsync(string code)
+    {
+        if (!_forms.TryGetValue(code, out var form))
+            return;
+
+        _saving = true;
+        _saveMessage = null;
+        _loadError = null;
+        try
+        {
+            var request = new SaveDecisionExecutionModeRequest(
+                code,
+                form.DisplayName,
+                string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
+                string.IsNullOrWhiteSpace(form.DefaultModelCode) ? null : form.DefaultModelCode,
+                form.AllowReplay,
+                form.IsProductionAllowed,
+                string.IsNullOrWhiteSpace(form.ProviderTypeCode) ? null : form.ProviderTypeCode,
+                string.IsNullOrWhiteSpace(form.EndpointReference) ? null : form.EndpointReference,
+                string.IsNullOrWhiteSpace(form.ApiVersion) ? null : form.ApiVersion,
+                form.Temperature,
+                form.MaxOutputTokens,
+                form.TimeoutSeconds);
+
+            await Api.SaveLegalDecisionExecutionModeAsync(request);
+            await LoadAsync();
+            _saveMessage = $"{form.DisplayName} saved.";
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class ModeForm
+    {
+        [Required, StringLength(80)] public string DisplayName { get; set; } = string.Empty;
+        [StringLength(400)] public string? Description { get; set; }
+        [StringLength(100)] public string? DefaultModelCode { get; set; }
+        public bool AllowReplay { get; set; }
+        public bool IsProductionAllowed { get; set; }
+        [StringLength(50)] public string? ProviderTypeCode { get; set; }
+        [StringLength(400)] public string? EndpointReference { get; set; }
+        [StringLength(40)] public string? ApiVersion { get; set; }
+        [Range(0, 2)] public decimal? Temperature { get; set; }
+        [Range(1, 1000000)] public int? MaxOutputTokens { get; set; }
+        [Range(1, 900)] public int? TimeoutSeconds { get; set; }
+
+        public static ModeForm From(DecisionExecutionModeDto dto) => new()
+        {
+            DisplayName = dto.DisplayName,
+            Description = dto.Description,
+            DefaultModelCode = dto.DefaultModelCode,
+            AllowReplay = dto.AllowReplay,
+            IsProductionAllowed = dto.IsProductionAllowed,
+            ProviderTypeCode = dto.ProviderTypeCode,
+            EndpointReference = dto.EndpointReference,
+            ApiVersion = dto.ApiVersion,
+            Temperature = dto.Temperature,
+            MaxOutputTokens = dto.MaxOutputTokens,
+            TimeoutSeconds = dto.TimeoutSeconds,
+        };
+    }
+}

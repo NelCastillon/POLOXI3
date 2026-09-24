@@ -9,11 +9,18 @@ public interface ILegalDecisionRepository
 {
     Task<DecisionCoreSettings> GetCoreSettingsAsync(CancellationToken cancellationToken = default);
     Task<DecisionV2Settings> GetV2SettingsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(CancellationToken cancellationToken = default);
+    Task SaveExecutionModeAsync(SaveDecisionExecutionModeRequest request, Guid actorUserId, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionModelRouteDto>> GetModelRoutesAsync(CancellationToken cancellationToken = default);
+    Task SaveModelRouteAsync(Guid actorUserId, SaveDecisionModelRouteRequest request, CancellationToken cancellationToken = default);
     Task<DecisionPromptDefinition?> GetPromptAsync(string promptCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default);
     Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default);
+    Task CreatePromptConfigurationAsync(Guid tenantId, Guid actorUserId, CreateDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default);
+    Task DeletePromptConfigurationAsync(Guid actorUserId, string promptCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default);
+    Task SaveSettingAsync(Guid actorUserId, SaveDecisionSettingRequest request, CancellationToken cancellationToken = default);
     Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default);
     Task PersistClarificationAsync(DecisionClarificationPersistence clarification, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionClarificationPersistence>> GetClarificationLineageAsync(Guid tenantId, Guid parentDecisionSessionId, CancellationToken cancellationToken = default);
@@ -29,6 +36,7 @@ public interface ILegalDecisionRepository
 
     // Matter aggregate + cockpit support.
     Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default);
     Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
@@ -40,6 +48,21 @@ public interface ILegalDecisionRepository
 
     // Domain Pack (practice-area domain semantics) retrieval.
     Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default);
+
+    // Domain Pack child CRUD (advisory domain configuration). All scoped to a pack by PackCode.
+    Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default);
+    Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default);
 
     // ── Personal Injury (Domain Pack: PERSONAL_INJURY) profile + child aggregates + options ──
     Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default);

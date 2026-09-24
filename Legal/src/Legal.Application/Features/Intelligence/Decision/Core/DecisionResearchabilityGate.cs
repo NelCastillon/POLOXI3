@@ -16,6 +16,13 @@ public sealed class DecisionResearchabilityGate
     public DecisionResearchabilityResult Evaluate(DecisionResearchSemanticProposal proposal)
     {
         var defects = new List<string>();
+        // Defects owned exclusively by derived/application (synthesis) leaves. Tracked separately so that a
+        // defective application leaf can be targeted for repair — and, if it stays defective, never blocks
+        // the independently researchable authority/matter leaves from progressing.
+        var applicationLeafDefects = new List<string>();
+        // Structural or researchable-leaf defects that a targeted application repair cannot resolve. When any
+        // of these exist, partial progression with researchable leaves is NOT permitted (gate not weakened).
+        var blockingDefects = new List<string>();
         var valid = new List<DecisionResearchSemanticLeaf>();
         var keys = proposal.Leaves
             .Where(leaf => !string.IsNullOrWhiteSpace(leaf.ResearchKey))
@@ -23,11 +30,20 @@ public sealed class DecisionResearchabilityGate
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         if (proposal.Leaves.Count == 0)
+        {
             defects.Add("NO_RESEARCH_LEAVES");
+            blockingDefects.Add("NO_RESEARCH_LEAVES");
+        }
         if (proposal.Leaves.Count < 3)
+        {
             defects.Add("SEMANTIC_HIERARCHY_TOO_SHALLOW");
+            blockingDefects.Add("SEMANTIC_HIERARCHY_TOO_SHALLOW");
+        }
         if (keys.Count != proposal.Leaves.Count)
+        {
             defects.Add("RESEARCH_KEYS_NOT_UNIQUE");
+            blockingDefects.Add("RESEARCH_KEYS_NOT_UNIQUE");
+        }
 
         foreach (var leaf in proposal.Leaves)
         {
@@ -78,17 +94,41 @@ public sealed class DecisionResearchabilityGate
 
             if (leafDefects.Count == 0 && leaf.Researchable)
                 valid.Add(leaf);
-            defects.AddRange(leafDefects.Select(defect => $"{leaf.ResearchKey}:{defect}"));
+            var prefixed = leafDefects.Select(defect => $"{leaf.ResearchKey}:{defect}").ToList();
+            defects.AddRange(prefixed);
+            if (derived && !leaf.Researchable)
+                applicationLeafDefects.AddRange(prefixed);
+            else
+                blockingDefects.AddRange(prefixed);
         }
 
         if (valid.Count == 0)
+        {
             defects.Add("NO_SOURCE_RESOLVABLE_LEAVES");
+            blockingDefects.Add("NO_SOURCE_RESOLVABLE_LEAVES");
+        }
         if (!proposal.Leaves.Any(leaf =>
                 leaf.ResearchNeedType.Equals(DecisionResearchNeedTypes.Application, StringComparison.OrdinalIgnoreCase)
                 && !leaf.Researchable))
+        {
             defects.Add("APPLICATION_NODE_MISSING");
+            blockingDefects.Add("APPLICATION_NODE_MISSING");
+        }
 
-        return new DecisionResearchabilityResult(defects.Count == 0, defects, valid);
+        // Partial progression is permitted only when the proposal is not fully acceptable, at least one
+        // researchable leaf passed cleanly, and EVERY residual defect is confined to a derived/application
+        // synthesis leaf. This never weakens the gate: full acceptance still requires zero defects, and any
+        // structural or researchable-leaf defect (tracked in blockingDefects) disables progression.
+        var canProgress = defects.Count > 0
+            && valid.Count > 0
+            && blockingDefects.Count == 0
+            && applicationLeafDefects.Count > 0;
+
+        return new DecisionResearchabilityResult(defects.Count == 0, defects, valid)
+        {
+            CanProgressWithResearchableLeaves = canProgress,
+            ApplicationLeafDefects = applicationLeafDefects,
+        };
     }
 
     private static bool IsDerived(DecisionResearchSemanticLeaf leaf) =>

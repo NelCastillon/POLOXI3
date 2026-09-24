@@ -9,6 +9,11 @@ public enum DecisionResearchNeedDisposition
     // defect-targeted LLM repair that preserves valid leaves.
     Repair,
 
+    // The researchable leaves are valid, but the derived/application (synthesis) leaf is defective (e.g.
+    // missing its explicit research question or dependency references). Repair ONLY that application leaf,
+    // preserving the accepted LEGAL_RULE/MATTER_FACT leaves — never re-route it to external retrieval.
+    RepairApplication,
+
     // A frontier item that conflates legal rule/authority with matter fact/evidence/application — the
     // producer must decompose it into atomic leaves with correct SourceClass routing.
     Decompose,
@@ -79,6 +84,18 @@ public static class DecisionResearchNeedRepairPlanner
         return DecisionResearchNeedDisposition.Repair;
     }
 
+    // Result-aware diagnosis. When the gate reports that valid researchable leaves exist and every residual
+    // defect is confined to the derived/application synthesis leaf, the bounded recovery is a TARGETED
+    // application repair — the accepted authority/matter leaves are preserved and never re-derived. This
+    // does not weaken the gate: it only narrows the repair to the single defective synthesis leaf.
+    public static DecisionResearchNeedDisposition Diagnose(DecisionResearchabilityResult evaluation)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        if (evaluation.CanProgressWithResearchableLeaves)
+            return DecisionResearchNeedDisposition.RepairApplication;
+        return Diagnose(evaluation.Defects);
+    }
+
     // Builds the disposition-specific directive appended to the producer prompt for the single bounded repair
     // attempt. The gate is never weakened; the producer is told precisely how to make the proposal researchable
     // (reword, decompose, or re-route), preserving valid leaves.
@@ -87,6 +104,15 @@ public static class DecisionResearchNeedRepairPlanner
         var defectList = "\n- " + string.Join("\n- ", defects ?? []);
         return disposition switch
         {
+            DecisionResearchNeedDisposition.RepairApplication =>
+                "\n\nThe researchable LEGAL_RULE and MATTER_FACT leaves are ACCEPTED and MUST be preserved verbatim — do not modify, re-route, or remove them. "
+                + "ONLY the APPLICATION (synthesis) leaf is defective. Repair that single leaf so that it:\n"
+                + "- Provides an explicit ResearchQuestion phrased as a dependent legal-synthesis question (e.g. \"Given the established legal requirements and the verified facts, which elements remain disputed for the requested determination?\").\n"
+                + "- Keeps ResearchNeedType APPLICATION, SourceClass NONE, Researchable=false, ApplicationDeferred=true (it is synthesis, NOT an external authority-retrieval request).\n"
+                + "- Lists in Requires the research keys of the LEGAL_RULE and MATTER_FACT leaves it depends on (at least two).\n"
+                + "- Carries NO SearchQuery, SearchConcepts, or AuthorityKinds.\n"
+                + "Do NOT invent evidence or a conclusion for the application; if its dependencies are unresolved it stays unresolved. Fix ONLY these defects:" + defectList
+                + "\nReturn the complete corrected JSON object once.",
             DecisionResearchNeedDisposition.Decompose =>
                 "\n\nThe frontier target is NOT directly researchable because it conflates legal and matter/application content. "
                 + "DECOMPOSE it into atomic leaves, each with the correct ResearchNeedType and SourceClass:\n"

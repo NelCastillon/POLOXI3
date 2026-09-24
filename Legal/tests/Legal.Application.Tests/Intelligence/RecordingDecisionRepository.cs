@@ -68,6 +68,16 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
             UseDependencyGraphDefault: true, MaterialityThreshold: 0.30, ReadinessMinAuthorityVerified: 0.50,
             ReadinessLosingSideMargin: 0.10, PropagationMaxDepth: 8, ReadinessMaxHighImpactFrontier: 3));
 
+    public Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionExecutionModeDto>>(new[]
+        {
+            new DecisionExecutionModeDto("DEV", "Dev Logic", null, "gpt-4.1-mini", AllowReplay: true, IsProductionAllowed: false, SortOrder: 1, IsActive: true),
+            new DecisionExecutionModeDto("PROD", "Prod Logic", null, null, AllowReplay: false, IsProductionAllowed: true, SortOrder: 2, IsActive: true),
+        });
+
+    public Task SaveExecutionModeAsync(SaveDecisionExecutionModeRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public Task<DecisionV21Settings> GetV21SettingsAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(new DecisionV21Settings(
             UseDependencyPropagation: true, UseGraphDrivenRecompetition: true, UseGraphFrontierSignals: true,
@@ -257,6 +267,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<IReadOnlyCollection<DecisionModelRouteDto>> GetModelRoutesAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(Routes);
 
+    public Task SaveModelRouteAsync(Guid actorUserId, SaveDecisionModelRouteRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
     public Task<DecisionPromptDefinition?> GetPromptAsync(string promptCode, CancellationToken cancellationToken = default)
         => Task.FromResult(Prompt is not null && string.Equals(Prompt.PromptCode, promptCode, StringComparison.Ordinal)
             ? Prompt
@@ -266,6 +279,12 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
         => Task.FromResult<IReadOnlyCollection<DecisionPromptConfigurationDto>>([]);
 
     public Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionSettingDto>>([]);
+
+    public Task SaveSettingAsync(Guid actorUserId, SaveDecisionSettingRequest request, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
     public Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default)
@@ -287,6 +306,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
         => Task.CompletedTask;
 
     public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionMatterDto>>([]);
+
+    public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<DecisionMatterDto>>([]);
 
     public Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
@@ -316,6 +338,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default)
         => Task.FromResult<DecisionDomainPackDto?>(null);
 
+    public Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<DecisionDomainPackDto>>([]);
+
     public Task PersistGraphAsync(DecisionGraphPersistence graph, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 
@@ -343,4 +368,47 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
 
     public Task<bool> MarkPersonalInjuryDraftConfirmedAsync(Guid tenantId, Guid userId, Guid decisionPIMatterDraftId, Guid confirmedMatterId, CancellationToken cancellationToken = default)
         => Task.FromResult(true);
+
+    // ── Configuration CRUD (prompts + Domain Pack children) — not exercised by the research-loop tests ──
+    public Task CreatePromptConfigurationAsync(Guid tenantId, Guid actorUserId, CreateDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeletePromptConfigurationAsync(Guid actorUserId, string promptCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

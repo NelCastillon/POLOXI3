@@ -92,9 +92,26 @@
                     <div class="decision-panel-header"><div><span>POLOXI needs one more detail before it can decide responsibly</span><h2>Clarification needed</h2></div><span class="decision-status">@(_response.ClarificationTarget ?? "AMBIGUOUS")</span></div>
                     <p>@_response.ClarificationQuestion</p>
                     <div class="decision-clarify-input">
-                        <input class="form-control" placeholder="Type your answer" @bind="_clarificationAnswer" />
+                        <input class="form-control" placeholder="Type your answer" @bind="_clarificationAnswer" @bind:event="oninput" />
                         <button class="um-btn um-btn-primary um-btn-sm" disabled="@string.IsNullOrWhiteSpace(_clarificationAnswer)" @onclick="SubmitClarificationAsync"><i class="bi bi-arrow-return-left"></i> Continue</button>
                     </div>
+                    @{
+                        var suggestions = ClarificationSuggestions();
+                    }
+                    @if (suggestions.Count > 0)
+                    {
+                        <div class="decision-clarify-suggestions" role="group" aria-label="Suggested follow-up answers">
+                            <span class="decision-clarify-suggestions-hint">Suggested answers — select one to fill the box, then click Continue:</span>
+                            @foreach (var suggestion in suggestions)
+                            {
+                                var isSelected = string.Equals(_clarificationAnswer, suggestion, StringComparison.Ordinal);
+                                <label class="decision-clarify-suggestion @(isSelected ? "is-selected" : null)">
+                                    <input type="checkbox" checked="@isSelected" @onchange="@(e => ToggleClarificationSuggestion(suggestion, e))" />
+                                    <span>@suggestion</span>
+                                </label>
+                            }
+                        </div>
+                    }
                 </section>
             }
 
@@ -110,7 +127,7 @@
                             Provisional — research required. This is the current leading hypothesis, not an evidence-backed conclusion. External evidence is not yet verified and decision readiness has not been met.
                         </div>
                     }
-                    <div class="decision-answer-body">@_response.FinalAnswer</div>
+                    <div class="decision-answer-body">@CleanExplanation(_response.FinalAnswer)</div>
                 </section>
             }
 
@@ -265,6 +282,20 @@
                             {
                                 <text> · override applied to the effective readiness verdict</text>
                             }
+                        </p>
+
+                        @* Output authorization (no unauthorized assertions) is a DIFFERENT check from external
+                           evidence verification. A "clean" output only means no unauthorized claim text stands
+                           verbatim in the prose — it does NOT mean the underlying claims were verified against
+                           external authority. Make that distinction explicit so a clean audit is not misread as
+                           established fact. *@
+                        <p class="decision-readiness-detail" title="Output authorization checks that no unauthorized claim text remains in the prose. Evidence verification checks the claims against external authority. These are independent.">
+                            <i class="bi bi-info-circle"></i>
+                            Output @(gov.OutputClean ? "authorized" : "flagged"): @(gov.OutputClean
+                                ? "no unauthorized assertions remain in the prose."
+                                : "unauthorized assertions were detected.")
+                            This is an authorization check only — it is <strong>not</strong> evidence verification.
+                            No unauthorized assertions does not mean the claims below are verified against external authority.
                         </p>
 
                         @if (gov.Blockers.Count > 0)
@@ -718,6 +749,12 @@
                                     <strong>@(e.SourceTitle ?? e.SourceRef)</strong>
                                     <span class="decision-evidence-ev">EV @e.VerificationValue.ToString("0.##")</span>
                                 </div>
+                                @if (!string.IsNullOrWhiteSpace(e.SourceRef) && Uri.TryCreate(e.SourceRef, UriKind.Absolute, out var sourceUri) && (sourceUri.Scheme == Uri.UriSchemeHttp || sourceUri.Scheme == Uri.UriSchemeHttps))
+                                {
+                                    <a class="decision-evidence-source" href="@e.SourceRef" target="_blank" rel="noopener noreferrer" title="Open the retrieved source in a new tab">
+                                        <span class="decision-evidence-source-icon" aria-hidden="true">🔗</span>@e.SourceRef
+                                    </a>
+                                }
                                 @if (!string.IsNullOrWhiteSpace(e.Snippet))
                                 {
                                     <p>@e.Snippet</p>
@@ -739,6 +776,13 @@
                         }
                     </ul>
                 </section>
+            }
+            else
+            {
+                <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">
+                    <strong>No evidence was retrieved.</strong>
+                    The decision completed, but the configured legal retrieval providers returned no verified source material. The result above must not be treated as evidence-backed.
+                </div>
             }
 
             @if (_timeline.Count > 0)
@@ -812,6 +856,30 @@
         DecisionStatusCodes.Failed => "Failed",
         _ => statusCode ?? string.Empty
     };
+
+    // Deterministic cleanup of malformed Markdown fragments in the model's final explanation before it is
+    // rendered as plain text. The composer occasionally emits dangling list markers ("...10."), stray
+    // escaped Markdown markers ("\\*", "\\_", "\\#"), and orphaned emphasis/heading tokens; this normalizes
+    // them so the attorney-facing prose reads cleanly. It never alters claim meaning — only presentation.
+    private static string CleanExplanation(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var value = text.Replace("\r\n", "\n");
+        // Unescape escaped Markdown punctuation the model emitted defensively (\* \_ \# \` \~ \[ \]).
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"\\([*_#`~\[\]()>+.-])", "$1");
+        // Repair broken ellipsis-then-number fragments such as "...10." left by truncated list rewrites.
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"\.{2,}\s*\d+\.", ". ");
+        // Collapse leftover leading emphasis/heading tokens at the start of a line (e.g. "** ", "## ").
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"(?m)^\s*[*_#>]{1,6}\s+", string.Empty);
+        // Remove stray inline emphasis runs that have no closing partner (odd count of ** or __).
+        value = value.Replace("**", string.Empty).Replace("__", string.Empty);
+        // Collapse excessive blank lines and trim trailing whitespace per line.
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"[ \t]+\n", "\n");
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"\n{3,}", "\n\n");
+        return value.Trim();
+    }
 
     // A branch belongs to a candidate via its code prefix
     // We surface a short, human-readable outcome label so the two candidates' identical legal
@@ -966,6 +1034,41 @@
         var parent = _response?.DecisionSessionId;
         _clarificationAnswer = null;
         return RunAsync(answer, parent, target);
+    }
+
+    // A checkbox behaves like a single-select radio: ticking one fills the textbox with that
+    // suggestion, unticking clears it. The user still confirms explicitly via the Continue button.
+    private void ToggleClarificationSuggestion(string suggestion, ChangeEventArgs e)
+    {
+        var isChecked = e.Value is bool b && b;
+        _clarificationAnswer = isChecked ? suggestion : null;
+    }
+
+    // Deterministic, client-side follow-up answers derived from the clarification question/target,
+    // so the tester can continue the flow in one click without hand-typing a plausible answer.
+    private IReadOnlyList<string> ClarificationSuggestions()
+    {
+        if (_response is null || _response.StatusCode != DecisionStatusCodes.UserClarificationRequired)
+            return [];
+
+        var target = _response.ClarificationTarget?.Trim();
+        var suggestions = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(target))
+        {
+            suggestions.Add($"Resolve for the {target} that most narrows the decision toward the leading outcome.");
+            suggestions.Add($"Assume the {target} the moving party asserts, and proceed on that basis.");
+            suggestions.Add($"Assume the {target} the opposing party asserts, and proceed on that basis.");
+        }
+
+        suggestions.Add("Proceed with the most reasonable good-faith assumption and flag it as provisional.");
+        suggestions.Add("Treat this as a hypothetical and analyze both competing outcomes side by side.");
+
+        return suggestions
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.Ordinal)
+            .Take(5)
+            .ToArray();
     }
 
     // Flip-point "Test" → re-decide the same question under the hypothetical assumption.

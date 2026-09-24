@@ -45,7 +45,7 @@
 - Preserve both graph layers and all existing POLOXI logic when making code changes; extend behavior minimally without replacing, bypassing, or collapsing existing graph semantics.
 
 ## CRMConfiguration Guidelines
-- CRM Configuration pages are Blzor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
+- CRM Configuration pages are Blazor pages under `TenantConfig/CrmConfig` and should follow the established CRM Configuration page pattern used by Lead Sources, Lead Statuses, Opportunity Stages, Duplicate Rules, Assignment Rules, and CRM Custom Fields. Preserve existing functionality and add or polish features without removing them, following the `/crm/opportunities` layout pattern.
 - Use `enterprise.css` design-system classes for CRM Configuration UI. Do not add one-off page styles unless the class is reusable and belongs in `enterprise.css`. When removing or altering stylesheet rules or UI dependencies for CRM Configuration pages, scope changes to the specific page requested and avoid global removals unless explicitly requested.
 - Keep the database as the source of truth for CRM Configuration schema, DTOs, requests, repositories, and form models. Update C# code to match the DB schema when mismatches are found.
 - CRM Configuration DTOs, requests, and Blazor form models must include validation consistent with database constraints. Required DB fields must be required in requests and form models.

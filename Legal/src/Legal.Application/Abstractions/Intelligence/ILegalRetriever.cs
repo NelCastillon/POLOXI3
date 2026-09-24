@@ -20,7 +20,14 @@ public sealed record LegalProviderRetrievalDiagnostic(
     string OutcomeCode,
     int RawResultCount,
     int ReturnedCount,
-    string? Detail = null);
+    string? Detail = null,
+    // Optional retrieval-integration telemetry populated by the source adapters so a diagnostic
+    // harness can distinguish provider configuration, query translation, HTTP/API access, response
+    // parsing, and filtering failures without altering routing/reasoning. Left null when not applicable.
+    string? NormalizedCitation = null,
+    string? EndpointUrl = null,
+    int? HttpStatus = null,
+    IReadOnlyCollection<string>? SourceCourtIds = null);
 
 public sealed record LegalProviderRetrievalResult(
     IReadOnlyCollection<WideExternalKnowledgeSnippet> Snippets,

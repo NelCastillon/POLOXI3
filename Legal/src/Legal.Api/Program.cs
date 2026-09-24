@@ -50,9 +50,12 @@ builder.Services.AddIdentityCore<Legal.Infrastructure.Identity.ApplicationUser>(
 // Ambient tenant for runtime-effective DB-backed EpistemicAuthoritySettings resolution.
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<Legal.Application.Abstractions.Services.IEpistemicTenantAccessor, Legal.Api.Security.HttpEpistemicTenantAccessor>();
+// Host-backed execution environment so the decision service can enforce PROD-only rules (DEV Logic
+// is rejected server-side in a Production deployment).
+builder.Services.AddSingleton<Legal.Application.Abstractions.Services.IExecutionEnvironment, Legal.Api.Security.HostExecutionEnvironment>();
 // Async start+poll transport for long-running POLOXI Wide searches (transport only; pipeline unchanged).
 builder.Services.AddSingleton<Legal.Api.Services.WideSearchOperationStore>();
-// Transactional outbox drain worker — delivers invitation emails after commit (retry-safe).
+// Transactional outbox drain worker
 builder.Services.AddHostedService<Legal.Api.Services.OutboxDrainHostedService>();
 builder.Services.AddHostedService<Legal.Api.Services.LegalDocumentSearchProjectionHostedService>();
 

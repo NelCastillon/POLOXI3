@@ -9,7 +9,10 @@
 <div class="intel-page">
 <header class="intel-header">
     <div><span>Control plane</span><h1>AI Configuration Center</h1><p>Effective provider capabilities, model deployments, routing, limits, and human-review controls from the database.</p></div>
-    <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    <div class="intel-header-actions">
+        <div class="intel-search"><i class="bi bi-search"></i><input type="search" placeholder="Search settings, providers, models, prompts…" value="@_search" @oninput="OnSearchInput" aria-label="Search configuration" />@if(!string.IsNullOrWhiteSpace(_search)){<button type="button" class="intel-search-clear" title="Clear search" @onclick="ClearSearch"><i class="bi bi-x-lg"></i></button>}</div>
+        <button class="um-btn um-btn-ghost" @onclick="LoadAsync" disabled="@_loading"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+    </div>
 </header>
 @if(_loading){<div class="intel-state">Loading AI configuration...</div>}
 else
@@ -26,22 +29,35 @@ else
         <article class="intel-kpi-link @(_focusSection=="epistemic"?"intel-kpi-active":null)" role="button" tabindex="0" title="Go to epistemic authority settings" @onclick="@(()=>FocusSectionAsync("epistemic"))"><span>Epistemic authority</span><strong>@_epistemicSettings.Count</strong></article>
     </section>
 
+    @if(!string.IsNullOrWhiteSpace(_search) && !HasAnySearchResult)
+    {
+        <div class="intel-state">No configuration entries match &ldquo;@_search&rdquo;.</div>
+    }
+
+    @if(SectionVisible("decision routes","POLOXI decision model routes") && _decisionRoutes.Any(r=>MatchRoute(r)))
+    {
     <section id="intel-section-decision-routes" class="intel-panel @(_focusSection=="decision-routes"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>POLOXI decision model routes</h2><span>DB-backed task policy</span></div>
         @if(_decisionRoutes.Count==0){<div class="intel-state">No POLOXI decision model routes are configured.</div>}
-        @foreach(var route in _decisionRoutes.OrderBy(r=>r.FeatureCode).ThenBy(r=>r.Priority))
+        @foreach(var route in _decisionRoutes.Where(MatchRoute).OrderBy(r=>r.FeatureCode).ThenBy(r=>r.Priority))
         {
             <div class="intel-row">
                 <div><strong>@route.FeatureCode</strong><small>@route.ModelCode · @route.DeploymentName</small><span>@route.MaxOutputTokens.ToString("N0") output tokens · @route.TimeoutSeconds seconds · temperature @route.Temperature</span></div>
-                <div><AppStatusBadge Status="@(route.ModelCode.Contains("astra",StringComparison.OrdinalIgnoreCase)?"ASTRA":"MINI")" /></div>
+                <div>
+                    <AppStatusBadge Status="@(route.ModelCode.Contains("astra",StringComparison.OrdinalIgnoreCase)?"ASTRA":"MINI")" />
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditDecisionRoute(route)">Edit</button>
+                </div>
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("providers provider registry","Provider registry") && _providers.Any(MatchProvider))
+    {
     <section id="intel-section-providers" class="intel-panel @(_focusSection=="providers"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Provider registry</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewProvider">Add provider</button></div>
         @if(_providers.Count==0){<div class="intel-state">No provider records are configured.</div>}
-        @foreach(var provider in _providers)
+        @foreach(var provider in _providers.Where(MatchProvider))
         {
             <div class="intel-row">
                 <div><strong>@provider.DisplayName</strong><small>@provider.ProviderCode · @provider.ProviderTypeCode</small></div>
@@ -54,11 +70,14 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("models model deployments","Model deployments") && _models.Any(MatchModel))
+    {
     <section id="intel-section-models" class="intel-panel @(_focusSection=="models"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Model deployments</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewModel">Add model deployment</button></div>
         @if(_models.Count==0){<div class="intel-state">No model deployments exist. Add deployment records before enabling feature policies.</div>}
-        @foreach(var model in _models)
+        @foreach(var model in _models.Where(MatchModel))
         {
             <div class="intel-row">
                 <div><strong>@model.DeploymentName</strong><small>@model.ProviderCode · @model.ModelFamily · @model.CapabilityCode</small></div>
@@ -71,11 +90,14 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("feature policies","Feature policies") && _policies.Any(MatchPolicy))
+    {
     <section id="intel-section-policies" class="intel-panel @(_focusSection=="policies"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Feature policies</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPolicy">Add feature policy</button></div>
         @if(_policies.Count==0){<div class="intel-state">No tenant feature policies are configured. AI features remain unavailable until explicitly enabled.</div>}
-        @foreach(var policy in _policies)
+        @foreach(var policy in _policies.Where(MatchPolicy))
         {
             <div class="intel-row">
                 <div><strong>@policy.FeatureCode</strong><small>@policy.ModuleCode · temperature @policy.Temperature · timeout @policy.TimeoutSeconds seconds</small><span>@policy.MaximumInputTokens.ToString("N0") input / @policy.MaximumOutputTokens.ToString("N0") output tokens · minimum confidence @policy.MinimumConfidence.ToString("P0")</span></div>
@@ -87,12 +109,15 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("prompt registry","Prompt registry") && _prompts.Any(MatchPrompt))
+    {
     <section id="intel-section-prompts" class="intel-panel @(_focusSection=="prompts"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Prompt registry</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewPrompt">Add prompt version</button></div>
         <div class="intel-state">Prompts are grouped by module and listed in the order the engine executes them.</div>
         @if(_prompts.Count==0){<div class="intel-state">No prompt definitions are configured.</div>}
-        @foreach(var group in _prompts.GroupBy(p=>PromptMeta(p.PromptCode).Category).OrderBy(g=>g.Min(p=>PromptMeta(p.PromptCode).Order)))
+        @foreach(var group in _prompts.Where(MatchPrompt).GroupBy(p=>PromptMeta(p.PromptCode).Category).OrderBy(g=>g.Min(p=>PromptMeta(p.PromptCode).Order)))
         {
             <h3 class="intel-prompt-group">@group.Key</h3>
             @foreach(var prompt in group.OrderBy(p=>PromptMeta(p.PromptCode).Order).ThenBy(p=>p.PromptCode).ThenBy(p=>p.VersionLabel))
@@ -109,12 +134,29 @@ else
             }
         }
     </section>
+    }
 
+    @if(SectionVisible("POLOXI decision prompts preflight gate clarification","POLOXI decision prompts") && (_decisionSettings.Any(MatchDecisionSetting) || _decisionPrompts.Any(MatchDecisionPrompt)))
+    {
     <section id="intel-section-decision-prompts" class="intel-panel @(_focusSection=="decision-prompts"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>POLOXI decision prompts</h2></div>
         <div class="intel-state">Database-backed runtime prompts used by candidate discovery, dependency graphs, verification, answers, and Research Need semantic decomposition.</div>
+        <div class="intel-note">
+            <strong>Clarification preflight gate</strong> &mdash; an optional early completeness check that runs <em>before</em> the expensive discovery, dependency-graph, and verification pipeline. When an essential decision-contract input is missing, POLOXI asks the attorney one targeted clarification up front instead of paying for the full run only to end in <code>CLARIFICATION_REQUIRED</code>. It never replaces the dynamic clarification logic that appears after candidate competition. These values are stored in <code>POLOXI.Legal_DecisionSetting</code> &mdash; edit and save them below.
+        </div>
+        @if(_decisionSettings.Count==0){<div class="intel-state">No POLOXI decision settings are configured. Run the latest database migrations to seed the preflight gate keys.</div>}
+        @foreach(var setting in _decisionSettings.Where(MatchDecisionSetting))
+        {
+            <div class="intel-row">
+                <div><strong>@ShortDecisionKey(setting.SettingKey)</strong><small>@setting.SettingKey &middot; @setting.DataTypeCode</small><span>@setting.Description</span></div>
+                <div>
+                    <span>@setting.SettingValue</span>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="()=>EditDecisionSetting(setting)">Edit</button>
+                </div>
+            </div>
+        }
         @if(_decisionPrompts.Count==0){<div class="intel-state">No POLOXI decision prompts are configured.</div>}
-        @foreach(var prompt in _decisionPrompts.OrderBy(p=>p.StageCode).ThenBy(p=>p.PromptCode))
+        @foreach(var prompt in _decisionPrompts.Where(MatchDecisionPrompt).OrderBy(p=>p.StageCode).ThenBy(p=>p.PromptCode))
         {
             <div class="intel-row">
                 <div><strong>@prompt.PromptCode</strong><small>@prompt.StageCode · POLOXI.Legal_DecisionPrompt</small><span>Last updated @(prompt.ModifiedDateUtc??prompt.CreatedDateUtc).ToString("u")</span></div>
@@ -125,12 +167,15 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("legal grounding settings courtlistener govinfo ecfr","Legal grounding settings") && _legalSettings.Any(MatchLegalSetting))
+    {
     <section id="intel-section-legal-grounding" class="intel-panel @(_focusSection=="legal-grounding"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Legal grounding settings</h2><button class="um-btn um-btn-primary um-btn-sm" @onclick="NewLegalSetting">Add setting</button></div>
         <div class="intel-note">CourtListener, GovInfo, and eCFR grounding values used when the Legal search context is selected. Encrypted API keys are masked.</div>
         @if(_legalSettings.Count==0){<div class="intel-state">No legal grounding settings are configured.</div>}
-        @foreach(var setting in _legalSettings)
+        @foreach(var setting in _legalSettings.Where(MatchLegalSetting))
         {
             <div class="intel-row">
                 <div><strong>@ShortLegalKey(setting.SettingKey)</strong><small>@setting.SettingKey · @setting.DataTypeCode</small><span>@setting.Description</span></div>
@@ -143,12 +188,15 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("epistemic authority settings","Epistemic authority settings") && _epistemicSettings.Any(MatchEpistemicSetting))
+    {
     <section id="intel-section-epistemic" class="intel-panel @(_focusSection=="epistemic"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Epistemic authority settings</h2></div>
         <div class="intel-note">POLOXI Epistemic Authority (EA) feature flags, override mode, and thresholds. Values resolve tenant override → platform default → code default and take effect on the next decision. Editing here saves a tenant override for your tenant.</div>
         @if(_epistemicSettings.Count==0){<div class="intel-state">No epistemic authority settings are configured.</div>}
-        @foreach(var setting in _epistemicSettings)
+        @foreach(var setting in _epistemicSettings.Where(MatchEpistemicSetting))
         {
             <div class="intel-row">
                 <div><strong>@ShortEpistemicKey(setting.SettingKey)</strong><small>@setting.SettingKey · @setting.DataTypeCode · platform default @setting.PlatformValue</small><span>@setting.Description</span></div>
@@ -160,7 +208,10 @@ else
             </div>
         }
     </section>
+    }
 
+    @if(SectionVisible("search result display pipeline diagnostics showpipeline","Search result display"))
+    {
     <section id="intel-section-search-display" class="intel-panel @(_focusSection=="search-display"?"intel-panel-focus":null)">
         <div class="intel-toolbar"><h2>Search result display</h2></div>
         <div class="intel-note">Controls what optional diagnostics appear on the Wide search result page (/legal/search).</div>
@@ -176,6 +227,7 @@ else
             </div>
         </div>
     </section>
+    }
 }
 @if(_editingDecisionPrompt)
 {
@@ -195,6 +247,35 @@ else
                 @if(_error is not null){<span class="intel-error">@_error</span>}
                 <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingDecisionPrompt=false">Cancel</button>
                 <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save decision prompt</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
+
+@if(_editingDecisionRoute)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-signpost-split"></i><span>Edit POLOXI decision model route</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingDecisionRoute=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_decisionRouteForm" OnValidSubmit="SaveDecisionRouteAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body"><div class="um-form-grid">
+                <div class="intel-field"><label>Feature code</label><InputText @bind-Value="_decisionRouteForm.FeatureCode" disabled /></div>
+                <div class="intel-field"><label>Provider type</label><InputText @bind-Value="_decisionRouteForm.ProviderTypeCode" /><ValidationMessage For="() => _decisionRouteForm.ProviderTypeCode" class="text-danger" /></div>
+                <div class="intel-field"><label>Model code</label><InputText @bind-Value="_decisionRouteForm.ModelCode" /><ValidationMessage For="() => _decisionRouteForm.ModelCode" class="text-danger" /></div>
+                <div class="intel-field"><label>Deployment name</label><InputText @bind-Value="_decisionRouteForm.DeploymentName" /><ValidationMessage For="() => _decisionRouteForm.DeploymentName" class="text-danger" /></div>
+                <div class="intel-field" style="grid-column:1/-1"><label>Endpoint reference</label><InputText @bind-Value="_decisionRouteForm.EndpointReference" /><ValidationMessage For="() => _decisionRouteForm.EndpointReference" class="text-danger" /></div>
+                <div class="intel-field" style="grid-column:1/-1"><label>Credential reference</label><InputText @bind-Value="_decisionRouteForm.CredentialReference" /><ValidationMessage For="() => _decisionRouteForm.CredentialReference" class="text-danger" /></div>
+                <div class="intel-field"><label>API version</label><InputText @bind-Value="_decisionRouteForm.ApiVersion" /><ValidationMessage For="() => _decisionRouteForm.ApiVersion" class="text-danger" /></div>
+                <div class="intel-field"><label>Timeout (seconds)</label><InputNumber @bind-Value="_decisionRouteForm.TimeoutSeconds" /><ValidationMessage For="() => _decisionRouteForm.TimeoutSeconds" class="text-danger" /></div>
+                <div class="intel-field"><label>Max output tokens</label><InputNumber @bind-Value="_decisionRouteForm.MaxOutputTokens" /><ValidationMessage For="() => _decisionRouteForm.MaxOutputTokens" class="text-danger" /></div>
+                <div class="intel-field"><label>Temperature</label><InputNumber @bind-Value="_decisionRouteForm.Temperature" /><ValidationMessage For="() => _decisionRouteForm.Temperature" class="text-danger" /></div>
+                <div class="intel-field"><label>Priority</label><InputNumber @bind-Value="_decisionRouteForm.Priority" /><ValidationMessage For="() => _decisionRouteForm.Priority" class="text-danger" /></div>
+                <div class="intel-field"><label><InputCheckbox @bind-Value="_decisionRouteForm.IsActive" /> Active</label></div>
+            </div></div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingDecisionRoute=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save decision route</button>
             </div>
         </EditForm>
     </div></div>
@@ -350,6 +431,35 @@ else
         </EditForm>
     </div></div>
 }
+@if(_editingDecisionSetting)
+{
+    <div class="um-modal-backdrop"><div class="um-modal">
+        <div class="um-modal-header"><i class="bi bi-sliders"></i><span>Edit decision setting</span><button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="()=>_editingDecisionSetting=false"><i class="bi bi-x-lg"></i></button></div>
+        <EditForm Model="_decisionForm" OnValidSubmit="SaveDecisionSettingAsync">
+            <DataAnnotationsValidator />
+            <div class="um-modal-body">
+                <ValidationSummary />
+                <div class="um-form-grid">
+                    <div class="intel-field" style="grid-column:1/-1"><label>Setting</label><InputText @bind-Value="_decisionForm.SettingKey" disabled /><small>@_decisionForm.DataTypeCode · POLOXI.Legal_DecisionSetting</small></div>
+                    @if(_decisionForm.DataTypeCode=="Boolean")
+                    {
+                        <div class="intel-field"><label>Value</label><InputSelect @bind-Value="_decisionForm.SettingValue"><option value="true">true</option><option value="false">false</option></InputSelect><ValidationMessage For="() => _decisionForm.SettingValue" class="text-danger" /></div>
+                    }
+                    else
+                    {
+                        <div class="intel-field"><label>Value</label><InputText @bind-Value="_decisionForm.SettingValue" /><ValidationMessage For="() => _decisionForm.SettingValue" class="text-danger" /><small>@(_decisionForm.DataTypeCode=="Integer"?"Whole number.":_decisionForm.DataTypeCode=="Decimal"?"Decimal (invariant, e.g. 0.15).":"")</small></div>
+                    }
+                    @if(!string.IsNullOrWhiteSpace(_decisionForm.Description)){<div class="intel-field" style="grid-column:1/-1"><small>@_decisionForm.Description</small></div>}
+                </div>
+            </div>
+            <div class="um-modal-footer">
+                @if(_error is not null){<span class="intel-error">@_error</span>}
+                <button type="button" class="um-btn um-btn-ghost" @onclick="()=>_editingDecisionSetting=false">Cancel</button>
+                <button type="submit" class="um-btn um-btn-primary" disabled="@_saving">Save setting</button>
+            </div>
+        </EditForm>
+    </div></div>
+}
 @if(_editingEpistemicSetting)
 {
     <div class="um-modal-backdrop"><div class="um-modal">
@@ -406,23 +516,28 @@ private readonly List<AiModelDeploymentDto> _models=[];
 private readonly List<AiFeaturePolicyDto> _policies=[];
 private readonly List<IntelligencePromptDefinitionDto> _prompts=[];
 private readonly List<DecisionPromptConfigurationDto> _decisionPrompts=[];
+private readonly List<DecisionSettingDto> _decisionSettings=[];
 private readonly List<DecisionModelRouteDto> _decisionRoutes=[];
 private readonly List<IntelligenceCapabilityDto> _capabilities=[];
 private readonly List<LegalGroundingSettingDto> _legalSettings=[];
 private readonly List<EpistemicSettingDto> _epistemicSettings=[];
 private bool _showPipeline;
-private bool _loading=true,_editing,_editingPrompt,_editingDecisionPrompt,_editingProvider,_editingModel,_saving;
+private bool _loading=true,_editing,_editingPrompt,_editingDecisionPrompt,_editingDecisionRoute,_editingProvider,_editingModel,_saving;
 private bool _editingLegalSetting;
 private bool _editingEpistemicSetting;
+private bool _editingDecisionSetting;
 private string? _error;
 private string? _focusSection;
+private string _search=string.Empty;
 private PolicyForm _form=new();
 private PromptForm _promptForm=new();
 private DecisionPromptForm _decisionPromptForm=new();
+private DecisionRouteForm _decisionRouteForm=new();
 private ProviderForm _providerForm=new();
 private ModelForm _modelForm=new();
 private LegalSettingForm _legalForm=new();
 private EpistemicSettingForm _epistemicForm=new();
+private DecisionSettingForm _decisionForm=new();
 private ConfirmRequest? _confirm;
 private TaskCompletionSource<bool>? _confirmSource;
 
@@ -447,6 +562,7 @@ private async Task LoadAsync()
         _prompts.Clear();_prompts.AddRange(await prompts);
         _decisionPrompts.Clear();_decisionPrompts.AddRange(await decisionPrompts);
         _decisionRoutes.Clear();_decisionRoutes.AddRange(await decisionRoutes);
+        _decisionSettings.Clear();_decisionSettings.AddRange(await Api.GetDecisionSettingsAsync("Decision.Preflight."));
         _capabilities.Clear();_capabilities.AddRange((await platform)?.Pillars.SelectMany(x=>x.Capabilities)??[]);
         _legalSettings.Clear();_legalSettings.AddRange(await Api.GetLegalGroundingSettingsAsync());
         _epistemicSettings.Clear();_epistemicSettings.AddRange(await Api.GetEpistemicSettingsAsync());
@@ -482,6 +598,38 @@ private sealed class DecisionPromptForm
     public static DecisionPromptForm From(DecisionPromptConfigurationDto item)=>new(){PromptCode=item.PromptCode,StageCode=item.StageCode,SystemPrompt=item.SystemPrompt,UserPromptTemplate=item.UserPromptTemplate,OutputSchemaJson=item.OutputSchemaJson,IsActive=item.IsActive};
 }
 
+private void EditDecisionRoute(DecisionModelRouteDto item){_error=null;_decisionRouteForm=DecisionRouteForm.From(item);_editingDecisionRoute=true;}
+private async Task SaveDecisionRouteAsync()
+{
+    if(!await ConfirmUpdateAsync($"POLOXI decision model route '{_decisionRouteForm.FeatureCode}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveDecisionModelRouteRequest(_decisionRouteForm.FeatureCode,_decisionRouteForm.ProviderTypeCode,_decisionRouteForm.ModelCode,_decisionRouteForm.DeploymentName,_decisionRouteForm.EndpointReference,string.IsNullOrWhiteSpace(_decisionRouteForm.CredentialReference)?null:_decisionRouteForm.CredentialReference,_decisionRouteForm.ApiVersion,_decisionRouteForm.TimeoutSeconds,_decisionRouteForm.MaxOutputTokens,_decisionRouteForm.Temperature,_decisionRouteForm.Priority,_decisionRouteForm.IsActive);
+        await Api.SaveDecisionModelRouteAsync(_decisionRouteForm.FeatureCode,request);
+        _editingDecisionRoute=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=$"Save failed: {ex.Message}";}
+    finally{_saving=false;}
+}
+
+private sealed class DecisionRouteForm
+{
+    [Required,StringLength(120)]public string FeatureCode{get;set;}="";
+    [Required,StringLength(60)]public string ProviderTypeCode{get;set;}="";
+    [Required,StringLength(100)]public string ModelCode{get;set;}="";
+    [Required,StringLength(100)]public string DeploymentName{get;set;}="";
+    [Required,StringLength(400)]public string EndpointReference{get;set;}="";
+    [StringLength(400)]public string? CredentialReference{get;set;}
+    [Required,StringLength(40)]public string ApiVersion{get;set;}="";
+    [Range(1,3600)]public int TimeoutSeconds{get;set;}=120;
+    [Range(1,100000000)]public int MaxOutputTokens{get;set;}=8000;
+    [Range(0,2)]public decimal Temperature{get;set;}=0.20m;
+    [Range(0,100000)]public int Priority{get;set;}=100;
+    public bool IsActive{get;set;}=true;
+    public static DecisionRouteForm From(DecisionModelRouteDto item)=>new(){FeatureCode=item.FeatureCode,ProviderTypeCode=item.ProviderTypeCode,ModelCode=item.ModelCode,DeploymentName=item.DeploymentName,EndpointReference=item.EndpointReference,CredentialReference=item.CredentialReference,ApiVersion=item.ApiVersion,TimeoutSeconds=item.TimeoutSeconds,MaxOutputTokens=item.MaxOutputTokens,Temperature=item.Temperature,Priority=item.Priority,IsActive=true};
+}
+
 private async Task SaveShowPipelineAsync()
 {
     try{await Api.SaveShowPipelineAsync(_showPipeline);}
@@ -489,6 +637,26 @@ private async Task SaveShowPipelineAsync()
 }
 
 private void NewProvider(){_error=null;_providerForm=new();_editingProvider=true;}
+private void OnSearchInput(ChangeEventArgs e){_search=e.Value?.ToString()??string.Empty;}
+private void ClearSearch(){_search=string.Empty;}
+private bool HasAnySearchResult =>
+    _decisionRoutes.Any(MatchRoute) || _providers.Any(MatchProvider) || _models.Any(MatchModel)
+    || _policies.Any(MatchPolicy) || _prompts.Any(MatchPrompt) || _decisionSettings.Any(MatchDecisionSetting)
+    || _decisionPrompts.Any(MatchDecisionPrompt) || _legalSettings.Any(MatchLegalSetting)
+    || _epistemicSettings.Any(MatchEpistemicSetting)
+    || SectionVisible("search result display pipeline diagnostics showpipeline","Search result display");
+private bool Contains(string? value)=>!string.IsNullOrEmpty(value)&&value.Contains(_search,StringComparison.OrdinalIgnoreCase);
+private bool SectionVisible(string sectionKeywords,string title)=>string.IsNullOrWhiteSpace(_search)||Contains(title)||Contains(sectionKeywords);
+private bool MatchAny(params string?[] fields)=>string.IsNullOrWhiteSpace(_search)||fields.Any(Contains);
+private bool MatchRoute(DecisionModelRouteDto r)=>MatchAny(r.FeatureCode,r.ModelCode,r.DeploymentName);
+private bool MatchProvider(AiProviderDto p)=>MatchAny(p.DisplayName,p.ProviderCode,p.ProviderTypeCode);
+private bool MatchModel(AiModelDeploymentDto m)=>MatchAny(m.DeploymentName,m.ProviderCode,m.ModelFamily,m.CapabilityCode);
+private bool MatchPolicy(AiFeaturePolicyDto p)=>MatchAny(p.FeatureCode,p.ModuleCode);
+private bool MatchPrompt(IntelligencePromptDefinitionDto p)=>MatchAny(p.DisplayName,p.PromptCode,p.VersionLabel,p.CapabilityCode,PromptMeta(p.PromptCode).Category);
+private bool MatchDecisionSetting(DecisionSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description,s.SettingValue);
+private bool MatchDecisionPrompt(DecisionPromptConfigurationDto p)=>MatchAny(p.PromptCode,p.StageCode);
+private bool MatchLegalSetting(LegalGroundingSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description);
+private bool MatchEpistemicSetting(EpistemicSettingDto s)=>MatchAny(s.SettingKey,s.DataTypeCode,s.Description);
 private async Task FocusSectionAsync(string section)
 {
     _focusSection=section;
@@ -585,6 +753,32 @@ private async Task SaveEpistemicSettingAsync()
         var request=new SaveEpistemicSettingRequest(_epistemicForm.SettingKey,_epistemicForm.SettingValue??string.Empty,_epistemicForm.Scope);
         await Api.SaveEpistemicSettingAsync(_epistemicForm.SettingKey,request);
         _editingEpistemicSetting=false;await LoadAsync();
+    }
+    catch(Exception ex){_error=ex.Message;}
+    finally{_saving=false;}
+}
+private static string ShortDecisionKey(string key)=>key.StartsWith("Decision.",StringComparison.OrdinalIgnoreCase)?key["Decision.".Length..]:key;
+private void EditDecisionSetting(DecisionSettingDto item)
+{
+    _error=null;
+    _decisionForm=new()
+    {
+        SettingKey=item.SettingKey,
+        SettingValue=item.SettingValue,
+        DataTypeCode=item.DataTypeCode,
+        Description=item.Description
+    };
+    _editingDecisionSetting=true;
+}
+private async Task SaveDecisionSettingAsync()
+{
+    if(!await ConfirmUpdateAsync($"decision setting '{ShortDecisionKey(_decisionForm.SettingKey)}'"))return;
+    _saving=true;_error=null;
+    try
+    {
+        var request=new SaveDecisionSettingRequest(_decisionForm.SettingKey,_decisionForm.SettingValue??string.Empty);
+        await Api.SaveDecisionSettingAsync(_decisionForm.SettingKey,request);
+        _editingDecisionSetting=false;await LoadAsync();
     }
     catch(Exception ex){_error=ex.Message;}
     finally{_saving=false;}
@@ -774,5 +968,12 @@ private sealed class EpistemicSettingForm
     public string PlatformValue{get;set;}="";
     [Required,StringLength(50)]public string DataTypeCode{get;set;}="String";
     [Required]public string Scope{get;set;}="Tenant";
+}
+private sealed class DecisionSettingForm
+{
+    [Required,StringLength(200)]public string SettingKey{get;set;}="";
+    [Required,StringLength(1000)]public string? SettingValue{get;set;}="";
+    [Required,StringLength(50)]public string DataTypeCode{get;set;}="String";
+    public string? Description{get;set;}
 }
 }

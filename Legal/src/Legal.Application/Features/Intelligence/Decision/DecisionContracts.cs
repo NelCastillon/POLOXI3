@@ -22,6 +22,15 @@ public sealed record DecisionSearchRequest(
     // POLOXI Engine toggle: true runs the full decision-state loop; false returns a direct LLM answer.
     public bool UsePoloxiEngine { get; init; } = true;
 
+    // Execution mode (DEV Logic / PROD Logic). Resolved once per NEW session into an immutable snapshot
+    // that selects the default model deployment, replay permission, and environment restriction. A
+    // clarification continuation inherits the parent session's mode. Defaults to Dev.
+    public DecisionExecutionMode Mode { get; init; } = DecisionExecutionMode.Dev;
+
+    // Opt-in deterministic AI response replay (DEV only). Honored only when the resolved mode allows
+    // replay; PROD always executes live regardless of this flag.
+    public bool EnableReplay { get; init; }
+
     // Model selection: null/empty = Auto (highest-priority active DB route); otherwise a specific ModelCode.
     [StringLength(100)] public string? ModelCode { get; init; }
 
@@ -30,7 +39,7 @@ public sealed record DecisionSearchRequest(
 
     // Continuation of a session that ended USER_CLARIFICATION_REQUIRED (§7 clarification loop).
     public Guid? ParentDecisionSessionId { get; init; }
-    [StringLength(500)] public string? ClarificationAnswer { get; init; }
+    [StringLength(2000)] public string? ClarificationAnswer { get; init; }
     [StringLength(300)] public string? ClarificationTarget { get; init; }
 
     // Matter this decision belongs to (cockpit / dashboard grouping). Null = ad-hoc decision.

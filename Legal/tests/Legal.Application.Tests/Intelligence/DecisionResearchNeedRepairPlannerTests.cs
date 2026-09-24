@@ -1,3 +1,4 @@
+using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Decision.Core;
 using Xunit;
 
@@ -134,5 +135,52 @@ public sealed class DecisionResearchNeedRepairPlannerTests
 
         Assert.Contains("REPAIR ONLY THESE DEFECTS", directive);
         Assert.Contains("declarative", directive);
+    }
+
+    [Fact]
+    public void Diagnose_Result_WhenCanProgress_ReturnsRepairApplication()
+    {
+        var evaluation = new DecisionResearchabilityResult(
+            IsAcceptable: false,
+            Defects: ["APPLICATION_1:RESEARCH_QUESTION_MISSING"],
+            ResearchableLeaves: [])
+        {
+            CanProgressWithResearchableLeaves = true,
+            ApplicationLeafDefects = ["APPLICATION_1:RESEARCH_QUESTION_MISSING"],
+        };
+
+        Assert.Equal(
+            DecisionResearchNeedDisposition.RepairApplication,
+            DecisionResearchNeedRepairPlanner.Diagnose(evaluation));
+    }
+
+    [Fact]
+    public void Diagnose_Result_WhenCannotProgress_FallsBackToDefectDiagnosis()
+    {
+        var evaluation = new DecisionResearchabilityResult(
+            IsAcceptable: false,
+            Defects: ["LEAF_1:MIXED_LEAF_MUST_BE_DECOMPOSED"],
+            ResearchableLeaves: [])
+        {
+            CanProgressWithResearchableLeaves = false,
+        };
+
+        Assert.Equal(
+            DecisionResearchNeedDisposition.Decompose,
+            DecisionResearchNeedRepairPlanner.Diagnose(evaluation));
+    }
+
+    [Fact]
+    public void BuildDirective_RepairApplication_TargetsOnlyApplicationLeaf()
+    {
+        var directive = DecisionResearchNeedRepairPlanner.BuildDirective(
+            DecisionResearchNeedDisposition.RepairApplication, ["APPLICATION_1:RESEARCH_QUESTION_MISSING"]);
+
+        Assert.Contains("ONLY the APPLICATION", directive);
+        Assert.Contains("ResearchQuestion", directive);
+        Assert.Contains("Requires", directive);
+        Assert.Contains("APPLICATION_1:RESEARCH_QUESTION_MISSING", directive);
+        // Must not invent evidence or re-route the application to external retrieval.
+        Assert.Contains("NO SearchQuery", directive);
     }
 }

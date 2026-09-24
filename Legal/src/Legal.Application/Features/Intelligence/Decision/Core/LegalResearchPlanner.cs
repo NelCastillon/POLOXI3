@@ -52,8 +52,20 @@ public sealed class LegalResearchPlanner:ILegalResearchPlanner
         }
     }
 
-    private static string BuildQualifiedQuery(string query,string? jurisdiction) =>
-        string.IsNullOrWhiteSpace(jurisdiction)?query:$"{query} jurisdiction {jurisdiction}";
+    // Qualifies a lexical/semantic/targeted query with the governing SOVEREIGN only. The incoming
+    // jurisdiction value frequently carries a full court caption (e.g. "Superior Court of California,
+    // County of Los Angeles"). Appending that caption verbatim pollutes every query with court-name
+    // free text and depresses provider relevance. Reduce the caption to its enclosing sovereign (state
+    // or federal jurisdiction) and append only that as structured scope. Exact-citation operations are
+    // never routed through here, so a citation is never diluted with jurisdiction text.
+    private static string BuildQualifiedQuery(string query,string? jurisdiction)
+    {
+        var sovereign=LegalJurisdictionScope.LooksLikeCourtCaption(jurisdiction)
+            ?LegalJurisdictionScope.ExtractSovereign(jurisdiction)
+                ??LegalJurisdictionScope.ExtractFederalJurisdiction(jurisdiction)
+            :jurisdiction?.Trim();
+        return string.IsNullOrWhiteSpace(sovereign)?query:$"{query} jurisdiction {sovereign}";
+    }
 
     private static LegalAuthorityKind ResolveAuthorityKind(DecisionResearchNeedPersistence need)
     {

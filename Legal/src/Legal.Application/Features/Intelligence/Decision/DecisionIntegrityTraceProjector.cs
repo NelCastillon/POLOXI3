@@ -35,7 +35,8 @@ public static class DecisionIntegrityTraceProjector
         var integrity = ProjectIntegrity(
             allStages, research, propagation, finalAudit, outputIntegrity, consistency);
         var readiness = ProjectReadiness(r);
-
+        var evidenceSufficiency = ProjectEvidenceSufficiency(r);
+        var outputReadability = ProjectRenderQuality(r);
         return new DecisionIntegrityTraceDto
         {
             SessionId = r.DecisionSessionId,
@@ -44,6 +45,8 @@ public static class DecisionIntegrityTraceProjector
             Readiness = readiness,
             OutputIntegrity = outputIntegrity,
             Consistency = consistency,
+            EvidenceSufficiency = evidenceSufficiency,
+            OutputReadability = outputReadability,
             Proposal = proposal,
             Research = research,
             Verification = verification,
@@ -354,10 +357,12 @@ public static class DecisionIntegrityTraceProjector
     private static IntegrityStageDto ProjectVerification(DecisionSearchResponse r)
     {
         // No evidence retrieved is a LEGITIMATELY UNNECESSARY stage, not a coverage gap: there was
-        // nothing to verify. Report Skipped with a reason so it does not block HEALTHY.
+        // nothing to verify. Report Skipped with a reason so it does not block HEALTHY. This is the
+        // EXTERNAL evidence/authority verifier only; the structural dependency verifier (DECISION_VERIFY)
+        // runs independently in the typed graph and can still invalidate edges even when this is skipped.
         if (r.Evidence.Count == 0)
             return Stage("VERIFY", "Verify", IntegrityTraceStatus.Skipped, "SKIPPED · no evidence retrieved",
-                [new("Reason", "No evidence was retrieved, so there was nothing to verify.")]);
+                [new("Reason", "No external evidence was retrieved, so external evidence verification was unnecessary. Structural dependency verification of the typed graph is reported separately and is not affected by this skip.")]);
 
         var verified = r.EvidenceVerifications.Count > 0
             ? r.EvidenceVerifications.Count(v => v.IsDecisionAuthorized)
@@ -720,6 +725,70 @@ public static class DecisionIntegrityTraceProjector
     private static bool HasSubstantiveAnswer(DecisionSearchResponse r) =>
         !string.IsNullOrWhiteSpace(r.FinalAnswer);
 
+    // Final-render readability projection — DELIBERATELY INDEPENDENT of evidence authorization. Output
+    // integrity answers "are the answer's claims authorized?"; this answers "is the rendered answer
+    // well-formed?" A clean audit with zero unauthorized assertions can still be poorly rendered (orphaned
+    // list markers like "...10.", repeated punctuation, dangling separators). This check never inspects or
+    // weakens evidence authorization; it only scans the composed prose for malformed fragments so a readable
+    // final answer is a separate, verifiable gate.
+    private static OutputReadabilityState ProjectRenderQuality(DecisionSearchResponse r)
+    {
+        var answer = r.FinalAnswer;
+        if (string.IsNullOrWhiteSpace(answer))
+            return OutputReadabilityState.NotRun;
+
+        return HasMalformedRenderFragments(answer)
+            ? OutputReadabilityState.AttentionRequired
+            : OutputReadabilityState.Clean;
+    }
+
+    // Deterministic malformed-fragment detection over composed prose. Flags the defect classes observed in
+    // MINI output: an orphaned ellipsis fused to a list marker ("...10."), runs of repeated sentence
+    // punctuation (e.g. "!!", "?.", ". ."), and a numbered marker glued to the end of a preceding word
+    // ("word10."). It intentionally tolerates a legitimate ellipsis ("...") and ordinary decimals.
+    private static bool HasMalformedRenderFragments(string answer)
+    {
+        for (var i = 0; i < answer.Length; i++)
+        {
+            var c = answer[i];
+
+            // An ellipsis immediately followed by digits then a period is an orphaned list fragment
+            // (e.g. "...10."). A plain "..." followed by a space or letter is fine.
+            if (c == '.' && i + 1 < answer.Length && answer[i + 1] == '.')
+            {
+                var j = i;
+                while (j < answer.Length && answer[j] == '.') j++;
+                if (j < answer.Length && char.IsDigit(answer[j]))
+                {
+                    var k = j;
+                    while (k < answer.Length && char.IsDigit(answer[k])) k++;
+                    if (k < answer.Length && answer[k] == '.')
+                        return true;
+                }
+                i = j - 1;
+                continue;
+            }
+
+            // Two adjacent sentence-terminating punctuation marks (allowing whitespace between) that are not
+            // a valid ellipsis indicate malformed rendering: "!!", "?.", ". .", "?!" fused mid-sentence.
+            if (c is '.' or '!' or '?')
+            {
+                var j = i + 1;
+                while (j < answer.Length && answer[j] == ' ') j++;
+                if (j < answer.Length && answer[j] is '.' or '!' or '?')
+                {
+                    // Allow a genuine ellipsis: three consecutive dots with no space.
+                    var isEllipsis = c == '.' && j == i + 1 && answer[j] == '.'
+                        && j + 1 < answer.Length && answer[j + 1] == '.';
+                    if (!isEllipsis)
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     // Internal-state coherence: the projected trace must not disagree with authoritative fields. We
     // check cross-references that must hold (e.g. a winner id must exist among candidates when present).
     private static StateConsistency ProjectConsistency(DecisionSearchResponse r)
@@ -788,6 +857,33 @@ public static class DecisionIntegrityTraceProjector
         if (r.Candidates.Count == 0)
             return TraceReadinessState.Unknown;
         return TraceReadinessState.NotReady;
+    }
+
+    // Evidence sufficiency is deliberately independent of system integrity and output integrity: a run
+    // whose controls all executed correctly (HEALTHY / CLEAN) can still have retrieved and verified
+    // NOTHING. This projection answers "is the answer actually supported?" from authoritative evidence
+    // state only, so the UI never presents pipeline integrity as evidence sufficiency.
+    //   \u2022 No evidence retrieved                         => NoVerifiedSupport
+    //   \u2022 Evidence retrieved but nothing decision-verified => NoVerifiedSupport
+    //   \u2022 Some verified, but unverified/rejected remain    => Insufficient
+    //   \u2022 Verified support present and nothing outstanding  => Sufficient
+    private static EvidenceSufficiencyState ProjectEvidenceSufficiency(DecisionSearchResponse r)
+    {
+        if (r.Evidence.Count == 0)
+            return EvidenceSufficiencyState.NoVerifiedSupport;
+
+        var verified = r.EvidenceVerifications.Count > 0
+            ? r.EvidenceVerifications.Count(v => v.IsDecisionAuthorized)
+            : r.Evidence.Count(e => IsVerified(e.VerificationStatus));
+        if (verified == 0)
+            return EvidenceSufficiencyState.NoVerifiedSupport;
+
+        var invalidated = r.Evidence.Count(e => IsInvalidated(e.VerificationStatus));
+        var evaluated = r.Evidence.Count(e => !string.IsNullOrWhiteSpace(e.LifecycleState));
+        var unresolved = r.Evidence.Count - evaluated;
+        return invalidated > 0 || unresolved > 0
+            ? EvidenceSufficiencyState.Insufficient
+            : EvidenceSufficiencyState.Sufficient;
     }
 
     private static DecisionMovementDto? ProjectMovement(DecisionSearchResponse r)

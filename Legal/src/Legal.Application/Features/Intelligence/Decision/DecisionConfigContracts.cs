@@ -1,5 +1,7 @@
 namespace Legal.Application.Features.Intelligence.Decision;
 
+using System.ComponentModel.DataAnnotations;
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // DB-backed configuration + persistence-snapshot contracts for the self-contained decision module.
 // These come exclusively from POLOXI.Legal_Decision* tables — no values are hardcoded in code (§3).
@@ -18,6 +20,56 @@ public sealed record DecisionModelRouteDto(
     int MaxOutputTokens,
     decimal Temperature,
     int Priority);
+
+// ── Execution modes (DEV Logic / PROD Logic) ────────────────────────────────────────────────────
+// Two shared-pipeline execution profiles. Modes are execution SETTINGS (default model, replay
+// permission, environment restriction), NOT separate reasoning engines. The same POLOXI Core, Legal
+// Domain Pack, Light Evidence Graph and Typed Legal Dependency Graph V2 run in both modes; only the
+// model/replay/provider execution settings differ. Governance and verification gates are identical.
+public enum DecisionExecutionMode
+{
+    // Fast development/debugging. Default gpt-4.1-mini, replay allowed, never runs in Production.
+    Dev,
+    // Full-quality governed output. Default gpt-6-astra, replay disabled, Production-authorized.
+    Prod
+}
+
+// A row of POLOXI.Legal_DecisionExecutionMode: the DB-backed, admin-editable configuration that
+// resolves an execution mode to its default model deployment, provider/endpoint overrides and
+// safeguards. Nullable override fields mean "use the existing Auto/route-resolved value" (so blank =
+// unchanged pre-existing behavior, which is what keeps PROD Logic identical to the current pipeline).
+public sealed record DecisionExecutionModeDto(
+    string ExecutionModeCode,
+    string DisplayName,
+    string? Description,
+    string? DefaultModelCode,
+    bool AllowReplay,
+    bool IsProductionAllowed,
+    int SortOrder,
+    bool IsActive,
+    string? ProviderTypeCode = null,
+    string? EndpointReference = null,
+    string? ApiVersion = null,
+    decimal? Temperature = null,
+    int? MaxOutputTokens = null,
+    int? TimeoutSeconds = null);
+
+// Admin update for a single execution mode (Configuration Mode page). ExecutionModeCode identifies the
+// row; nullable overrides clear to "use existing routed value" when omitted. DisplayName/Description
+// are editable labels; the execution safeguards (AllowReplay, IsProductionAllowed) are editable flags.
+public sealed record SaveDecisionExecutionModeRequest(
+    [property: Required, StringLength(20)] string ExecutionModeCode,
+    [property: Required, StringLength(80)] string DisplayName,
+    [property: StringLength(400)] string? Description,
+    [property: StringLength(100)] string? DefaultModelCode,
+    bool AllowReplay,
+    bool IsProductionAllowed,
+    [property: StringLength(50)] string? ProviderTypeCode,
+    [property: StringLength(400)] string? EndpointReference,
+    [property: StringLength(40)] string? ApiVersion,
+    [property: Range(0, 2)] decimal? Temperature,
+    [property: Range(1, 1000000)] int? MaxOutputTokens,
+    [property: Range(1, 900)] int? TimeoutSeconds);
 
 // A prompt family row (POLOXI.Legal_DecisionPrompt).
 public sealed record DecisionPromptDefinition(
@@ -51,6 +103,127 @@ public sealed record SaveDecisionPromptConfigurationRequest(
     string? OutputSchemaJson,
     bool IsActive);
 
+// Admin-editable update for a POLOXI.Legal_DecisionModelRoute row. FeatureCode identifies the route
+// (kept read-only in the UI); the remaining fields mirror the editable table columns. Governance and
+// verification gates are unaffected — this only adjusts model/endpoint routing settings.
+public sealed record SaveDecisionModelRouteRequest(
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(120)]
+    string FeatureCode,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(60)]
+    string ProviderTypeCode,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(100)]
+    string ModelCode,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(100)]
+    string DeploymentName,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(400)]
+    string EndpointReference,
+    [property: System.ComponentModel.DataAnnotations.StringLength(400)]
+    string? CredentialReference,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(40)]
+    string ApiVersion,
+    [property: System.ComponentModel.DataAnnotations.Range(1, 3600)]
+    int TimeoutSeconds,
+    [property: System.ComponentModel.DataAnnotations.Range(1, 100000000)]
+    int MaxOutputTokens,
+    [property: System.ComponentModel.DataAnnotations.Range(0, 2)]
+    decimal Temperature,
+    [property: System.ComponentModel.DataAnnotations.Range(0, 100000)]
+    int Priority,
+    bool IsActive);
+
+// Create a brand-new POLOXI.Legal_DecisionPrompt row (distinct from the update-only save above).
+public sealed record CreateDecisionPromptConfigurationRequest(
+    [property: Required, StringLength(120)] string PromptCode,
+    [property: Required, StringLength(60)] string StageCode,
+    [property: Required] string SystemPrompt,
+    [property: Required] string UserPromptTemplate,
+    string? OutputSchemaJson,
+    bool IsActive);
+
+// ── Domain Pack child CRUD requests (advisory domain configuration) ──────────────────────────
+// Each request targets a specific pack (DecisionDomainPackId) and upserts by business code.
+public sealed record SaveDomainPackDimensionRequest(
+    [property: Required, StringLength(60)] string DimensionCode,
+    [property: Required, StringLength(200)] string Name,
+    [property: StringLength(1000)] string? Description,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record SaveDomainPackEvidenceTypeRequest(
+    [property: Required, StringLength(60)] string EvidenceTypeCode,
+    [property: Required, StringLength(200)] string Name,
+    [property: StringLength(60)] string? DimensionCode,
+    [property: StringLength(1000)] string? Description,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record SaveDomainPackVerificationProfileRequest(
+    [property: Required, StringLength(60)] string ProfileCode,
+    [property: Required, StringLength(200)] string Name,
+    [property: StringLength(60)] string? EvidenceTypeCode,
+    [property: StringLength(1000)] string? Description,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record SaveDomainPackMatterTypeRequest(
+    [property: Required, StringLength(120)] string MatterTypeCode,
+    [property: Required, StringLength(200)] string Name,
+    [property: StringLength(1000)] string? Description,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record SaveDomainPackConceptRequest(
+    [property: Required, StringLength(80)] string ConceptCode,
+    [property: Required, StringLength(60)] string DimensionCode,
+    [property: Required, StringLength(200)] string Name,
+    [property: StringLength(1200)] string? Description,
+    [property: Required, StringLength(40)] string ConceptKindCode,
+    [property: Required, StringLength(40)] string SourceClassCode,
+    [property: StringLength(60)] string? VerificationProfileCode,
+    [property: StringLength(120)] string? JurisdictionCode,
+    [property: StringLength(120)] string? MatterTypeCode,
+    bool IsRequiredCoverage,
+    bool IsFallbackEligible,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record SaveDomainPackConceptRelationRequest(
+    [property: Required, StringLength(80)] string SourceConceptCode,
+    [property: Required, StringLength(80)] string TargetConceptCode,
+    [property: Required, StringLength(40)] string RelationTypeCode,
+    [property: StringLength(80)] string? ConstraintCode,
+    [property: StringLength(1200)] string? Description,
+    [property: StringLength(120)] string? JurisdictionCode,
+    [property: StringLength(120)] string? MatterTypeCode,
+    bool IsHardConstraint,
+    int SortOrder,
+    bool IsActive);
+
+// A single editable row of POLOXI.Legal_DecisionSetting (the runtime decision-tuning table).
+// Surfaced in the Legal Configuration UI so operators can toggle/tune settings such as the
+// clarification preflight gate (Decision.Preflight.*) without editing the database by hand.
+public sealed record DecisionSettingDto(
+    string SettingKey,
+    string SettingValue,
+    string DataTypeCode,
+    string? Description,
+    DateTime CreatedDateUtc,
+    DateTime? ModifiedDateUtc);
+
+public sealed record SaveDecisionSettingRequest(
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(200)]
+    string SettingKey,
+    [property: System.ComponentModel.DataAnnotations.Required]
+    [property: System.ComponentModel.DataAnnotations.StringLength(1000)]
+    string SettingValue);
+
 // The Core control weights/thresholds loaded from POLOXI.Legal_DecisionSetting (§11,§12,§34).
 public sealed record DecisionCoreSettings(
     double WeightUncertainty,
@@ -76,6 +249,34 @@ public sealed record DecisionCoreSettings(
     bool EnableProposalRecovery = false)
 {
     public DecisionVerificationSettings Verification { get; init; } = new();
+
+    // Additive early Decision-Contract completeness preflight (attorney clarification BEFORE the
+    // expensive POLOXI discovery/graph/verification pipeline). Off by default; it never replaces the
+    // dynamic clarification logic that only becomes visible after candidate competition.
+    public DecisionPreflightSettings Preflight { get; init; } = new();
+}
+
+// Configurable gate that lets POLOXI ask a targeted clarification up front when an ESSENTIAL
+// decision-contract input is missing, so the run does not pay for the full pipeline just to end in
+// CLARIFICATION_REQUIRED. Deliberately conservative: it must NOT fire on "zero uploaded documents"
+// alone (a valid hypothetical analysis is still allowed when the attorney supplies sufficient facts).
+public sealed record DecisionPreflightSettings
+{
+    // Master switch. Default false = disabled (preserves current behavior exactly).
+    public bool Enabled { get; init; }
+
+    // When true, a missing explicit procedural relief/instruction (Posture + MotionTarget both empty)
+    // is treated as an essential-input gap that warrants an up-front clarification.
+    public bool RequireProceduralInstruction { get; init; } = true;
+
+    // When true, the gate only fires if the matter/query also supplies no usable facts (so a purely
+    // hypothetical, fact-bearing query is never blocked). When false, missing procedural instruction
+    // alone is enough. Default true keeps the gate narrow.
+    public bool RequireFactsWhenProcedureMissing { get; init; } = true;
+
+    // Minimum effective-query length (characters) below which the query is considered fact-thin for
+    // the "facts supplied" test. Configurable so tenants can tune sensitivity.
+    public int MinimumFactsQueryLength { get; init; } = 40;
 }
 
 public sealed record DecisionVerificationSettings
@@ -156,6 +357,10 @@ public sealed record DecisionSessionPersistence(
     public string? CourtOrForum { get; init; }
     public DateOnly? AuthorityCutoffDate { get; init; }
     public LegalAuthorityScope? AuthorityScope { get; init; }
+
+    // Execution mode (DEV / PROD) frozen into the immutable session snapshot at creation. A continued
+    // (clarification) session inherits the parent's ModeCode so the run cannot silently switch modes.
+    public string? ModeCode { get; init; }
 }
 
 public sealed record DecisionClarificationPersistence(

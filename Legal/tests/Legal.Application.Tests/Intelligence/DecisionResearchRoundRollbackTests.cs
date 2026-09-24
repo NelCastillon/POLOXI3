@@ -1,5 +1,6 @@
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
+using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Decision.Core;
 using Legal.Application.Features.Intelligence.Epistemic;
@@ -585,6 +586,7 @@ internal static class RollbackFixture
             new UnusedDocumentCorpusRepository(),
             new UnusedMatterContextRetriever(),
             new DecisionResearchSourceRouter(),
+            new TestExecutionEnvironment(),
             NullLogger<LegalDecisionService>.Instance);
 }
 
@@ -628,6 +630,13 @@ internal sealed class UnusedMatterContextRetriever : ILegalMatterContextRetrieve
 {
     public Task<LegalMatterContextResult> RetrieveAsync(Guid tenantId, Guid userId, Guid matterId, string query, DecisionRetrievalArchitectureSettings settings, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Matter context must not be called on the research-loop path.");
+}
+
+// Non-production execution environment so DEV Logic is permitted in tests.
+internal sealed class TestExecutionEnvironment : IExecutionEnvironment
+{
+    public bool IsProduction => false;
+    public string EnvironmentName => "Development";
 }
 
 internal sealed class UnusedEpistemicBridge : IEpistemicDecisionBridge

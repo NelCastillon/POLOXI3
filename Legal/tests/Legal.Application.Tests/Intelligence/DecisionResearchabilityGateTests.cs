@@ -284,6 +284,66 @@ public sealed class DecisionResearchabilityGateTests
         Assert.Equal(DecisionResearchNeedDisposition.Repair, DecisionResearchNeedRepairPlanner.Diagnose(result.Defects));
     }
 
+    // ── APP1 regression (DEV/MINI trace): the APPLICATION leaf omits its required research question while the
+    //    LEGAL_RULE and MATTER_FACT leaves are fully valid. The whole proposal is not acceptable, but the valid
+    //    researchable leaves MUST be able to progress and the disposition MUST be a targeted application repair. ─
+    [Fact]
+    public void ApplicationLeafMissingResearchQuestion_PreservesValidLeaves_AndCanProgress()
+    {
+        var hierarchy = ValidHierarchy();
+        var brokenApplication = hierarchy.Leaves[2] with { ResearchQuestion = "   " };
+        var proposal = hierarchy with { Leaves = [hierarchy.Leaves[0], hierarchy.Leaves[1], brokenApplication] };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains("APPLICATION_1:RESEARCH_QUESTION_MISSING", result.Defects);
+        Assert.True(result.CanProgressWithResearchableLeaves);
+        Assert.Contains("APPLICATION_1:RESEARCH_QUESTION_MISSING", result.ApplicationLeafDefects);
+        Assert.Equal(2, result.ResearchableLeaves.Count);
+        Assert.Equal(
+            DecisionResearchNeedDisposition.RepairApplication,
+            DecisionResearchNeedRepairPlanner.Diagnose(result));
+    }
+
+    // The same APP1 defect repeated on the second attempt (MINI reproduces the identical omission) must remain
+    // progressable rather than collapsing to UNRESOLVED — one defective synthesis leaf never blocks retrieval.
+    [Fact]
+    public void ApplicationLeafRepeatedIdenticalDefect_StillProgressesWithResearchableLeaves()
+    {
+        var hierarchy = ValidHierarchy();
+        var brokenApplication = hierarchy.Leaves[2] with { ResearchQuestion = string.Empty };
+        var proposal = hierarchy with { Leaves = [hierarchy.Leaves[0], hierarchy.Leaves[1], brokenApplication] };
+        var gate = new DecisionResearchabilityGate();
+
+        var first = gate.Evaluate(proposal);
+        var second = gate.Evaluate(proposal);
+
+        Assert.False(first.IsAcceptable);
+        Assert.False(second.IsAcceptable);
+        Assert.True(first.CanProgressWithResearchableLeaves);
+        Assert.True(second.CanProgressWithResearchableLeaves);
+        Assert.Equal(
+            DecisionResearchNeedDisposition.RepairApplication,
+            DecisionResearchNeedRepairPlanner.Diagnose(second));
+    }
+
+    // A defect on a RESEARCHABLE leaf (not the application leaf) is a blocking defect: partial progression must
+    // NOT be permitted, guaranteeing the gate is not weakened for genuinely defective authority/matter leaves.
+    [Fact]
+    public void ResearchableLeafDefect_DoesNotAllowPartialProgression()
+    {
+        var hierarchy = ValidHierarchy();
+        var brokenRule = hierarchy.Leaves[0] with { SearchQuery = "   " };
+        var proposal = hierarchy with { Leaves = [brokenRule, hierarchy.Leaves[1], hierarchy.Leaves[2]] };
+
+        var result = new DecisionResearchabilityGate().Evaluate(proposal);
+
+        Assert.False(result.IsAcceptable);
+        Assert.Contains("LEGAL_RULE_1:SEARCH_QUERY_MISSING", result.Defects);
+        Assert.False(result.CanProgressWithResearchableLeaves);
+    }
+
     private static DecisionResearchSemanticProposal ValidHierarchy() => new()
     {
         Leaves =

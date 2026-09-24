@@ -68,6 +68,37 @@ public enum OutputIntegrityState
     NotRun
 }
 
+// Evidence-sufficiency summary shown alongside (but separate from) system integrity and output
+// integrity. Pipeline HEALTHY / output CLEAN describe whether the controls ran correctly; they must
+// NOT be read as "the answer is supported". This concept answers the distinct question: did the run
+// actually retrieve and verify enough authority to support its material claims?
+//   \u2022 Sufficient       \u2014 verified decision support exists and covers the material claims.
+//   \u2022 Insufficient     \u2014 some support exists but material claims remain unverified.
+//   \u2022 NoVerifiedSupport \u2014 nothing was retrieved/verified; the answer stands on unverified prose.
+//   \u2022 NotEvaluated     \u2014 the sufficiency check did not run.
+public enum EvidenceSufficiencyState
+{
+    Sufficient,
+    Insufficient,
+    NoVerifiedSupport,
+    NotEvaluated
+}
+
+// Final-render readability summary shown alongside (but separate from) evidence authorization. Output
+// integrity / final audit answer "are the answer's claims authorized?"; this concept answers the distinct
+// presentation question: "is the rendered answer well-formed and readable?" It flags malformed fragments
+// (orphaned list markers like "...10.", repeated punctuation, dangling separators) WITHOUT weakening evidence
+// authorization — a clean audit with zero unauthorized assertions can still be poorly rendered.
+//   • Clean            — the rendered answer contains no detected malformed fragments.
+//   • AttentionRequired— malformed fragments were detected in the rendered answer.
+//   • NotRun           — no substantive answer was composed, so readability was not evaluated.
+public enum OutputReadabilityState
+{
+    Clean,
+    AttentionRequired,
+    NotRun
+}
+
 // One key/value line inside an expanded stage (e.g. "Stop reason" → "MAX_ROUNDS"). Ordered for display.
 public sealed record IntegrityStageDetailDto(string Label, string Value);
 
@@ -123,8 +154,10 @@ public sealed record DecisionIntegrityTraceDto
     public IntegrityState Integrity { get; init; }
     public TraceReadinessState Readiness { get; init; }
     public OutputIntegrityState OutputIntegrity { get; init; }
+    public EvidenceSufficiencyState EvidenceSufficiency { get; init; }
     public StateConsistency Consistency { get; init; }
-
+    // Final-render readability, independent of evidence authorization above.
+    public OutputReadabilityState OutputReadability { get; init; }
     // The nine ordered stages.
     public required IntegrityStageDto Proposal { get; init; }
     public required IntegrityStageDto Research { get; init; }

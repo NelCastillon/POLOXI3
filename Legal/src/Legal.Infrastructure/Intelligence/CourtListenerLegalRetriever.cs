@@ -37,9 +37,13 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
         if(scope.AuthorityRoleCode==LegalAuthorityRoles.Persuasive)
             return await SearchCoreAsync(request.Query,configuration,null,cancellationToken);
 
-        var scopeValue=scope.AuthorityRoleCode==LegalAuthorityRoles.FederalApplyingStateLaw
-            ||scope.IssueScopeCode==LegalAuthorityIssueScopes.ProceduralLaw
-            ?scope.CourtOrForum:scope.GoverningLaw;
+        // Court-slug resolution is driven by the SOURCE COURT (the actual court/forum caption), not by
+        // the governing-law sovereign. Sending a bare sovereign such as "California" to the courts
+        // endpoint (as citation-expansion previously did) cannot resolve a provider-native court id.
+        // Prefer the explicit source court, then the court/forum caption, and only fall back to the
+        // governing-law jurisdiction when no court caption is available. ResolveCourtFilterAsync still
+        // extracts the enclosing sovereign from a caption so state jurisdictions remain supported.
+        var scopeValue=FirstNonEmpty(scope.SourceCourt,scope.CourtOrForum,scope.GoverningLaw);
         if(string.IsNullOrWhiteSpace(scopeValue))
             return new([],new("COURTLISTENER",true,
                 scope.IssueScopeCode==LegalAuthorityIssueScopes.ProceduralLaw
@@ -47,8 +51,22 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
 
         var eligibleCourts=await ResolveCourtFilterAsync(scopeValue,scope,configuration,cancellationToken);
         if(eligibleCourts.Count==0)
-            return new([],new("COURTLISTENER",true,"RETRIEVAL_SCOPE_UNSUPPORTED",0,0,
-                $"CourtListener did not expose a provider-native court identifier for '{scopeValue}'."));
+        {
+            // A composite/free-text scope (e.g. the matter breadcrumb "United States - State · Delaware
+            // · District Court") may not map to any provider-native court slug. Rather than collapsing
+            // the whole round into RETRIEVAL_SCOPE_UNSUPPORTED (which upstream reports as
+            // RETRIEVAL_NO_RESULTS and hard-stops the research loop), degrade gracefully to an
+            // UNFILTERED case-law search so genuinely retrievable evidence is still returned. The
+            // diagnostic detail preserves the unresolved scope for observability.
+            logger.LogInformation(
+                "LEGAL-TRACE stage=2-courtlistener-scope outcome=UNFILTERED_FALLBACK scope=\"{Scope}\"",scopeValue);
+            var fallback=await SearchCoreAsync(request.Query,configuration,null,cancellationToken);
+            var diagnostic=fallback.Diagnostic with
+            {
+                Detail=$"Court filter unresolved for '{scopeValue}'; used unfiltered case-law search. {fallback.Diagnostic.Detail}".Trim()
+            };
+            return fallback with { Diagnostic=diagnostic };
+        }
         return await SearchCoreAsync(request.Query,configuration,eligibleCourts,cancellationToken);
     }
 
@@ -62,8 +80,10 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             timeout.CancelAfter(TimeSpan.FromSeconds(configuration.TimeoutSeconds));
 
             var baseUrl=NormalizeBaseUrl(configuration.CourtListenerBaseUrl);
-            var courtQuery=eligibleCourts is{Count:>0}
-                ?$"&court={Uri.EscapeDataString(string.Join(',',eligibleCourts.Select(court=>court.Slug)))}":string.Empty;
+            var sourceCourtIds=eligibleCourts is{Count:>0}
+                ?eligibleCourts.Select(court=>court.Slug).Where(slug=>!string.IsNullOrWhiteSpace(slug)).Select(slug=>slug!).ToArray():[];
+            var courtQuery=sourceCourtIds.Length>0
+                ?$"&court={Uri.EscapeDataString(string.Join(',',sourceCourtIds))}":string.Empty;
             var url=$"{baseUrl}/api/rest/v4/search/?type=o&order_by=score%20desc&q={Uri.EscapeDataString(query)}{courtQuery}";
             // STAGE 3 (CourtListener query): log the exact clean query sent so we can confirm a named
             // authority (e.g. "Raffles v Wichelhaus") is searched, not the whole user prompt.
@@ -80,14 +100,14 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             if(!response.IsSuccessStatusCode)
             {
                 logger.LogWarning("LEGAL-TRACE stage=4-courtlistener-response outcome=HTTP_ERROR status={StatusCode} query=\"{Query}\" url={RequestUrl}",(int)response.StatusCode,query,url);
-                return new([],new("COURTLISTENER",true,"HTTP_ERROR",0,0,$"HTTP {(int)response.StatusCode}"));
+                return new([],new("COURTLISTENER",true,"HTTP_ERROR",0,0,$"HTTP {(int)response.StatusCode}",EndpointUrl:url,HttpStatus:(int)response.StatusCode,SourceCourtIds:sourceCourtIds));
             }
 
             var payload=await response.Content.ReadFromJsonAsync<CourtListenerSearchResponse>(JsonOptions,timeout.Token);
             if(payload?.Results is not{Count:>0}results)
             {
                 logger.LogInformation("LEGAL-TRACE stage=4-courtlistener-response outcome=NO_RESULTS status={StatusCode} query=\"{Query}\"",(int)response.StatusCode,query);
-                return new([],new("COURTLISTENER",true,"NO_RESULTS",0,0));
+                return new([],new("COURTLISTENER",true,"NO_RESULTS",0,0,EndpointUrl:url,HttpStatus:(int)response.StatusCode,SourceCourtIds:sourceCourtIds));
             }
 
             var retrievedUtc=DateTime.UtcNow;
@@ -120,7 +140,8 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
             return new(snippets,new("COURTLISTENER",true,outcome,results.Count,snippets.Count,
                 snippets.Count>0?null:outcome=="FILTER_REJECTED_SCOPE_MISMATCH"
                     ?"Provider results did not identify an eligible court from the enforced source scope."
-                    :"Provider returned results, but no usable opinion passage could be extracted."));
+                    :"Provider returned results, but no usable opinion passage could be extracted.",
+                EndpointUrl:url,HttpStatus:(int)response.StatusCode,SourceCourtIds:sourceCourtIds));
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
@@ -147,7 +168,55 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
 
             var catalogUrl=$"{baseUrl}/api/rest/v4/courts/?page_size=1000";
             courts=await FetchCourtsAsync(catalogUrl,configuration,timeout.Token);
-            return SelectEligibleCourts(courts,scopeValue,scope,federalLane);
+            matches=SelectEligibleCourts(courts,scopeValue,scope,federalLane);
+            if(matches.Count>0)return matches;
+
+            // Provider-native scope translation: the incoming value may be a court/forum caption that
+            // CourtListener cannot resolve directly (e.g. "Superior Court of California, County of Los
+            // Angeles"). Fall back to the enclosing US-state sovereign, which the provider DOES expose
+            // as a jurisdiction, so a valid court filter is produced instead of SCOPE_UNSUPPORTED.
+            var sovereign=LegalJurisdictionScope.ExtractSovereign(scopeValue);
+            if(!string.IsNullOrWhiteSpace(sovereign)&&!sovereign.Equals(scopeValue,StringComparison.OrdinalIgnoreCase))
+            {
+                var sovereignUrl=$"{baseUrl}/api/rest/v4/courts/?search={Uri.EscapeDataString(sovereign)}";
+                var sovereignCourts=await FetchCourtsAsync(sovereignUrl,configuration,timeout.Token);
+                matches=SelectEligibleCourts(sovereignCourts,sovereign,scope,federalLane);
+                if(matches.Count>0)return matches;
+                var sovereignCatalog=SelectEligibleCourts(courts,sovereign,scope,federalLane);
+                if(sovereignCatalog.Count>0)return sovereignCatalog;
+            }
+
+            // Provider-native FEDERAL scope translation: when no US-state sovereign resolves, the
+            // caption may name a federal forum (e.g. "United States Court of Appeals for the Ninth
+            // Circuit"). CourtListener exposes the circuit/appellate courts as jurisdictions, so
+            // translate the caption to the federal jurisdiction term and resolve on the federal lane.
+            var federal=LegalJurisdictionScope.ExtractFederalJurisdiction(scopeValue);
+            if(!string.IsNullOrWhiteSpace(federal)&&!federal.Equals(scopeValue,StringComparison.OrdinalIgnoreCase))
+            {
+                var federalUrl=$"{baseUrl}/api/rest/v4/courts/?search={Uri.EscapeDataString(federal)}";
+                var federalCourts=await FetchCourtsAsync(federalUrl,configuration,timeout.Token);
+                matches=SelectEligibleCourts(federalCourts,federal,scope,federalLane:true);
+                if(matches.Count>0)return matches;
+                return SelectEligibleCourts(courts,federal,scope,federalLane:true);
+            }
+
+            // Provider-native BREADCRUMB scope translation: the incoming value may be a composite
+            // display breadcrumb (e.g. "United States - State · Delaware · District Court") assembled
+            // from separate court dimensions. CourtListener cannot resolve the whole breadcrumb, so
+            // resolve each delimited segment independently (longest first, so "Delaware" resolves the
+            // state jurisdiction) against the already-fetched catalog before reporting SCOPE_UNSUPPORTED.
+            foreach(var segment in SplitScopeSegments(scopeValue))
+            {
+                var segmentMatches=SelectEligibleCourts(courts,segment,scope,federalLane);
+                if(segmentMatches.Count>0)return segmentMatches;
+                var segmentSovereign=LegalJurisdictionScope.ExtractSovereign(segment);
+                if(!string.IsNullOrWhiteSpace(segmentSovereign))
+                {
+                    var segmentSovereignMatches=SelectEligibleCourts(courts,segmentSovereign,scope,federalLane);
+                    if(segmentSovereignMatches.Count>0)return segmentSovereignMatches;
+                }
+            }
+            return matches;
         }
 
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
@@ -223,6 +292,23 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
         var apiIndex=trimmed.IndexOf("/api/",StringComparison.OrdinalIgnoreCase);
         return apiIndex>0?trimmed[..apiIndex]:trimmed;
     }
+
+    // Returns the first non-blank candidate, trimmed. Used to select the court-slug resolution source
+    // (source court, then caption, then governing-law jurisdiction) without collapsing distinct fields.
+    private static string? FirstNonEmpty(params string?[] candidates) =>
+        candidates.Select(value=>value?.Trim()).FirstOrDefault(value=>!string.IsNullOrWhiteSpace(value));
+
+    // Splits a composite display breadcrumb (e.g. "United States - State · Delaware · District Court")
+    // into its individual scope segments so each can be resolved against CourtListener independently.
+    // Longest segments first so a specific jurisdiction ("Delaware") is preferred over a generic label.
+    private static IReadOnlyList<string> SplitScopeSegments(string scopeValue) =>
+        scopeValue
+            .Split(['·','|','/','-',','],StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)
+            .Where(segment=>!string.IsNullOrWhiteSpace(segment))
+            .Where(segment=>!segment.Equals(scopeValue,StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(segment=>segment.Length)
+            .ToArray();
 
     private static string BuildTitle(CourtListenerSearchResult result)
     {

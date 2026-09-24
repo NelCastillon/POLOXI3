@@ -59,6 +59,13 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 EnforceVerifiedEvidenceOnly = B("Decision.Verification.Authorization.EnforceVerifiedOnly", false),
                 CacheEnabled = B("Decision.Verification.Cache.Enabled", true),
             },
+            Preflight = new DecisionPreflightSettings
+            {
+                Enabled = B("Decision.Preflight.Enabled", false),
+                RequireProceduralInstruction = B("Decision.Preflight.RequireProceduralInstruction", true),
+                RequireFactsWhenProcedureMissing = B("Decision.Preflight.RequireFactsWhenProcedureMissing", true),
+                MinimumFactsQueryLength = I("Decision.Preflight.MinimumFactsQueryLength", 40),
+            },
         };
     }
 
@@ -372,6 +379,61 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             B("Decision.V2.ApplyVerifiedSignalsToRanking", false));
     }
 
+    public async Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<DecisionExecutionModeDto>(new CommandDefinition(
+            """
+            SELECT ExecutionModeCode, DisplayName, Description, DefaultModelCode, AllowReplay, IsProductionAllowed, SortOrder, IsActive,
+                   ProviderTypeCode, EndpointReference, ApiVersion, Temperature, MaxOutputTokens, TimeoutSeconds
+            FROM POLOXI.Legal_DecisionExecutionMode
+            WHERE IsDeleted = 0 AND IsActive = 1
+            ORDER BY SortOrder, DisplayName;
+            """,
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task SaveExecutionModeAsync(SaveDecisionExecutionModeRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionExecutionMode
+            SET DisplayName        = @DisplayName,
+                Description         = @Description,
+                DefaultModelCode    = @DefaultModelCode,
+                AllowReplay         = @AllowReplay,
+                IsProductionAllowed = @IsProductionAllowed,
+                ProviderTypeCode    = @ProviderTypeCode,
+                EndpointReference   = @EndpointReference,
+                ApiVersion          = @ApiVersion,
+                Temperature         = @Temperature,
+                MaxOutputTokens     = @MaxOutputTokens,
+                TimeoutSeconds      = @TimeoutSeconds,
+                ModifiedDateUtc     = SYSUTCDATETIME(),
+                ModifiedByUserId    = @ActorUserId
+            WHERE ExecutionModeCode = @ExecutionModeCode AND IsDeleted = 0;
+            """,
+            new
+            {
+                request.ExecutionModeCode,
+                request.DisplayName,
+                request.Description,
+                request.DefaultModelCode,
+                request.AllowReplay,
+                request.IsProductionAllowed,
+                request.ProviderTypeCode,
+                request.EndpointReference,
+                request.ApiVersion,
+                request.Temperature,
+                request.MaxOutputTokens,
+                request.TimeoutSeconds,
+                ActorUserId = actorUserId
+            },
+            cancellationToken: cancellationToken));
+    }
+
     public async Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -394,6 +456,51 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """,
             cancellationToken: cancellationToken));
         return rows.ToArray();
+    }
+
+    public async Task SaveModelRouteAsync(
+        Guid actorUserId,
+        SaveDecisionModelRouteRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionModelRoute
+            SET ProviderTypeCode = @ProviderTypeCode,
+                ModelCode = @ModelCode,
+                DeploymentName = @DeploymentName,
+                EndpointReference = @EndpointReference,
+                CredentialReference = @CredentialReference,
+                ApiVersion = @ApiVersion,
+                TimeoutSeconds = @TimeoutSeconds,
+                MaxOutputTokens = @MaxOutputTokens,
+                Temperature = @Temperature,
+                Priority = @Priority,
+                IsActive = @IsActive,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ActorUserId
+            WHERE FeatureCode = @FeatureCode AND IsDeleted = 0;
+            """,
+            new
+            {
+                FeatureCode = request.FeatureCode.Trim(),
+                ProviderTypeCode = request.ProviderTypeCode.Trim(),
+                ModelCode = request.ModelCode.Trim(),
+                DeploymentName = request.DeploymentName.Trim(),
+                EndpointReference = request.EndpointReference.Trim(),
+                CredentialReference = string.IsNullOrWhiteSpace(request.CredentialReference) ? null : request.CredentialReference.Trim(),
+                ApiVersion = request.ApiVersion.Trim(),
+                request.TimeoutSeconds,
+                request.MaxOutputTokens,
+                request.Temperature,
+                request.Priority,
+                request.IsActive,
+                ActorUserId = actorUserId,
+            },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Decision model route '{request.FeatureCode}' was not found.");
     }
 
     public async Task<DecisionPromptDefinition?> GetPromptAsync(string promptCode, CancellationToken cancellationToken = default)
@@ -457,6 +564,107 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             throw new InvalidOperationException($"Decision prompt '{request.PromptCode}' was not found.");
     }
 
+    public async Task CreatePromptConfigurationAsync(
+        Guid tenantId,
+        Guid actorUserId,
+        CreateDecisionPromptConfigurationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var exists = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            """
+            SELECT COUNT(1) FROM POLOXI.Legal_DecisionPrompt
+            WHERE PromptCode = @PromptCode AND IsDeleted = 0;
+            """,
+            new { PromptCode = request.PromptCode.Trim() },
+            cancellationToken: cancellationToken));
+        if (exists > 0)
+            throw new InvalidOperationException($"Decision prompt '{request.PromptCode}' already exists.");
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_DecisionPrompt
+                (DecisionPromptId, PromptCode, StageCode, SystemPrompt, UserPromptTemplate, OutputSchemaJson,
+                 IsActive, TenantId, CreatedByUserId)
+            VALUES
+                (NEWID(), @PromptCode, @StageCode, @SystemPrompt, @UserPromptTemplate, @OutputSchemaJson,
+                 @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PromptCode = request.PromptCode.Trim(),
+                StageCode = request.StageCode.Trim(),
+                SystemPrompt = request.SystemPrompt.Trim(),
+                UserPromptTemplate = request.UserPromptTemplate.Trim(),
+                OutputSchemaJson = string.IsNullOrWhiteSpace(request.OutputSchemaJson) ? null : request.OutputSchemaJson.Trim(),
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeletePromptConfigurationAsync(
+        Guid actorUserId,
+        string promptCode,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionPrompt
+            SET IsDeleted = 1,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ActorUserId
+            WHERE PromptCode = @PromptCode AND IsDeleted = 0;
+            """,
+            new { PromptCode = promptCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Decision prompt '{promptCode}' was not found.");
+    }
+
+    public async Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<DecisionSettingDto>(new CommandDefinition(
+            """
+            SELECT SettingKey, SettingValue, DataTypeCode, Description, CreatedDateUtc, ModifiedDateUtc
+            FROM POLOXI.Legal_DecisionSetting
+            WHERE IsDeleted = 0
+              AND (@KeyPrefix IS NULL OR SettingKey LIKE @KeyPrefix + N'%')
+            ORDER BY SettingKey;
+            """,
+            new { KeyPrefix = string.IsNullOrWhiteSpace(keyPrefix) ? null : keyPrefix },
+            cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task SaveSettingAsync(
+        Guid actorUserId,
+        SaveDecisionSettingRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionSetting
+            SET SettingValue = @SettingValue,
+                ModifiedDateUtc = SYSUTCDATETIME(),
+                ModifiedByUserId = @ActorUserId
+            WHERE SettingKey = @SettingKey AND IsDeleted = 0;
+            """,
+            new
+            {
+                SettingKey = request.SettingKey.Trim(),
+                SettingValue = request.SettingValue.Trim(),
+                ActorUserId = actorUserId,
+            },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Decision setting '{request.SettingKey}' was not found.");
+    }
+
     public async Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -471,7 +679,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                  MatterId, NextBestActionText, NextBestActionImpactCode, NextBestActionRationale,
                  ResearchStatusCode, ResearchFailureDetail, ParentDecisionSessionId,
                  MatterJurisdiction, GoverningLaw, CourtOrForum, AuthorityCutoffDate, AuthorityScopeJson,
-                 TenantId, CreatedByUserId)
+                 TenantId, CreatedByUserId, ModeCode)
             VALUES
                 (@DecisionSessionId, @QueryText, @ContextCode, @ModelCode, @UsePoloxiEngine, @StatusCode, @TerminalStateCode,
                  @TerminationReason, @WinnerCandidateId, @ContractCompleteness, @CandidateEntropy, @DecisionMargin, @DepthReached,
@@ -479,7 +687,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                  @MatterId, @NextBestActionText, @NextBestActionImpactCode, @NextBestActionRationale,
                  @ResearchStatusCode, @ResearchFailureDetail, @ParentDecisionSessionId,
                  @MatterJurisdiction, @GoverningLaw, @CourtOrForum, @AuthorityCutoffDate, @AuthorityScopeJson,
-                 @TenantId, @ActorUserId);
+                 @TenantId, @ActorUserId, @ModeCode);
             """,
             new
             {
@@ -493,7 +701,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 session.MatterJurisdiction, session.GoverningLaw, session.CourtOrForum,
                 AuthorityCutoffDate = session.AuthorityCutoffDate?.ToDateTime(TimeOnly.MinValue),
                 AuthorityScopeJson=session.AuthorityScope is null?null:JsonSerializer.Serialize(session.AuthorityScope),
-                session.TenantId, session.ActorUserId
+                session.TenantId, session.ActorUserId, session.ModeCode
             },
             transaction, cancellationToken: cancellationToken));
 
@@ -698,7 +906,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                    DecisionMargin, DepthReached, LlmCallCount, DurationMs, FinalAnswer, ClarificationQuestion, ClarificationTarget, CorrelationId,
                    MatterId, NextBestActionText, NextBestActionImpactCode, NextBestActionRationale,
                     ResearchStatusCode, ResearchFailureDetail, ParentDecisionSessionId,
-                    MatterJurisdiction, GoverningLaw, CourtOrForum, AuthorityCutoffDate, AuthorityScopeJson
+                    MatterJurisdiction, GoverningLaw, CourtOrForum, AuthorityCutoffDate, AuthorityScopeJson, ModeCode
             FROM POLOXI.Legal_DecisionSession
             WHERE IsDeleted = 0 AND TenantId = @TenantId AND DecisionSessionId = @DecisionSessionId;
             """,
@@ -771,6 +979,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 ? DateOnly.FromDateTime(cutoff)
                 : null,
             AuthorityScope = DeserializeAuthorityScope(session.AuthorityScopeJson),
+            ModeCode = session.ModeCode,
         };
     }
 
@@ -864,11 +1073,14 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
     }
 
     // ── Matter aggregate + cockpit support ──────────────────────────────────────────────────────
-    public async Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default)
+        => GetMattersAsync(tenantId, includeAllTenants: false, cancellationToken);
+
+    public async Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<MatterRow>(new CommandDefinition(
-            """
+            $"""
             SELECT
                 m.DecisionMatterId, m.Title, m.MatterTypeCode, m.Jurisdiction, m.Posture, m.Description, m.StatusCode,
                 m.PracticeAreaCode, m.ClaimTypeCode, m.DomainPackCode,
@@ -890,7 +1102,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             ) s
             LEFT JOIN POLOXI.Legal_DecisionCandidate c
                 ON c.IsDeleted = 0 AND c.DecisionCandidateId = s.WinnerCandidateId
-            WHERE m.IsDeleted = 0 AND m.TenantId = @TenantId
+            WHERE m.IsDeleted = 0 {(includeAllTenants ? string.Empty : "AND m.TenantId = @TenantId")}
             ORDER BY COALESCE(m.ModifiedDateUtc, m.CreatedDateUtc) DESC;
             """,
             new { TenantId = tenantId },
@@ -994,6 +1206,40 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         if (pack is null)
             return null;
 
+        return await BuildDomainPackAsync(connection, pack, tenantId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packs = (await connection.QueryAsync<DomainPackRow>(new CommandDefinition(
+            """
+            WITH RankedPack AS
+            (
+                SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description,
+                       ROW_NUMBER() OVER
+                       (
+                           PARTITION BY PackCode
+                           ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder
+                       ) AS ScopeRank
+                FROM POLOXI.Legal_DecisionDomainPack
+                WHERE IsDeleted = 0 AND IsActive = 1
+                  AND (TenantId = @TenantId OR TenantId IS NULL)
+            )
+            SELECT DecisionDomainPackId, PackCode, PracticeAreaCode, Name, Description
+            FROM RankedPack WHERE ScopeRank = 1 ORDER BY PracticeAreaCode, PackCode;
+            """,
+            new { TenantId = tenantId },
+            cancellationToken: cancellationToken))).ToArray();
+
+        var result = new List<DecisionDomainPackDto>(packs.Length);
+        foreach (var pack in packs)
+            result.Add(await BuildDomainPackAsync(connection, pack, tenantId, cancellationToken));
+        return result;
+    }
+
+    private static async Task<DecisionDomainPackDto> BuildDomainPackAsync(System.Data.IDbConnection connection, DomainPackRow pack, Guid tenantId, CancellationToken cancellationToken)
+    {
         var dimensions = (await connection.QueryAsync<DecisionDomainPackDimensionDto>(new CommandDefinition(
             """
             SELECT DimensionCode, Name, Description FROM POLOXI.Legal_DecisionDomainPackDimension
@@ -1067,6 +1313,345 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             Concepts = concepts,
             ConceptRelations = conceptRelations,
         };
+    }
+
+    // ── Domain Pack child CRUD (advisory configuration; upsert by business code, soft-delete) ─────
+    // Resolves the effective pack id for a tenant (tenant override first, then global default row).
+    private static async Task<Guid> ResolveDomainPackIdAsync(System.Data.IDbConnection connection, Guid tenantId, string packCode, CancellationToken cancellationToken)
+    {
+        var packId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT TOP 1 DecisionDomainPackId FROM POLOXI.Legal_DecisionDomainPack
+            WHERE IsDeleted = 0 AND PackCode = @PackCode AND (TenantId = @TenantId OR TenantId IS NULL)
+            ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END, SortOrder;
+            """,
+            new { PackCode = packCode, TenantId = tenantId },
+            cancellationToken: cancellationToken));
+        if (packId is null)
+            throw new InvalidOperationException($"Domain Pack '{packCode}' was not found.");
+        return packId.Value;
+    }
+
+    public async Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainPackDimension AS target
+            USING (SELECT @PackId AS PackId, @DimensionCode AS DimensionCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.DimensionCode = source.DimensionCode AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET Name = @Name, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, DimensionCode, Name, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PackId, @DimensionCode, @Name, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                DimensionCode = request.DimensionCode.Trim(),
+                Name = request.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPackDimension
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND DimensionCode = @DimensionCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, DimensionCode = dimensionCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Dimension '{dimensionCode}' was not found.");
+    }
+
+    public async Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainPackEvidenceType AS target
+            USING (SELECT @PackId AS PackId, @EvidenceTypeCode AS EvidenceTypeCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.EvidenceTypeCode = source.EvidenceTypeCode AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET Name = @Name, DimensionCode = @DimensionCode, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, EvidenceTypeCode, Name, DimensionCode, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PackId, @EvidenceTypeCode, @Name, @DimensionCode, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                EvidenceTypeCode = request.EvidenceTypeCode.Trim(),
+                Name = request.Name.Trim(),
+                DimensionCode = string.IsNullOrWhiteSpace(request.DimensionCode) ? null : request.DimensionCode.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPackEvidenceType
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND EvidenceTypeCode = @EvidenceTypeCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, EvidenceTypeCode = evidenceTypeCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Evidence type '{evidenceTypeCode}' was not found.");
+    }
+
+    public async Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainPackVerificationProfile AS target
+            USING (SELECT @PackId AS PackId, @ProfileCode AS ProfileCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.ProfileCode = source.ProfileCode AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET Name = @Name, EvidenceTypeCode = @EvidenceTypeCode, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, ProfileCode, Name, EvidenceTypeCode, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PackId, @ProfileCode, @Name, @EvidenceTypeCode, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                ProfileCode = request.ProfileCode.Trim(),
+                Name = request.Name.Trim(),
+                EvidenceTypeCode = string.IsNullOrWhiteSpace(request.EvidenceTypeCode) ? null : request.EvidenceTypeCode.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPackVerificationProfile
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND ProfileCode = @ProfileCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, ProfileCode = profileCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Verification profile '{profileCode}' was not found.");
+    }
+
+    public async Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainPackMatterType AS target
+            USING (SELECT @PackId AS PackId, @MatterTypeCode AS MatterTypeCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.MatterTypeCode = source.MatterTypeCode AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET Name = @Name, Description = @Description, SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, MatterTypeCode, Name, Description, SortOrder, IsActive, TenantId, CreatedByUserId)
+                VALUES (@PackId, @MatterTypeCode, @Name, @Description, @SortOrder, @IsActive, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                MatterTypeCode = request.MatterTypeCode.Trim(),
+                Name = request.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainPackMatterType
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND MatterTypeCode = @MatterTypeCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, MatterTypeCode = matterTypeCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Matter type '{matterTypeCode}' was not found.");
+    }
+
+    public async Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainConcept AS target
+            USING (SELECT @PackId AS PackId, @ConceptCode AS ConceptCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.ConceptCode = source.ConceptCode
+               AND ((target.TenantId = @TenantId) OR (target.TenantId IS NULL AND @TenantId IS NULL)) AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET DimensionCode = @DimensionCode, Name = @Name, Description = @Description, ConceptKindCode = @ConceptKindCode,
+                           SourceClassCode = @SourceClassCode, VerificationProfileCode = @VerificationProfileCode,
+                           JurisdictionCode = @JurisdictionCode, MatterTypeCode = @MatterTypeCode,
+                           IsRequiredCoverage = @IsRequiredCoverage, IsFallbackEligible = @IsFallbackEligible,
+                           SortOrder = @SortOrder, IsActive = @IsActive, VersionNumber = target.VersionNumber + 1,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, ConceptCode, DimensionCode, Name, Description, ConceptKindCode, SourceClassCode,
+                        VerificationProfileCode, JurisdictionCode, MatterTypeCode, IsRequiredCoverage, IsFallbackEligible,
+                        IsActive, SortOrder, TenantId, CreatedByUserId)
+                VALUES (@PackId, @ConceptCode, @DimensionCode, @Name, @Description, @ConceptKindCode, @SourceClassCode,
+                        @VerificationProfileCode, @JurisdictionCode, @MatterTypeCode, @IsRequiredCoverage, @IsFallbackEligible,
+                        @IsActive, @SortOrder, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                ConceptCode = request.ConceptCode.Trim(),
+                DimensionCode = request.DimensionCode.Trim(),
+                Name = request.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                ConceptKindCode = request.ConceptKindCode.Trim(),
+                SourceClassCode = request.SourceClassCode.Trim(),
+                VerificationProfileCode = string.IsNullOrWhiteSpace(request.VerificationProfileCode) ? null : request.VerificationProfileCode.Trim(),
+                JurisdictionCode = string.IsNullOrWhiteSpace(request.JurisdictionCode) ? null : request.JurisdictionCode.Trim(),
+                MatterTypeCode = string.IsNullOrWhiteSpace(request.MatterTypeCode) ? null : request.MatterTypeCode.Trim(),
+                request.IsRequiredCoverage,
+                request.IsFallbackEligible,
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainConcept
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND ConceptCode = @ConceptCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, ConceptCode = conceptCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Concept '{conceptCode}' was not found.");
+    }
+
+    public async Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var sourceCode = request.SourceConceptCode.Trim();
+        var targetCode = request.TargetConceptCode.Trim();
+        var sourceId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            "SELECT TOP 1 DecisionDomainConceptId FROM POLOXI.Legal_DecisionDomainConcept WHERE DecisionDomainPackId = @PackId AND ConceptCode = @Code AND IsDeleted = 0 ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END;",
+            new { PackId = packId, Code = sourceCode, TenantId = tenantId }, cancellationToken: cancellationToken));
+        var targetId = await connection.ExecuteScalarAsync<Guid?>(new CommandDefinition(
+            "SELECT TOP 1 DecisionDomainConceptId FROM POLOXI.Legal_DecisionDomainConcept WHERE DecisionDomainPackId = @PackId AND ConceptCode = @Code AND IsDeleted = 0 ORDER BY CASE WHEN TenantId = @TenantId THEN 0 ELSE 1 END;",
+            new { PackId = packId, Code = targetCode, TenantId = tenantId }, cancellationToken: cancellationToken));
+        if (sourceId is null)
+            throw new InvalidOperationException($"Source concept '{sourceCode}' was not found.");
+        if (targetId is null)
+            throw new InvalidOperationException($"Target concept '{targetCode}' was not found.");
+
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            MERGE POLOXI.Legal_DecisionDomainConceptRelation AS target
+            USING (SELECT @PackId AS PackId, @SourceConceptCode AS SourceConceptCode, @TargetConceptCode AS TargetConceptCode, @RelationTypeCode AS RelationTypeCode) AS source
+            ON target.DecisionDomainPackId = source.PackId AND target.SourceConceptCode = source.SourceConceptCode
+               AND target.TargetConceptCode = source.TargetConceptCode AND target.RelationTypeCode = source.RelationTypeCode
+               AND ((target.TenantId = @TenantId) OR (target.TenantId IS NULL AND @TenantId IS NULL)) AND target.IsDeleted = 0
+            WHEN MATCHED THEN
+                UPDATE SET SourceDecisionDomainConceptId = @SourceId, TargetDecisionDomainConceptId = @TargetId,
+                           ConstraintCode = @ConstraintCode, Description = @Description, JurisdictionCode = @JurisdictionCode,
+                           MatterTypeCode = @MatterTypeCode, IsHardConstraint = @IsHardConstraint, SortOrder = @SortOrder, IsActive = @IsActive,
+                           ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHEN NOT MATCHED THEN
+                INSERT (DecisionDomainPackId, SourceDecisionDomainConceptId, TargetDecisionDomainConceptId, SourceConceptCode, TargetConceptCode,
+                        RelationTypeCode, ConstraintCode, Description, JurisdictionCode, MatterTypeCode, IsHardConstraint, IsActive, SortOrder, TenantId, CreatedByUserId)
+                VALUES (@PackId, @SourceId, @TargetId, @SourceConceptCode, @TargetConceptCode,
+                        @RelationTypeCode, @ConstraintCode, @Description, @JurisdictionCode, @MatterTypeCode, @IsHardConstraint, @IsActive, @SortOrder, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                PackId = packId,
+                SourceId = sourceId.Value,
+                TargetId = targetId.Value,
+                SourceConceptCode = sourceCode,
+                TargetConceptCode = targetCode,
+                RelationTypeCode = request.RelationTypeCode.Trim(),
+                ConstraintCode = string.IsNullOrWhiteSpace(request.ConstraintCode) ? null : request.ConstraintCode.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                JurisdictionCode = string.IsNullOrWhiteSpace(request.JurisdictionCode) ? null : request.JurisdictionCode.Trim(),
+                MatterTypeCode = string.IsNullOrWhiteSpace(request.MatterTypeCode) ? null : request.MatterTypeCode.Trim(),
+                request.IsHardConstraint,
+                request.SortOrder,
+                request.IsActive,
+                TenantId = tenantId == Guid.Empty ? (Guid?)null : tenantId,
+                ActorUserId = actorUserId == Guid.Empty ? (Guid?)null : actorUserId,
+            },
+            cancellationToken: cancellationToken));
+    }
+
+    public async Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var packId = await ResolveDomainPackIdAsync(connection, tenantId, packCode, cancellationToken);
+        var affected = await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DecisionDomainConceptRelation
+            SET IsDeleted = 1, ModifiedDateUtc = SYSUTCDATETIME(), ModifiedByUserId = @ActorUserId
+            WHERE DecisionDomainPackId = @PackId AND SourceConceptCode = @SourceConceptCode
+              AND TargetConceptCode = @TargetConceptCode AND RelationTypeCode = @RelationTypeCode AND IsDeleted = 0;
+            """,
+            new { PackId = packId, SourceConceptCode = sourceConceptCode.Trim(), TargetConceptCode = targetConceptCode.Trim(), RelationTypeCode = relationTypeCode.Trim(), ActorUserId = actorUserId },
+            cancellationToken: cancellationToken));
+        if (affected == 0)
+            throw new InvalidOperationException($"Concept relation '{sourceConceptCode} → {targetConceptCode}' was not found.");
     }
 
     private sealed record DomainPackRow(Guid DecisionDomainPackId, string PackCode, string PracticeAreaCode, string Name, string? Description);
@@ -2688,5 +3273,6 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         long DurationMs, string? FinalAnswer, string? ClarificationQuestion, string? ClarificationTarget, string? CorrelationId,
         Guid? MatterId, string? NextBestActionText, string? NextBestActionImpactCode, string? NextBestActionRationale,
         string? ResearchStatusCode, string? ResearchFailureDetail, Guid? ParentDecisionSessionId,
-        string? MatterJurisdiction, string? GoverningLaw, string? CourtOrForum, DateTime? AuthorityCutoffDate, string? AuthorityScopeJson);
+        string? MatterJurisdiction, string? GoverningLaw, string? CourtOrForum, DateTime? AuthorityCutoffDate, string? AuthorityScopeJson,
+        string? ModeCode = null);
 }

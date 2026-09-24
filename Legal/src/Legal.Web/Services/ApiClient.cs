@@ -63,10 +63,20 @@ public sealed class ApiClient(HttpClient httpClient)
 
     public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionContextDto>> GetLegalDecisionContextsAsync(CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionContextDto>>("api/legal_decision/contexts",token)??[];
 
+    // Configuration Mode admin surface (DB-backed execution settings per mode).
+    public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionExecutionModeDto>> GetLegalDecisionExecutionModesAsync(CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionExecutionModeDto>>("api/legal_decision/execution-modes",token)??[];
+
+    public async Task SaveLegalDecisionExecutionModeAsync(Legal.Application.Features.Intelligence.Decision.SaveDecisionExecutionModeRequest request,CancellationToken token=default)
+    {
+        using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/execution-modes/{request.ExecutionModeCode}",request,token);
+        response.EnsureSuccessStatusCode();
+    }
+
         // POLOXI Legal Decision cockpit — matter dashboard + timeline.
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>> GetLegalDecisionMattersAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>>("api/legal_decision/matters",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto> GetLegalDecisionMatterFacetsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterFacetsDto>("api/legal_decision/matters/facets",token)??new([],[],[]);
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto?> GetLegalDecisionDomainPackAsync(string packCode,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>($"api/legal_decision/domainpacks/{packCode}",token);
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>> GetLegalDecisionDomainPacksAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDomainPackDto>>("api/legal_decision/domainpacks",token)??[];
         public Task<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto?> GetLegalDecisionMatterAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.DecisionMatterDto>($"api/legal_decision/matters/{matterId}",token);
         public async Task<Guid> CreateLegalDecisionMatterAsync(Legal.Application.Features.Intelligence.Decision.DecisionMatterCreateRequest request,CancellationToken token=default)
         {
@@ -186,6 +196,9 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetDecisionPromptConfigurationsAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionPromptConfigurationDto>>("api/intelligence/decision-prompts",token)??[];
     public async Task<IReadOnlyCollection<DecisionModelRouteDto>> GetDecisionModelRoutesAsync(CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionModelRouteDto>>("api/intelligence/decision-model-routes",token)??[];
     public async Task SaveDecisionPromptConfigurationAsync(string promptCode,SaveDecisionPromptConfigurationRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/decision-prompts/{Uri.EscapeDataString(promptCode)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+    public async Task SaveDecisionModelRouteAsync(string featureCode,SaveDecisionModelRouteRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/decision-model-routes/{Uri.EscapeDataString(featureCode)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
+    public async Task<IReadOnlyCollection<DecisionSettingDto>> GetDecisionSettingsAsync(string? keyPrefix=null,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionSettingDto>>($"api/intelligence/decision-settings{(string.IsNullOrWhiteSpace(keyPrefix)?string.Empty:$"?keyPrefix={Uri.EscapeDataString(keyPrefix)}")}",token)??[];
+    public async Task SaveDecisionSettingAsync(string settingKey,SaveDecisionSettingRequest request,CancellationToken token=default){var response=await _httpClient.PutAsJsonAsync($"api/intelligence/decision-settings/{Uri.EscapeDataString(settingKey)}",request,token);await EnsureSuccessWithDetailAsync(response,token);}
     public async Task DeleteIntelligencePromptDefinitionAsync(string promptCode,string versionLabel,CancellationToken token=default){var response=await _httpClient.DeleteAsync($"api/intelligence/prompts/{Uri.EscapeDataString(promptCode)}/{Uri.EscapeDataString(versionLabel)}",token);await EnsureSuccessWithDetailAsync(response,token);}
 
     // Legal Grounding settings (CourtListener/GovInfo/eCFR) stored in Core.ConfigurationSetting.

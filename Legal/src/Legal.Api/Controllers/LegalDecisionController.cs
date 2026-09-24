@@ -49,11 +49,29 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> Contexts(CancellationToken cancellationToken)
         => Ok(await service.GetContextsAsync(TenantId, cancellationToken));
 
+    // ── Configuration Mode admin surface (DB-backed execution settings per mode) ──────────────────
+    // Read is available to anyone who can run decisions; write requires the Intelligence.Configure policy.
+    [HttpGet("execution-modes")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ExecutionModes(CancellationToken cancellationToken)
+        => Ok(await service.GetExecutionModesAsync(TenantId, cancellationToken));
+
+    [HttpPut("execution-modes/{executionModeCode}")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveExecutionMode(string executionModeCode, [FromBody] SaveDecisionExecutionModeRequest request, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(executionModeCode, request.ExecutionModeCode, StringComparison.OrdinalIgnoreCase))
+            return BadRequest("Execution mode code in the route must match the request body.");
+
+        await service.SaveExecutionModeAsync(TenantId, ActorUserId, request, cancellationToken);
+        return NoContent();
+    }
+
     // ── Matter dashboard / cockpit ──────────────────────────────────────────────────────────────
     [HttpGet("matters")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Matters(CancellationToken cancellationToken)
-        => Ok(await service.GetMattersAsync(TenantId, cancellationToken));
+        => Ok(await service.GetMattersAsync(TenantId, AuthenticatedRequestContext.IsSystemAdmin(User), cancellationToken));
 
     // Distinct free-form facet values (matter type / jurisdiction / posture) to pre-populate dropdowns.
     [HttpGet("matters/facets")]
@@ -62,6 +80,11 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         => Ok(await service.GetMatterFacetsAsync(TenantId, cancellationToken));
 
     // Database-backed Domain Pack (practice-area domain semantics) for the decision cockpit.
+    [HttpGet("domainpacks")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> DomainPacks(CancellationToken cancellationToken)
+        => Ok(await service.GetDomainPacksAsync(TenantId, cancellationToken));
+
     [HttpGet("domainpacks/{packCode}")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> DomainPack(string packCode, CancellationToken cancellationToken)

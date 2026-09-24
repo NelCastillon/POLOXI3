@@ -408,9 +408,15 @@ public static class DecisionGraph
             $"{openHighImpactFrontierCount} high-impact frontier item(s) still open.",
             frontierOk ? null : "Resolve open frontier branches before final reliance.");
 
-        // 8. No dispositive verifier failure.
+        // 8. No dispositive structural-dependency failure. NOTE: edge invalidation here comes from the
+        //    DECISION_VERIFY structural dependency verifier (which assesses whether a typed graph
+        //    relationship holds), NOT from the external evidence/authority verifier. The two are distinct:
+        //    the evidence Verify stage can be SKIPPED (no authority retrieved) while a structural edge is
+        //    still invalidated. The label/blocker therefore attribute the failure to the structural
+        //    dependency verifier so a skipped evidence verifier is never blamed for a structural result.
         var dispositiveFailure = model.Edges.Any(e => e.IsDispositive && e.VerificationStatus == DecisionVerificationStates.Invalidated);
-        Clause("No dispositive verifier failure", !dispositiveFailure, "A dispositive edge was invalidated by the verifier.");
+        Clause("No dispositive structural-dependency failure", !dispositiveFailure,
+            "A dispositive dependency edge was invalidated by the structural dependency verifier (this is a graph-relationship failure, not an external evidence-verification failure).");
 
         return new DecisionReadinessVerdictDto(blockers.Count == 0, blockers, items);
     }

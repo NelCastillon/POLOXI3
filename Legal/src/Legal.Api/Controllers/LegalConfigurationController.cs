@@ -79,6 +79,18 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
     public async Task<IActionResult> DecisionModelRoutes([FromServices] ILegalDecisionRepository decisionRepository,CancellationToken cancellationToken)
         =>Ok(await decisionRepository.GetModelRoutesAsync(cancellationToken));
 
+    [HttpPut("decision-model-routes/{featureCode}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDecisionModelRoute(
+        string featureCode,
+        [FromBody] SaveDecisionModelRouteRequest request,
+        [FromServices] ILegalDecisionRepository decisionRepository,
+        CancellationToken cancellationToken)
+    {
+        await decisionRepository.SaveModelRouteAsync(ActorUserId,request with{FeatureCode=featureCode},cancellationToken);
+        return NoContent();
+    }
+
     [HttpPut("decision-prompts/{promptCode}")]
     [Authorize(Policy=IntelligencePolicies.Configure)]
     public async Task<IActionResult> SaveDecisionPrompt(
@@ -88,6 +100,25 @@ public sealed class LegalConfigurationController(IIntelligenceRepository reposit
         CancellationToken cancellationToken)
     {
         await decisionRepository.SavePromptConfigurationAsync(ActorUserId,request with{PromptCode=promptCode},cancellationToken);
+        return NoContent();
+    }
+
+    // Runtime decision-tuning settings stored in POLOXI.Legal_DecisionSetting (e.g. the clarification
+    // preflight gate: Decision.Preflight.*). Optional keyPrefix scopes the result to a settings group.
+    [HttpGet("decision-settings")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> DecisionSettings([FromServices] ILegalDecisionRepository decisionRepository,[FromQuery] string? keyPrefix,CancellationToken cancellationToken)
+        =>Ok(await decisionRepository.GetSettingsAsync(keyPrefix,cancellationToken));
+
+    [HttpPut("decision-settings/{settingKey}")]
+    [Authorize(Policy=IntelligencePolicies.Configure)]
+    public async Task<IActionResult> SaveDecisionSetting(
+        string settingKey,
+        [FromBody] SaveDecisionSettingRequest request,
+        [FromServices] ILegalDecisionRepository decisionRepository,
+        CancellationToken cancellationToken)
+    {
+        await decisionRepository.SaveSettingAsync(ActorUserId,request with{SettingKey=settingKey},cancellationToken);
         return NoContent();
     }
 

@@ -69,6 +69,10 @@ public sealed record LegalAuthorityScope
     public string? GoverningLaw { get; init; }
     public string? CourtSystem { get; init; }
     public string? CourtOrForum { get; init; }
+    // Provider-native source court used ONLY for court-slug resolution (e.g. CourtListener court=).
+    // Distinct from GoverningLaw (jurisdiction filter) and from the human-readable CourtOrForum caption
+    // so a governing-law sovereign is never mistaken for a court identifier during retrieval routing.
+    public string? SourceCourt { get; init; }
     public string? CourtLevel { get; init; }
     public string? SubjectMatterJurisdiction { get; init; }
     public string? PersonalTerritorialJurisdiction { get; init; }
@@ -187,7 +191,20 @@ public sealed record DecisionResearchSemanticProposal
 public sealed record DecisionResearchabilityResult(
     bool IsAcceptable,
     IReadOnlyList<string> Defects,
-    IReadOnlyList<DecisionResearchSemanticLeaf> ResearchableLeaves);
+    IReadOnlyList<DecisionResearchSemanticLeaf> ResearchableLeaves)
+{
+    // True when the proposal is NOT fully acceptable, yet at least one researchable leaf passed the gate
+    // cleanly and EVERY remaining defect is confined to derived/application (synthesis) leaves. In that
+    // state POLOXI can progress retrieval with the valid legal-authority/matter leaves while the defective
+    // application leaf is repaired or preserved as unresolved — one defective synthesis leaf must never
+    // block independently researchable authority leaves. Never weakens the gate: full acceptance still
+    // requires zero defects.
+    public bool CanProgressWithResearchableLeaves { get; init; }
+
+    // The subset of defects that belong to derived/application (synthesis) leaves only. Used to build the
+    // targeted application-repair directive without touching already-valid researchable leaves.
+    public IReadOnlyList<string> ApplicationLeafDefects { get; init; } = [];
+}
 
 // The before/after audit of a Candidate×Branch recompetition triggered by a verification change.
 public sealed record DecisionRecompetitionDto(
@@ -364,6 +381,7 @@ public static class DecisionResearchLoopStopReasons
     public const string NoStateChange         = "NO_STATE_CHANGE";          // round produced no material movement
     public const string NoGraph               = "NO_GRAPH";                 // session has no dependency graph
     public const string RoundFailed           = "RESEARCH_ROUND_FAILED";    // a round faulted before commit; prior state preserved
+    public const string RetrievalNoResults    = "RETRIEVAL_NO_RESULTS";     // retrieval completed without a usable source
     public const string AlreadyRunning        = "ALREADY_RUNNING";          // another loop is active for this session
 }
 
@@ -473,7 +491,21 @@ public sealed record DecisionResearchTransformationAttemptDto(
     int LeavesProduced,
     string Disposition,
     IReadOnlyCollection<string> Defects,
-    IReadOnlyCollection<DecisionResearchTransformationLeafDto> Leaves);
+    IReadOnlyCollection<DecisionResearchTransformationLeafDto> Leaves)
+{
+    // Safe model-output diagnostics. These describe the response shape/classification only; raw prompts,
+    // full model payloads, and chain-of-thought are intentionally not persisted.
+    public string OutputClassification { get; init; } = DecisionModelOutputClassifications.StructuredProposal;
+    public string? BlockingReason { get; init; }
+}
+
+public static class DecisionModelOutputClassifications
+{
+    public const string StructuredProposal = "STRUCTURED_PROPOSAL";
+    public const string ModelOutputIntegrityFailure = "MODEL_OUTPUT_INTEGRITY_FAILURE";
+    public const string ModelReturnedClarificationQuestion = "MODEL_RETURNED_CLARIFICATION_QUESTION";
+    public const string IncompleteStructuredProposal = "INCOMPLETE_STRUCTURED_PROPOSAL";
+}
 
 public sealed record DecisionResearchTransformationDto(
     Guid? FrontierBranchId,
