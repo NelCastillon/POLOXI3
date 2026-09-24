@@ -52,20 +52,18 @@ public sealed class CourtListenerLegalRetriever(HttpClient httpClient,ILogger<Co
         var eligibleCourts=await ResolveCourtFilterAsync(scopeValue,scope,configuration,cancellationToken);
         if(eligibleCourts.Count==0)
         {
-            // A composite/free-text scope (e.g. the matter breadcrumb "United States - State · Delaware
-            // · District Court") may not map to any provider-native court slug. Rather than collapsing
-            // the whole round into RETRIEVAL_SCOPE_UNSUPPORTED (which upstream reports as
-            // RETRIEVAL_NO_RESULTS and hard-stops the research loop), degrade gracefully to an
-            // UNFILTERED case-law search so genuinely retrievable evidence is still returned. The
-            // diagnostic detail preserves the unresolved scope for observability.
+            // Controlling (and federal-applying-state-law) authority is only authoritative when it comes
+            // from the resolved court set for the governing jurisdiction. When the scope cannot be mapped
+            // to any provider-native court slug we MUST NOT degrade to an unfiltered case-law search:
+            // an unrestricted search admits opinions from any court and would let non-controlling
+            // authority through as controlling, corrupting the controlling-jurisdiction guarantee (and
+            // contradicting the returned-court scope-mismatch rejection below). Hard-stop this lane with
+            // RETRIEVAL_SCOPE_UNSUPPORTED and issue no request; the persuasive lane (which is explicitly
+            // allowed to search unfiltered) already returned earlier.
             logger.LogInformation(
-                "LEGAL-TRACE stage=2-courtlistener-scope outcome=UNFILTERED_FALLBACK scope=\"{Scope}\"",scopeValue);
-            var fallback=await SearchCoreAsync(request.Query,configuration,null,cancellationToken);
-            var diagnostic=fallback.Diagnostic with
-            {
-                Detail=$"Court filter unresolved for '{scopeValue}'; used unfiltered case-law search. {fallback.Diagnostic.Detail}".Trim()
-            };
-            return fallback with { Diagnostic=diagnostic };
+                "LEGAL-TRACE stage=2-courtlistener-scope outcome=SCOPE_UNSUPPORTED scope=\"{Scope}\"",scopeValue);
+            return new([],new("COURTLISTENER",true,"RETRIEVAL_SCOPE_UNSUPPORTED",0,0,
+                $"Court filter unresolved for '{scopeValue}'; controlling-lane search suppressed to preserve jurisdiction scope."));
         }
         return await SearchCoreAsync(request.Query,configuration,eligibleCourts,cancellationToken);
     }

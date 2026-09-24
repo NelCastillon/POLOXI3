@@ -7,6 +7,7 @@ using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 using Microsoft.Extensions.Logging;
 
 namespace Legal.Application;
@@ -14,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILogger<IntelligenceWide2Service> logger):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,ILogger<IntelligenceWide2Service> logger):IIntelligenceWide2Service
 {
     private const int WideUserPromptBudget=48000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
@@ -22,6 +23,26 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // with headroom so the large Wide answer system prompt plus the clamped user prompt never trips
     // the safety violation, while still staying well inside the model input token budget.
     private const int WideAnswerInputCeiling=58000;
+
+    // R2 Matter-first proposal input: the immutable Matter Context Snapshot for the CURRENT run, loaded
+    // once (fail-soft) at the start of SearchDynamicAsync when a LEGAL request carries a MatterId. The
+    // service is scoped and processes one request end-to-end, so a per-run field is safe. Null when no
+    // matter is selected (general searches) or the load failed — the pipeline then behaves exactly as
+    // before. Projected (never concatenated into the user Query) into the intent/hierarchy prompts.
+    private MatterContextSnapshot? _matterContext;
+    // Bounded, pre-rendered projection block appended to the proposal prompts. Empty when no context.
+    private string _matterContextBlock=string.Empty;
+    // R3 Decision ownership: the authoritative decision intent for the CURRENT run. On an EVALUATE run a
+    // supplied CurrentOutcome must NEVER become a fixed legal conclusion; on IMPLEMENT_DRAFT it is the
+    // governing premise. Defaults to Evaluate so nothing is silently adopted. Per-run (scoped service).
+    private DecisionIntentResolver.Resolution _decisionIntent=new(DecisionIntent.Evaluate,"No matter context.",false);
+    // R3 Domain Pack verification: the resolved DB-backed pack identity for this run (id + code), proving
+    // a specific pack was resolved rather than inferring it from PracticeArea. Null when unresolved.
+    private Guid? _resolvedDomainPackId;
+    private string? _resolvedDomainPackCode;
+    // R3 competition accountability: typed status for whether candidate competition ran on this run.
+    private string? _candidateCompetitionStatus;
+
 
     // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
     private static string? ModelOverride(WideSearchRequest request)=>string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)?"gpt-4.1-mini":request.ModelCode.Trim();
@@ -540,8 +561,22 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var clarificationConstraint=string.IsNullOrWhiteSpace(request.ClarificationTarget)?NormalizeQuery(request.ClarificationAnswer):$"{request.ClarificationTarget.Trim()}: {NormalizeQuery(request.ClarificationAnswer)}";
             request=request with{Query=$"{request.Query} ({clarificationConstraint})",ClarificationRound=Math.Max(request.ClarificationRound,1)};
         }
+        // R2 Matter-first proposal input: load ONE immutable Matter Context Snapshot for this run when a
+        // LEGAL request carries a MatterId. The snapshot is a projected INPUT to the proposal prompts; the
+        // user Query is preserved verbatim above and is never suppressed by it. Loading is fail-soft — an
+        // unavailable/foreign matter degrades to the standard (matter-less) pipeline. Tenant-scoped.
+        _matterContext=null;
+        _matterContextBlock=string.Empty;
+        _decisionIntent=new(DecisionIntent.Evaluate,"No matter context.",false);
+        _resolvedDomainPackId=null;
+        _resolvedDomainPackCode=null;
+        _candidateCompetitionStatus=null;
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
+        // Matter context is only projected into the POLOXI proposal prompts, so load it after the LLM-only
+        // short-circuit to avoid a wasted lookup on the raw passthrough path.
+        if(request.MatterId is{}matterId&&matterId!=Guid.Empty&&string.Equals(request.ContextCode,WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase))
+            await LoadMatterContextAsync(request.TenantId,matterId,request.Query,cancellationToken);
         var configuration=await wideRepository.GetWideConfigurationAsync(request.TenantId,cancellationToken);
         // Wide search is knowledge-only: it never grounds branches against AMS enterprise records.
         // An empty capability catalog forces every branch onto the INTERPRETIVE reasoning path.
@@ -578,6 +613,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             if(!string.IsNullOrWhiteSpace(request.ClarificationAnswer)&&NormalizeAnswerKind(configuration,request.OriginalAnswerKind)is{Length:>0}inheritedKind)
                 queryContract=queryContract is null?new(null,null,null,null,[],[],[]){AnswerKind=inheritedKind}:queryContract with{AnswerKind=inheritedKind};
             queryContract=RefineQueryContractForAmbiguity(configuration,queryContract,request.Query);
+            // R3 Decision-ownership guard (LEGAL only): on an EVALUATE run the supplied CurrentOutcome is a
+            // recorded Matter ASSERTION, not a verified ruling, so it must never be promoted into a FIXED
+            // hard constraint that pre-decides the answer. Strip any hard constraint that merely restates the
+            // supplied CurrentOutcome; the value still travels to the prompts as a [SUPPLIED] matter field and
+            // competes as one candidate outcome. On an IMPLEMENT_DRAFT run the disposition is the governing
+            // premise, so constraints are preserved unchanged.
+            queryContract=ApplyDecisionOwnershipGuard(queryContract);
             // Clarification disabled globally: the Stage-0 answer-kind classifier can still route a broad
             // query to CLARIFICATION_REQUIRED (which skips candidate competition and returns no ranking).
             // When the gate is off we downgrade that classification so the full ranking pipeline runs and
@@ -853,7 +895,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // Candidate eligibility must be stable for the same proposed name and query. Retrieved
                 // corpus capitalization may vary between runs, so it cannot authoritatively reject a
                 // seed; every accepted seed still has to earn support at the evidence admission gates.
-                var validSeeds=seeds.Where(seed=>IsValidCandidateForContract(seed,queryContract)&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
+                var validSeeds=seeds.Where(seed=>(IsValidCandidateForContract(seed,queryContract)||IsDecisionOutcomeCandidate(seed))&&!IsQueryTopicEcho(seed,queryTopicSeedTokens)&&!candidateUniverse.Contains(seed)).Take(20).ToArray();
                 if(validSeeds.Length>0)
                 {
                     candidateUniverse.UnionWith(validSeeds);
@@ -1186,11 +1228,31 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                     .Where(name=>name.Length>0).Distinct(StringComparer.OrdinalIgnoreCase).Count();
                 if(distinctNamedCandidates>=2)isContentEnumeration=false;
             }
-            var rankingCompletionRequired=RequiresRankingCompletion(configuration,queryContract,isContentEnumeration,interpretiveResults);
+            // R2 LEGAL_DECISION competition gate: a matter-backed EVALUATE run adjudicates COMPETING legal
+            // dispositions, but its AnswerKind is RESOLUTION (or null), which RequiresRankingCompletion does
+            // not recognize — so the Candidate x Branch competition was never requested and dispositions
+            // stayed as L1 interpretation branches. Require the competition for a legal EVALUATE run whenever
+            // the interpretive layer surfaced competing outcomes, strictly gated to matter-backed EVALUATE
+            // (not a HardConstraint ImplementDraft, not a non-legal RESOLUTION run) so nothing else regresses.
+            var rankingCompletionRequired=RequiresRankingCompletion(configuration,queryContract,isContentEnumeration,interpretiveResults)
+                ||(IsLegalDecisionEvaluationRun&&!isContentEnumeration&&interpretiveResults.Any(result=>result.Items.Count>0));
             var effectiveContractCount=EffectiveRankingContractCount(configuration,queryContract,rankingCompletionRequired);
             var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
             candidates=completion.Candidates;
             llmCalls=completion.LlmCalls;
+            // R3 competition accountability: record a TYPED status for candidate competition so an EVALUATE
+            // run can never silently deliver no competition. On a legal EVALUATE run the status is always
+            // populated: RAN when competing candidates were produced, NO_COMPETING_CANDIDATES when the pool
+            // stayed empty/degenerate, or NOT_REQUIRED when ranking completion was not requested.
+            _candidateCompetitionStatus=!IsLegalDecisionEvaluationRun
+                ? _candidateCompetitionStatus
+                : !rankingCompletionRequired
+                    ? "NOT_REQUIRED"
+                    : DeliveredCandidateCount(candidates)>=2
+                        ? $"RAN (universe={candidateUniverse.Count}, accepted={DeliveredCandidateCount(candidates)})"
+                        : $"NO_COMPETING_CANDIDATES (universe={candidateUniverse.Count}, accepted={DeliveredCandidateCount(candidates)})";
+            if(IsLegalDecisionEvaluationRun)
+                logger.LogInformation("Wide2 EVALUATE candidate competition status for matter {MatterId}: {Status} (delivered {Delivered} candidate(s), universe {Universe}).",_matterContext!.MatterId,_candidateCompetitionStatus,DeliveredCandidateCount(candidates),candidateUniverse.Count);
             // V2.9.2 Output Contract Validation: the delivered ranking must mechanically satisfy the
             // query contract. Requested 10 cities → 10 valid candidates; a shortfall is a validation
             // failure, not a composition style choice. One recovery pass re-runs the competition with
@@ -1495,7 +1557,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic()};
             return response;
         }
         catch
@@ -1650,10 +1712,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // POLOXI INTERPRETATION RESULTS as substantive (but explicitly unverified) input. Zero new
     // reasoning happens here: lack of verified evidence changes the EVIDENCE STATUS, not whether an
     // already-resolved interpretation may be presented.
-    private static string BuildLegalComposerContext(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string interpretationStatus,string evidenceStatus,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy)
+    private string BuildLegalComposerContext(WideSearchRequest request,string poloxiConclusion,string? winnerDisplayName,WideResolutionDeliverableDto? resolutionDeliverable,IReadOnlyList<WideExternalKnowledgeSnippet> verifiedAuthorities,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,string interpretationStatus,string evidenceStatus,decimal? decisionConfidence,decimal decisionEvidenceCoverage,decimal evidenceCoverage,WideEntropyResult finalEntropy)
     {
         var builder=new StringBuilder();
         builder.Append("QUESTION: ").Append(Truncate(request.Query,3000)).Append('\n');
+        // Selected matter context is a first-class composer input so the attorney answer grounds in the
+        // saved incident, jurisdiction, injuries, claims, and demand status instead of reporting them as
+        // "not supplied". Bounded, distinct legal fields, allegations tagged unverified.
+        var matterSection=BuildMatterContextSection();
+        if(!string.IsNullOrEmpty(matterSection))
+            builder.Append(Truncate(matterSection,6000)).Append('\n');
         if(!string.IsNullOrWhiteSpace(winnerDisplayName))
             builder.Append("POLOXI RESOLVED INTERPRETATION: ").Append(Truncate(winnerDisplayName,400)).Append('\n');
         builder.Append("INTERPRETATION STATUS: ").Append(interpretationStatus).Append('\n');
@@ -1863,7 +1931,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var catalog=BuildCatalog(capabilities);
         // V2.1: when a query contract exists, the LLM branches ONLY the ambiguous concepts; hard
         // constraints and output requirements are fixed by the user and must never be reinterpreted.
-        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
+        var contractContext=(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")+BuildMatterContextSection();
         var userPrompt=BuildIntentUserPrompt(request.Query,contractContext,catalog,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideIntent,cancellationToken),
@@ -1880,7 +1948,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var samples=evidence.Where(item=>item.HierarchyBranchId==parent.WideBranchId).Take(3).Select(item=>item.Title);
             return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
         }));
-        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
+        var contractContext=(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")+BuildMatterContextSection();
         var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
@@ -1891,7 +1959,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
 
     private static string BuildIntentUserPrompt(string query,string contractContext,string catalog,int maximumBranches)
     {
-        var boundedContract=Truncate(contractContext,3500)??string.Empty;
+        var boundedContract=Truncate(contractContext,9500)??string.Empty;
         var boundedCatalog=Truncate(catalog,1500)??string.Empty;
         var envelope=$"{boundedContract}\nMaximum branches: {maximumBranches}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
         var boundedQuery=Truncate(query,Math.Max(0,WideUserPromptBudget-"Ambiguous question: ".Length-envelope.Length))??string.Empty;
@@ -1901,7 +1969,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private static string BuildHierarchyUserPrompt(string query,string contractContext,string parentSummary,string catalog,int levelNumber,int maximumBranches)
     {
         var boundedQuery=Truncate(query,4500)??string.Empty;
-        var boundedContract=Truncate(contractContext,2500)??string.Empty;
+        var boundedContract=Truncate(contractContext,9500)??string.Empty;
         var boundedParents=Truncate(parentSummary,3000)??string.Empty;
         var boundedCatalog=Truncate(catalog,1000)??string.Empty;
         var prompt=$"Original question: {boundedQuery}{boundedContract}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {maximumBranches}\nSurviving parent branches with grounding outcomes:\n{boundedParents}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
@@ -1913,6 +1981,254 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         static string Join(IReadOnlyCollection<string> values)=>values.Count==0?"(none)":string.Join("; ",values);
         return $"Query contract (FIXED, do not reinterpret): answer kind: {queryContract.AnswerKind??"(unspecified)"}; candidate kind: {queryContract.CandidateKind??"(unspecified)"}; intent: {queryContract.Intent??"(unspecified)"}; target object: {queryContract.TargetObject??queryContract.EntityType??"(unspecified)"}; entity type: {queryContract.EntityType??"(unspecified)"}; geography: {queryContract.GeographicConstraint??"(unspecified)"}; requested count: {(queryContract.RequestedCount?.ToString()??"(unspecified)")}; ranking concept: {queryContract.RankingConcept??"(unspecified)"}; output shape: {queryContract.OutputShape??"(unspecified)"}; safety risk: {queryContract.SafetyRiskCode??(queryContract.IsSafetySensitive?"MEDIUM":"NONE")}\nHard constraints: {Join(queryContract.HardConstraints)}\nRequired terms: {Join(queryContract.RequiredTerms)}\nExcluded terms: {Join(queryContract.ExcludedTerms)}\nOutput requirements: {Join(queryContract.OutputRequirements)}\nAmbiguous concepts to disambiguate (branch ONLY these unless evidence proves incompleteness): {Join(queryContract.AmbiguousConcepts)}\nAmbiguous terms: {Join(queryContract.AmbiguousTerms)}";
     }
+
+    // R2 — Fail-soft load of the immutable Matter Context Snapshot for the current run. Loads the shared
+    // DecisionMatter aggregate and its optional Personal Injury profile, projects them into the snapshot
+    // (distinct legal fields, provenance-tagged, no cross-derivation), and pre-renders a bounded prompt
+    // block. Any failure (missing/foreign matter, provider error) leaves the run matter-less. Never throws.
+    private async Task LoadMatterContextAsync(Guid tenantId,Guid matterId,string originalQuestion,CancellationToken cancellationToken)
+    {
+        try
+        {
+            var matter=await legalDecisionRepository.GetMatterAsync(tenantId,matterId,cancellationToken);
+            if(matter is null)
+            {
+                // #6: pinpoint the disappearance — matter row not found/visible for this tenant.
+                logger.LogWarning("Wide2 matter context UNAVAILABLE: matter {MatterId} not found for tenant {TenantId}; run proceeds matter-less.",matterId,tenantId);
+                return;
+            }
+            PersonalInjuryProfileDto? profile=null;
+            try{profile=await legalDecisionRepository.GetPersonalInjuryProfileAsync(tenantId,matterId,cancellationToken);}
+            catch(Exception)when(!cancellationToken.IsCancellationRequested){/* PI profile is optional; matter-only context still valuable */}
+            var snapshot=MatterContextSnapshotBuilder.Build(tenantId,originalQuestion,matter,profile);
+            if(!snapshot.HasAnyContext)
+            {
+                // #6: matter loaded but every projected field was empty — the disappearance is upstream in storage.
+                logger.LogWarning("Wide2 matter context EMPTY for matter {MatterId} (title '{Title}', profile {ProfilePresent}); run proceeds matter-less.",matterId,matter.Title,profile is not null);
+                return;
+            }
+            _matterContext=snapshot;
+            // Bound the projection so it can never dominate the prompt budget; the original question and
+            // query contract retain their own budgets in the prompt builders.
+            _matterContextBlock=Truncate(snapshot.ToPromptBlock(),6000)??string.Empty;
+            // R3 Decision ownership: resolve the authoritative decision intent deterministically from the
+            // ORIGINAL question. No Stage 0 proposal is available yet, so the guard defaults to EVALUATE
+            // unless the user explicitly asked to draft/implement a specified disposition. This decides
+            // whether the supplied CurrentOutcome may act as a hard constraint (ImplementDraft only).
+            _decisionIntent=DecisionIntentResolver.Resolve(null,originalQuestion);
+            // R3 Domain Pack verification: resolve the actual DB-backed pack (id + code) so the run can
+            // PROVE a specific pack was applied rather than inferring one from the practice-area label.
+            // Fail-soft: an unavailable pack leaves the resolved identity null and the run continues.
+            if(!string.IsNullOrWhiteSpace(snapshot.DomainPackCode))
+            {
+                try
+                {
+                    var pack=await legalDecisionRepository.GetDomainPackAsync(tenantId,snapshot.DomainPackCode,cancellationToken);
+                    if(pack is not null)
+                    {
+                        _resolvedDomainPackId=pack.DecisionDomainPackId;
+                        _resolvedDomainPackCode=pack.PackCode;
+                    }
+                }
+                catch(Exception)when(!cancellationToken.IsCancellationRequested){/* pack is advisory; run continues unresolved */}
+            }
+            // R3: fold the VERIFIED pack identity (id + code) into the serialized block so the discovery and
+            // graph-proposal prompts carry proof of which specific DB-backed pack was applied — never an
+            // inferred practice-area label. Only appended when a pack actually resolved.
+            if(_resolvedDomainPackId is{}resolvedPackId)
+                _matterContextBlock=Truncate($"RESOLVED DOMAIN PACK (verified, database-backed): {_resolvedDomainPackCode} [id {resolvedPackId}]\n{_matterContextBlock}",6200)??_matterContextBlock;
+            // R2 diagnostic (#6): prove which saved matter fields actually reach EVERY prompt stage
+            // (query contract, intent, hierarchy, answer, legal composer, candidate competition).
+            logger.LogInformation("Wide2 matter context projected into all prompt stages for matter {MatterId}. DomainPack={DomainPack} (id {DomainPackId}). DecisionIntent={DecisionIntent} ({DecisionIntentReason}). Fields={FieldCount}. SerializedRequest:\n{MatterBlock}",matterId,_resolvedDomainPackCode??snapshot.DomainPackCode??"(none)",_resolvedDomainPackId?.ToString()??"(unresolved)",_decisionIntent.Intent,_decisionIntent.Reason,snapshot.FieldCount,_matterContextBlock);
+        }
+        catch(Exception ex)when(!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex,"Wide2 matter context load failed for matter {MatterId}; continuing without matter context.",matterId);
+            _matterContext=null;
+            _matterContextBlock=string.Empty;
+        }
+    }
+
+    // Renders the Matter context as a distinct, clearly-labelled prompt section that instructs the model
+    // to GROUND its proposal in the saved matter WITHOUT treating supplied allegations as verified proof
+    // and WITHOUT collapsing distinct legal fields. Empty string when there is no matter context, so the
+    // matter-less pipeline is byte-for-byte unchanged.
+    private string BuildMatterContextSection()
+        => string.IsNullOrEmpty(_matterContextBlock)
+            ? string.Empty
+            : $"\n\nSELECTED MATTER CONTEXT (first-class proposal input — ground the proposal in these saved values; keep each legal field DISTINCT; do NOT derive Jurisdiction from Governing Law or Incident State; treat [SUPPLIED] allegations as unproven, not verified evidence):{BuildDecisionOwnershipDirective()}\n{_matterContextBlock}";
+
+    // R3 decision-ownership directive: tells the model how to treat the supplied RequestedDisposition and
+    // CurrentOutcome for THIS run. On EVALUATE they are advisory inputs that must COMPETE against genuine
+    // alternative outcomes — never adopted as the conclusion. On IMPLEMENT_DRAFT the supplied disposition
+    // is the governing premise to be drafted. Empty when there is no matter context.
+    private string BuildDecisionOwnershipDirective()
+        => _matterContext is null
+            ? string.Empty
+            : _decisionIntent.CurrentOutcomeIsHardConstraint
+                ? "\n[DECISION INTENT = IMPLEMENT/DRAFT] The supplied Requested Disposition is the governing premise; draft/implement it. Do NOT re-litigate whether it is correct."
+                : "\n[DECISION INTENT = EVALUATE] The supplied 'Current Outcome' is a recorded matter ASSERTION, not a verified ruling, and 'Requested Disposition' is the user's OBJECTIVE. Neither is FIXED. Generate genuinely competing outcome candidates and let the supplied outcome compete as ONE candidate; never adopt it as the conclusion by default.";
+
+    // R3 Decision-ownership guard: on an EVALUATE run, remove any hard constraint that merely restates the
+    // supplied CurrentOutcome (or the RequestedDisposition, which is the user's OBJECTIVE, not a fixed
+    // fact). This keeps a supplied outcome from silently becoming both the candidate and the conclusion.
+    // No-op when there is no matter context, the intent is IMPLEMENT_DRAFT, or there are no constraints.
+    private WideQueryContract? ApplyDecisionOwnershipGuard(WideQueryContract? queryContract)
+    {
+        if(queryContract is null||_matterContext is null)return queryContract;
+        if(_decisionIntent.CurrentOutcomeIsHardConstraint)return queryContract;
+        if(queryContract.HardConstraints is not{Count:>0}constraints)return queryContract;
+        // Build normalized tokens for the supplied outcome / requested disposition so a paraphrased hard
+        // constraint that echoes them is recognized and demoted back to a supplied assertion.
+        var suppliedOutcome=FindMatterFieldValue("Current Outcome");
+        var requestedDisposition=FindMatterFieldValue("Requested Disposition");
+        if(string.IsNullOrWhiteSpace(suppliedOutcome)&&string.IsNullOrWhiteSpace(requestedDisposition))return queryContract;
+        var kept=constraints.Where(constraint=>!RestatesSuppliedDecision(constraint,suppliedOutcome,requestedDisposition)).ToArray();
+        if(kept.Length==constraints.Count)return queryContract;
+        logger.LogInformation("Wide2 decision-ownership guard: demoted {Removed} of {Total} hard constraint(s) that restated the supplied CurrentOutcome/RequestedDisposition on an EVALUATE run for matter {MatterId}; they remain [SUPPLIED] matter assertions and compete as candidate outcomes.",constraints.Count-kept.Length,constraints.Count,_matterContext.MatterId);
+        return queryContract with{HardConstraints=kept};
+    }
+
+    private string? FindMatterFieldValue(string label)
+        =>_matterContext?.Decision.FirstOrDefault(f=>string.Equals(f.Label,label,StringComparison.OrdinalIgnoreCase)&&f.HasValue)?.Value;
+
+    // R3 legal-outcome candidate admission: dispositions the tribunal could reach ("grant in part",
+    // "deny", "remand", "dismiss", "settle") are sentence-case verb phrases — they are NOT proper-noun
+    // named entities and NOT the infrastructure action verbs IsActionCandidate recognizes, so the standard
+    // validity gate rejects them. On a legal EVALUATE run these ARE the competing candidates, so admit a
+    // seed that opens with (or contains) a recognized disposition verb. Only active for a matter-backed
+    // EVALUATE run; otherwise this is a no-op and the standard validity gate stays authoritative. An
+    // admitted seed still has to earn evidence support at the unchanged admission gates before it can win.
+    private bool IsDecisionOutcomeCandidate(string name)
+    {
+        if(_matterContext is null||_decisionIntent.CurrentOutcomeIsHardConstraint)return false;
+        if(string.IsNullOrWhiteSpace(name))return false;
+        var trimmed=name.Trim();
+        if(trimmed.Length<3||trimmed.Length>120)return false;
+        var words=trimmed.Split([' ','\t','-','—',',','/','(',')'],StringSplitOptions.RemoveEmptyEntries);
+        if(words.Length==0||words.Length>9)return false;
+        // Match a disposition verb by its raw lowercase form AND by a naive singular form. Only strip a
+        // SINGLE trailing 's' (awards→award), never a double-s (dismiss must stay dismiss, not "dismi"),
+        // so double-s dispositions like dismiss/discuss are still recognized.
+        return words.Any(word=>
+        {
+            var head=word.Trim(',',':',';','.').ToLowerInvariant();
+            if(head.Length==0)return false;
+            if(DispositionVerbs.Contains(head))return true;
+            return head[^1]=='s'&&head.Length>1&&head[^2]!='s'&&DispositionVerbs.Contains(head[..^1]);
+        });
+    }
+
+    // Deterministic set of verbs/heads that identify a competing legal disposition.
+    private static readonly HashSet<string> DispositionVerbs=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "grant","deny","denied","granted","dismiss","dismissed","remand","remanded","affirm","affirmed",
+        "reverse","reversed","settle","settled","sustain","overrule","vacate","vacated","strike","stricken",
+        "uphold","upheld","reject","rejected","allow","allowed","enter","enjoin","award","apportion",
+    };
+
+    // R2 LEGAL_DECISION: true only for a matter-backed EVALUATE decision run — the mode that must
+    // adjudicate genuinely competing legal dispositions via Candidate x Branch competition. Excludes
+    // ImplementDraft (CurrentOutcome is a HardConstraint) and every non-legal run (no matter context).
+    private bool IsLegalDecisionEvaluationRun
+        =>_matterContext is not null&&!_decisionIntent.CurrentOutcomeIsHardConstraint;
+
+    // R2 candidate/branch separation: on a legal EVALUATE run a hierarchy branch whose head IS a
+    // disposition ("Grant summary judgment", "Deny the motion") is a GLOBAL OUTCOME CANDIDATE, not a
+    // shared-dependency scoring criterion. Scoring it as an L1 interpretation branch both double-counts
+    // it and keeps it out of the candidate pool. Demote such branches to NonScoring so the shared
+    // dependency forest keeps only the procedural/legal/factual/burden/evidentiary sub-issues while the
+    // dispositions compete as candidates. No-op outside a legal EVALUATE run.
+    private bool IsDispositionBranch(WideBranchRecord branch)
+    {
+        if(!IsLegalDecisionEvaluationRun)return false;
+        if(string.IsNullOrWhiteSpace(branch.DisplayName))return false;
+        return IsDecisionOutcomeCandidate(branch.DisplayName);
+    }
+
+    // R3 EVALUATE candidate generation hint: on a legal EVALUATE run the candidate enumeration stage must
+    // produce GENUINELY COMPETING outcome candidates (mutually-exclusive dispositions the court could
+    // reach), not the compatible decision dependencies the hierarchy surfaces. The supplied Current
+    // Outcome must appear as ONE candidate among real alternatives, never the sole/foregone answer. No
+    // hint on IMPLEMENT_DRAFT (the disposition is already specified) or when there is no matter context.
+    private string BuildCandidateEnumerationDecisionHint()
+    {
+        if(_matterContext is null||_decisionIntent.CurrentOutcomeIsHardConstraint)return string.Empty;
+        var suppliedOutcome=FindMatterFieldValue("Current Outcome");
+        var requestedDisposition=FindMatterFieldValue("Requested Disposition");
+        var sb=new StringBuilder();
+        sb.Append("\nDECISION-EVALUATION CANDIDATE RULE: enumerate genuinely COMPETING, mutually-exclusive outcome candidates the tribunal could reach for this matter (e.g. grant in full, grant in part, deny, remand, dismiss, settle). Do NOT emit compatible decision dependencies or sub-issues as candidates.");
+        // R2 candidate normalization: merge dispositions that are the same outcome under different wording,
+        // keep genuinely different grounds for denial as distinct candidates (they lead to different
+        // dependency gates), and reject an outcome that would require a separate procedural vehicle the
+        // moving party never requested (e.g. judgment for the non-movant when only the movant's motion is
+        // before the court) unless that vehicle is explicitly within this matter's requested relief.
+        sb.Append(" NORMALIZE the candidate pool: (a) collapse duplicate or conditionally-equivalent dispositions into ONE candidate; (b) keep materially DIFFERENT grounds for denial as separate candidates when they turn on different requirements; (c) DO NOT propose a disposition that requires an independent, unrequested procedural vehicle (for example judgment for the party who did not move) unless that vehicle is expressly part of the requested relief.");
+        if(!string.IsNullOrWhiteSpace(requestedDisposition))
+            sb.Append(" The user's requested disposition is an OBJECTIVE to test, not a given: '").Append(requestedDisposition).Append("'.");
+        if(!string.IsNullOrWhiteSpace(suppliedOutcome))
+            sb.Append(" Include the supplied current outcome as exactly ONE competing candidate, not the default answer: '").Append(suppliedOutcome).Append("'.");
+        return sb.ToString();
+    }
+
+    // A hard constraint "restates" a supplied decision when it shares a substantial normalized token
+    // overlap with the supplied CurrentOutcome or RequestedDisposition. Deterministic and zero-LLM.
+    private static bool RestatesSuppliedDecision(string constraint,string? suppliedOutcome,string? requestedDisposition)
+    {
+        var constraintTokens=DecisionOverlapTokens(constraint);
+        if(constraintTokens.Count==0)return false;
+        return HasMajorityOverlap(constraintTokens,DecisionOverlapTokens(suppliedOutcome))
+            ||HasMajorityOverlap(constraintTokens,DecisionOverlapTokens(requestedDisposition));
+    }
+
+    private static bool HasMajorityOverlap(HashSet<string> constraintTokens,HashSet<string> sourceTokens)
+    {
+        if(sourceTokens.Count==0)return false;
+        var shared=constraintTokens.Count(sourceTokens.Contains);
+        // Demote only when the constraint is largely a restatement of the supplied value: at least half of
+        // its meaningful tokens are present in the supplied outcome/disposition.
+        return shared>0&&shared>=Math.Max(2,(int)Math.Ceiling(constraintTokens.Count/2.0));
+    }
+
+    private static readonly HashSet<string> DecisionStopWords=new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the","a","an","and","or","of","to","for","in","on","with","is","are","be","that","this",
+        "grant","relief","reserve","issue","issues","unresolved","fixed","disposition","order",
+    };
+
+    private static HashSet<string> DecisionOverlapTokens(string? text)
+    {
+        var tokens=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if(string.IsNullOrWhiteSpace(text))return tokens;
+        foreach(var raw in text.Split([' ','\t','\n','\r','-','—',',',';','.','/','(',')'],StringSplitOptions.RemoveEmptyEntries))
+        {
+            var token=raw.Trim();
+            if(token.Length<3||DecisionStopWords.Contains(token))continue;
+            tokens.Add(token);
+        }
+        return tokens;
+    }
+
+    // R2 DEV diagnostic surface: exposes the exact serialized Matter context projected into the proposal
+    // prompts plus the applied Domain Pack, so DEV can verify field identity/provenance end-to-end. Null
+    // when no matter context was loaded for this run.
+    private WideMatterContextDiagnosticDto? BuildMatterContextDiagnostic()
+        => _matterContext is null
+            ? null
+            : new WideMatterContextDiagnosticDto(
+                _matterContext.MatterId,
+                _matterContext.DomainPackCode,
+                _matterContext.PracticeAreaCode,
+                _matterContext.ToPromptBlock(),
+                !string.IsNullOrEmpty(_matterContextBlock))
+            {
+                ResolvedDomainPackId=_resolvedDomainPackId,
+                ResolvedDomainPackCode=_resolvedDomainPackCode,
+                DecisionIntent=_decisionIntent.Intent.ToString(),
+                DecisionIntentReason=_decisionIntent.Reason,
+                CurrentOutcomeIsHardConstraint=_decisionIntent.CurrentOutcomeIsHardConstraint,
+                CandidateCompetitionStatus=_candidateCompetitionStatus
+            };
 
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.
@@ -1933,6 +2249,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         try
         {
             var isLegalContext=string.Equals(request.ContextCode?.Trim(),WideSearchContexts.Legal,StringComparison.OrdinalIgnoreCase);
+            // Matter governing-law sovereign for the deterministic evidence-scope gate. Derived once from
+            // the question text (the matter context is seeded into request.Query). When the matter targets a
+            // specific US-state sovereign, a retrieved source that positively identifies a DIFFERENT state
+            // sovereign is out of scope and is denied promotion in ClassifyLegalSnippet — this blocks an
+            // eCFR/regulatory passage from another state being admitted as support for this matter.
+            var targetSovereign=Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(request.Query);
             // Resolve the active grounding source for the request's context. LEGAL routes through the
             // legal sources (CourtListener case law + GovInfo/eCFR + DB-backed concept resolution);
             // every other context prefers the general web knowledge provider. Both paths share caching,
@@ -2008,16 +2330,24 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             {
                 var branchClaim=$"{branch.DisplayName}. {branch.Interpretation}";
                 var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,attributionQuery,notBeforeUtc,cancellationToken);
-                if(cached.Count>0)return cached.Take(maximumSnippets).Select(snippet=>StampBranch(snippet,branch,attributionQuery)).ToArray();
+                if(cached.Count>0)
+                {
+                    // Cache may predate the scope gate (or the matter sovereign may differ), so apply the
+                    // same deterministic jurisdiction eligibility to cached snippets in the legal path.
+                    var cachedEligible=useLegalGrounding?FilterScopeEligible(cached,targetSovereign):cached;
+                    return cachedEligible.Take(maximumSnippets).Select(snippet=>StampBranch(snippet,branch,attributionQuery)).ToArray();
+                }
                 var retrieved=await retrieve(providerQuery,kind,cancellationToken);
                 if(retrieved.Count==0)return [];
                 IReadOnlyList<WideExternalKnowledgeSnippet> stamped;
                 if(verify is{}authority)
                 {
-                    // MANDATORY identity gate first, then deterministic proposition-support weighting.
-                    // Snippets that fail identity are UNVERIFIED and dropped so they never become evidence.
+                    // MANDATORY identity gate first, then scope-eligibility, then deterministic proposition-support
+                    // weighting. Snippets that fail identity are UNVERIFIED and snippets that name a different
+                    // US-state sovereign than the matter are SCOPE_INELIGIBLE; both are dropped so they never
+                    // become evidence.
                     var classified=retrieved
-                        .Select(snippet=>(snippet,classification:ClassifyLegalSnippet(snippet,authority,branchClaim)))
+                        .Select(snippet=>(snippet,classification:ClassifyLegalSnippet(snippet,authority,branchClaim,targetSovereign)))
                         .ToArray();
                     // STAGE 5-6 (identity + proposition support): show per-snippet whether identity matched
                     // and the separate support score/status, so an accurately retrieved authority that was
@@ -2042,9 +2372,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
                 else
                 {
-                    // Concept fallback / general-web: no authority to gate on; verification fields stay
-                    // at their neutral defaults so non-legal scoring behavior is unchanged.
-                    stamped=retrieved.Take(maximumSnippets).Select(snippet=>StampBranch(snippet,branch,attributionQuery)).ToArray();
+                    // Concept fallback / doctrinal / general-web: no named authority to gate on, so the
+                    // identity gate does not apply. In the LEGAL path these snippets still must not be
+                    // admitted when they name a DIFFERENT US-state sovereign than the matter — otherwise an
+                    // out-of-scope regulation (e.g. eCFR Alabama storage-tank) retrieved via a doctrinal
+                    // fallback query would be promoted with no scope check. The general-web path (non-legal)
+                    // keeps its neutral behavior. Verification fields stay at their neutral defaults.
+                    var eligible=useLegalGrounding
+                        ?retrieved.Where(snippet=>SnippetJurisdictionEligible(snippet,targetSovereign))
+                        :retrieved;
+                    stamped=eligible.Take(maximumSnippets).Select(snippet=>StampBranch(snippet,branch,attributionQuery)).ToArray();
+                    if(useLegalGrounding&&stamped.Count<retrieved.Count)
+                        logger.LogInformation("LEGAL-TRACE stage=5-scope branchId={BranchId} query=\"{Query}\" retrieved={Retrieved} scopeEligible={Eligible} targetSovereign={Target}",branch.WideBranchId,Truncate(providerQuery,80),retrieved.Count,stamped.Count,targetSovereign??"(none)");
                 }
                 if(stamped.Count==0)return [];
                 await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,attributionQuery,stamped,executionId,cancellationToken);
@@ -2175,7 +2514,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private async Task<(WideAnswerProposal Proposal,string ProviderCode,string ModelCode)> ComposeAnswerAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<PoloxiEvidenceDto> ranked,decimal confidence,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideQueryContract? queryContract,CancellationToken cancellationToken)
     {
         // V3.14: the fixed query contract is non-negotiable in the final answer.
-        var contractContext=queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}";
+        var contractContext=(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")+BuildMatterContextSection();
         // Input budget: the tenant AI safety guard (Intelligence.Safety.MaximumInputCharacters) blocks
         // prompts over the configured limit. The answer system prompt is large and the survivor/evidence
         // sections grow with depth, so every variable section is clamped and, if the assembled user prompt
@@ -2210,7 +2549,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // Clamp each live snippet so external grounding cannot blow the answer prompt past the
             // feature-policy input budget (Tavily content blocks can be several thousand characters).
             var externalGrounding=externalKnowledge.Count==0?"(none)":string.Join('\n',externalKnowledge.Take(snippetCount).Select((snippet,index)=>$"E{index+1}. {Truncate(snippet.Title,150)} ({snippet.Url}, retrieved {snippet.RetrievedDateUtc:yyyy-MM-dd}): {Truncate(snippet.Snippet,snippetLength)}"));
-            userPrompt=$"Question: {Truncate(request.Query,4000)}{Truncate(contractContext,3000)}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
+            userPrompt=$"Question: {Truncate(request.Query,4000)}{Truncate(contractContext,9500)}\nOverall confidence: {confidence:P0}\nSurviving disambiguation paths:\n{paths}\nNumbered interpretive narrowing paths ({topInterpretiveBranches.Length} paths - return {topInterpretiveBranches.Length} interpretiveResults entries):\n{(string.IsNullOrEmpty(topInterpretive)?"(none)":topInterpretive)}\nEnterprise evidence:\n{grounding}\nExternal evidence snippets (live web, current figures - use these for TIME_SENSITIVE paths):\n{externalGrounding}";
             if(userPrompt.Length<=userPromptBudget)break;
             // Shrink in evidence-preserving order: snippet length, snippet count, path list, then interpretive paths.
             if(snippetLength>400){snippetLength=400;continue;}
@@ -3217,7 +3556,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         {
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INTENT",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideQueryContract,cancellationToken),
-                $"Question: {request.Query}",
+                $"Question: {request.Query}{BuildMatterContextSection()}",
                 QueryContractSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_QUERY_CONTRACT",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideQueryContractProposal>(result.Content,JsonOptions);
             if(proposal is null)return null;
@@ -4103,7 +4442,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var contractContext=queryContract is null?"(none)":$"answerKind: {queryContract.AnswerKind}; candidateKind: {queryContract.CandidateKind}; entityType: {queryContract.EntityType}; ranking: {queryContract.RankingConcept}; hard constraints: {string.Join("; ",queryContract.HardConstraints)}";
             var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_INFORMATION_VALUE",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideCandidateEnumeration,cancellationToken),
-                $"Question: {request.Query}\nQuery contract: {contractContext}",
+                $"Question: {request.Query}\nQuery contract: {contractContext}{BuildCandidateEnumerationDecisionHint()}{BuildMatterContextSection()}",
                 CandidateEnumerationSchema,request.CorrelationId,new("Intelligence",null,null,request.Query,"WIDE_CANDIDATE_ENUMERATION",null,request.CorrelationId,"Intelligent Search Wide"),MechanicalModel(configuration,request),cancellationToken);
             var proposal=JsonSerializer.Deserialize<WideCandidateEnumerationProposal>(result.Content,JsonOptions);
             return proposal?.Candidates?.Where(name=>!string.IsNullOrWhiteSpace(name)).Select(name=>name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()??[];
@@ -4320,6 +4659,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 retrieve=(query,token)=>externalKnowledgeProvider.SearchAsync(query,configuration,token);
             }
             var notBeforeUtc=DateTime.UtcNow.AddHours(-cacheHours);
+            // Matter governing-law sovereign for the deterministic evidence-scope gate (legal path only).
+            // A snippet naming a DIFFERENT US-state sovereign than the matter is out of scope and must not
+            // be admitted, mirroring the branch-grounding gate so no legal admission path bypasses it.
+            var targetSovereign=isLegalContext
+                ?Legal.Application.Features.Intelligence.Decision.LegalJurisdictionScope.ExtractSovereign(request.Query)
+                :null;
             var topic=BuildCandidateSeekingQuery(request.Query,string.Empty);
             var batches=seeds.Chunk(4).Take(5).ToArray();
             var collected=new List<WideExternalKnowledgeSnippet>();
@@ -4329,11 +4674,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 {
                     var query=NormalizeQuery($"{string.Join(" vs ",batch)} {topic} comparison").ToLowerInvariant();
                     var cached=await wideRepository.GetCachedExternalKnowledgeAsync(request.TenantId,query,notBeforeUtc,cancellationToken);
-                    if(cached.Count>0){collected.AddRange(cached.Take(maximumSnippets));continue;}
+                    if(cached.Count>0){collected.AddRange(FilterScopeEligible(cached,targetSovereign).Take(maximumSnippets));continue;}
                     var retrieved=await retrieve(query,cancellationToken);
                     if(retrieved.Count==0)continue;
-                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,retrieved,executionId,cancellationToken);
-                    collected.AddRange(retrieved);
+                    var eligible=FilterScopeEligible(retrieved,targetSovereign);
+                    if(eligible.Count==0)continue;
+                    await wideRepository.SaveExternalKnowledgeAsync(request.TenantId,request.UserId,query,eligible,executionId,cancellationToken);
+                    collected.AddRange(eligible);
                 }
                 catch(Exception)when(!cancellationToken.IsCancellationRequested){/* one failed batch never blocks the rest */}
             }
@@ -5155,7 +5502,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .OrderByDescending(branch=>branch.PoloxiConfidence)
                 .Take(6);
             var competitionCandidates=topSurvivors.Concat(rootDimensions).DistinctBy(branch=>branch.WideBranchId).OrderByDescending(branch=>branch.PoloxiConfidence).Take(10).ToArray();
-            var branches=competitionCandidates.Where(branch=>ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion).ToArray();
+            var branches=competitionCandidates.Where(branch=>ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion&&!IsDispositionBranch(branch)).ToArray();
             if(branches.Length==0)return [];
             // V3.5 Hierarchical Roll-Up: the progressive-narrowing children of each scoring dimension
             // carry concrete meaning ("Safe Environment" -> "Low Violent Crime Rate", "Police Response
@@ -5167,7 +5514,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             var childBranches=survivors
                 .Where(branch=>branch.ParentWideBranchId is not null&&scoringBranchIds.Contains(branch.ParentWideBranchId.Value)
                     &&!branch.IsEliminated&&branch.PoloxiConfidence>=.15m&&!scoringBranchIds.Contains(branch.WideBranchId)
-                    &&ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion)
+                    &&ClassifyCompetitionRole(branch,queryContract)==CompetitionRole.ScoreableCriterion&&!IsDispositionBranch(branch))
                 .GroupBy(branch=>branch.ParentWideBranchId!.Value)
                 .SelectMany(group=>group.OrderByDescending(branch=>branch.PoloxiConfidence).Take(5))
                 .Take(20)
@@ -5271,7 +5618,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 var childList=string.Join('\n',childBranches.Select((branch,index)=>$"S{index+1} (sub-criterion of B{parentIndexById[branch.ParentWideBranchId!.Value]}). {branch.DisplayName}: {branch.Interpretation}"));
                 branchList=$"{branchList}\n{childList}";
             }
-            var contractContext=queryContract is null?"(none)":BuildQueryContractContext(queryContract);
+            var contractContext=(queryContract is null?"(none)":BuildQueryContractContext(queryContract))+BuildMatterContextSection();
             var candidateKind=queryContract?.CandidateKind??CandidateKindNamedEntity;
             var matrixBranches=branches.Concat(childBranches).ToArray();
             var branchesByName=matrixBranches.GroupBy(branch=>branch.DisplayName.Trim(),StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
@@ -5584,17 +5931,30 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // most without corpus hosts; zero-support names are still excluded.
                 var hasCorpusSupport=distinctHosts>0||exclusiveHosts>0;
                 var hasCrossInterpretiveSupport=interpretiveCount>=requiredSupport;
-                var supportTier=!hasCorpusSupport&&!hasCrossInterpretiveSupport?null
+                // R2 legal-decision admission: a competing legal DISPOSITION is an enumerated outcome the
+                // tribunal could reach, not a corpus entity that must be independently attested by sources.
+                // The named-entity admission gates below (corpus-host requirement, isEntityOfRequestedKind,
+                // HasNamedEntityAdmissionSupport) are built for entity ranking and would hard-exclude every
+                // disposition on a zero-evidence run, collapsing 5 proposals to 0 accepted and preventing
+                // the Candidate x Branch competition from ever executing. On a legal EVALUATE run a genuine
+                // disposition is admitted so the competition runs; evidence confidence still comes from
+                // hosts/coverage (0 here), so the determinacy gate keeps the run UNVERIFIED - no verified
+                // winner, no evidence-based ranking presented as established.
+                var isDispositionCandidate=IsLegalDecisionEvaluationRun&&IsDecisionOutcomeCandidate(resolvedName);
+                var supportTier=!hasCorpusSupport&&!hasCrossInterpretiveSupport&&!isDispositionCandidate?null
                     :hasCorpusSupport&&(support>=requiredSupport||exclusiveHosts>=2)?"STRONG"
                     :combinedSupport>=requiredSupport||exclusiveHosts>=1?"MODERATE"
                     :hasCrossInterpretiveSupport?"MODERATE"
                     :combinedSupport>=1?"LIMITED"
                     :null;
+                // A disposition with no corpus/interpretive attestation still competes, but at LIMITED tier
+                // so it can never masquerade as strongly supported on a zero-evidence run.
+                if(isDispositionCandidate&&supportTier is null)supportTier="LIMITED";
                 // Entity-role gate: a criterion/category/methodology proposal cannot be admitted by
                 // shared listicle mentions. Exclusive evidence discussing this exact candidate can
                 // override the untrusted model classification, preventing the model from hard-rejecting
                 // a genuinely attested entity while keeping methodology labels out of the ranking.
-                if(supportTier is not null&&!candidate.IsEntityOfRequestedKind&&exclusiveHosts==0)
+                if(supportTier is not null&&!isDispositionCandidate&&!candidate.IsEntityOfRequestedKind&&exclusiveHosts==0)
                     supportTier=null;
                 // V3.11.2 Interpretive-Absence Damping: a candidate appearing in ZERO interpretation
                 // results is evidence-discovered only — it was never independently proposed by any
@@ -5603,7 +5963,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // interpretation-backed candidates on near-tied quality scores. Disclosed, not removed.
                 if(supportTier=="STRONG"&&interpretiveCount==0)supportTier="MODERATE";
                 if(interpretiveCount==0)composite*=.85m;
-                if(supportTier is not null&&!HasNamedEntityAdmissionSupport(resolvedName,queryContract,interpretiveCount,distinctHosts,exclusiveHosts,requiredSupport))
+                if(supportTier is not null&&!isDispositionCandidate&&!HasNamedEntityAdmissionSupport(resolvedName,queryContract,interpretiveCount,distinctHosts,exclusiveHosts,requiredSupport))
                     supportTier=null;
                 var supportExcluded=false;
                 if(!violates&&dominatedFragments.TryGetValue(resolvedName,out var dominator))

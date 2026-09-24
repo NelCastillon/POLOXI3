@@ -378,11 +378,24 @@
                                     {
                                         <span class="poloxi-branch-chip" title="Ambiguous concept — the only part POLOXI disambiguated."><i class="bi bi-question-circle"></i>@concept<em>DISAMBIGUATED</em></span>
                                     }
-                                </div>
-                            </div>
-                        </div>
-                    }
-                    @if (_response.SuggestedActions.Count > 0)
+                                             </div>
+                                        </div>
+                                    </div>
+                                }
+                                @if (_response.MatterContext is { } matterContext)
+                                {
+                                    <div class="poloxi-answer-section poloxi-reveal">
+                                        <h3><i class="bi bi-folder-symlink"></i> Selected matter context <span class="poloxi-status">diagnostic</span></h3>
+                                        <p>
+                                            First-class proposal input projected into the discovery/hierarchy prompts@(matterContext.ProjectedIntoPrompt ? "" : " (not projected this run)").
+                                            Domain Pack: <strong>@(matterContext.ResolvedDomainPackCode ?? matterContext.DomainPackCode ?? "—")</strong>@(matterContext.ResolvedDomainPackId is { } packId ? $" (id {packId})" : "")@(string.IsNullOrWhiteSpace(matterContext.PracticeAreaCode) ? "" : $" · Practice area: {matterContext.PracticeAreaCode}").
+                                            @(string.IsNullOrWhiteSpace(matterContext.CandidateCompetitionStatus) ? "" : $" Candidate competition: {matterContext.CandidateCompetitionStatus}.")
+                                            Distinct legal fields with provenance; supplied allegations are never treated as verified evidence.
+                                        </p>
+                                        <pre class="poloxi-matter-context">@matterContext.SerializedContext</pre>
+                                    </div>
+                                }
+                                @if (_response.SuggestedActions.Count > 0)
                     {
                         <div class="poloxi-answer-section poloxi-reveal">
                             <h3><i class="bi bi-arrow-right-circle"></i> Suggested actions</h3>
@@ -1488,9 +1501,9 @@
 
     private string _query = "";
     private string _clarificationAnswer = "";
-    private string _selectedModelCode = "";
+    private string _selectedModelCode = "gpt-6-astra";
     private IReadOnlyCollection<WideModelOptionDto> _models = [];
-    private string _selectedContextCode = "GENERAL";
+    private string _selectedContextCode = "Legal";
     private IReadOnlyCollection<WideSearchContextDto> _contexts = [];
     private bool _loading, _usePoloxiEngine = true;
     private bool _showPipeline;
@@ -1766,19 +1779,29 @@
                 _matter = await Api.GetLegalDecisionMatterAsync(matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
-                    var parts = new[] { _matter.Title, _matter.MatterTypeCode, _matter.Jurisdiction, _matter.Description }
-                        .Where(p => !string.IsNullOrWhiteSpace(p));
-                    _query = string.Join(" — ", parts);
+                    // Seed only a readable default question from the matter title. The full structured
+                    // Matter context (distinct legal scope, PI profile, facts, evidence, provenance) is
+                    // projected server-side from the immutable Matter Context Snapshot via MatterId — it is
+                    // NOT concatenated into the free-text question here, so distinct legal fields never
+                    // collapse and the user can freely edit the question without losing matter context.
+                    _query = _matter.Title ?? string.Empty;
                 }
             }
             catch { _matter = null; }
         }
         try { _models = await Api.GetIntelligenceWide2ModelsAsync(); } catch { _models = []; }
+        // Prefer gpt-6-astra when available; otherwise fall back to the first available model.
+        if (_models.Count > 0 && !_models.Any(m => string.Equals(m.ModelCode, _selectedModelCode, StringComparison.OrdinalIgnoreCase)))
+        {
+            _selectedModelCode = _models.First().ModelCode;
+        }
         try { _showPipeline = await Api.GetSearch2ShowPipelineAsync(); } catch { _showPipeline = false; }
         try
         {
             _contexts = await Api.GetIntelligenceSearch2ContextsAsync();
-            var defaultContext = _contexts.FirstOrDefault(c => c.IsDefault) ?? _contexts.FirstOrDefault();
+            // Prefer the Legal context; otherwise fall back to the flagged default/first context.
+            var preferred = _contexts.FirstOrDefault(c => string.Equals(c.ContextCode, "Legal", StringComparison.OrdinalIgnoreCase));
+            var defaultContext = preferred ?? _contexts.FirstOrDefault(c => c.IsDefault) ?? _contexts.FirstOrDefault();
             if (defaultContext is not null) _selectedContextCode = defaultContext.ContextCode;
         }
         catch { _contexts = []; }
@@ -1794,7 +1817,7 @@
         _searchCancellation = new CancellationTokenSource();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -1833,7 +1856,7 @@
         _searchCancellation = new CancellationTokenSource();
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
             _clarificationAnswer = "";
         }
         catch (OperationCanceledException)

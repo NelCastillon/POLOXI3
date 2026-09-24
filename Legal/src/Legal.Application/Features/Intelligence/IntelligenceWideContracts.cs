@@ -38,6 +38,11 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // Search context (POLOXI.Legal_SearchContext.ContextCode): null/empty/GENERAL keeps the default
     // pipeline; LEGAL routes external grounding through legal sources (CourtListener + GovInfo/eCFR).
     [StringLength(50)]public string? ContextCode{get;init;}
+    // R2 Matter-first proposal input: when set (and ContextCode==LEGAL), the pipeline loads one
+    // immutable Matter Context Snapshot by this id and projects its distinct legal-scope + PI-profile
+    // fields into the Astra proposal prompt. The original user Query is preserved verbatim and is never
+    // suppressed by the matter context; loading is fail-soft so an unavailable matter never breaks search.
+    public Guid? MatterId{get;init;}
 }
 
 // Database-backed model option for the wide-search Model dropdown (active CHAT deployments).
@@ -217,6 +222,25 @@ public sealed record WideSearchOperationStatusResponse(Guid OperationId,string S
 // AI.Execution by hand. Diagnostic only — never feeds any scoring or routing decision.
 public sealed record WideStageTimingDto(string StageCode,long DurationMilliseconds,int InputTokenCount,int OutputTokenCount,string? ModelCode);
 
+// R2 DEV diagnostic surface for the immutable Matter Context Snapshot projected into the proposal
+// prompts. Diagnostic only — never evidence. SerializedContext is the exact block appended to the
+// intent/hierarchy prompts so DEV can verify field identity/provenance end-to-end.
+public sealed record WideMatterContextDiagnosticDto(Guid MatterId,string? DomainPackCode,string? PracticeAreaCode,string SerializedContext,bool ProjectedIntoPrompt)
+{
+    // R3 decision ownership + Domain Pack verification. ResolvedDomainPackId proves a specific DB-backed
+    // pack was resolved (not inferred from PracticeArea); DecisionIntent + reason record whether the run
+    // evaluates competing dispositions or drafts an already-specified one.
+    public Guid? ResolvedDomainPackId { get; init; }
+    public string? ResolvedDomainPackCode { get; init; }
+    public string? DecisionIntent { get; init; }
+    public string? DecisionIntentReason { get; init; }
+    public bool CurrentOutcomeIsHardConstraint { get; init; }
+    // R3 competition accountability: on an EVALUATE run this records whether genuine candidate competition
+    // ran and, if not, a typed reason (e.g. NOT_APPLICABLE, RAN, NO_COMPETING_CANDIDATES,
+    // BUDGET_EXHAUSTED). Never null on a legal EVALUATE run so a silent skip is impossible to hide.
+    public string? CandidateCompetitionStatus { get; init; }
+}
+
 public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
 {
     // V3.12 P0: per-stage LLM latency/token disclosure (diagnostic only).
@@ -236,6 +260,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     public IReadOnlyCollection<WideProposedAuthorityDto> ProposedLegalAuthorities{get;init;}=[];
     // V2.1: query contract extracted before hierarchy generation (constraints vs ambiguities vs output shape).
     public WideQueryContract? QueryContract{get;init;}
+    // R2 DEV diagnostic: the serialized immutable Matter Context Snapshot projected into the proposal
+    // prompts (distinct legal fields + provenance), plus the applied Domain Pack code. Null when no matter
+    // was selected or the load failed. Diagnostic only — never evidence, never gates anything.
+    public WideMatterContextDiagnosticDto? MatterContext{get;init;}
     // V3.2: the governing AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER)
     // and whether kind-aware budget routing actually tuned this execution's workflow.
     public string? AnswerKindCode{get;init;}

@@ -1,5 +1,6 @@
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Features.Intelligence;
+using Legal.Application.Features.Intelligence.Decision;
 
 namespace Legal.Application;
 
@@ -159,6 +160,9 @@ public sealed partial class IntelligenceWide2Service
     private const string PropositionStatusVerifiedSupport="VERIFIED_SUPPORT";
     private const string PropositionStatusUnclear="AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR";
     private const string PropositionStatusUnverified="UNVERIFIED";
+    // Terminal status for a snippet that passed identity but names a DIFFERENT US-state sovereign than the
+    // matter's governing law. Such a source is out of legal scope and can never be promoted as support.
+    private const string PropositionStatusScopeIneligible="SCOPE_INELIGIBLE";
     // Overlap at/above this share of branch-claim concept tokens counts as strong proposition support.
     private const decimal PropositionSupportThreshold=0.34m;
 
@@ -198,12 +202,41 @@ public sealed partial class IntelligenceWide2Service
 
     // Classifies a single legal snippet into the tri-state status. Identity failure is terminal:
     // proposition scoring can never rescue an authority that was not actually retrieved.
-    private static (bool IdentityVerified,decimal SupportScore,string Status) ClassifyLegalSnippet(WideExternalKnowledgeSnippet snippet,LegalAuthorityReference authority,string branchClaim)
+    //
+    // Scope-eligibility gate (deterministic, no LLM): when the matter targets a specific US-state
+    // sovereign (targetSovereign) and the retrieved source positively identifies a DIFFERENT US-state
+    // sovereign, the snippet is out of legal scope and cannot be promoted as support — even though it
+    // referenced the proposed authority. This blocks the class of defect where an eCFR Title 40
+    // (Alabama storage-tank) passage is admitted as support for a Delaware personal-injury proposition.
+    // The gate is conservative: a source with no identifiable state sovereign (e.g. federal authority)
+    // stays eligible, so legitimate cross-jurisdiction and federal evidence is never dropped.
+    private static (bool IdentityVerified,decimal SupportScore,string Status) ClassifyLegalSnippet(WideExternalKnowledgeSnippet snippet,LegalAuthorityReference authority,string branchClaim,string? targetSovereign)
     {
         if(!SnippetMatchesAuthorityIdentity(snippet,authority))return (false,0m,PropositionStatusUnverified);
+        if(!SnippetJurisdictionEligible(snippet,targetSovereign))return (false,0m,PropositionStatusScopeIneligible);
         var support=ComputePropositionSupport(branchClaim,$"{snippet.Title} {snippet.Snippet}");
         var status=support>=PropositionSupportThreshold?PropositionStatusVerifiedSupport:PropositionStatusUnclear;
         return (true,support,status);
     }
+
+    // Deterministic jurisdiction-eligibility check. Returns false ONLY when the matter targets a specific
+    // US-state sovereign AND the source (its explicit Jurisdiction stamp, else its title/snippet text)
+    // positively identifies a DIFFERENT US-state sovereign. When either side lacks an identifiable state
+    // sovereign, the snippet remains eligible so federal and non-state authorities are never blocked.
+    private static bool SnippetJurisdictionEligible(WideExternalKnowledgeSnippet snippet,string? targetSovereign)
+    {
+        var target=LegalJurisdictionScope.ExtractSovereign(targetSovereign);
+        if(string.IsNullOrWhiteSpace(target))return true;
+        var stamped=LegalJurisdictionScope.ExtractSovereign(snippet.Jurisdiction);
+        var sourceSovereign=stamped??LegalJurisdictionScope.ExtractSovereign($"{snippet.Title} {snippet.Snippet}");
+        if(string.IsNullOrWhiteSpace(sourceSovereign))return true;
+        return string.Equals(sourceSovereign,target,StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Convenience filter over a snippet collection applying the deterministic scope-eligibility gate.
+    // Used by the ungated concept-fallback and candidate-comparison retrieval paths so no legal
+    // admission route bypasses the jurisdiction check. A null/empty target sovereign is a no-op.
+    private static IReadOnlyList<WideExternalKnowledgeSnippet> FilterScopeEligible(IEnumerable<WideExternalKnowledgeSnippet> snippets,string? targetSovereign)
+        =>snippets.Where(snippet=>SnippetJurisdictionEligible(snippet,targetSovereign)).ToArray();
 }
 
