@@ -239,7 +239,166 @@ public sealed record WideMatterContextDiagnosticDto(Guid MatterId,string? Domain
     // ran and, if not, a typed reason (e.g. NOT_APPLICABLE, RAN, NO_COMPETING_CANDIDATES,
     // BUDGET_EXHAUSTED). Never null on a legal EVALUATE run so a silent skip is impossible to hide.
     public string? CandidateCompetitionStatus { get; init; }
+
+    // R4 Outcome-Dependency Normalization Gate observability. All null/false on a run that did not reach
+    // the shared gate (non-legal, flag off, or fail-soft skip), so absence is explicit, never hidden.
+    // SemanticProposalStatus / NormalizationGateStatus record whether the gate ran and its terminal state;
+    // the counts expose the exact normalization + registration outcome; RegisteredCandidateIds are the
+    // eligible representative ids handed to the candidate competition; DecisionReadinessStatus records
+    // whether authoritative scoring proceeded or was blocked by the unchanged evidence/readiness rules.
+    public string? SemanticProposalStatus { get; init; }
+    public int OutcomeNodeCount { get; init; }
+    public int ProposedCandidateCount { get; init; }
+    public string? NormalizationGateStatus { get; init; }
+    public int NormalizedCandidateCount { get; init; }
+    public int MergeCount { get; init; }
+    public int KeepDistinctCount { get; init; }
+    public int RequiresReviewCount { get; init; }
+    public int SharedDependencyCount { get; init; }
+    public int CandidateDependencyRelationCount { get; init; }
+    public string? RegistrationPlanStatus { get; init; }
+    public string? CoreRegistrationStatus { get; init; }
+    public IReadOnlyCollection<string> RegisteredCandidateIds { get; init; } = [];
+    public string? CompetitionEligibility { get; init; }
+    public IReadOnlyCollection<string> ScoredCandidateIds { get; init; } = [];
+    public string? DecisionReadinessStatus { get; init; }
 }
+
+// R5 Legal Decision Processing Inspector — a structured, actual-data projection of the full processing
+// sequence executed by the dynamic PI pipeline. Diagnostic only; every field carries the value the run
+// actually produced (or an explicit MISSING / NOT_REACHED marker), never an inferred or placeholder
+// value, and it is assembled from captured run state without any additional LLM call. Null on a run that
+// was not a matter-backed legal EVALUATE run (the inspector is legal-decision specific).
+public sealed record WideDecisionInspectorDto(
+    WideInspectorExecutionModeDto ExecutionMode,
+    IReadOnlyCollection<WideInspectorStageDto> Stages,
+    IReadOnlyCollection<WideInspectorCandidateDto> NormalizedCandidates,
+    IReadOnlyCollection<WideInspectorDependencyDto> SharedDependencies,
+    IReadOnlyCollection<WideInspectorRejectedDto> RejectedObjects)
+{
+    // Universal Legal Factor Inventory — the domain-agnostic view of the factors required to evaluate
+    // every proposed outcome, their sources/values/availability/verification, and their Candidate×Factor
+    // relationships. Projected from the SAME normalization plan + matter context; null when the inventory
+    // could not be built (no validated plan). Diagnostic only; no additional model call.
+    public WideFactorInventoryDto? FactorInventory { get; init; }
+}
+
+// Execution isolation + feature mode (§7). Records exactly which route/kind/mode executed so pipeline
+// execution is never inferred from AnswerKind. GateMode is DISABLED / SHADOW / ENABLED. Prompt identity
+// is MISSING (null) when the run did not capture it — never fabricated.
+public sealed record WideInspectorExecutionModeDto(
+    string ExecutionRoute,
+    string? AnswerKind,
+    bool IsLegalDecisionEvaluationRun,
+    string GateMode,
+    string? NormalizationMode,
+    string? PromptKey,
+    string? PromptVersion,
+    string? PromptHash);
+
+// One processing stage (§1). Status is one of COMPLETED / INCOMPLETE / FAILED / BLOCKED / MISSING /
+// NOT_REACHED. Required/Available/Missing factors, validation errors, processing performed, actual
+// output, duration, and blocking reason are all captured from the real run; absence is explicit.
+public sealed record WideInspectorStageDto(
+    string StageCode,
+    string StageName,
+    string Status,
+    string? InputSource,
+    string? ActualInput,
+    IReadOnlyCollection<string> RequiredFactors,
+    IReadOnlyCollection<string> AvailableFactors,
+    IReadOnlyCollection<string> MissingFactors,
+    IReadOnlyCollection<string> ValidationErrors,
+    string? ProcessingPerformed,
+    string? ActualOutput,
+    long? DurationMilliseconds,
+    string? BlockingReason);
+
+// One normalized candidate row (§4). IdentityDecision is MERGE / KEEP_DISTINCT / REQUIRES_REVIEW.
+public sealed record WideInspectorCandidateDto(
+    string NormalizedCandidateId,
+    string OriginalTitle,
+    string SemanticRole,
+    string IdentityDecision,
+    string MaterialDistinction,
+    IReadOnlyCollection<string> OriginMappings,
+    IReadOnlyCollection<string> OriginatingOutcomeNodeIds,
+    bool CompetitionEligible,
+    bool ReachedScoring,
+    string DecisionReason);
+
+// One shared dependency row (§5). Shown once with links to all related candidates — never duplicated.
+public sealed record WideInspectorDependencyDto(
+    string DependencyId,
+    string DependencyType,
+    string Proposition,
+    IReadOnlyCollection<string> RelatedCandidateIds,
+    string RelationType,
+    string VerificationState,
+    string? UnresolvedInformation);
+
+// A proposed object the gate rejected during normalization (§4/§6 provenance). Never silently dropped.
+public sealed record WideInspectorRejectedDto(string ObjectKind,string Identifier,string Reason);
+
+// ── Universal Legal Factor Inventory ────────────────────────────────────────────────────────────
+// A single, domain-agnostic inventory of the factors required to evaluate EVERY proposed outcome.
+// Shared factors carry ONE global identity (Factors) and connect to candidates through separate
+// Candidate×Factor relationships (Relationships) — a shared factor is never duplicated per candidate.
+// Populated from the SAME registration plan + immutable matter context + resolved Domain Pack the run
+// already produced. No additional LLM call. Missing values remain explicit (Availability=MISSING).
+public sealed record WideFactorInventoryDto(
+    IReadOnlyCollection<WideFactorDto> Factors,
+    IReadOnlyCollection<WideCandidateFactorRelationDto> Relationships,
+    WideFactorInventorySourceStatusDto SourceStatus,
+    int CandidateCount,
+    int SharedFactorCount,
+    int MissingFactorCount);
+
+// One global factor. Exposes the required eight-field contract plus the engineering identities needed
+// for correct registration. FactorId is the stable global identity; a single factor may relate to many
+// candidates through WideCandidateFactorRelationDto. ActualValue/Availability/VerificationStatus reflect
+// ACTUAL captured state — MISSING/UNVERIFIED when the matter/documents/evidence do not supply a value.
+public sealed record WideFactorDto(
+    // ── Eight-field universal contract ──
+    string FactorName,
+    string Source,               // MATTER_DATA / UPLOADED_DOCUMENT / LLM_SEMANTIC / DOMAIN_PACK / (composite)
+    string? ActualValue,         // null when no case-specific value is available (explicit MISSING)
+    string Availability,         // AVAILABLE / MISSING / INCOMPLETE / INVALID
+    string VerificationStatus,   // SUPPLIED / VERIFIED / UNVERIFIED / BLOCKED
+    string Requirement,          // what must be established/considered
+    IReadOnlyCollection<string> Relationships, // relation types across all candidates (REQUIRED, SUPPORTS, …)
+    string? MissingInformation,  // what is still required; null when nothing outstanding
+    // ── Engineering identities ──
+    string FactorId,
+    string FactorType,           // LEGAL / FACTUAL / PROCEDURAL / EVIDENTIARY / ECONOMIC
+    string ValueSource,          // where the actual value came from (or MISSING)
+    string? SourceLocation,      // document/matter-field reference, when known
+    string ValidationStatus);    // VALID / INCOMPLETE / INVALID
+
+// One Candidate×Factor relationship. The same shared factor may have different relationships with
+// different candidates (e.g. REQUIRED for one, SUPPORTS another). Reuses the existing relation
+// vocabulary: REQUIRED, SUPPORTS, OPPOSES, CONDITIONAL, DISTINGUISHES, NOT_APPLICABLE.
+public sealed record WideCandidateFactorRelationDto(
+    string CandidateId,
+    string CandidateTitle,
+    string FactorId,
+    string FactorName,
+    string RelationType,
+    bool IsRequired,             // required-to-establish vs merely evaluative
+    string? Rationale);
+
+// Source availability + retrieval status for the four information sources (§4). Each flag reflects the
+// ACTUAL run: whether matter data was loaded, a domain pack was verifiably resolved, and whether the
+// document corpus / validated evidence were reachable — never a fabricated success state.
+public sealed record WideFactorInventorySourceStatusDto(
+    bool MatterDataLoaded,
+    int MatterFieldCount,
+    bool DomainPackResolved,
+    string? DomainPackCode,
+    string DocumentCorpusStatus, // AVAILABLE / NOT_REACHED / NONE
+    string EvidenceStatus);      // ADMITTED / NONE / NOT_REACHED
+
+
 
 public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string StatusCode,string TerminationReasonCode,int DepthReached,int LlmCallCount,decimal FinalConfidence,string AnswerVerificationCode,string? FinalAnswer,IReadOnlyCollection<WideBranchDto> Branches,IReadOnlyCollection<PoloxiEvidenceDto> Evidence,IReadOnlyCollection<WideActionSuggestionDto> SuggestedActions,long DurationMilliseconds)
 {
@@ -264,6 +423,10 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // prompts (distinct legal fields + provenance), plus the applied Domain Pack code. Null when no matter
     // was selected or the load failed. Diagnostic only — never evidence, never gates anything.
     public WideMatterContextDiagnosticDto? MatterContext{get;init;}
+    // R5 Legal Decision Processing Inspector: the structured, actual-data projection of the full
+    // processing sequence (contract → outcomes → proposal → dependencies → validation → normalization →
+    // registration → evaluation/readiness). Null on a non-legal / non-EVALUATE run. Diagnostic only.
+    public WideDecisionInspectorDto? DecisionInspector{get;init;}
     // V3.2: the governing AnswerKind classification (ENTITY_RANKING / CONTENT_ENUMERATION / SINGLE_ANSWER)
     // and whether kind-aware budget routing actually tuned this execution's workflow.
     public string? AnswerKindCode{get;init;}
@@ -724,6 +887,12 @@ public sealed record WideConfiguration(decimal TargetConfidence,decimal MinimumB
     // does not resolve. Every proposed authority still passes the unchanged mandatory identity +
     // proposition-support admission gates, so an unverifiable authority never becomes evidence.
     public bool EnableLegalAuthorityProposal{get;init;}=true;
+    // R4 Legal Decision Normalization Gate (DB-seeded; see migration 0322). When enabled AND the run is a
+    // matter-backed legal EVALUATE run, the dynamic pipeline routes its proposed dispositions through the
+    // shared Outcome-Dependency Normalization Gate (deterministic material identity + shared-dependency
+    // registration) before candidate competition, so the eligible normalized candidates drive the ranking.
+    // Fail-soft and strictly EVALUATE-gated: any failure or non-legal run degrades to the unchanged pipeline.
+    public bool EnableLegalDecisionNormalizationGate{get;init;}=true;
     // V2.8 Clarification Gate thresholds (DB-seeded; see migration 0152). ALL conditions must hold
     // for POLOXI to ask instead of answer — a single low metric never triggers a question.
     public bool EnableClarificationGate{get;init;}=true;

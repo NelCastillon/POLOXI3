@@ -19,7 +19,7 @@ namespace Legal.Application;
 // The DECISION is the primary object; POLOXI Core owns the authoritative state and all scoring (§3),
 // the LLM only proposes semantics. Everything configurable comes from POLOXI.Legal_Decision* tables.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-public sealed class LegalDecisionService(
+public sealed partial class LegalDecisionService(
     ILegalDecisionRepository repository,
     ILegalDecisionAiProvider aiProvider,
     ILegalDecisionRetriever retriever,
@@ -917,6 +917,32 @@ public sealed class LegalDecisionService(
         var diagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, proposal, integrity);
         var (disposition, defects) = DiagnoseProposal(diagnostics);
 
+        // R2 Dual-Hierarchy Contract validation (branch-first V2 / LEGAL_DECISION EVALUATE only). The
+        // prompt REQUIRES two separate structured hierarchies (outcomeProposalHierarchy for discovery +
+        // semanticRoots for shared dependencies) normalized into ONE global candidate pool with explicit
+        // originatingOutcomeNodeIds lineage. Prompt compliance alone is not trusted: here we deterministically
+        // verify the returned object actually has that shape and fold any contract defects into the SAME
+        // bounded gate/recovery path (so a missing/legacy shape is repaired, not silently accepted). Only the
+        // structurally-valid branch-first path is checked — legacy candidate-first and non-V2 runs are untouched.
+        // When the branch-first V2 contract is violated (missing / legacy / empty outcomeProposalHierarchy),
+        // enforcement MUST NOT depend on the global EnableProposalRecovery shadow flag. The outcome hierarchy
+        // is a mandatory first-class artifact for LEGAL_DECISION / EVALUATE, so a contract defect always forces
+        // the bounded targeted-recovery + hard-fail path below, even while general proposal recovery stays in
+        // shadow mode. General (non-contract) shadow diagnostics behavior is unchanged.
+        var dualHierarchyContractViolated = false;
+        if (branchFirstDiscovery && integrity.IsAcceptable)
+        {
+            var contractDefects = DiagnoseDualHierarchyContract(proposal, proposalEnrichment);
+            if (contractDefects.Count > 0)
+            {
+                dualHierarchyContractViolated = true;
+                defects = defects.Concat(contractDefects).Distinct().ToArray();
+                if (disposition == ProposalDisposition.Accept)
+                    disposition = ProposalDisposition.Repair;
+                Record("PROPOSAL_DUAL_HIERARCHY_DEFECTS", "DISCOVERY", new { contractDefects });
+            }
+        }
+
         // Decision Integrity Trace (Proposal stage) inputs — a read-only projection of the gate outcome.
         // Tracks the final disposition/attempt/defects so the cockpit can show ACCEPT · Attempt 1 or the
         // recovered path (Attempt 2). Updated below when an ACTIVE-mode recovery runs.
@@ -947,10 +973,12 @@ public sealed class LegalDecisionService(
             defects
         });
 
-        if (!settings.EnableProposalRecovery)
+        if (!settings.EnableProposalRecovery && !dualHierarchyContractViolated)
         {
             // SHADOW MODE: never reject or repair. Log the prediction + diagnostics and proceed with
-            // attempt #1 exactly as-is.
+            // attempt #1 exactly as-is. NOTE: this shadow bypass is suppressed when the branch-first
+            // dual-hierarchy contract is violated \u2014 a missing/empty outcomeProposalHierarchy is a mandatory
+            // first-class defect that must always be repaired or hard-failed, regardless of the global flag.
             Record("PROPOSAL_INTEGRITY_DIAGNOSTICS", "DISCOVERY", diagnostics);
         }
         else if (disposition != ProposalDisposition.Accept)
@@ -974,12 +1002,25 @@ public sealed class LegalDecisionService(
             var recoveredDiagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, recovered, recoveredIntegrity);
             var (recoveredDisposition, recoveredDefects) = DiagnoseProposal(recoveredDiagnostics);
 
-            if (recoveredIntegrity.IsAcceptable)
+            // When the failure that triggered recovery was (or included) a dual-hierarchy contract violation,
+            // the recovered proposal MUST also satisfy the contract \u2014 a structurally-valid proposal that still
+            // omits the outcomeProposalHierarchy is NOT acceptable and must not be silently accepted.
+            var recoveredEnrichment = branchFirstDiscovery
+                ? AdaptSemanticEnrichment(recovery.StructuredOutputJson ?? recovery.Content)
+                : SemanticProposalEnrichment.Empty;
+            var recoveredContractDefects = (branchFirstDiscovery && recoveredIntegrity.IsAcceptable)
+                ? DiagnoseDualHierarchyContract(recovered, recoveredEnrichment)
+                : Array.Empty<string>();
+            if (recoveredContractDefects.Count > 0)
+                recoveredDefects = recoveredDefects.Concat(recoveredContractDefects).Distinct().ToArray();
+            var recoveredAcceptable = recoveredIntegrity.IsAcceptable && recoveredContractDefects.Count == 0;
+
+            if (recoveredAcceptable)
             {
                 proposal = recovered;
                 integrity = recoveredIntegrity;
                 if (branchFirstDiscovery)
-                    proposalEnrichment = AdaptSemanticEnrichment(recovery.StructuredOutputJson ?? recovery.Content);
+                    proposalEnrichment = recoveredEnrichment;
                 diagnostics = recoveredDiagnostics with
                 {
                     RecoveryTriggered = true,
@@ -1029,7 +1070,42 @@ public sealed class LegalDecisionService(
             StructurallyValid: integrity.IsAcceptable,
             Defects: proposalTraceDefects?.ToArray() ?? []);
 
-        // ── Candidate × Branch competition + deterministic Core scoring ──────────────────────────
+        // Outcome-Dependency Normalization Gate (pre-Core, branch-first V2 EVALUATE only). The proposal
+        // is only fit to become semantics; POLOXI Core remains authoritative over registration, branch
+        // states, evidence, scoring, and readiness. Before Core competes anything, deterministically
+        // classify + normalize candidate identity (MERGE/KEEP_DISTINCT/REQUIRES_REVIEW), normalize shared
+        // dependencies, validate ONLY explicit candidate->dependency edges, and produce a validated
+        // LegalDecisionRegistrationPlan. Only representative candidates (with unioned outcome lineage) flow
+        // into scoring; enrichment relations are remapped onto representative candidate ids.
+        if (branchFirstDiscovery)
+        {
+            var gate = RunNormalizationGate(proposal, proposalEnrichment);
+            Record("NORMALIZATION_GATE", "DISCOVERY", new
+            {
+                gate.Diagnostics.RawProposalCount,
+                gate.Diagnostics.ValidatedOutcomeNodes,
+                gate.Diagnostics.NormalizedCandidates,
+                gate.Diagnostics.DuplicateMappings,
+                gate.Diagnostics.SharedDependencies,
+                gate.Diagnostics.ValidatedRelationCount,
+                gate.Diagnostics.RejectedObjectCount,
+                gate.Diagnostics.RoleCounts,
+                gate.Diagnostics.DecisionCounts,
+                gate.Diagnostics.EligibleCandidateCount,
+                gate.Diagnostics.DeferredCandidateCount,
+                registeredCandidateIds = gate.Plan.Candidates.Select(c => c.RepresentativeSemanticId).ToArray(),
+                eligibleCandidateIds = gate.Plan.EligibleCandidateSemanticIds,
+                deferredCandidateIds = gate.Plan.DeferredCandidateSemanticIds,
+                planValid = gate.Plan.IsValid,
+            });
+            if (gate.Plan.IsValid)
+            {
+                proposal = gate.NormalizedProposal;
+                proposalEnrichment = gate.RemappedEnrichment;
+            }
+        }
+
+
         var candidates = ScoreCandidates(proposal, settings, sessionId, request.TenantId, out var branches, cancellationToken);
         if (applicableDomainConcepts.Count > 0)
         {
@@ -1179,6 +1255,19 @@ public sealed class LegalDecisionService(
                 factProvenanceCount = semanticDependencies.Count(d => d.NodeKind == "FACT_PROVENANCE"),
             });
 
+        // R1 Outcome Proposal Hierarchy (§2 DISCOVERY): the normalized outcome-interpretation nodes and
+        // the candidate origin links they produced. Diagnostic-only trace; these nodes never contribute
+        // evidentiary support and are kept separate from the shared evaluation branches above.
+        var outcomeNodes = MaterializeOutcomeHierarchy(proposalEnrichment);
+        if (outcomeNodes.Count > 0)
+            Record("OUTCOME_HIERARCHY_MATERIALIZED", "DISCOVERY", new
+            {
+                outcomeNodeCount = outcomeNodes.Count,
+                rootCount = outcomeNodes.Count(n => string.IsNullOrWhiteSpace(n.ParentOutcomeNodeCode)),
+                maxDepth = outcomeNodes.Count == 0 ? 0 : outcomeNodes.Max(n => n.LevelNumber),
+                candidatesWithOrigin = candidates.Count(c => !string.IsNullOrWhiteSpace(c.OriginatingOutcomeNodeIds)),
+            });
+
         var persistence = new DecisionSessionPersistence(
             sessionId, request.TenantId, request.UserId, request.Query, contextCode, route.ModelCode, true,
             statusCode, terminalState, reason, winner?.DecisionCandidateId,
@@ -1204,6 +1293,7 @@ public sealed class LegalDecisionService(
             CandidateBranchRelations = candidateBranchRelations,
             Dependencies = semanticDependencies,
             DecisionIntent = MaterializeDecisionIntent(proposalEnrichment),
+            OutcomeNodes = outcomeNodes,
         };
         await repository.PersistSessionAsync(persistence, cancellationToken);
         if (currentClarification is not null)
@@ -3530,6 +3620,110 @@ public sealed class LegalDecisionService(
             : (ProposalDisposition.Repair, defects);
     }
 
+    // R2 test seam: runs the dual-hierarchy contract diagnosis directly from a raw discovery JSON string
+    // so contract tests can assert defect codes without reaching the private ProposedCandidate record.
+    internal static IReadOnlyList<string> DiagnoseDualHierarchyContractForTest(string json, int maxCandidates)
+        => DiagnoseDualHierarchyContract(
+            AdaptSemanticProposal(json, maxCandidates),
+            AdaptSemanticEnrichment(json));
+
+    // R2 Dual-Hierarchy Contract diagnosis (branch-first V2 / LEGAL_DECISION EVALUATE). Deterministically
+    // verifies the returned proposal actually carries the TWO separate structured hierarchies the R2 prompt
+    // requires — an outcomeProposalHierarchy (discovery) AND a shared semanticRoots dependency forest — plus
+    // a normalized global candidate pool with valid originatingOutcomeNodeIds lineage. Returns targeted
+    // contract-defect codes (no scoring, no winner). Empty => the dual-hierarchy contract holds.
+    private static IReadOnlyList<string> DiagnoseDualHierarchyContract(
+        IReadOnlyList<ProposedCandidate> proposal, SemanticProposalEnrichment enrichment)
+    {
+        var defects = new List<string>();
+
+        var outcomeNodes = enrichment.OutcomeNodes;
+        var sharedBranchIds = CollectSemanticBranchIds(proposal);
+
+        // (1) outcomeProposalHierarchy must be present as a structured object with stable node identities.
+        if (outcomeNodes.Count == 0)
+            defects.Add("MISSING_OUTCOME_HIERARCHY");
+
+        // (5) semanticRoots must be a separate shared dependency hierarchy (branch identities present).
+        if (sharedBranchIds.Count == 0)
+            defects.Add("MISSING_SHARED_DEPENDENCY_HIERARCHY");
+
+        // (3) Every global candidate must reference one or more existing originating outcome nodes.
+        if (outcomeNodes.Count > 0)
+        {
+            var outcomeIdSet = outcomeNodes
+                .Select(n => n.OutcomeNodeId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var anyMissingLineage = proposal.Any(c => c.OriginatingOutcomeNodeIds.Count == 0);
+            var anyDanglingLineage = proposal.Any(c =>
+                c.OriginatingOutcomeNodeIds.Any(id => !outcomeIdSet.Contains(id)));
+            if (anyMissingLineage)
+                defects.Add("CANDIDATE_MISSING_OUTCOME_LINEAGE");
+            if (anyDanglingLineage)
+                defects.Add("CANDIDATE_DANGLING_OUTCOME_LINEAGE");
+        }
+
+        // (8) Every candidateBranchRelation must reference an existing candidate + shared branch, and must
+        // never point a relation's branchId at an outcome node (the two hierarchies must not be conflated).
+        if (enrichment.CandidateBranchRelations.Count > 0)
+        {
+            var candidateIdSet = proposal
+                .Where(c => !string.IsNullOrWhiteSpace(c.SemanticCandidateId))
+                .Select(c => c.SemanticCandidateId!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var outcomeIdSet = outcomeNodes
+                .Select(n => n.OutcomeNodeId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var relation in enrichment.CandidateBranchRelations)
+            {
+                if (candidateIdSet.Count > 0 && !candidateIdSet.Contains(relation.CandidateId))
+                {
+                    defects.Add("RELATION_UNKNOWN_CANDIDATE");
+                    break;
+                }
+            }
+            foreach (var relation in enrichment.CandidateBranchRelations)
+            {
+                var branchKnown = sharedBranchIds.Contains(relation.BranchId);
+                var pointsAtOutcome = outcomeIdSet.Contains(relation.BranchId);
+                if (pointsAtOutcome)
+                {
+                    defects.Add("RELATION_BRANCH_IS_OUTCOME_NODE");
+                    break;
+                }
+                if (sharedBranchIds.Count > 0 && !branchKnown)
+                {
+                    defects.Add("RELATION_UNKNOWN_BRANCH");
+                    break;
+                }
+            }
+        }
+
+        return defects;
+    }
+
+    // Recursively collects every semantic branchId in a candidate's shared-branch forest. Because the
+    // branch-first adapter attaches the SAME shared forest to every candidate, the first candidate is
+    // sufficient, but we union across all candidates defensively.
+    private static HashSet<string> CollectSemanticBranchIds(IReadOnlyList<ProposedCandidate> proposal)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        static void Walk(IReadOnlyList<ProposedBranch> branches, HashSet<string> acc)
+        {
+            foreach (var b in branches)
+            {
+                if (!string.IsNullOrWhiteSpace(b.SemanticBranchId))
+                    acc.Add(b.SemanticBranchId!);
+                if (b.Children is { Count: > 0 })
+                    Walk(b.Children, acc);
+            }
+        }
+        foreach (var c in proposal)
+            Walk(c.Branches ?? Array.Empty<ProposedBranch>(), ids);
+        return ids;
+    }
+
+
     // Builds a defect-targeted recovery instruction. This is REPAIR, not a re-roll: it preserves valid
     // existing structure and asks only for correction of the diagnosed defects.
     private static string BuildRecoveryInstruction(IReadOnlyList<string> defects)
@@ -3553,6 +3747,13 @@ public sealed class LegalDecisionService(
                 "LOW_INTERPRETATION_DISTINCTNESS" => "- Increase the distinctness of interpretations; they are too similar.",
                 "WEAK_CANDIDATE_SEPARABILITY" => "- Make candidate outcomes clearly distinguishable from one another.",
                 "QUERY_DRIFT" => "- Realign the proposal with the original question; it has drifted off-topic.",
+                "MISSING_OUTCOME_HIERARCHY" => "- Return a structured outcomeProposalHierarchy of materially distinct outcome interpretations (with stable outcomeNodeId identities); do not describe it in prose or imply it from semanticRoots.",
+                "MISSING_SHARED_DEPENDENCY_HIERARCHY" => "- Return a separate shared semanticRoots dependency hierarchy of legal/factual propositions with stable branchId identities; it must be distinct from the outcome hierarchy.",
+                "CANDIDATE_MISSING_OUTCOME_LINEAGE" => "- Every global candidate must reference one or more originatingOutcomeNodeIds that exist in outcomeProposalHierarchy.",
+                "CANDIDATE_DANGLING_OUTCOME_LINEAGE" => "- Each originatingOutcomeNodeIds value must reference an actual outcome node; remove references to nodes that do not exist.",
+                "RELATION_UNKNOWN_CANDIDATE" => "- Every candidateBranchRelation.candidateId must reference an existing global candidate.",
+                "RELATION_UNKNOWN_BRANCH" => "- Every candidateBranchRelation.branchId must reference an existing shared semanticRoots branch.",
+                "RELATION_BRANCH_IS_OUTCOME_NODE" => "- Never point a candidateBranchRelation.branchId at an outcomeNodeId; relations connect candidates to shared dependency branches only.",
                 _ => $"- Correct: {defect}."
             });
         }
@@ -3602,6 +3803,15 @@ public sealed class LegalDecisionService(
         return results;
     }
 
+    // R1 test seam: projects the parsed global candidate universe to (semanticId, originating outcome
+    // node ids) tuples so contract tests can assert normalization + outcome-origin provenance without
+    // reaching the private ProposedCandidate record.
+    internal static IReadOnlyList<(string? SemanticCandidateId, IReadOnlyList<string> OriginatingOutcomeNodeIds)>
+        AdaptSemanticProposalForTest(string json, int maxCandidates)
+        => AdaptSemanticProposal(json, maxCandidates)
+            .Select(c => (c.SemanticCandidateId, c.OriginatingOutcomeNodeIds))
+            .ToArray();
+
     // Branch-first (v2) adapter — mirrors IntelligenceWideService's semantic-to-legacy adaptation for
     // /legal/search. DECISION_DISCOVERY_V2 emits the Wide semantic shape: a SHARED "semanticRoots"
     // forest (each root carries nested "children" branches) plus one GLOBAL "candidates" universe that
@@ -3613,8 +3823,7 @@ public sealed class LegalDecisionService(
     // retrieved evidence, exactly as the Wide pipeline does.
     private static IReadOnlyList<ProposedCandidate> AdaptSemanticProposal(string json, int maxCandidates)
     {
-        var results = new List<ProposedCandidate>();
-        try
+        var results = new List<ProposedCandidate>();        try
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
@@ -3645,6 +3854,7 @@ public sealed class LegalDecisionService(
                     {
                         SemanticCandidateId = GetNullableString(c, "candidateId"),
                         ProposedScore = GetNullableNumber(c, "score") is { } s ? Math.Clamp(s, 0d, 1d) : null,
+                        OriginatingOutcomeNodeIds = ParseOutcomeNodeIdArray(c),
                     });
                     if (results.Count >= maxCandidates)
                         break;
@@ -3655,6 +3865,149 @@ public sealed class LegalDecisionService(
             // Non-JSON proposal ⇒ no candidates; the caller surfaces this as a failed proposal.
         }
         return results;
+    }
+
+    // R1 Outcome Proposal Hierarchy: reads a candidate's originatingOutcomeNodeIds string array into a
+    // trimmed, de-duplicated, order-preserving list. DISCOVERY provenance only. Empty on legacy shapes.
+    private static IReadOnlyList<string> ParseOutcomeNodeIdArray(JsonElement candidate)
+    {
+        if (!candidate.TryGetProperty("originatingOutcomeNodeIds", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return [];
+        var ids = new List<string>();
+        foreach (var item in arr.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+                continue;
+            var value = item.GetString();
+            if (string.IsNullOrWhiteSpace(value))
+                continue;
+            var trimmed = value.Trim();
+            if (!ids.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                ids.Add(trimmed);
+        }
+        return ids;
+    }
+
+    // R1 Outcome Proposal Hierarchy parser (§2 DISCOVERY): reads the optional outcomeProposalHierarchy
+    // object into neutral semantic outcome nodes, then runs the deterministic normalizer/validator
+    // (unique IDs, valid parent references, no cycles, depth normalization). Returns an empty list on
+    // legacy shapes or when the hierarchy is missing/invalid — the outcome hierarchy is advisory and
+    // never blocks discovery. These nodes are DISCOVERY-only and never become evaluation branches.
+    internal static IReadOnlyList<SemanticOutcomeNode> AdaptOutcomeHierarchy(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return AdaptOutcomeHierarchy(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<SemanticOutcomeNode> AdaptOutcomeHierarchy(JsonElement root)
+    {
+        if (!root.TryGetProperty("outcomeProposalHierarchy", out var hierarchy)
+            || hierarchy.ValueKind != JsonValueKind.Object
+            || !hierarchy.TryGetProperty("nodes", out var nodesNode)
+            || nodesNode.ValueKind != JsonValueKind.Array)
+            return [];
+
+        var parsed = new List<SemanticOutcomeNode>();
+        foreach (var n in nodesNode.EnumerateArray())
+        {
+            if (n.ValueKind != JsonValueKind.Object)
+                continue;
+            var code = GetNullableString(n, "outcomeNodeId");
+            var title = GetString(n, "title");
+            if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(title))
+                continue;
+            parsed.Add(new SemanticOutcomeNode(
+                code.Trim(),
+                GetNullableString(n, "parentOutcomeNodeId")?.Trim(),
+                n.TryGetProperty("level", out var lvl) && lvl.ValueKind == JsonValueKind.Number ? lvl.GetInt32() : 0,
+                title,
+                GetNullableString(n, "description"),
+                GetNullableString(n, "distinguishingProposition"))
+            {
+                RelationshipToDecisionTarget = GetNullableString(n, "relationshipToDecisionTarget"),
+                NormalizationStatus = GetNullableString(n, "normalizationStatus"),
+                NormalizationReason = GetNullableString(n, "normalizationReason"),
+            });
+        }
+
+        return NormalizeOutcomeHierarchy(parsed);
+    }
+
+    // R1 normalizer/validator (normalization step 1): enforce unique outcome-node IDs, valid parent
+    // references, absence of cycles, and derive a stable depth/level and sort order. Invalid parents are
+    // demoted to roots; nodes that participate in a cycle are broken to roots so the hierarchy stays a
+    // forest. Deterministic and side-effect free so identical input yields identical output.
+    private static IReadOnlyList<SemanticOutcomeNode> NormalizeOutcomeHierarchy(IReadOnlyList<SemanticOutcomeNode> nodes)
+    {
+        if (nodes.Count == 0)
+            return [];
+
+        // De-duplicate by outcome-node code (first occurrence wins), preserving input order.
+        var byCode = new Dictionary<string, SemanticOutcomeNode>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<SemanticOutcomeNode>();
+        foreach (var node in nodes)
+        {
+            if (byCode.ContainsKey(node.OutcomeNodeId))
+                continue;
+            byCode[node.OutcomeNodeId] = node;
+            ordered.Add(node);
+        }
+
+        static bool CreatesCycle(
+            string code,
+            string? parent,
+            IReadOnlyDictionary<string, SemanticOutcomeNode> lookup)
+        {
+            var guard = 0;
+            var cursor = parent;
+            while (!string.IsNullOrWhiteSpace(cursor))
+            {
+                if (string.Equals(cursor, code, StringComparison.OrdinalIgnoreCase))
+                    return true;
+                if (++guard > 64 || !lookup.TryGetValue(cursor!, out var next))
+                    break;
+                cursor = next.ParentOutcomeNodeId;
+            }
+            return false;
+        }
+
+        // Resolve valid parents (must exist, not self, and not create a cycle); else demote to root.
+        var resolved = new List<SemanticOutcomeNode>(ordered.Count);
+        foreach (var node in ordered)
+        {
+            var parent = node.ParentOutcomeNodeId;
+            var validParent = !string.IsNullOrWhiteSpace(parent)
+                && !string.Equals(parent, node.OutcomeNodeId, StringComparison.OrdinalIgnoreCase)
+                && byCode.ContainsKey(parent!)
+                && !CreatesCycle(node.OutcomeNodeId, parent, byCode);
+            resolved.Add(node with { ParentOutcomeNodeId = validParent ? parent : null });
+        }
+
+        // Derive a stable depth from the (now acyclic) parent chain and a deterministic sort order.
+        var resolvedByCode = resolved.ToDictionary(n => n.OutcomeNodeId, StringComparer.OrdinalIgnoreCase);
+        var final = new List<SemanticOutcomeNode>(resolved.Count);
+        var sort = 0;
+        foreach (var node in resolved)
+        {
+            var depth = 1;
+            var cursor = node.ParentOutcomeNodeId;
+            var guard = 0;
+            while (!string.IsNullOrWhiteSpace(cursor) && resolvedByCode.TryGetValue(cursor!, out var parentNode) && ++guard <= 64)
+            {
+                depth++;
+                cursor = parentNode.ParentOutcomeNodeId;
+            }
+            final.Add(node with { Level = depth, SortOrder = sort++ });
+        }
+
+        return final;
     }
 
     // Recursively adapts a Wide semantic root/branch node into a neutral ProposedBranch. Roots and
@@ -3737,13 +4090,19 @@ public sealed class LegalDecisionService(
             if (relations.Count == 0 && propositions.Count == 0 && facts.Count == 0)
             {
                 var intentOnly = ParseDecisionIntent(root);
-                return intentOnly is null
-                    ? SemanticProposalEnrichment.Empty
-                    : SemanticProposalEnrichment.Empty with { DecisionIntent = intentOnly };
+                var outcomeOnly = AdaptOutcomeHierarchy(root);
+                if (intentOnly is null && outcomeOnly.Count == 0)
+                    return SemanticProposalEnrichment.Empty;
+                return SemanticProposalEnrichment.Empty with
+                {
+                    DecisionIntent = intentOnly,
+                    OutcomeNodes = outcomeOnly,
+                };
             }
             return new SemanticProposalEnrichment(relations, propositions, facts)
             {
                 DecisionIntent = ParseDecisionIntent(root),
+                OutcomeNodes = AdaptOutcomeHierarchy(root),
             };
         }
         catch (JsonException)
@@ -3836,6 +4195,9 @@ public sealed class LegalDecisionService(
             {
                 SemanticCandidateId = p.SemanticCandidateId,
                 ProposedScore = p.ProposedScore is { } ps ? (decimal)DecisionCoreMath.Clamp01(ps) : null,
+                OriginatingOutcomeNodeIds = p.OriginatingOutcomeNodeIds.Count == 0
+                    ? null
+                    : string.Join(",", p.OriginatingOutcomeNodeIds),
             });
 
             var branchIndex = 0;
@@ -3918,6 +4280,28 @@ public sealed class LegalDecisionService(
             Guid.NewGuid(),
             intent.DecisionTarget, intent.DecisionType, intent.RequestedDisposition, intent.CurrentOutcome,
             intent.DecisionScope, intent.TimeHorizon, intent.ProceduralStage, constraints, intent.MaterialAmbiguity);
+    }
+
+    // R1 Outcome Proposal Hierarchy materialization (§2 DISCOVERY). Projects the normalized/validated
+    // outcome-interpretation nodes into persistence records. These are DISCOVERY-only artifacts: they are
+    // NEVER registered as evaluation branches and never carry evidentiary support, so POLOXI Core's Branch
+    // and Candidate formulas are unaffected. Empty for the legacy path, non-EVALUATE modes, or no proposal.
+    internal static IReadOnlyList<DecisionOutcomeNodePersistence> MaterializeOutcomeHierarchy(SemanticProposalEnrichment? enrichment)
+    {
+        var nodes = enrichment?.OutcomeNodes;
+        if (nodes is null || nodes.Count == 0)
+            return [];
+        var result = new List<DecisionOutcomeNodePersistence>(nodes.Count);
+        foreach (var n in nodes)
+            result.Add(new DecisionOutcomeNodePersistence(
+                Guid.NewGuid(), n.OutcomeNodeId, n.ParentOutcomeNodeId, n.Level,
+                n.Title, n.Description, n.DistinguishingProposition, n.SortOrder)
+            {
+                RelationshipToDecisionTarget = n.RelationshipToDecisionTarget,
+                NormalizationStatus = n.NormalizationStatus,
+                NormalizationReason = n.NormalizationReason,
+            });
+        return result;
     }
 
     // Branch-first (V2) enrichment materialization (§4,§5,§6). Resolves the LLM's semantic candidateId /
@@ -4537,13 +4921,20 @@ public sealed class LegalDecisionService(
     private static string Truncate(string value, int max = 160)
         => value.Length <= max ? value : value[..max].TrimEnd() + "…";
 
+    // R1 Outcome Proposal Hierarchy: split the persisted comma-separated originating outcome-node codes
+    // (e.g. "O1,O1.1") back into a trimmed list for the response. DISCOVERY provenance only.
+    private static IReadOnlyCollection<string> SplitOutcomeNodeIds(string? csv)
+        => string.IsNullOrWhiteSpace(csv)
+            ? []
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
     private static DecisionSearchResponse BuildResponse(DecisionSessionPersistence p, DecisionNextActionDto? nextAction, IReadOnlyCollection<DecisionReadinessItemDto> readiness,
         bool usedDependencyGraph = false, DecisionV2Result? v2 = null, Features.Intelligence.Decision.DecisionGovernanceVerdictDto? governanceVerdict = null, string? graphDiagnostic = null, Features.Intelligence.Decision.DecisionSolverShadowDto? solverShadow = null)
         => new(
             p.DecisionSessionId, p.QueryText, p.StatusCode, p.TerminalStateCode, p.TerminationReason,
             p.DepthReached, p.LlmCallCount, p.CandidateEntropy, p.DecisionMargin, p.ContractCompleteness,
             p.FinalAnswer, p.WinnerCandidateId,
-            p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated) { ProposedScore = c.ProposedScore }).ToArray(),
+            p.Candidates.Select(c => new DecisionCandidateDto(c.DecisionCandidateId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport, c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination, c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder, c.IsWinner, c.IsEliminated) { ProposedScore = c.ProposedScore, OriginatingOutcomeNodeIds = SplitOutcomeNodeIds(c.OriginatingOutcomeNodeIds) }).ToArray(),
             p.Branches.Select(MapBranch).ToArray(),
             p.Evidence.Select(e => new DecisionEvidenceDto(e.DecisionEvidenceId, e.DecisionBranchId, e.SourceRef, e.SourceTitle, e.Snippet, e.VerificationValue, e.VerificationStatus)
             {
@@ -4581,7 +4972,13 @@ public sealed class LegalDecisionService(
                 d.IsEssential, d.IsVerified, d.EvidenceNeeded, d.AuthorityNeeded, d.LinkedBranchCode, d.FailureCode)).ToArray(),
             DecisionIntent = p.DecisionIntent is { } di ? new Features.Intelligence.Decision.DecisionIntentDto(
                 di.DecisionIntentId, di.DecisionTarget, di.DecisionType, di.RequestedDisposition, di.CurrentOutcome,
-                di.DecisionScope, di.TimeHorizon, di.ProceduralStage, di.UserConstraints, di.MaterialAmbiguity) : null
+                di.DecisionScope, di.TimeHorizon, di.ProceduralStage, di.UserConstraints, di.MaterialAmbiguity) : null,
+            OutcomeProposalHierarchy = p.OutcomeNodes.Count == 0
+                ? null
+                : new Features.Intelligence.Decision.OutcomeProposalHierarchyDto(
+                    p.OutcomeNodes.Select(n => new Features.Intelligence.Decision.OutcomeProposalNodeDto(
+                        n.DecisionOutcomeNodeId, n.OutcomeNodeCode, n.ParentOutcomeNodeCode, n.LevelNumber,
+                        n.Title, n.Description, n.DistinguishingProposition)).ToArray())
         };
 
     private static DecisionBranchDto MapBranch(DecisionBranchPersistence branch) =>
@@ -5148,7 +5545,7 @@ public sealed class LegalDecisionService(
         bool RecoveryTriggered,
         string? RecoveryReason,
         bool? RecoverySucceeded);
-    private sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches)
+    internal sealed record ProposedCandidate(string DisplayName, string Outcome, double LegalSupport, double FactSupport, double EvidenceSupport, double AuthoritySupport, double Verification, double Discrimination, double RankingImpact, IReadOnlyList<ProposedBranch> Branches)
     {
         // Branch-first (V2) only: the LLM-proposed stable candidateId, carried so Candidate × Branch
         // relations resolve to the persisted candidate. Null for the legacy candidate-first path.
@@ -5157,6 +5554,10 @@ public sealed class LegalDecisionService(
         // Branch-first (V2) only: the advisory score in [0,1] Astra proposed for POLOXI Core to consume.
         // Advisory only; Core owns the authoritative composite score/verdict. Null when omitted.
         public double? ProposedScore { get; init; }
+
+        // R1 Outcome Proposal Hierarchy: the outcome-node codes (e.g. "O1", "O1.1") this candidate was
+        // normalized from. DISCOVERY provenance ONLY; never contributes evidentiary support to scoring.
+        public IReadOnlyList<string> OriginatingOutcomeNodeIds { get; init; } = [];
     }
     internal sealed record ProposedBranch(string DisplayName, string Interpretation, double DecisionRelevance, double FlipPotential, double EvidenceAvailability, IReadOnlyList<ProposedBranch> Children)
     {
@@ -5178,12 +5579,35 @@ public sealed class LegalDecisionService(
         string? DecisionScope, string? TimeHorizon, string? ProceduralStage,
         IReadOnlyList<string> UserConstraints, string? MaterialAmbiguity);
 
+    // R1 Outcome Proposal Hierarchy node (§2 DISCOVERY): a materially-distinct outcome interpretation
+    // (O1, O1.1, …) proposed by Astra. A first-class DISCOVERY structure, separate from the shared
+    // evaluation branches; it never carries evidentiary support and is never double-counted in scoring.
+    // Level/SortOrder are assigned deterministically by the normalizer.
+    internal sealed record SemanticOutcomeNode(
+        string OutcomeNodeId, string? ParentOutcomeNodeId, int Level,
+        string Title, string? Description, string? DistinguishingProposition)
+    {
+        public int SortOrder { get; init; }
+
+        // R2 dual-hierarchy discovery metadata (§2). RelationshipToDecisionTarget explains how this
+        // outcome interpretation relates to the decisionTarget; NormalizationStatus/Reason record whether
+        // the node was admitted to the global candidate set and why. DISCOVERY metadata only, never
+        // evidence and never an evaluation branch. Null on legacy shapes / non-EVALUATE runs.
+        public string? RelationshipToDecisionTarget { get; init; }
+        public string? NormalizationStatus { get; init; }
+        public string? NormalizationReason { get; init; }
+    }
+
     internal sealed record SemanticProposalEnrichment(
         IReadOnlyList<SemanticCandidateBranchRelation> CandidateBranchRelations,
         IReadOnlyList<SemanticUnresolvedProposition> UnresolvedPropositions,
         IReadOnlyList<SemanticFactProvenance> FactProvenance)
     {
         public SemanticDecisionIntent? DecisionIntent { get; init; }
+
+        // R1 Outcome Proposal Hierarchy nodes (§2), normalized and validated. Empty for the legacy path,
+        // non-EVALUATE modes, or when no outcome hierarchy was proposed.
+        public IReadOnlyList<SemanticOutcomeNode> OutcomeNodes { get; init; } = [];
 
         public static readonly SemanticProposalEnrichment Empty = new([], [], []);
     }

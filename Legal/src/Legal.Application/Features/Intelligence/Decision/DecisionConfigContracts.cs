@@ -376,6 +376,11 @@ public sealed record DecisionSessionPersistence(
     // DECISION_DISCOVERY_V2 (§1): the first-class structured DecisionIntent proposed by Astra (the
     // specific decision + its scope). Null for the legacy v1 path or when no intent was proposed.
     public DecisionIntentPersistence? DecisionIntent { get; init; }
+
+    // R1 Outcome Proposal Hierarchy: the proposed outcome-interpretation nodes (O1, O1.1, …), a
+    // first-class DISCOVERY artifact persisted per session and kept separate from the shared evaluation
+    // branches. Never carries evidentiary support. Empty on the legacy path or non-EVALUATE modes.
+    public IReadOnlyCollection<DecisionOutcomeNodePersistence> OutcomeNodes { get; init; } = [];
 }
 
 public sealed record DecisionClarificationPersistence(
@@ -480,6 +485,11 @@ public sealed record DecisionCandidatePersistence(
     // further reasoning. Advisory only — Core still owns the authoritative CompositeScore/verdict.
     // Null on the legacy candidate-first path or when the proposal omitted a score.
     public decimal? ProposedScore { get; init; }
+
+    // R1 Outcome Proposal Hierarchy provenance: comma-separated originating outcome-node codes (e.g.
+    // "O1,O1.1") this candidate was normalized from. DISCOVERY provenance ONLY; never scores. Null on
+    // the legacy path or when no outcome hierarchy was proposed.
+    public string? OriginatingOutcomeNodeIds { get; init; }
 }
 
 public sealed record DecisionBranchPersistence(
@@ -549,6 +559,26 @@ public sealed record DecisionIntentPersistence(
     string? ProceduralStage,
     string? UserConstraints,
     string? MaterialAmbiguity);
+
+// R1 Outcome Proposal Hierarchy node (§2 DISCOVERY): a materially-distinct outcome interpretation
+// (O1, O1.1, …) persisted per session. First-class discovery provenance; NOT an evaluation branch and
+// never carries evidentiary support. Candidate origin links are stored on the candidate row.
+public sealed record DecisionOutcomeNodePersistence(
+    Guid DecisionOutcomeNodeId,
+    string OutcomeNodeCode,
+    string? ParentOutcomeNodeCode,
+    int LevelNumber,
+    string Title,
+    string? Description,
+    string? DistinguishingProposition,
+    int SortOrder)
+{
+    // R2 dual-hierarchy discovery metadata (§2), persisted on the outcome node. Additive/nullable so
+    // legacy rows and non-EVALUATE runs are unaffected.
+    public string? RelationshipToDecisionTarget { get; init; }
+    public string? NormalizationStatus { get; init; }
+    public string? NormalizationReason { get; init; }
+}
 
 // §5/§6 Unresolved proposition + fact provenance, persisted as typed Legal_DecisionDependency nodes.
 public sealed record DecisionDependencyPersistence(

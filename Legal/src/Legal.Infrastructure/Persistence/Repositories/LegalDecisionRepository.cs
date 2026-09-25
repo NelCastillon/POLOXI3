@@ -712,18 +712,18 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 INSERT INTO POLOXI.Legal_DecisionCandidate
                     (DecisionCandidateId, DecisionSessionId, CandidateCode, DisplayName, Outcome, LegalSupport, FactSupport,
                      EvidenceSupport, AuthoritySupport, VerificationScore, Uncertainty, Discrimination, RankingImpact, Diversity,
-                     RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore, TenantId, CreatedByUserId)
+                     RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore, OriginatingOutcomeNodeIds, TenantId, CreatedByUserId)
                 VALUES
                     (@DecisionCandidateId, @DecisionSessionId, @CandidateCode, @DisplayName, @Outcome, @LegalSupport, @FactSupport,
                      @EvidenceSupport, @AuthoritySupport, @Verification, @Uncertainty, @Discrimination, @RankingImpact, @Diversity,
-                     @RedundancyPenalty, @CompositeScore, @DecisionSupportCeiling, @RankOrder, @IsWinner, @IsEliminated, @ProposedScore, @TenantId, @ActorUserId);
+                     @RedundancyPenalty, @CompositeScore, @DecisionSupportCeiling, @RankOrder, @IsWinner, @IsEliminated, @ProposedScore, @OriginatingOutcomeNodeIds, @TenantId, @ActorUserId);
                 """,
                 session.Candidates.Select(c => new
                 {
                     c.DecisionCandidateId, session.DecisionSessionId, c.CandidateCode, c.DisplayName, c.Outcome, c.LegalSupport,
                     c.FactSupport, c.EvidenceSupport, c.AuthoritySupport, c.Verification, c.Uncertainty, c.Discrimination,
                     c.RankingImpact, c.Diversity, c.RedundancyPenalty, c.CompositeScore, c.DecisionSupportCeiling, c.RankOrder,
-                    c.IsWinner, c.IsEliminated, c.ProposedScore, session.TenantId, session.ActorUserId
+                    c.IsWinner, c.IsEliminated, c.ProposedScore, c.OriginatingOutcomeNodeIds, session.TenantId, session.ActorUserId
                 }),
                 transaction, cancellationToken: cancellationToken));
 
@@ -857,6 +857,26 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 },
                 transaction, cancellationToken: cancellationToken));
 
+        // R1 Outcome Proposal Hierarchy (§2 DISCOVERY): the outcome-interpretation nodes (O1, O1.1, …)
+        // persisted per session as a first-class DISCOVERY artifact. NEVER evaluation branches; they
+        // carry no evidentiary support and do not influence POLOXI Core's Branch/Candidate scoring.
+        if (session.OutcomeNodes.Count > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT INTO POLOXI.Legal_DecisionOutcomeNode
+                    (DecisionOutcomeNodeId, DecisionSessionId, OutcomeNodeCode, ParentOutcomeNodeCode, LevelNumber, Title,
+                     Description, DistinguishingProposition, SortOrder, RelationshipToDecisionTarget, NormalizationStatus, NormalizationReason, TenantId, CreatedByUserId)
+                VALUES
+                    (@DecisionOutcomeNodeId, @DecisionSessionId, @OutcomeNodeCode, @ParentOutcomeNodeCode, @LevelNumber, @Title,
+                     @Description, @DistinguishingProposition, @SortOrder, @RelationshipToDecisionTarget, @NormalizationStatus, @NormalizationReason, @TenantId, @ActorUserId);
+                """,
+                session.OutcomeNodes.Select(o => new
+                {
+                    o.DecisionOutcomeNodeId, session.DecisionSessionId, o.OutcomeNodeCode, o.ParentOutcomeNodeCode, o.LevelNumber,
+                    o.Title, o.Description, o.DistinguishingProposition, o.SortOrder, o.RelationshipToDecisionTarget, o.NormalizationStatus, o.NormalizationReason, session.TenantId, session.ActorUserId
+                }),
+                transaction, cancellationToken: cancellationToken));
+
         transaction.Commit();
     }
 
@@ -976,7 +996,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """
             SELECT DecisionCandidateId, CandidateCode, DisplayName, Outcome, LegalSupport, FactSupport, EvidenceSupport,
                    AuthoritySupport, VerificationScore AS Verification, Uncertainty, Discrimination, RankingImpact, Diversity,
-                   RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore
+                   RedundancyPenalty, CompositeScore, DecisionSupportCeiling, RankOrder, IsWinner, IsEliminated, ProposedScore, OriginatingOutcomeNodeIds
             FROM POLOXI.Legal_DecisionCandidate WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId ORDER BY RankOrder;
             """,
             new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
@@ -1043,6 +1063,16 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             """,
             new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).FirstOrDefault();
 
+        // R1 Outcome Proposal Hierarchy (§2 DISCOVERY): rehydrate the outcome-interpretation nodes.
+        var outcomeNodes = (await connection.QueryAsync<DecisionOutcomeNodePersistence>(new CommandDefinition(
+            """
+            SELECT DecisionOutcomeNodeId, OutcomeNodeCode, ParentOutcomeNodeCode, LevelNumber, Title,
+                   Description, DistinguishingProposition, SortOrder, RelationshipToDecisionTarget, NormalizationStatus, NormalizationReason
+            FROM POLOXI.Legal_DecisionOutcomeNode WHERE IsDeleted = 0 AND DecisionSessionId = @DecisionSessionId
+            ORDER BY SortOrder;
+            """,
+            new { DecisionSessionId = decisionSessionId }, cancellationToken: cancellationToken))).ToArray();
+
         return new DecisionSessionPersistence(
             session.DecisionSessionId, session.TenantId, session.ActorUserId, session.QueryText, session.ContextCode,
             session.ModelCode, session.UsePoloxiEngine, session.StatusCode, session.TerminalStateCode, session.TerminationReason,
@@ -1068,6 +1098,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             CandidateBranchRelations = candidateBranchRelations,
             Dependencies = dependencies,
             DecisionIntent = decisionIntent,
+            OutcomeNodes = outcomeNodes,
         };
     }
 

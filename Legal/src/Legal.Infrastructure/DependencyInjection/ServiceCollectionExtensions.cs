@@ -21,6 +21,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLegalInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        // Ensure Dapper can map SQL Server date/time columns (returned as DateTime/TimeSpan)
+        // into DTO DateOnly?/TimeOnly? properties (e.g. PI profile child aggregates).
+        DapperTypeHandlers.EnsureRegistered();
+
         services.Configure<SqlOptions>(options =>
         {
             options.ConnectionString = configuration.GetConnectionString("DefaultConnection") ?? string.Empty;

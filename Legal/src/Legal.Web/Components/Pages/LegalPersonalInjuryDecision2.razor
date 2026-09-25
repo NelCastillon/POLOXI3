@@ -1138,6 +1138,316 @@
         }
     };
 
+    // Always-visible universal Factor Inventory checklist. Independent of the _showPipeline diagnostics
+    // toggle so users can always see, per candidate, which required/supporting factors are satisfied
+    // (AVAILABLE/SUPPLIED) vs. still missing — and how each factor affects that outcome in the pipeline.
+    private RenderFragment FactorChecklistPanel => __builder =>
+    {
+        @if (_response?.DecisionInspector?.FactorInventory is { } inventory && inventory.Factors.Count > 0)
+        {
+            <section class="poloxi-panel poloxi-reveal poloxi-factorcheck-panel">
+                <div class="poloxi-panel-header">
+                    <div class="poloxi-panel-title">
+                        <span class="poloxi-panel-icon"><i class="bi bi-list-check"></i></span>
+                        <div><span>Factor inventory checklist</span><h2>What each outcome needs — and what is established</h2></div>
+                    </div>
+                    <span class="poloxi-status" title="Factors are derived from the actual normalized decision plan and matter data. Nothing is hardcoded.">@inventory.Factors.Count factors · @inventory.SharedFactorCount shared · @inventory.MissingFactorCount missing</span>
+                </div>
+
+                <div class="poloxi-factor-sources">
+                    <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.MatterDataLoaded ? "on" : "off")">Matter data: @(inventory.SourceStatus.MatterDataLoaded ? $"{inventory.SourceStatus.MatterFieldCount} fields" : "none")</span>
+                    <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.DomainPackResolved ? "on" : "off")">Domain pack: @(inventory.SourceStatus.DomainPackResolved ? (inventory.SourceStatus.DomainPackCode ?? "resolved") : "not resolved")</span>
+                    <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.DocumentCorpusStatus == "AVAILABLE" ? "on" : "off")">Documents: @inventory.SourceStatus.DocumentCorpusStatus</span>
+                    <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.EvidenceStatus == "ADMITTED" ? "on" : "off")">Evidence: @inventory.SourceStatus.EvidenceStatus</span>
+                </div>
+
+                @{
+                    // Group relationship rows by candidate so each outcome shows its own factor checklist.
+                    var byCandidate = inventory.Relationships
+                        .GroupBy(r => r.CandidateTitle)
+                        .OrderByDescending(g => g.Count(x => x.IsRequired))
+                        .ThenBy(g => g.Key)
+                        .ToArray();
+                    var factorById = inventory.Factors.ToDictionary(f => f.FactorId, StringComparer.OrdinalIgnoreCase);
+                }
+
+                @if (byCandidate.Length == 0)
+                {
+                    <p class="poloxi-factorcheck-empty">The normalized plan registered factors but no candidate relationships were produced for this run.</p>
+                }
+                else
+                {
+                    <div class="poloxi-factorcheck-grid">
+                        @foreach (var grp in byCandidate)
+                        {
+                            var required = grp.Where(r => r.IsRequired).ToArray();
+                            var met = required.Count(r => factorById.TryGetValue(r.FactorId, out var f) && f.Availability == "AVAILABLE");
+                            <article class="poloxi-factorcheck-card">
+                                <header>
+                                    <h3>@grp.Key</h3>
+                                    <span class="poloxi-factorcheck-progress" title="Required factors with an established (AVAILABLE) value.">@met / @required.Length required established</span>
+                                </header>
+                                <ul class="poloxi-factorcheck-list">
+                                    @foreach (var rel in grp.OrderByDescending(r => r.IsRequired).ThenBy(r => r.FactorName))
+                                    {
+                                        factorById.TryGetValue(rel.FactorId, out var factor);
+                                        var available = factor?.Availability == "AVAILABLE";
+                                        var stateClass = available ? "met" : (rel.IsRequired ? "missing" : "pending");
+                                        var icon = available ? "bi-check-circle-fill" : (rel.IsRequired ? "bi-x-circle-fill" : "bi-dash-circle");
+                                        <li class="poloxi-factorcheck-item poloxi-factorcheck-item--@stateClass">
+                                            <i class="bi @icon"></i>
+                                            <div class="poloxi-factorcheck-item-body">
+                                                <div class="poloxi-factorcheck-item-head">
+                                                    <strong>@rel.FactorName</strong>
+                                                    <span class="poloxi-factor-badge poloxi-factor-badge--@(rel.RelationType.ToLowerInvariant())">@rel.RelationType</span>
+                                                    @if (factor is not null)
+                                                    {
+                                                        <span class="poloxi-factor-badge poloxi-factor-badge--@factor.Availability.ToLowerInvariant()">@factor.Availability</span>
+                                                        <span class="poloxi-factor-badge poloxi-factor-badge--@factor.VerificationStatus.ToLowerInvariant()">@factor.VerificationStatus</span>
+                                                    }
+                                                </div>
+                                                <div class="poloxi-factorcheck-item-value">
+                                                    @if (factor is not null && !string.IsNullOrWhiteSpace(factor.ActualValue))
+                                                    {
+                                                        <span><i class="bi bi-database"></i> @factor.ActualValue <em>(@factor.Source)</em></span>
+                                                    }
+                                                    else if (factor is not null && !string.IsNullOrWhiteSpace(factor.MissingInformation))
+                                                    {
+                                                        <span class="poloxi-factorcheck-missing">@factor.MissingInformation</span>
+                                                    }
+                                                </div>
+                                                @if (!string.IsNullOrWhiteSpace(rel.Rationale))
+                                                {
+                                                    <div class="poloxi-factorcheck-item-effect"><i class="bi bi-arrow-return-right"></i> @rel.Rationale</div>
+                                                }
+                                            </div>
+                                        </li>
+                                    }
+                                </ul>
+                            </article>
+                        }
+                    </div>
+                }
+            </section>
+        }
+    };
+
+    private RenderFragment DecisionInspectorPanel => __builder =>
+    {
+        @if (_response?.DecisionInspector is { } inspector)
+        {
+            <section class="poloxi-panel poloxi-reveal poloxi-inspector-panel">
+                <div class="poloxi-panel-header">
+                    <div class="poloxi-panel-title">
+                        <span class="poloxi-panel-icon"><i class="bi bi-clipboard-data"></i></span>
+                        <div><span>Legal decision processing inspector</span><h2>Actual execution — every processing stage</h2></div>
+                    </div>
+                    <span class="poloxi-status" title="Diagnostic only. Every value is captured from the real run; MISSING / NOT_REACHED is explicit.">DIAGNOSTIC</span>
+                </div>
+
+                <div class="poloxi-inspector-mode">
+                    <span><strong>Execution route:</strong> @inspector.ExecutionMode.ExecutionRoute</span>
+                    <span><strong>Answer kind:</strong> @(inspector.ExecutionMode.AnswerKind ?? "MISSING")</span>
+                    <span><strong>Legal EVALUATE run:</strong> @inspector.ExecutionMode.IsLegalDecisionEvaluationRun</span>
+                    <span><strong>Gate mode:</strong> @inspector.ExecutionMode.GateMode</span>
+                    <span><strong>Normalization mode:</strong> @(inspector.ExecutionMode.NormalizationMode ?? "NOT_REACHED")</span>
+                    <span><strong>Prompt key:</strong> @(inspector.ExecutionMode.PromptKey ?? "MISSING")</span>
+                    <span><strong>Prompt version:</strong> @(inspector.ExecutionMode.PromptVersion ?? "MISSING")</span>
+                    <span><strong>Prompt hash:</strong> @(inspector.ExecutionMode.PromptHash ?? "MISSING")</span>
+                </div>
+
+                <div class="poloxi-inspector-stages">
+                    @foreach (var stage in inspector.Stages)
+                    {
+                        <details class="poloxi-inspector-stage">
+                            <summary>
+                                <span class="poloxi-inspector-stage-name">@stage.StageName</span>
+                                <span class="poloxi-inspector-badge poloxi-inspector-badge--@stage.Status.ToLowerInvariant()">@stage.Status</span>
+                            </summary>
+                            <div class="poloxi-inspector-stage-body">
+                                @if (!string.IsNullOrWhiteSpace(stage.InputSource))
+                                {
+                                    <div><strong>Input source:</strong> @stage.InputSource</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(stage.ActualInput))
+                                {
+                                    <div><strong>Actual input:</strong> @stage.ActualInput</div>
+                                }
+                                @if (stage.RequiredFactors.Count > 0)
+                                {
+                                    <div><strong>Required factors:</strong> @string.Join(" · ", stage.RequiredFactors)</div>
+                                }
+                                @if (stage.AvailableFactors.Count > 0)
+                                {
+                                    <div><strong>Available factors:</strong> @string.Join(" · ", stage.AvailableFactors)</div>
+                                }
+                                @if (stage.MissingFactors.Count > 0)
+                                {
+                                    <div class="poloxi-inspector-missing"><strong>Missing factors:</strong> @string.Join(" · ", stage.MissingFactors)</div>
+                                }
+                                @if (stage.ValidationErrors.Count > 0)
+                                {
+                                    <div class="poloxi-inspector-missing"><strong>Validation errors:</strong> @string.Join(" · ", stage.ValidationErrors)</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(stage.ProcessingPerformed))
+                                {
+                                    <div><strong>Processing performed:</strong> @stage.ProcessingPerformed</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(stage.ActualOutput))
+                                {
+                                    <div><strong>Actual output:</strong> <pre class="poloxi-inspector-output">@stage.ActualOutput</pre></div>
+                                }
+                                @if (stage.DurationMilliseconds is { } ms)
+                                {
+                                    <div><strong>Duration:</strong> @ms ms</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(stage.BlockingReason))
+                                {
+                                    <div class="poloxi-inspector-blocked"><strong>Blocking / failure reason:</strong> @stage.BlockingReason</div>
+                                }
+                            </div>
+                        </details>
+                    }
+                </div>
+
+                @if (inspector.NormalizedCandidates.Count > 0)
+                {
+                    <div class="poloxi-inspector-subsection">
+                        <h3>Normalized global candidate pool</h3>
+                        <div class="poloxi-table-scroll">
+                            <table class="poloxi-inspector-table">
+                                <thead>
+                                    <tr>
+                                        <th>Normalized ID</th><th>Original title</th><th>Semantic role</th>
+                                        <th>Identity decision</th><th>Material distinction</th><th>Origins</th>
+                                        <th>Eligible</th><th>Reached scoring</th><th>Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var c in inspector.NormalizedCandidates)
+                                    {
+                                        <tr>
+                                            <td>@c.NormalizedCandidateId</td>
+                                            <td>@c.OriginalTitle</td>
+                                            <td>@c.SemanticRole</td>
+                                            <td>@c.IdentityDecision</td>
+                                            <td>@c.MaterialDistinction</td>
+                                            <td>@(c.OriginMappings.Count > 0 ? string.Join(", ", c.OriginMappings) : "—")</td>
+                                            <td>@(c.CompetitionEligible ? "yes" : "no")</td>
+                                            <td>@(c.ReachedScoring ? "yes" : "no")</td>
+                                            <td>@c.DecisionReason</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (inspector.SharedDependencies.Count > 0)
+                {
+                    <div class="poloxi-inspector-subsection">
+                        <h3>Shared dependencies <small>(shown once, linked to related candidates)</small></h3>
+                        <div class="poloxi-table-scroll">
+                            <table class="poloxi-inspector-table">
+                                <thead>
+                                    <tr>
+                                        <th>Dependency ID</th><th>Type</th><th>Proposition</th>
+                                        <th>Related candidates</th><th>Relation</th><th>Verification</th><th>Unresolved</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var d in inspector.SharedDependencies)
+                                    {
+                                        <tr>
+                                            <td>@d.DependencyId</td>
+                                            <td>@d.DependencyType</td>
+                                            <td>@d.Proposition</td>
+                                            <td>@(d.RelatedCandidateIds.Count > 0 ? string.Join(", ", d.RelatedCandidateIds) : "—")</td>
+                                            <td>@d.RelationType</td>
+                                            <td>@d.VerificationState</td>
+                                            <td>@(string.IsNullOrWhiteSpace(d.UnresolvedInformation) ? "—" : d.UnresolvedInformation)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                }
+
+                @if (inspector.RejectedObjects.Count > 0)
+                {
+                    <div class="poloxi-inspector-subsection">
+                        <h3>Rejected objects <small>(preserved for provenance)</small></h3>
+                        <ul class="poloxi-inspector-rejected">
+                            @foreach (var r in inspector.RejectedObjects)
+                            {
+                                <li><strong>@r.ObjectKind</strong> — @r.Identifier: @r.Reason</li>
+                            }
+                        </ul>
+                    </div>
+
+                    @if (inspector.FactorInventory is { } inventory)
+                    {
+                        <div class="poloxi-inspector-subsection poloxi-factor-inventory">
+                            <h3>Factor inventory <small>(universal · @inventory.CandidateCount candidates · @inventory.Factors.Count factors · @inventory.SharedFactorCount shared · @inventory.MissingFactorCount missing)</small></h3>
+                            <div class="poloxi-factor-sources">
+                                <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.MatterDataLoaded ? "on" : "off")">Matter data: @(inventory.SourceStatus.MatterDataLoaded ? $"{inventory.SourceStatus.MatterFieldCount} fields" : "none")</span>
+                                <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.DomainPackResolved ? "on" : "off")">Domain pack: @(inventory.SourceStatus.DomainPackResolved ? (inventory.SourceStatus.DomainPackCode ?? "resolved") : "not resolved")</span>
+                                <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.DocumentCorpusStatus == "AVAILABLE" ? "on" : "off")">Documents: @inventory.SourceStatus.DocumentCorpusStatus</span>
+                                <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.EvidenceStatus == "ADMITTED" ? "on" : "off")">Evidence: @inventory.SourceStatus.EvidenceStatus</span>
+                            </div>
+
+                            <h4>Global factors <small>(one identity, reused across candidates)</small></h4>
+                            <table class="poloxi-inspector-table">
+                                <thead>
+                                    <tr><th>Factor</th><th>Source</th><th>Actual value</th><th>Availability</th><th>Verification</th><th>Requirement</th><th>Relationship</th><th>Missing information</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var f in inventory.Factors)
+                                    {
+                                        <tr>
+                                            <td><strong>@f.FactorName</strong><br /><small>@f.FactorId · @f.FactorType</small></td>
+                                            <td>@f.Source</td>
+                                            <td>@(string.IsNullOrWhiteSpace(f.ActualValue) ? "—" : f.ActualValue)</td>
+                                            <td><span class="poloxi-factor-badge poloxi-factor-badge--@f.Availability.ToLowerInvariant()">@f.Availability</span></td>
+                                            <td><span class="poloxi-factor-badge poloxi-factor-badge--@f.VerificationStatus.ToLowerInvariant()">@f.VerificationStatus</span></td>
+                                            <td>@f.Requirement</td>
+                                            <td>@(f.Relationships.Count == 0 ? "—" : string.Join(" · ", f.Relationships))</td>
+                                            <td>@(string.IsNullOrWhiteSpace(f.MissingInformation) ? "—" : f.MissingInformation)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+
+                            <h4>Candidate × factor relationships</h4>
+                            @foreach (var grp in inventory.Relationships.GroupBy(r => r.CandidateTitle).OrderBy(g => g.Key))
+                            {
+                                <details class="poloxi-inspector-stage">
+                                    <summary><span class="poloxi-inspector-stage-name">@grp.Key</span> <span class="poloxi-inspector-badge">@grp.Count() factors</span></summary>
+                                    <table class="poloxi-inspector-table">
+                                        <thead><tr><th>Factor</th><th>Relationship</th><th>Required</th><th>Rationale</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var rel in grp)
+                                            {
+                                                <tr>
+                                                    <td>@rel.FactorName</td>
+                                                    <td>@rel.RelationType</td>
+                                                    <td>@(rel.IsRequired ? "Yes" : "No")</td>
+                                                    <td>@(string.IsNullOrWhiteSpace(rel.Rationale) ? "—" : rel.Rationale)</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </details>
+                            }
+                        </div>
+                    }
+                }
+            </section>
+        }
+    };
+
     private RenderFragment ComparisonPanel => __builder =>
     {
         @if (ShouldShowComparisonPanel)
@@ -1357,6 +1667,7 @@
                     </div>
                 </li>
             </ol>
+            @FactorChecklistPanel
             @if (_showPipeline)
             {
                 <section class="poloxi-panel poloxi-pipeline-panel">
@@ -1385,6 +1696,7 @@
                     </div>
                 </section>
             }
+            @DecisionInspectorPanel
             @if (ShouldShowComparisonPanel)
             {
                 <div class="poloxi-compare">

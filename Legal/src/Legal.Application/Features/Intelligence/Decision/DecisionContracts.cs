@@ -159,7 +159,30 @@ public sealed record DecisionCandidateDto(
     // POLOXI Core consumes for further reasoning. Advisory only; Core owns the authoritative
     // CompositeScore/verdict above. Null on the legacy candidate-first path or when omitted.
     public decimal? ProposedScore { get; init; }
+
+    // R1 Outcome Proposal Hierarchy: the originating outcome-node codes (e.g. "O1", "O1.1") this
+    // candidate was normalized from. DISCOVERY provenance ONLY — it links a competed candidate back to
+    // the interpretation nodes that produced it and NEVER contributes evidentiary support to scoring.
+    // Empty on the legacy candidate-first path or when no outcome hierarchy was proposed.
+    public IReadOnlyCollection<string> OriginatingOutcomeNodeIds { get; init; } = [];
 }
+
+// ── R1 Outcome Proposal Hierarchy (DECISION_DISCOVERY §2). A first-class DISCOVERY structure of
+//    materially-distinct outcome interpretations, kept separate from the Section 3 shared legal /
+//    factual dependency (evaluation) hierarchy. Outcome nodes normalize into the global candidate pool
+//    (traced via DecisionCandidateDto.OriginatingOutcomeNodeIds) but are NEVER independent evidence and
+//    are never double-counted in authoritative scoring. Empty on the legacy candidate-first path. ──
+public sealed record OutcomeProposalHierarchyDto(
+    IReadOnlyCollection<OutcomeProposalNodeDto> Nodes);
+
+public sealed record OutcomeProposalNodeDto(
+    Guid DecisionOutcomeNodeId,
+    string OutcomeNodeId,
+    string? ParentOutcomeNodeId,
+    int Level,
+    string Title,
+    string? Description,
+    string? DistinguishingProposition);
 
 public sealed record DecisionBranchDto(
     Guid DecisionBranchId,
@@ -377,6 +400,12 @@ public sealed record DecisionSearchResponse(
     // §1 First-class DecisionIntent (the specific decision + its scope) proposed by Astra. Null on the
     // legacy candidate-first path or when no intent was proposed. Descriptive; Core still validates it.
     public DecisionIntentDto? DecisionIntent { get; init; }
+
+    // R1 Outcome Proposal Hierarchy: the first-class DISCOVERY structure of materially-distinct outcome
+    // interpretations proposed for LEGAL_DECISION / EVALUATE. Separate from the shared dependency
+    // (evaluation) hierarchy; normalized candidates trace back via OriginatingOutcomeNodeIds. Null on
+    // the legacy path, for non-EVALUATE modes, or when no outcome hierarchy was proposed.
+    public OutcomeProposalHierarchyDto? OutcomeProposalHierarchy { get; init; }
 
     // ── POLOXI Legal B3 (Hallucination Solver) shadow/what-if snapshot.
     // ran and recompeted the ranking on verified evidence. In ADVISORY mode this is a NON-DESTRUCTIVE

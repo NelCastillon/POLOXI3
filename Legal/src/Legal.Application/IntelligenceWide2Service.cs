@@ -42,6 +42,18 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     private string? _resolvedDomainPackCode;
     // R3 competition accountability: typed status for whether candidate competition ran on this run.
     private string? _candidateCompetitionStatus;
+    // R4 Normalization Gate observability: the outcome of routing this run through the shared gate, or
+    // null when the gate was not reached (non-legal, flag off, or fail-soft skip). Per-run (scoped).
+    private LegalNormalizationOutcome? _legalNormalization;
+    private string? _normalizationGateStatus;
+    private string? _decisionReadinessStatus;
+    private IReadOnlyList<string> _scoredCandidateIds=[];
+    // R5 Processing Inspector capture: the exact candidate pool fed to the competition (normalized when the
+    // gate replaced the raw universe, else the raw universe), the gate feature-mode (DISABLED/SHADOW/ENABLED),
+    // and whether ranking completion was requested. All null/empty when no legal EVALUATE run reached them.
+    private IReadOnlyCollection<string> _competitionBasis=[];
+    private string? _gateMode;
+    private bool _rankingCompletionRequired;
 
 
     // Model selection: Auto routes to MINI; otherwise route every wide LLM call through the requested model.
@@ -571,6 +583,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _resolvedDomainPackId=null;
         _resolvedDomainPackCode=null;
         _candidateCompetitionStatus=null;
+        _legalNormalization=null;
+        _normalizationGateStatus=null;
+        _decisionReadinessStatus=null;
+        _scoredCandidateIds=[];
+        _competitionBasis=[];
+        _gateMode=null;
+        _rankingCompletionRequired=false;
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
         // Matter context is only projected into the POLOXI proposal prompts, so load it after the LLM-only
@@ -1236,10 +1255,58 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // (not a HardConstraint ImplementDraft, not a non-legal RESOLUTION run) so nothing else regresses.
             var rankingCompletionRequired=RequiresRankingCompletion(configuration,queryContract,isContentEnumeration,interpretiveResults)
                 ||(IsLegalDecisionEvaluationRun&&!isContentEnumeration&&interpretiveResults.Any(result=>result.Items.Count>0));
+            // R4 Outcome-Dependency Normalization Gate: on a matter-backed legal EVALUATE run (and only when
+            // the DB flag is enabled), route the proposed dispositions through the SHARED normalization gate
+            // BEFORE candidate competition. The gate deterministically classifies semantic roles, normalizes
+            // material legal identity (MERGE/KEEP_DISTINCT/REQUIRES_REVIEW), registers shared dependencies,
+            // and validates a RegistrationPlan. When the plan is valid, the eligible representative candidates
+            // REPLACE the raw string universe fed into the competition so the normalized pool (not the raw
+            // interpretation groups) drives the Candidate x Dependency ranking. Fail-soft: a null result or a
+            // plan that is not valid leaves the unchanged universe in place. Changes no scoring/evidence rule.
+            var competitionBasis=(IReadOnlyCollection<string>)candidateUniverse;
+            _rankingCompletionRequired=rankingCompletionRequired;
+            _gateMode=!IsLegalDecisionEvaluationRun
+                ? "DISABLED (not a legal EVALUATE run)"
+                : !configuration.EnableLegalDecisionNormalizationGate
+                    ? "DISABLED (feature flag off)"
+                    : !rankingCompletionRequired
+                        ? "SHADOW (enabled but ranking completion not requested)"
+                        : "ENABLED";
+            if(IsLegalDecisionEvaluationRun&&configuration.EnableLegalDecisionNormalizationGate&&rankingCompletionRequired)
+            {
+                _legalNormalization=RunLegalDecisionNormalizationGate(candidateUniverse,survivorsFinal,interpretiveResults);
+                if(_legalNormalization is{} normalization)
+                {
+                    var d=normalization.GateResult.Diagnostics;
+                    if(normalization.Plan.IsValid&&normalization.EligibleCandidateNames.Count>0)
+                    {
+                        competitionBasis=normalization.EligibleCandidateNames;
+                        _normalizationGateStatus=$"REGISTERED (normalized={d.NormalizedCandidates}, eligible={d.EligibleCandidateCount}, deferred={d.DeferredCandidateCount}, deps={d.SharedDependencies}, relations={d.ValidatedRelationCount})";
+                    }
+                    else
+                    {
+                        _normalizationGateStatus=$"PLAN_INVALID (normalized={d.NormalizedCandidates}, eligible={d.EligibleCandidateCount}, deps={d.SharedDependencies})";
+                    }
+                    logger.LogInformation("Wide2 legal-decision normalization gate for matter {MatterId}: {Status}. Registered candidate ids: {Ids}.",_matterContext!.MatterId,_normalizationGateStatus,string.Join(",",normalization.Plan.EligibleCandidateSemanticIds));
+                }
+                else
+                {
+                    _normalizationGateStatus="SKIPPED (no projectable dispositions or fail-soft skip)";
+                }
+            }
             var effectiveContractCount=EffectiveRankingContractCount(configuration,queryContract,rankingCompletionRequired);
-            var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,candidateUniverse,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
+            _competitionBasis=competitionBasis;
+            var completion=await CompleteRankingAsync(request,executionId,queryContract,survivorsFinal,interpretiveResults,competitionBasis,externalKnowledgeAll,configuration,llmCalls,rankingCompletionRequired,effectiveContractCount,cancellationToken);
             candidates=completion.Candidates;
             llmCalls=completion.LlmCalls;
+            // R4 decision readiness: registration success is NOT an evidence-grounded decision. Record whether
+            // authoritative scoring produced competing candidates or whether the unchanged evidence/readiness
+            // rules blocked a winner, so a normalized-but-unsupported run is never reported as a decision.
+            _scoredCandidateIds=candidates.Select(c=>c.DisplayName).Where(n=>!string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if(IsLegalDecisionEvaluationRun&&_legalNormalization is{} reg&&reg.Plan.IsValid)
+                _decisionReadinessStatus=DeliveredCandidateCount(candidates)>=2
+                    ? "CANDIDATES_REGISTERED_AND_COMPETED"
+                    : "REGISTERED_SCORING_BLOCKED (registration succeeded; evidence/readiness rules prevented an authoritative winner)";
             // R3 competition accountability: record a TYPED status for candidate competition so an EVALUATE
             // run can never silently deliver no competition. On a legal EVALUATE run the status is always
             // populated: RAN when competing candidates were produced, NO_COMPETING_CANDIDATES when the pool
@@ -1249,10 +1316,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 : !rankingCompletionRequired
                     ? "NOT_REQUIRED"
                     : DeliveredCandidateCount(candidates)>=2
-                        ? $"RAN (universe={candidateUniverse.Count}, accepted={DeliveredCandidateCount(candidates)})"
-                        : $"NO_COMPETING_CANDIDATES (universe={candidateUniverse.Count}, accepted={DeliveredCandidateCount(candidates)})";
+                        ? $"RAN (universe={competitionBasis.Count}, accepted={DeliveredCandidateCount(candidates)})"
+                        : $"NO_COMPETING_CANDIDATES (universe={competitionBasis.Count}, accepted={DeliveredCandidateCount(candidates)})";
             if(IsLegalDecisionEvaluationRun)
-                logger.LogInformation("Wide2 EVALUATE candidate competition status for matter {MatterId}: {Status} (delivered {Delivered} candidate(s), universe {Universe}).",_matterContext!.MatterId,_candidateCompetitionStatus,DeliveredCandidateCount(candidates),candidateUniverse.Count);
+                logger.LogInformation("Wide2 EVALUATE candidate competition status for matter {MatterId}: {Status} (delivered {Delivered} candidate(s), universe {Universe}).",_matterContext!.MatterId,_candidateCompetitionStatus,DeliveredCandidateCount(candidates),competitionBasis.Count);
             // V2.9.2 Output Contract Validation: the delivered ranking must mechanically satisfy the
             // query contract. Requested 10 cities → 10 valid candidates; a shortfall is a validation
             // failure, not a composition style choice. One recovery pass re-runs the competition with
@@ -1557,7 +1624,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic()};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic(),DecisionInspector=BuildDecisionInspector(queryContract?.AnswerKind,interpretiveResults,candidates)};
             return response;
         }
         catch
@@ -2227,8 +2294,28 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 DecisionIntent=_decisionIntent.Intent.ToString(),
                 DecisionIntentReason=_decisionIntent.Reason,
                 CurrentOutcomeIsHardConstraint=_decisionIntent.CurrentOutcomeIsHardConstraint,
-                CandidateCompetitionStatus=_candidateCompetitionStatus
+                CandidateCompetitionStatus=_candidateCompetitionStatus,
+                OutcomeNodeCount=_legalNormalization?.OutcomeNodeCount??0,
+                ProposedCandidateCount=_legalNormalization?.ProposedCandidateCount??0,
+                SemanticProposalStatus=_legalNormalization is null?null:"PROJECTED",
+                NormalizationGateStatus=_normalizationGateStatus,
+                NormalizedCandidateCount=_legalNormalization?.GateResult.Diagnostics.NormalizedCandidates??0,
+                MergeCount=DecisionCount(_legalNormalization,"Merge"),
+                KeepDistinctCount=DecisionCount(_legalNormalization,"KeepDistinct"),
+                RequiresReviewCount=DecisionCount(_legalNormalization,"RequiresReview"),
+                SharedDependencyCount=_legalNormalization?.GateResult.Diagnostics.SharedDependencies??0,
+                CandidateDependencyRelationCount=_legalNormalization?.GateResult.Diagnostics.ValidatedRelationCount??0,
+                RegistrationPlanStatus=_legalNormalization is null?null:(_legalNormalization.Plan.IsValid?"VALID":"INVALID"),
+                RegisteredCandidateIds=_legalNormalization?.Plan.EligibleCandidateSemanticIds.ToArray()??[],
+                CompetitionEligibility=_normalizationGateStatus is null?null:(_legalNormalization?.EligibleCandidateNames.Count>0?"ELIGIBLE":"NONE"),
+                ScoredCandidateIds=_scoredCandidateIds.ToArray(),
+                DecisionReadinessStatus=_decisionReadinessStatus
             };
+
+    // R4 diagnostic helper: reads a normalization-decision bucket (Merge / KeepDistinct / RequiresReview)
+    // from the gate's DecisionCounts map, returning 0 when the gate did not run or the bucket is absent.
+    private static int DecisionCount(LegalNormalizationOutcome? outcome,string decisionKey)
+        => outcome is not null&&outcome.GateResult.Diagnostics.DecisionCounts.TryGetValue(decisionKey,out var count)?count:0;
 
     // Cache-first live external grounding for interpretive narrowing paths. Any failure returns an
     // empty collection so the Wide pipeline never breaks when the provider is unavailable.

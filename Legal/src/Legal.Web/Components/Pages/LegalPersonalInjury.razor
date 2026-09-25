@@ -495,10 +495,33 @@
         StateHasChanged();
         try
         {
-            var request = BuildRandomTestMatter();
+            var request = BuildRandomTestMatter(out var profileContext);
             var id = await Api.CreateLegalDecisionMatterAsync(request);
             if (id != Guid.Empty)
             {
+                // Seed a complete fictional PI profile so the generated matter opens fully populated.
+                try
+                {
+                    var options = await Api.GetLegalDecisionPersonalInjuryOptionsAsync();
+                    var profile = Legal.Web.Services.TestPersonalInjuryProfileFactory.Build(
+                        options,
+                        state: profileContext.State,
+                        city: profileContext.City,
+                        county: profileContext.County,
+                        incidentSummary: profileContext.IncidentSummary,
+                        liabilitySummary: profileContext.LiabilitySummary,
+                        injurySummary: profileContext.InjurySummary,
+                        treatmentSummary: profileContext.TreatmentSummary,
+                        damagesSummary: profileContext.DamagesSummary,
+                        plaintiff: profileContext.Plaintiff,
+                        defendant: profileContext.Defendant);
+                    await Api.SaveLegalDecisionPersonalInjuryProfileAsync(id, profile);
+                }
+                catch
+                {
+                    // If profile seeding fails, still proceed with the created matter.
+                }
+
                 // Immediately run the matter through the PI decision pipeline, then open the decision
                 // cockpit on the resulting session so the ranked outcomes are ready on arrival.
                 var decisionTypeCode = await ResolvePiDecisionTypeCodeAsync();
@@ -558,7 +581,14 @@
 
     private static T Pick<T>(IReadOnlyList<T> items) => items[_rng.Next(items.Count)];
 
-    private DecisionMatterCreateRequest BuildRandomTestMatter()
+    // Fictional PI context captured while building the matter, used to seed the PI profile.
+    private sealed record TestProfileContext(
+        string? State, string? City, string? County,
+        string? IncidentSummary, string? LiabilitySummary, string? InjurySummary,
+        string? TreatmentSummary, string? DamagesSummary,
+        string? Plaintiff, string? Defendant);
+
+    private DecisionMatterCreateRequest BuildRandomTestMatter(out TestProfileContext profileContext)
     {
         // Prefer DB-backed option lists (facets) when available; fall back to representative pools.
         string PickFacet(IReadOnlyCollection<string> facet, IReadOnlyList<string> fallback)
@@ -594,6 +624,18 @@
             $"through {liabilityTheory}. Claimed injuries: {injury} affecting the {bodyPart}, treated with {treatment}. " +
             $"Jurisdiction: {jurisdiction}. Current stage: {stage}. Damages sought: {damages}. " +
             $"Requested outcome: {disposition}. Auto-generated test matter for validating the PI decision cockpit, dashboard, and ranking panels.";
+
+        profileContext = new TestProfileContext(
+            State: state,
+            City: county.Replace(" County", string.Empty),
+            County: county,
+            IncidentSummary: $"{plaintiff} was injured in a {accident} allegedly caused by {defendant} through {liabilityTheory}.",
+            LiabilitySummary: $"Liability theory: {liabilityTheory}. Supported by the incident report and available witnesses; comparative fault disputed.",
+            InjurySummary: $"Claimed injuries: {injury} affecting the {bodyPart}.",
+            TreatmentSummary: $"Treated with {treatment}.",
+            DamagesSummary: $"Damages sought: {damages}.",
+            Plaintiff: plaintiff,
+            Defendant: defendant);
 
         return new DecisionMatterCreateRequest(
             title.Length > 300 ? title[..300] : title,
