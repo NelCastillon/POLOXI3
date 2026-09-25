@@ -79,8 +79,19 @@ public sealed partial class LegalDecisionService
             && Decision != NormalizationDecision.RequiresReview;
     }
 
+    // Hierarchy role of a normalized dependency node (§4 dual-hierarchy). Parent nodes are broad
+    // groupings (L1/L2 dimensions) that carry further decomposition; Atomic nodes are the leaf
+    // L3 factor propositions that are independently testable. Both are retained in the inventory
+    // so hierarchical context is preserved, but the UI/inventory can filter to atomic factors.
+    internal enum DependencyNodeKind
+    {
+        Atomic,
+        Parent,
+    }
+
     internal sealed record NormalizedDependency(
-        string DependencyId, string Label, DependencyCategory Category, string? Question);
+        string DependencyId, string Label, DependencyCategory Category, string? Question,
+        DependencyNodeKind NodeKind = DependencyNodeKind.Atomic);
 
     internal sealed record CandidateDependencyEdge(
         string CandidateSemanticId, string DependencyId, string RelationType, string? Rationale);
@@ -418,12 +429,14 @@ public sealed partial class LegalDecisionService
         {
             foreach (var b in branches)
             {
+                var hasChildren = b.Children is { Count: > 0 };
                 if (!string.IsNullOrWhiteSpace(b.SemanticBranchId) && seen.Add(b.SemanticBranchId!))
                     acc.Add(new NormalizedDependency(
                         b.SemanticBranchId!, b.DisplayName,
-                        CategorizeDependency($"{b.DisplayName} {b.Interpretation}"), b.Interpretation));
-                if (b.Children is { Count: > 0 })
-                    Walk(b.Children, acc, seen);
+                        CategorizeDependency($"{b.DisplayName} {b.Interpretation}"), b.Interpretation,
+                        hasChildren ? DependencyNodeKind.Parent : DependencyNodeKind.Atomic));
+                if (hasChildren)
+                    Walk(b.Children!, acc, seen);
             }
         }
 

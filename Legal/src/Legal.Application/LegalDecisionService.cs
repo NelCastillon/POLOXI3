@@ -879,7 +879,7 @@ public sealed partial class LegalDecisionService(
             new DecisionAiRequest(route, discoveryPromptCode, discoveryPrompt.SystemPrompt, discoveryUser, discoveryPrompt.OutputSchemaJson, request.CorrelationId),
             cancellationToken);
         var llmCalls = 1;
-        Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount, branchFirst = branchFirstDiscovery });
+        Record("CANDIDATES_PROPOSED", "DISCOVERY", new { discovery.InputTokenCount, discovery.OutputTokenCount, branchFirst = branchFirstDiscovery, promptCode = discoveryPromptCode, stageCode = discoveryPrompt.StageCode });
 
         // Branch-first (v2) emits the /legal/search Wide semantic shape (semanticRoots + scoreless global
         // candidates) and is adapted into the same ProposedCandidate shape so everything downstream is
@@ -1005,11 +1005,26 @@ public sealed partial class LegalDecisionService(
             // When the failure that triggered recovery was (or included) a dual-hierarchy contract violation,
             // the recovered proposal MUST also satisfy the contract \u2014 a structurally-valid proposal that still
             // omits the outcomeProposalHierarchy is NOT acceptable and must not be silently accepted.
+            var recoveredRawJson = recovery.StructuredOutputJson ?? recovery.Content;
             var recoveredEnrichment = branchFirstDiscovery
-                ? AdaptSemanticEnrichment(recovery.StructuredOutputJson ?? recovery.Content)
+                ? AdaptSemanticEnrichment(recoveredRawJson)
                 : SemanticProposalEnrichment.Empty;
+
+            // Node-preserving merge (branch-first single bounded attempt only): keep every accepted L1/L2
+            // branch + outcome node id, append ONLY new recovered child branches/atomic leaves under
+            // existing parents, and never overwrite an accepted node. This lets targeted recovery request
+            // only the missing hierarchy content while the accepted structure survives verbatim.
+            if (branchFirstDiscovery && recovered.Count > 0)
+            {
+                recovered = MergeSharedForestPreservingAccepted(proposal, recovered);
+                recoveredEnrichment = MergeOutcomeHierarchyPreservingAccepted(proposalEnrichment, recoveredEnrichment);
+                recoveredIntegrity = EvaluateProposalIntegrity(recovered);
+                recoveredDiagnostics = BuildProposalIntegrityDiagnostics(effectiveQuery, recovered, recoveredIntegrity);
+                (recoveredDisposition, recoveredDefects) = DiagnoseProposal(recoveredDiagnostics);
+            }
+
             var recoveredContractDefects = (branchFirstDiscovery && recoveredIntegrity.IsAcceptable)
-                ? DiagnoseDualHierarchyContract(recovered, recoveredEnrichment)
+                ? DiagnoseDualHierarchyContract(recovered, recoveredEnrichment, recoveredRawJson)
                 : Array.Empty<string>();
             if (recoveredContractDefects.Count > 0)
                 recoveredDefects = recoveredDefects.Concat(recoveredContractDefects).Distinct().ToArray();
@@ -3625,7 +3640,8 @@ public sealed partial class LegalDecisionService(
     internal static IReadOnlyList<string> DiagnoseDualHierarchyContractForTest(string json, int maxCandidates)
         => DiagnoseDualHierarchyContract(
             AdaptSemanticProposal(json, maxCandidates),
-            AdaptSemanticEnrichment(json));
+            AdaptSemanticEnrichment(json),
+            json);
 
     // R2 Dual-Hierarchy Contract diagnosis (branch-first V2 / LEGAL_DECISION EVALUATE). Deterministically
     // verifies the returned proposal actually carries the TWO separate structured hierarchies the R2 prompt
@@ -3633,7 +3649,7 @@ public sealed partial class LegalDecisionService(
     // a normalized global candidate pool with valid originatingOutcomeNodeIds lineage. Returns targeted
     // contract-defect codes (no scoring, no winner). Empty => the dual-hierarchy contract holds.
     private static IReadOnlyList<string> DiagnoseDualHierarchyContract(
-        IReadOnlyList<ProposedCandidate> proposal, SemanticProposalEnrichment enrichment)
+        IReadOnlyList<ProposedCandidate> proposal, SemanticProposalEnrichment enrichment, string? rawJson = null)
     {
         var defects = new List<string>();
 
@@ -3647,6 +3663,46 @@ public sealed partial class LegalDecisionService(
         // (5) semanticRoots must be a separate shared dependency hierarchy (branch identities present).
         if (sharedBranchIds.Count == 0)
             defects.Add("MISSING_SHARED_DEPENDENCY_HIERARCHY");
+
+        // (5b) Atomic-L3 completeness. A shared forest that exists but never decomposes below broad
+        // L1/L2 dimensions registers those broad dimensions as Universal Factor Inventory factors
+        // (the Mendoza/Harper defect). Flag ONLY when the forest is present, ENTIRELY flat (no branch
+        // anywhere carries children), AND no leaf poses a concrete, independently testable question.
+        // This is deliberately conservative and purely structural: a single interrogative leaf (a real
+        // atomic proposition) is enough to treat a flat forest as already-atomic and NOT flag it, which
+        // preserves legitimately flat atomic forests. No lexical dimension whitelist is used.
+        if (sharedBranchIds.Count > 0 && SharedForestIsUndecomposedDimensions(proposal))
+            defects.Add("SHARED_DEPENDENCY_NOT_DECOMPOSED");
+
+        // (5c) Explicit hierarchy-completeness defects on the SHARED semanticRoots forest. These are
+        // finer-grained than the conservative flat-forest check above and are what the targeted single
+        // bounded recovery repairs. They only apply when a shared forest is actually present.
+        //   • L2_MISSING            — a non-leaf L1 dimension exists but its subtree carries no sub-branch.
+        //   • L3_MISSING            — a non-leaf dimension exists but its subtree contains NO atomic leaf
+        //                             (a concrete, independently testable question), so the decision would
+        //                             register a broad L1/L2 dimension as an atomic factor.
+        //   • INVALID_FACTOR_PROPOSITION — a leaf branch whose label/interpretation matches an outcome-node
+        //                             title or a candidate name (an outcome/candidate leaked in as a factor).
+        // Purely structural; no lexical dimension vocabulary is used. A legitimately flat atomic forest
+        // (governed solely by SHARED_DEPENDENCY_NOT_DECOMPOSED) is NOT flagged by any of these.
+        if (sharedBranchIds.Count > 0)
+        {
+            var (l2Missing, l3Missing) = DiagnoseSharedForestDepthGaps(proposal);
+            if (l2Missing)
+                defects.Add("L2_MISSING");
+            if (l3Missing)
+                defects.Add("L3_MISSING");
+
+            if (SharedForestHasOutcomeOrCandidateLeafLeak(proposal, outcomeNodes))
+                defects.Add("INVALID_FACTOR_PROPOSITION");
+        }
+
+        // (2b) INVALID_PARENT_RELATIONSHIP — an outcome node whose parentOutcomeNodeId references a node
+        // that does not exist in the outcome hierarchy. Read from the RAW proposal because the outcome
+        // normalizer defensively demotes invalid-parent nodes to roots; the raw shape is where the
+        // contract violation is still observable, so recovery can be asked to repair the dangling link.
+        if (rawJson is not null && OutcomeHierarchyHasDanglingParent(rawJson))
+            defects.Add("INVALID_PARENT_RELATIONSHIP");
 
         // (3) Every global candidate must reference one or more existing originating outcome nodes.
         if (outcomeNodes.Count > 0)
@@ -3723,6 +3779,279 @@ public sealed partial class LegalDecisionService(
         return ids;
     }
 
+    // Conservative, purely structural detector for an entirely-flat shared dependency forest of broad
+    // dimensions that was never decomposed into atomic L3 factor propositions. Returns true ONLY when:
+    //   • no branch anywhere in the forest carries children (the forest is entirely flat), AND
+    //   • no leaf carries a concrete, independently testable question (interrogative interpretation).
+    // A single interrogative leaf (an actual atomic proposition, e.g. "Was acceptance timely?") makes a
+    // flat forest already-atomic, so this returns false and does NOT flag it — this preserves valid flat
+    // atomic forests and uses no lexical dimension whitelist.
+    private static bool SharedForestIsUndecomposedDimensions(IReadOnlyList<ProposedCandidate> proposal)
+    {
+        var anyBranch = false;
+        var anyDepth = false;
+        var anyAtomicLeaf = false;
+
+        static bool LooksAtomic(ProposedBranch b)
+            => (b.Interpretation ?? string.Empty).Contains('?')
+               || (b.DisplayName ?? string.Empty).Contains('?');
+
+        void Walk(IReadOnlyList<ProposedBranch> branches)
+        {
+            foreach (var b in branches)
+            {
+                anyBranch = true;
+                if (b.Children is { Count: > 0 })
+                {
+                    anyDepth = true;
+                    Walk(b.Children);
+                }
+                else if (LooksAtomic(b))
+                {
+                    anyAtomicLeaf = true;
+                }
+            }
+        }
+
+        foreach (var c in proposal)
+            Walk(c.Branches ?? Array.Empty<ProposedBranch>());
+
+        // Undecomposed iff there ARE branches, the forest is entirely flat, and no leaf is atomic.
+        return anyBranch && !anyDepth && !anyAtomicLeaf;
+    }
+
+    // A leaf branch is "atomic" when it poses a concrete, independently testable question (interrogative
+    // interpretation/label). Shared across the depth-gap and undecomposed detectors so both agree.
+    private static bool BranchLooksAtomic(ProposedBranch b)
+        => (b.Interpretation ?? string.Empty).Contains('?')
+           || (b.DisplayName ?? string.Empty).Contains('?');
+
+    // Explicit hierarchy depth-gap diagnosis over the SHARED semanticRoots forest.
+    //   • L2_MISSING: a non-leaf L1 (root) dimension exists but at least one such root has NO children.
+    //   • L3_MISSING: a non-leaf dimension exists whose subtree contains NO atomic leaf, so a broad
+    //     dimension would be registered as a factor instead of concrete testable propositions.
+    // A single-level forest of only leaves (no dimension carries children anywhere) is NOT a depth gap;
+    // that shape is governed solely by SHARED_DEPENDENCY_NOT_DECOMPOSED, preserving flat atomic forests.
+    private static (bool L2Missing, bool L3Missing) DiagnoseSharedForestDepthGaps(
+        IReadOnlyList<ProposedCandidate> proposal)
+    {
+        // The same shared forest is attached to every candidate; the first non-empty forest is enough.
+        var roots = proposal
+            .Select(c => c.Branches ?? Array.Empty<ProposedBranch>())
+            .FirstOrDefault(b => b.Count > 0) ?? Array.Empty<ProposedBranch>();
+
+        var anyDimension = roots.Any(r => r.Children is { Count: > 0 });
+        if (!anyDimension)
+            return (false, false); // entirely flat forest — not a depth gap here.
+
+        // L2_MISSING: some non-leaf root dimension has an empty subtree. Because a "dimension" here is a
+        // non-leaf, this instead flags the inverse case: a root that SHOULD be decomposed (there is depth
+        // elsewhere) but is itself a bare leaf sitting beside decomposed siblings.
+        var l2Missing = roots.Any(r => (r.Children is null || r.Children.Count == 0));
+
+        // L3_MISSING: any decomposed dimension whose subtree contains NO atomic (interrogative) leaf.
+        static bool SubtreeHasAtomicLeaf(ProposedBranch b)
+        {
+            if (b.Children is { Count: > 0 })
+                return b.Children.Any(SubtreeHasAtomicLeaf);
+            return BranchLooksAtomic(b);
+        }
+
+        var l3Missing = roots
+            .Where(r => r.Children is { Count: > 0 })
+            .Any(r => !r.Children.Any(SubtreeHasAtomicLeaf));
+
+        return (l2Missing, l3Missing);
+    }
+
+    // INVALID_FACTOR_PROPOSITION detector: a shared-forest LEAF whose label or interpretation is a
+    // (normalized) match for an outcome-node title or a candidate display/outcome name — i.e. an outcome
+    // or candidate leaked in as a factor. Structural, case/whitespace-insensitive; no lexical vocabulary.
+    private static bool SharedForestHasOutcomeOrCandidateLeafLeak(
+        IReadOnlyList<ProposedCandidate> proposal, IReadOnlyList<SemanticOutcomeNode> outcomeNodes)
+    {
+        static string Norm(string? s) => (s ?? string.Empty).Trim().ToLowerInvariant();
+
+        var forbidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var n in outcomeNodes)
+        {
+            if (!string.IsNullOrWhiteSpace(n.Title))
+                forbidden.Add(Norm(n.Title));
+        }
+        foreach (var c in proposal)
+        {
+            if (!string.IsNullOrWhiteSpace(c.DisplayName))
+                forbidden.Add(Norm(c.DisplayName));
+            if (!string.IsNullOrWhiteSpace(c.Outcome))
+                forbidden.Add(Norm(c.Outcome));
+        }
+        forbidden.Remove(string.Empty);
+        if (forbidden.Count == 0)
+            return false;
+
+        var leaked = false;
+        void Walk(IReadOnlyList<ProposedBranch> branches)
+        {
+            foreach (var b in branches)
+            {
+                if (b.Children is { Count: > 0 })
+                {
+                    Walk(b.Children);
+                }
+                else
+                {
+                    if (forbidden.Contains(Norm(b.DisplayName)) || forbidden.Contains(Norm(b.Interpretation)))
+                        leaked = true;
+                }
+            }
+        }
+
+        var roots = proposal
+            .Select(c => c.Branches ?? Array.Empty<ProposedBranch>())
+            .FirstOrDefault(b => b.Count > 0) ?? Array.Empty<ProposedBranch>();
+        Walk(roots);
+        return leaked;
+    }
+
+    // INVALID_PARENT_RELATIONSHIP detector: an outcome node in the RAW proposal whose parentOutcomeNodeId
+    // references a code that does not exist among the outcome nodes. Read raw because the outcome
+    // normalizer demotes such nodes to roots, hiding the violation from the normalized shape.
+    private static bool OutcomeHierarchyHasDanglingParent(string rawJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(rawJson);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("outcomeProposalHierarchy", out var hierarchy)
+                || hierarchy.ValueKind != JsonValueKind.Object
+                || !hierarchy.TryGetProperty("nodes", out var nodesNode)
+                || nodesNode.ValueKind != JsonValueKind.Array)
+                return false;
+
+            var codes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var parents = new List<string>();
+            foreach (var n in nodesNode.EnumerateArray())
+            {
+                if (n.ValueKind != JsonValueKind.Object)
+                    continue;
+                var code = GetNullableString(n, "outcomeNodeId")?.Trim();
+                if (!string.IsNullOrWhiteSpace(code))
+                    codes.Add(code!);
+                var parent = GetNullableString(n, "parentOutcomeNodeId")?.Trim();
+                if (!string.IsNullOrWhiteSpace(parent))
+                    parents.Add(parent!);
+            }
+
+            return parents.Any(p => !codes.Contains(p));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    // Node-preserving merge of the SHARED semanticRoots forest for the single bounded recovery attempt.
+    // Keeps every ACCEPTED branch verbatim (identity = SemanticBranchId, else normalized DisplayName) and
+    // appends ONLY branches present in the recovered forest that the accepted forest did not already have,
+    // recursively under the matching parent. An accepted node is NEVER overwritten. The merged forest is
+    // attached to every candidate (shared axis of competition), exactly like AdaptSemanticProposal.
+    private static IReadOnlyList<ProposedCandidate> MergeSharedForestPreservingAccepted(
+        IReadOnlyList<ProposedCandidate> accepted, IReadOnlyList<ProposedCandidate> recovered)
+    {
+        var acceptedForest = accepted
+            .Select(c => c.Branches ?? Array.Empty<ProposedBranch>())
+            .FirstOrDefault(b => b.Count > 0) ?? Array.Empty<ProposedBranch>();
+        var recoveredForest = recovered
+            .Select(c => c.Branches ?? Array.Empty<ProposedBranch>())
+            .FirstOrDefault(b => b.Count > 0) ?? Array.Empty<ProposedBranch>();
+
+        // Nothing accepted to preserve — take the recovered proposal as-is (its own forest already attached).
+        if (acceptedForest.Count == 0)
+            return recovered;
+
+        static string Key(ProposedBranch b)
+            => !string.IsNullOrWhiteSpace(b.SemanticBranchId)
+                ? "id:" + b.SemanticBranchId!.Trim().ToLowerInvariant()
+                : "name:" + (b.DisplayName ?? string.Empty).Trim().ToLowerInvariant();
+
+        static IReadOnlyList<ProposedBranch> MergeLevel(
+            IReadOnlyList<ProposedBranch> acc, IReadOnlyList<ProposedBranch> rec)
+        {
+            var recByKey = new Dictionary<string, ProposedBranch>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in rec)
+                recByKey[Key(r)] = r;
+
+            var accKeys = new HashSet<string>(acc.Select(Key), StringComparer.OrdinalIgnoreCase);
+            var merged = new List<ProposedBranch>(acc.Count + rec.Count);
+
+            // Preserve each accepted node verbatim, recursively appending only its new recovered children.
+            foreach (var a in acc)
+            {
+                if (recByKey.TryGetValue(Key(a), out var match)
+                    && match.Children is { Count: > 0 })
+                {
+                    var mergedChildren = MergeLevel(
+                        a.Children ?? Array.Empty<ProposedBranch>(), match.Children);
+                    merged.Add(a with { Children = mergedChildren });
+                }
+                else
+                {
+                    merged.Add(a);
+                }
+            }
+
+            // Append recovered branches the accepted forest did not already contain.
+            foreach (var r in rec)
+            {
+                if (!accKeys.Contains(Key(r)))
+                    merged.Add(r);
+            }
+
+            return merged;
+        }
+
+        var mergedForest = MergeLevel(acceptedForest, recoveredForest);
+
+        // Re-attach the merged shared forest to every accepted candidate (identity/lineage preserved).
+        return accepted
+            .Select(c => c with { Branches = mergedForest })
+            .ToArray();
+    }
+
+    // Node-preserving merge of the R1 outcome hierarchy: keep every ACCEPTED outcome node (by
+    // OutcomeNodeId) verbatim and append only recovered outcome nodes with new ids. Accepted nodes are
+    // never overwritten, then the combined set is re-normalized deterministically.
+    private static SemanticProposalEnrichment MergeOutcomeHierarchyPreservingAccepted(
+        SemanticProposalEnrichment accepted, SemanticProposalEnrichment recovered)
+    {
+        var acceptedNodes = accepted.OutcomeNodes;
+        if (acceptedNodes.Count == 0)
+            return recovered;
+
+        var byId = new Dictionary<string, SemanticOutcomeNode>(StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<SemanticOutcomeNode>();
+        foreach (var n in acceptedNodes)
+        {
+            if (byId.ContainsKey(n.OutcomeNodeId))
+                continue;
+            byId[n.OutcomeNodeId] = n;
+            ordered.Add(n);
+        }
+        foreach (var n in recovered.OutcomeNodes)
+        {
+            if (byId.ContainsKey(n.OutcomeNodeId))
+                continue; // never overwrite an accepted node
+            byId[n.OutcomeNodeId] = n;
+            ordered.Add(n);
+        }
+
+        var mergedNodes = NormalizeOutcomeHierarchy(ordered);
+
+        // Prefer the recovered enrichment relations/propositions (they reflect the repaired shape), but
+        // keep the merged, accepted-preserving outcome hierarchy.
+        return recovered with { OutcomeNodes = mergedNodes };
+    }
+
 
     // Builds a defect-targeted recovery instruction. This is REPAIR, not a re-roll: it preserves valid
     // existing structure and asks only for correction of the diagnosed defects.
@@ -3749,6 +4078,11 @@ public sealed partial class LegalDecisionService(
                 "QUERY_DRIFT" => "- Realign the proposal with the original question; it has drifted off-topic.",
                 "MISSING_OUTCOME_HIERARCHY" => "- Return a structured outcomeProposalHierarchy of materially distinct outcome interpretations (with stable outcomeNodeId identities); do not describe it in prose or imply it from semanticRoots.",
                 "MISSING_SHARED_DEPENDENCY_HIERARCHY" => "- Return a separate shared semanticRoots dependency hierarchy of legal/factual propositions with stable branchId identities; it must be distinct from the outcome hierarchy.",
+                "SHARED_DEPENDENCY_NOT_DECOMPOSED" => "- The shared semanticRoots stopped at broad evaluation dimensions. Decompose each material dimension into ATOMIC, INDEPENDENTLY TESTABLE L3 factor propositions (each a single concrete question, e.g. \"Was acceptance timely under the applicable deadline?\"), attach them as children with stable branchId identities, and connect candidates to those atomic branches via candidateBranchRelations. Do not register a broad dimension label as a leaf factor.",
+                "L2_MISSING" => "- Preserve every accepted L1 dimension (keep the same branchId identities). For each L1 dimension that is still a bare leaf, add its substantive L2 subdependencies as children WITHOUT changing or removing the accepted L1 nodes.",
+                "L3_MISSING" => "- Preserve every accepted L1/L2 branch (keep the same branchId identities). Under each dimension that lacks them, add ONLY the missing ATOMIC, INDEPENDENTLY TESTABLE L3 factor propositions (each a single concrete question) as children; do not overwrite or renumber accepted nodes.",
+                "INVALID_FACTOR_PROPOSITION" => "- A shared semanticRoots leaf duplicates an outcome interpretation or a candidate name. Replace it with a concrete, independently testable legal/factual proposition; outcomes and candidates are never factors.",
+                "INVALID_PARENT_RELATIONSHIP" => "- An outcome node's parentOutcomeNodeId references a node that does not exist. Point each parentOutcomeNodeId at an existing outcomeNodeId, or make the node a root.",
                 "CANDIDATE_MISSING_OUTCOME_LINEAGE" => "- Every global candidate must reference one or more originatingOutcomeNodeIds that exist in outcomeProposalHierarchy.",
                 "CANDIDATE_DANGLING_OUTCOME_LINEAGE" => "- Each originatingOutcomeNodeIds value must reference an actual outcome node; remove references to nodes that do not exist.",
                 "RELATION_UNKNOWN_CANDIDATE" => "- Every candidateBranchRelation.candidateId must reference an existing global candidate.",

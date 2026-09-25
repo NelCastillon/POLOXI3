@@ -608,6 +608,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         var depth=0;
         var terminationReason="LLM_COMPLETE";
         var aggregateConfidence=0m;
+        // Legal decision EVALUATE runs must decompose broad L1/L2 evaluation dimensions into atomic,
+        // independently testable L3 factors (the Mendoza/Harper defect). Confidence-based and
+        // LLM-complete early exits are therefore honored only after Level 3 has been processed on a
+        // legal decision run; every other route keeps the standard minimum depth of 2. Circuit
+        // breakers (depth ceiling, LLM-call ceiling, evidence-priority, no-progress) are unchanged, so
+        // this can never force an unbounded hierarchy — it only defers the SOFT confidence/complete
+        // exits by one level so the atomic-factor level can be requested.
+        var minimumTerminationDepth=IsLegalDecisionEvaluationRun?3:2;
         var poloxiRequest=new PoloxiSearchRequest(request.TenantId,request.UserId,request.Query,request.MaximumResults,request.CorrelationId){GrantedPermissions=request.GrantedPermissions};
         // Raw first LLM result: fire the PLAIN query at the selected model in parallel — exactly what the
         // user would get from the model's own chat interface, before POLOXI touches anything. Comparison
@@ -752,13 +760,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 }
 
                 // Confidence: evidence-weighted aggregate over surviving paths.
-                // Minimum depth of 2: confidence/LLM-complete exits are honored only after Level 2
-                // has been processed, so single-level hierarchies cannot terminate early.
+                // Minimum depth (2 normally, 3 for legal decision runs): confidence/LLM-complete exits
+                // are honored only after that level has been processed, so shallow hierarchies cannot
+                // terminate before the atomic-factor level is generated.
                 aggregateConfidence=ComputeAggregateConfidence(survivors);
-                if(depth>=2&&aggregateConfidence>=configuration.TargetConfidence){terminationReason="CONFIDENCE_REACHED";break;}
+                if(depth>=minimumTerminationDepth&&aggregateConfidence>=configuration.TargetConfidence){terminationReason="CONFIDENCE_REACHED";break;}
 
                 // Natural LLM termination: no surviving branch wants further narrowing.
-                if(depth>=2&&survivors.All(branch=>!branch.ContinueNarrowing)){terminationReason="LLM_COMPLETE";break;}
+                if(depth>=minimumTerminationDepth&&survivors.All(branch=>!branch.ContinueNarrowing)){terminationReason="LLM_COMPLETE";break;}
 
                 // Circuit breakers (never functional limits; audited when reached).
                 if(depth>=effectiveDepthCeiling){terminationReason=answerKindRoutingApplied&&effectiveDepthCeiling<configuration.AbsoluteDepthCeiling?"ANSWER_KIND_DEPTH_BUDGET":"DEPTH_CEILING_REACHED";break;}
@@ -2620,7 +2629,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         // ranking, evidence admission, or scoring - it only ensures the LLM-knowledge narrowing paths exist.
         if(allInterpretiveBranches.Length==0)
             allInterpretiveBranches=orderedSurvivors.Where(branch=>!string.IsNullOrWhiteSpace(branch.Interpretation)).OrderBy(branch=>branch.LevelNumber).ThenByDescending(branch=>branch.Confidence).ToArray();
-        var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,10);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
+        // Interpretive-result budget: normally capped at 10 numbered paths. A legal decision EVALUATE run
+        // now decomposes broad L1/L2 dimensions into atomic L3/L4 factors, so a flat cap of 10 would be fully
+        // consumed by the L1+L2 dimensions (ordered level-ascending above) and silently drop every atomic
+        // factor from the Interpretation results surface even though they exist in the reasoning hierarchy.
+        // Raise the cap for legal runs so the deeper atomic levels are represented; the prompt-budget loop
+        // below still shrinks interpretiveCount under input pressure, so this can never break the safety guard.
+        var interpretiveCap=IsLegalDecisionEvaluationRun?24:10;
+        var pathCount=orderedSurvivors.Length;var interpretiveCount=Math.Min(allInterpretiveBranches.Length,interpretiveCap);var evidenceCount=Math.Min(ranked.Count,12);var snippetCount=Math.Min(externalKnowledge.Count,10);var snippetLength=900;
         // The safety guard rejects prompts where systemPrompt.Length + userPrompt.Length exceeds the
         // configured maximum, so the user-prompt budget must reserve room for the (large) system prompt.
         // Fetch it up front and shrink the user prompt against the remaining headroom, never below a floor.

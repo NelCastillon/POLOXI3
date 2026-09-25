@@ -373,7 +373,8 @@ public sealed record WideFactorDto(
     string FactorType,           // LEGAL / FACTUAL / PROCEDURAL / EVIDENTIARY / ECONOMIC
     string ValueSource,          // where the actual value came from (or MISSING)
     string? SourceLocation,      // document/matter-field reference, when known
-    string ValidationStatus);    // VALID / INCOMPLETE / INVALID
+    string ValidationStatus,     // VALID / INCOMPLETE / INVALID
+    string NodeKind = "ATOMIC"); // ATOMIC (leaf L3 factor) / PARENT (broad L1/L2 grouping)
 
 // One Candidate×Factor relationship. The same shared factor may have different relationships with
 // different candidates (e.g. REQUIRED for one, SUPPORTS another). Reuses the existing relation

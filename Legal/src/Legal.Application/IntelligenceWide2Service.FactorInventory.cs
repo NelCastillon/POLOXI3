@@ -124,7 +124,8 @@ public sealed partial class IntelligenceWide2Service
                 FactorType: dep.Category.ToString().ToUpperInvariant(),
                 ValueSource: hasValue ? valueSource : AvailMissing,
                 SourceLocation: sourceLocation,
-                ValidationStatus: hasValue ? "VALID" : AvailIncomplete));
+                ValidationStatus: hasValue ? "VALID" : AvailIncomplete,
+                NodeKind: dep.NodeKind.ToString().ToUpperInvariant()));
 
             // One relationship row per candidate edge. The same factor may be REQUIRED for one candidate
             // and SUPPORTS another — each edge is preserved distinctly.

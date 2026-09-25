@@ -37,9 +37,12 @@ public sealed partial class IntelligenceWide2Service
             IsLegalDecisionEvaluationRun: true,
             GateMode: _gateMode ?? StatusNotReached,
             NormalizationMode: _normalizationGateStatus,
-            // Prompt identity is not captured by the dynamic pipeline today. Report MISSING explicitly
-            // rather than fabricating a value — the acceptance criteria forbid inferred/placeholder data.
-            PromptKey: null,
+            // The dynamic Wide2 hierarchy is always built from the DB-backed WIDE_INTENT (Level 1) and
+            // WIDE_HIERARCHY_STEP (Level 2+) prompts — this is a deterministic property of the pipeline,
+            // not an inferred value, so reporting the composite prompt key is factual. The concrete
+            // version/hash are resolved per tenant by the prompt catalog at dispatch time and are not
+            // returned to the caller, so they remain MISSING rather than being fabricated.
+            PromptKey: $"{IntelligencePromptCodes.WideIntent} + {IntelligencePromptCodes.WideHierarchyStep}",
             PromptVersion: null,
             PromptHash: null);
 
