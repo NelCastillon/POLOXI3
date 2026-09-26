@@ -16,7 +16,7 @@ public sealed class LegalRetrieverScopeRoutingTests
         var govInfo=new ProviderSource("GOVINFO_ECFR");
         var cornell=new ProviderSource("CORNELL_LII");
         var official=new ProviderSource("OFFICIAL_AUTHORITY");
-        var retriever=new LegalRetriever(court,govInfo,cornell,official,NullLogger<LegalRetriever>.Instance);
+        var retriever=new LegalRetriever(court,govInfo,cornell,official,Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<LegalRetriever>.Instance);
         var scope=new LegalAuthorityScope
         {
             IssueScopeCode=LegalAuthorityIssueScopes.SettlementEnforcement,

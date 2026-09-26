@@ -46,44 +46,13 @@ public sealed class OfficialLegalAuthorityRetriever(
     ILegalAuthoritySourceBootstrapper bootstrapper,
     ILegalJurisdictionDetector jurisdictionDetector,
     IEpistemicTenantAccessor tenantAccessor,
+    IErrorLogService errorLog,
     ILogger<OfficialLegalAuthorityRetriever> logger):IOfficialLegalAuthoritySource
 {
-    private static readonly Regex TemplateToken=new(@"\{(?<name>[A-Za-z][A-Za-z0-9_]*)(?::(?<operation>prefix):(?<argument>\d+))?\}",RegexOptions.Compiled);
+    private static readonly Regex TemplateToken=new(@"\{(?<name>[A-Za-z][A-Za-z0-9_]*)(?::(?<operation>prefix|pad|replace):(?<argument>[^}]+))?\}",RegexOptions.Compiled);
     private static readonly Regex HtmlTag=new("<[^>]+>",RegexOptions.Compiled);
+    private static readonly Regex ScriptOrStyleBlock=new(@"<(script|style)\b[^>]*>.*?</\1>",RegexOptions.Compiled|RegexOptions.IgnoreCase|RegexOptions.Singleline);
     private static readonly Regex WhiteSpace=new(@"\s+",RegexOptions.Compiled);
-
-    // Built-in official California statutory sources (California Legislative Information, the state's
-    // authoritative code publisher at leginfo.legislature.ca.gov). These close the coverage gap where
-    // an exact California statutory citation (e.g. "California Vehicle Code § 22350") had no configured
-    // adapter and returned COVERAGE_GAP. Each descriptor maps a named California code to its leginfo
-    // lawCode so codes_displaySection.xhtml resolves the exact section. Registry descriptors still take
-    // precedence (lower Priority wins); these seeds apply only when nothing tenant-specific matches.
-    private static readonly IReadOnlyList<LegalAuthoritySourceDescriptor> BuiltInCaliforniaSources = BuildCaliforniaSources();
-
-    private static IReadOnlyList<LegalAuthoritySourceDescriptor> BuildCaliforniaSources()
-    {
-        // California code name -> leginfo lawCode. Kept deterministic (no aliases/LLM); covers the
-        // codes most frequently cited in litigation matters.
-        var codes = new (string Name, string LawCode)[]
-        {
-            ("Vehicle", "VEH"), ("Civil", "CIV"), ("Penal", "PEN"), ("Probate", "PROB"),
-            ("Evidence", "EVID"), ("Business and Professions", "BPC"), ("Corporations", "CORP"),
-            ("Family", "FAM"), ("Government", "GOV"), ("Health and Safety", "HSC"),
-            ("Insurance", "INS"), ("Labor", "LAB"), ("Code of Civil Procedure", "CCP"),
-        };
-        return codes.Select(code => new LegalAuthoritySourceDescriptor(
-            LegalAuthoritySourceId: Guid.Empty,
-            ProviderCode: $"CA_LEGINFO_{code.LawCode}",
-            JurisdictionCode: "NAME:CALIFORNIA",
-            AuthorityKindCode: "STATUTE",
-            CitationPattern: $@"\bCal(?:ifornia|\.)?\s+{Regex.Escape(code.Name)}\s+Code\s*(?:§+|section|sec\.?)?\s*(?<section>\d[\dA-Za-z.:-]*)",
-            BaseUrl: "https://leginfo.legislature.ca.gov",
-            DocumentUrlTemplate: $"faces/codes_displaySection.xhtml?lawCode={code.LawCode}&sectionNum={{section}}",
-            SectionAnchorTemplate: null,
-            ExtractionStrategyCode: "FULL_PAGE_TEXT",
-            Priority: 500)).ToArray();
-    }
-
     public async Task<LegalProviderRetrievalResult> SearchAsync(string query,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default)
     {
         if(string.IsNullOrWhiteSpace(query))return Empty(false,"INVALID_QUERY");
@@ -98,17 +67,11 @@ public sealed class OfficialLegalAuthorityRetriever(
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(exception,"LEGAL-TRACE stage=3-official-authority outcome=REGISTRY_FAILURE");
+            await errorLog.LogAsync("OfficialLegalAuthorityRetriever",exception,"SearchAsync/GetSources",severityCode:"Warning",contextJson:$"{{\"outcome\":\"REGISTRY_FAILURE\"}}",cancellationToken:cancellationToken);
             return Empty(true,"REGISTRY_FAILURE",exception.Message);
         }
 
         var matches=MatchDescriptors(query,descriptors);
-        if(matches.Count==0)
-        {
-            // Fall back to the built-in official California statutory sources before attempting live
-            // discovery. This closes the coverage gap for exact California code citations without a
-            // tenant-specific configuration or a network bootstrap round-trip.
-            matches=MatchDescriptors(query,BuiltInCaliforniaSources);
-        }
         if(matches.Count==0&&jurisdictionDetector.TryDetect(query,out var jurisdictionCitation))
         {
             var discovered=await bootstrapper.BootstrapAsync(new(
@@ -169,7 +132,19 @@ public sealed class OfficialLegalAuthorityRetriever(
             try
             {
                 var citation=Regex.Match(query,descriptor.CitationPattern,RegexOptions.IgnoreCase|RegexOptions.CultureInvariant,TimeSpan.FromMilliseconds(250));
-                if(citation.Success)matches.Add((descriptor,citation));
+                if(!citation.Success)continue;
+                if(IsCaliforniaCivilCode377Miscitation(descriptor,citation))
+                {
+                    // Defense-in-depth guard independent of DB pattern drift: California's wrongful-death /
+                    // survival statutes (§§ 377.10-377.62, including § 377.60) live in the Code of Civil
+                    // Procedure, NOT the Civil Code. A CIV-worded descriptor that still captures a 377-series
+                    // section (e.g. because a re-seeded or newly registered Civil-Code provider lacks the
+                    // 0336/0338 negative lookahead) must be refused so the citation resolves only through the
+                    // CCP descriptor and never surfaces a contradictory "Cal. Civ. Code § 377.x" identity.
+                    logger.LogWarning("LEGAL-TRACE stage=3-official-authority provider={Provider} outcome=CIV_377_ROUTING_GUARD section={Section}",descriptor.ProviderCode,citation.Groups["section"].Value);
+                    continue;
+                }
+                matches.Add((descriptor,citation));
             }
             catch(ArgumentException exception)
             {
@@ -177,6 +152,27 @@ public sealed class OfficialLegalAuthorityRetriever(
             }
         }
         return matches;
+    }
+
+    // Returns true when a Civil-Code (CIV) descriptor has captured a California § 377-series section. The
+    // 377-series is a Code of Civil Procedure family, so a CIV descriptor matching it is always a
+    // miscitation-routing error. "Civil Code" is detected from the provider code (…_CIV / contains CIV) or
+    // a "lawCode=CIV" document template; Code of Civil Procedure providers (…_CCP / lawCode=CCP) are never
+    // treated as CIV, so this guard never suppresses the correct CCP resolution.
+    private static bool IsCaliforniaCivilCode377Miscitation(LegalAuthoritySourceDescriptor descriptor,Match citation)
+    {
+        var section=citation.Groups["section"].Success?citation.Groups["section"].Value.Trim():string.Empty;
+        if(!section.StartsWith("377",StringComparison.OrdinalIgnoreCase))return false;
+        if(section.Length>3&&section[3] is not ('.' or ':' or '-'))return false;
+        var provider=descriptor.ProviderCode??string.Empty;
+        var isCcp=provider.EndsWith("_CCP",StringComparison.OrdinalIgnoreCase)
+            ||provider.Contains("CCP",StringComparison.OrdinalIgnoreCase)
+            ||descriptor.DocumentUrlTemplate.Contains("lawCode=CCP",StringComparison.OrdinalIgnoreCase);
+        if(isCcp)return false;
+        var isCiv=provider.EndsWith("_CIV",StringComparison.OrdinalIgnoreCase)
+            ||provider.Contains("CIV",StringComparison.OrdinalIgnoreCase)
+            ||descriptor.DocumentUrlTemplate.Contains("lawCode=CIV",StringComparison.OrdinalIgnoreCase);
+        return isCiv;
     }
 
     private async Task<(WideExternalKnowledgeSnippet? Snippet,string? FailureOutcome,string? FailureDetail,string? Url,int? HttpStatus)> FetchAsync(string query,LegalAuthoritySourceDescriptor descriptor,Match citation,CancellationToken timeoutToken,CancellationToken cancellationToken)
@@ -208,25 +204,92 @@ public sealed class OfficialLegalAuthorityRetriever(
             var html=await response.Content.ReadAsStringAsync(timeoutToken);
             var text=Extract(html,descriptor,citation);
             if(string.IsNullOrWhiteSpace(text))return (null,"EXTRACTION_EMPTY",null,url,status);
-            return (new(query,$"{citation.Value} ({descriptor.ProviderCode})",url,text,0m,DateTime.UtcNow)
+            // Compose ONE canonical authority identity from the descriptor the citation actually resolved
+            // to, NOT the raw matched citation text. A "Cal. Civ. Code § 377.60" miscitation routed to the
+            // CCP descriptor must be reported as the Code of Civil Procedure authority it really is, so the
+            // display title, jurisdiction, and source version all agree on a single authority identity and
+            // no obsolete Civil-Code wording survives from stale retrieval text.
+            var canonicalTitle=BuildCanonicalAuthorityTitle(descriptor,citation);
+            return (new(query,canonicalTitle,url,text,0m,DateTime.UtcNow)
             {
                 AuthorityKind=descriptor.AuthorityKindCode,
                 SourceProvider="OFFICIAL_AUTHORITY",
                 SourceVersion=$"{descriptor.ProviderCode}:{descriptor.ExtractionStrategyCode}",
+                Jurisdiction=NormalizeJurisdictionLabel(descriptor.JurisdictionCode),
                 ProviderIdentityVerified=true,
             },null,null,url,status);
         }
         catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
         {
             logger.LogWarning(exception,"LEGAL-TRACE stage=4-official-authority provider={Provider} outcome=PROVIDER_FAILURE",descriptor.ProviderCode);
+            await errorLog.LogAsync("OfficialLegalAuthorityRetriever",exception,$"Fetch/{descriptor.ProviderCode}",severityCode:"Warning",contextJson:$"{{\"outcome\":\"PROVIDER_FAILURE\",\"provider\":\"{descriptor.ProviderCode}\"}}",cancellationToken:cancellationToken);
             return (null,"PROVIDER_FAILURE",exception.Message,url,null);
         }
     }
 
+    // Deterministically compose the single canonical authority identity for an admitted snippet from the
+    // descriptor the citation resolved to. The captured section number is taken from the regex's named
+    // "section" group when present (so a Civil-Code-worded 377.x miscitation still surfaces the section),
+    // and the code label is derived from the provider code — never from the raw miscited wording. Result
+    // form: "California Code of Civil Procedure § 377.60 (CA_LEGINFO_CCP)".
+    private static string BuildCanonicalAuthorityTitle(LegalAuthoritySourceDescriptor descriptor,Match citation)
+    {
+        var jurisdiction=NormalizeJurisdictionLabel(descriptor.JurisdictionCode);
+        var codeLabel=CanonicalCodeLabel(descriptor.ProviderCode,descriptor.AuthorityKindCode);
+        var section=citation.Groups["section"].Success?citation.Groups["section"].Value.Trim():string.Empty;
+        var sectionPart=section.Length>0?$" § {section}":string.Empty;
+        return $"{jurisdiction} {codeLabel}{sectionPart} ({descriptor.ProviderCode})".Replace("  "," ").Trim();
+    }
+
+    // Map a provider code (e.g. CA_LEGINFO_CCP, CA_LEGINFO_CIV) to its authoritative code name. The code
+    // family is the trailing token after the last underscore. Falls back to the authority-kind label so
+    // an unknown provider still yields a coherent identity rather than the raw miscitation.
+    private static string CanonicalCodeLabel(string providerCode,string authorityKindCode)
+    {
+        var family=providerCode.Split('_').LastOrDefault()?.ToUpperInvariant()??string.Empty;
+        return family switch
+        {
+            "CCP"=>"Code of Civil Procedure",
+            "CIV"=>"Civil Code",
+            "PEN"=>"Penal Code",
+            "PROB"=>"Probate Code",
+            "VEH"=>"Vehicle Code",
+            "BPC"=>"Business and Professions Code",
+            "HSC"=>"Health and Safety Code",
+            "LAB"=>"Labor Code",
+            "INS"=>"Insurance Code",
+            "GOV"=>"Government Code",
+            "EVID"=>"Evidence Code",
+            "WIC"=>"Welfare and Institutions Code",
+            _=>string.Equals(authorityKindCode,"STATUTE",StringComparison.OrdinalIgnoreCase)?"Statute":"Authority",
+        };
+    }
+
+    // Turn a stored jurisdiction code (e.g. "NAME:CALIFORNIA") into a display label ("California").
+    private static string NormalizeJurisdictionLabel(string jurisdictionCode)
+    {
+        if(string.IsNullOrWhiteSpace(jurisdictionCode))return string.Empty;
+        var raw=jurisdictionCode.Contains(':')?jurisdictionCode[(jurisdictionCode.IndexOf(':')+1)..]:jurisdictionCode;
+        raw=raw.Trim();
+        if(raw.Length==0)return string.Empty;
+        return System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(raw.ToLowerInvariant());
+    }
+
+    // Minimum number of characters a FULL_PAGE_TEXT statutory body must contain after chrome removal to
+    // be admitted as evidence. leginfo returns a JSF "shell" page (search box + navigation only, no
+    // statute) for sections that do not exist under the requested lawCode; that shell decodes to a few
+    // words of chrome. A real statute section decodes to hundreds of characters of operative text.
+    private const int MinimumStatutoryBodyLength=120;
+
+    // leginfo emits the operative statute text AFTER this sentinel ("Search Phrase: Code Text <body>").
+    // On a shell page nothing meaningful follows it, so splitting on the last occurrence isolates the
+    // real body and lets the length guard reject empty shells deterministically.
+    private const string LeginfoBodySentinel="Code Text";
+
     private static string? Extract(string html,LegalAuthoritySourceDescriptor descriptor,Match citation)
     {
         if(descriptor.ExtractionStrategyCode.Equals("FULL_PAGE_TEXT",StringComparison.OrdinalIgnoreCase))
-            return WebUtility.HtmlDecode(WhiteSpace.Replace(HtmlTag.Replace(html," ")," ")).Trim();
+            return ExtractFullPageText(html);
         if(!descriptor.ExtractionStrategyCode.Equals("HTML_ID_SECTION",StringComparison.OrdinalIgnoreCase))return null;
         var anchor=ExpandTemplate(descriptor.SectionAnchorTemplate??string.Empty,citation);
         if(string.IsNullOrWhiteSpace(anchor))return null;
@@ -238,6 +301,20 @@ public sealed class OfficialLegalAuthorityRetriever(
         return WebUtility.HtmlDecode(WhiteSpace.Replace(HtmlTag.Replace(fragment," ")," ")).Trim();
     }
 
+    // Strips markup/script, then rejects JSF shell pages that carry no statutory body. When the leginfo
+    // "Code Text" sentinel is present we keep only what follows the LAST occurrence (the operative
+    // statute), which is empty on a shell page. The length guard then discards chrome-only pages so they
+    // are never admitted as evidence (returns null => caller reports EXTRACTION_EMPTY).
+    private static string? ExtractFullPageText(string html)
+    {
+        var withoutScripts=ScriptOrStyleBlock.Replace(html," ");
+        var decoded=WebUtility.HtmlDecode(WhiteSpace.Replace(HtmlTag.Replace(withoutScripts," ")," ")).Trim();
+        if(decoded.Length==0)return null;
+        var sentinelIndex=decoded.LastIndexOf(LeginfoBodySentinel,StringComparison.OrdinalIgnoreCase);
+        var body=sentinelIndex>=0?decoded[(sentinelIndex+LeginfoBodySentinel.Length)..].Trim():decoded;
+        return body.Length>=MinimumStatutoryBodyLength?body:null;
+    }
+
     private static string? ExpandTemplate(string template,Match citation)
     {
         var invalid=false;
@@ -246,9 +323,19 @@ public sealed class OfficialLegalAuthorityRetriever(
             var group=citation.Groups[token.Groups["name"].Value];
             if(!group.Success){invalid=true;return string.Empty;}
             var result=group.Value;
-            if(token.Groups["operation"].Value.Equals("prefix",StringComparison.OrdinalIgnoreCase)&&
-               int.TryParse(token.Groups["argument"].Value,out var length))
+            var operation=token.Groups["operation"].Value;
+            var argument=token.Groups["argument"].Value;
+            if(operation.Equals("prefix",StringComparison.OrdinalIgnoreCase)&&
+               int.TryParse(argument,out var length))
                 result=result[..Math.Min(length,result.Length)];
+            else if(operation.Equals("pad",StringComparison.OrdinalIgnoreCase)&&
+               int.TryParse(argument,out var width))
+                result=result.PadLeft(width,'0');
+            // replace maps one character to a replacement (e.g. "{section:replace:.-}" turns "377.60" into
+            // "377-60" for static-HTML aggregators that slugify section numbers). Argument = <from><to...>:
+            // the first character is replaced by the remaining substring (may be empty to delete it).
+            else if(operation.Equals("replace",StringComparison.OrdinalIgnoreCase)&&argument.Length>=1)
+                result=result.Replace(argument[0].ToString(),argument[1..]);
             return Uri.EscapeDataString(result);
         });
         return invalid?null:value;

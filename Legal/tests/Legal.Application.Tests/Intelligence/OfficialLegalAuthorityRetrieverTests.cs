@@ -109,11 +109,106 @@ public sealed class OfficialLegalAuthorityRetrieverTests
         Assert.Contains("sectionNum=22350",requested.AbsoluteUri);
     }
 
+    [Fact]
+    public async Task SearchAsync_ReplaceTokenSlugifiesSectionForStaticHtmlAggregator()
+    {
+        // Static-HTML statutory aggregators slugify dotted section numbers in the URL path
+        // (e.g. "377.60" becomes "377-60"). The reusable "{section:replace:.-}" template operation
+        // must produce that slug so the authoritative page resolves and its text can be extracted.
+        var descriptor=Descriptor("STATIC_AGGREGATOR",@"AGG (?<section>\d[\d.]*)","https://codes.example","/ca/ccp/{section:replace:.-}.html#{section}");
+        Uri? requested=null;
+        var handler=new StubHandler(request=>
+        {
+            requested=request.RequestUri;
+            return Html("<article id=\"377.60\"><h2>Section 377.60</h2><p>A decedent's heirs may bring a wrongful death action.</p></article><article id=\"377.61\">Next</article>");
+        });
+        var sut=Create(descriptor,handler);
+
+        var result=await sut.SearchAsync("Apply AGG 377.60",Configuration());
+
+        var snippet=Assert.Single(result.Snippets);
+        Assert.Equal("https://codes.example/ca/ccp/377-60.html#377.60",requested!.AbsoluteUri);
+        Assert.Contains("wrongful death action",snippet.Snippet);
+        Assert.Equal("RESULTS_FOUND",result.Diagnostic.OutcomeCode);
+    }
+
+    [Fact]
+    public async Task SearchAsync_CivilCodeDescriptorNeverResolves377SeriesEvenWhenPatternGreedilyMatches()
+    {
+        // Defense-in-depth regression: California's wrongful-death / survival statutes (§ 377.x) live in
+        // the Code of Civil Procedure, not the Civil Code. Even if a Civil-Code (CIV) descriptor still
+        // carries a greedy pattern that captures "Cal. Civ. Code § 377.60" (e.g. a re-seeded provider that
+        // lost the 0336/0338 negative lookahead), the retriever must refuse it and never fetch lawCode=CIV.
+        var civ=Descriptor("CA_LEGINFO_CIV",@"\bCal\.?\s+Civ\.?\s+Code\s*§?\s*(?<section>\d[\dA-Za-z.:-]*)","https://leginfo.legislature.ca.gov","faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum={section}","FULL_PAGE_TEXT");
+        var handler=new StubHandler(_=>throw new InvalidOperationException("CIV descriptor must not be fetched for a § 377-series citation."));
+        var sut=Create(handler,civ);
+
+        var result=await sut.SearchAsync("Apply Cal. Civ. Code § 377.60",Configuration());
+
+        Assert.Empty(result.Snippets);
+        Assert.Equal(0,handler.RequestCount);
+        Assert.NotEqual("RESULTS_FOUND",result.Diagnostic.OutcomeCode);
+    }
+
+    [Fact]
+    public async Task SearchAsync_377SeriesResolvesThroughCcpDescriptorNotCivilCode()
+    {
+        // With both a greedy CIV descriptor and the correct CCP descriptor present, the § 377.60 citation
+        // must resolve ONLY through the Code of Civil Procedure provider, producing a single authoritative
+        // CCP identity rather than a contradictory "Cal. Civ. Code" one.
+        var civ=Descriptor("CA_LEGINFO_CIV",@"\bCal\.?\s+Civ\.?\s+Code\s*§?\s*(?<section>\d[\dA-Za-z.:-]*)","https://leginfo.legislature.ca.gov","faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum={section}","FULL_PAGE_TEXT");
+        var ccp=Descriptor("CA_LEGINFO_CCP",@"\bCal\.?\s+Civ\.?\s+Code\s*§?\s*(?<section>377[\dA-Za-z.:-]*)","https://leginfo.legislature.ca.gov","faces/codes_displaySection.xhtml?lawCode=CCP&sectionNum={section}","FULL_PAGE_TEXT");
+        Uri? requested=null;
+        var handler=new StubHandler(request=>
+        {
+            requested=request.RequestUri;
+            return Html("Code of Civil Procedure Section 377.60. A cause of action for the death of a person caused by the wrongful act or neglect of another may be asserted by the decedent's surviving spouse, domestic partner, children, and heirs.");
+        });
+        var sut=Create(handler,civ,ccp);
+
+        var result=await sut.SearchAsync("Apply Cal. Civ. Code § 377.60",Configuration());
+
+        var snippet=Assert.Single(result.Snippets);
+        Assert.Equal("RESULTS_FOUND",result.Diagnostic.OutcomeCode);
+        Assert.StartsWith("CA_LEGINFO_CCP:",snippet.SourceVersion);
+        Assert.Contains("lawCode=CCP",requested!.AbsoluteUri);
+        Assert.DoesNotContain("lawCode=CIV",requested.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task SearchAsync_CivilCodeDescriptorStillResolvesOrdinaryCivilCodeSection()
+    {
+        // The 377 guard must be narrow: ordinary Civil Code citations (e.g. § 1714) must still resolve
+        // through the CIV descriptor exactly as before.
+        var civ=Descriptor("CA_LEGINFO_CIV",@"\bCal\.?\s+Civ\.?\s+Code\s*§?\s*(?<section>\d[\dA-Za-z.:-]*)","https://leginfo.legislature.ca.gov","faces/codes_displaySection.xhtml?lawCode=CIV&sectionNum={section}","FULL_PAGE_TEXT");
+        Uri? requested=null;
+        var handler=new StubHandler(request=>
+        {
+            requested=request.RequestUri;
+            return Html("Civil Code Section 1714. Everyone is responsible, not only for the result of his or her willful acts, but also for an injury occasioned to another by his or her want of ordinary care or skill in the management of his or her property or person.");
+        });
+        var sut=Create(handler,civ);
+
+        var result=await sut.SearchAsync("Apply Cal. Civ. Code § 1714",Configuration());
+
+        var snippet=Assert.Single(result.Snippets);
+        Assert.Equal("RESULTS_FOUND",result.Diagnostic.OutcomeCode);
+        Assert.StartsWith("CA_LEGINFO_CIV:",snippet.SourceVersion);
+        Assert.Contains("lawCode=CIV",requested!.AbsoluteUri);
+        Assert.Contains("sectionNum=1714",requested.AbsoluteUri);
+    }
+
     private static OfficialLegalAuthorityRetriever Create(LegalAuthoritySourceDescriptor descriptor,StubHandler handler) =>
-        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        new(new HttpClient(handler),new StubRegistry([descriptor]),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+
+    private static OfficialLegalAuthorityRetriever Create(StubHandler handler,params LegalAuthoritySourceDescriptor[] descriptors) =>
+        new(new HttpClient(handler),new StubRegistry(descriptors),new StubBootstrapper(),new StubDetector(),new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
     private static LegalAuthoritySourceDescriptor Descriptor(string provider,string pattern,string baseUrl,string template) =>
         new(Guid.NewGuid(),provider,"TEST", "STATUTE",pattern,baseUrl,template,"{section}","HTML_ID_SECTION",10);
+
+    private static LegalAuthoritySourceDescriptor Descriptor(string provider,string pattern,string baseUrl,string template,string extractionStrategyCode) =>
+        new(Guid.NewGuid(),provider,"NAME:CALIFORNIA", "STATUTE",pattern,baseUrl,template,null,extractionStrategyCode,10);
 
     private static WideLegalGroundingConfiguration Configuration() =>
         new(true,3,5,24,15,true,"https://court.example","",true,"https://gov.example","","https://ecfr.example",true,"https://lii.example");

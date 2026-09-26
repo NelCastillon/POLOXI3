@@ -1,5 +1,6 @@
 using Legal.Application.Features.Intelligence;
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Intelligence.Decision.Core;
 
 namespace Legal.Application;
 
@@ -35,6 +36,11 @@ public sealed partial class IntelligenceWide2Service
     private const string VerifSupplied = "SUPPLIED";
     private const string VerifUnverified = "UNVERIFIED";
 
+    // Per-run fact-binding validator (DB-backed config resolved by the orchestrator; fail-soft
+    // DefaultConfig when the DB load degrades) and optional semantic probe (off by default).
+    private PropositionFactBindingValidator? _factBindingValidator;
+    private FactBindingSemanticProbe? _factBindingSemanticProbe;
+
     // Instance entry point: reads captured run state and delegates to the instance-free projector so the
     // projection logic is unit-testable directly from the shared gate fixtures.
     internal WideFactorInventoryDto? BuildFactorInventory(
@@ -48,7 +54,9 @@ public sealed partial class IntelligenceWide2Service
             _matterContext,
             _resolvedDomainPackId is not null,
             _resolvedDomainPackCode ?? _matterContext?.DomainPackCode,
-            deliveredCandidates?.Any(c => !c.IsConstraintViolation) == true);
+            deliveredCandidates?.Any(c => !c.IsConstraintViolation) == true,
+            _factBindingValidator ?? new PropositionFactBindingValidator(PropositionFactBindingValidator.DefaultConfig()),
+            _factBindingSemanticProbe);
     }
 
     // Deterministic, instance-free projection. Accepts only the validated plan + immutable matter context
@@ -59,8 +67,13 @@ public sealed partial class IntelligenceWide2Service
         MatterContextSnapshot? matterContext,
         bool domainPackResolved,
         string? domainPackCode,
-        bool anyCandidateDelivered)
+        bool anyCandidateDelivered,
+        PropositionFactBindingValidator? validator = null,
+        FactBindingSemanticProbe? semanticProbe = null)
     {
+        // Fail-soft: with no explicit validator (unit tests / degraded config) apply the embedded
+        // DefaultConfig so the deterministic guardrails still run.
+        validator ??= new PropositionFactBindingValidator(PropositionFactBindingValidator.DefaultConfig());
         // Candidate id → display title for relationship rows.
         var candidateTitles = plan.Candidates.ToDictionary(
             c => c.RepresentativeSemanticId,
@@ -75,6 +88,8 @@ public sealed partial class IntelligenceWide2Service
         var factors = new List<WideFactorDto>();
         var relationships = new List<WideCandidateFactorRelationDto>();
         var missingCount = 0;
+        var rejectedBindingCount = 0;
+        var blockingObligations = new List<string>();
 
         foreach (var dep in plan.Dependencies)
         {
@@ -85,20 +100,8 @@ public sealed partial class IntelligenceWide2Service
 
             // Resolve the actual value from matter data only (never invented). MISSING when no matter
             // field materially matches the factor's label/question.
-            var (actualValue, valueSource, sourceLocation) = ResolveFactorValue(dep, matterContext);
+            var (actualValue, valueSource, sourceLocation, matchedFieldLabel) = ResolveFactorValue(dep, matterContext);
             var hasValue = !string.IsNullOrWhiteSpace(actualValue);
-
-            var availability = hasValue ? AvailAvailable : AvailMissing;
-            if (!hasValue) missingCount++;
-
-            // Verification: a supplied matter value is SUPPLIED; otherwise UNVERIFIED (the dynamic path
-            // attaches no per-factor admitted evidence, so nothing here is VERIFIED).
-            var verification = hasValue ? VerifSupplied : VerifUnverified;
-
-            // Source composition: the Domain Pack defines the factor category/semantics; matter data (or a
-            // document) supplies the actual value when present. Report the definition + value sources.
-            var definitionSource = domainPackResolved ? FactorSourceDomainPack : FactorSourceLlm;
-            var source = hasValue ? $"{definitionSource}+{valueSource}" : definitionSource;
 
             var relationTypes = edges
                 .Select(e => e.RelationType)
@@ -106,10 +109,67 @@ public sealed partial class IntelligenceWide2Service
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
+            var definitionSource = domainPackResolved ? FactorSourceDomainPack : FactorSourceLlm;
             var requirement = BuildRequirement(dep, relationTypes);
-            var missingInformation = hasValue
-                ? null
-                : $"No case-specific value for '{dep.Label}' found in matter data or uploaded documents.";
+            var isRequiredFactor = relationTypes.Any(r => string.Equals(r, "REQUIRED", StringComparison.OrdinalIgnoreCase));
+
+            // ── Proposition-specific fact binding ─────────────────────────────────────────────────────
+            // A supplied value is validated BEFORE it is allowed to establish the proposition. A category
+            // mismatch (e.g. SettlementStatus=Disbursed → "Liability established") is preserved verbatim in
+            // ActualValue but is NOT promoted to an established proposition — it becomes an explicit
+            // verification obligation. Availability/VerificationStatus reflect the validated outcome.
+            string availability;
+            string verification;
+            string evidenceState;
+            string bindingAdmissibility;
+            string? verificationObligation;
+            string? missingInformation;
+            string source;
+            string validationStatus;
+
+            if (hasValue)
+            {
+                var verdict = validator.Validate(matchedFieldLabel, actualValue, proposition, semanticProbe);
+                source = $"{definitionSource}+{valueSource}";
+                evidenceState = verdict.EvidenceAdmissionState;
+                bindingAdmissibility = verdict.Admissibility;
+                verificationObligation = verdict.VerificationObligation;
+
+                if (verdict.Establishes)
+                {
+                    // Value legitimately populates the proposition (still SUPPLIED, never VERIFIED here).
+                    availability = AvailAvailable;
+                    verification = VerifSupplied;
+                    missingInformation = null;
+                    validationStatus = "VALID";
+                }
+                else
+                {
+                    // Rejected or ambiguous: retain the value but the proposition is NOT established.
+                    availability = AvailIncomplete;
+                    verification = VerifUnverified;
+                    missingInformation = verdict.VerificationObligation;
+                    validationStatus = AvailIncomplete;
+                    if (verdict.Decision == FactBindingDecision.Rejected)
+                        rejectedBindingCount++;
+                    if (!string.IsNullOrWhiteSpace(verdict.VerificationObligation))
+                        blockingObligations.Add(verdict.VerificationObligation!);
+                }
+            }
+            else
+            {
+                availability = AvailMissing;
+                verification = VerifUnverified;
+                evidenceState = PropositionFactBindingValidator.StateUnresolved;
+                bindingAdmissibility = "NONE";
+                verificationObligation = null;
+                missingInformation = $"No case-specific value for '{dep.Label}' found in matter data or uploaded documents.";
+                source = definitionSource;
+                validationStatus = AvailIncomplete;
+                missingCount++;
+                if (isRequiredFactor)
+                    blockingObligations.Add($"Establish required factor '{dep.Label}' — no value in matter data or documents.");
+            }
 
             factors.Add(new WideFactorDto(
                 FactorName: dep.Label,
@@ -124,8 +184,14 @@ public sealed partial class IntelligenceWide2Service
                 FactorType: dep.Category.ToString().ToUpperInvariant(),
                 ValueSource: hasValue ? valueSource : AvailMissing,
                 SourceLocation: sourceLocation,
-                ValidationStatus: hasValue ? "VALID" : AvailIncomplete,
-                NodeKind: dep.NodeKind.ToString().ToUpperInvariant()));
+                ValidationStatus: validationStatus,
+                NodeKind: dep.NodeKind.ToString().ToUpperInvariant())
+            {
+                EvidenceAdmissionState = evidenceState,
+                CountsTowardEvidenceScore = false, // dynamic path attaches no admitted per-factor evidence yet
+                BindingAdmissibility = bindingAdmissibility,
+                VerificationObligation = verificationObligation,
+            });
 
             // One relationship row per candidate edge. The same factor may be REQUIRED for one candidate
             // and SUPPORTS another — each edge is preserved distinctly.
@@ -164,18 +230,28 @@ public sealed partial class IntelligenceWide2Service
             SourceStatus: sourceStatus,
             CandidateCount: candidateCount,
             SharedFactorCount: sharedFactorCount,
-            MissingFactorCount: missingCount);
+            MissingFactorCount: missingCount)
+        {
+            // Competition may run to surface hypotheses, but an unresolved material dependency or a rejected
+            // binding keeps the result provisional — never presented as a verified recommendation.
+            IsProvisional = true,
+            DecisionReadinessStatus = (blockingObligations.Count > 0 || missingCount > 0 || rejectedBindingCount > 0)
+                ? "BLOCKED"
+                : "PROVISIONAL",
+            RejectedBindingCount = rejectedBindingCount,
+            BlockingObligations = blockingObligations,
+        };
     }
 
     // Resolve a factor's actual value from matter data ONLY (never invented). Matches the dependency
     // label/question against the populated matter fields across all groups; returns the field value,
     // its source category, and a source location reference when found.
-    private static (string? Value, string ValueSource, string? SourceLocation) ResolveFactorValue(
+    private static (string? Value, string ValueSource, string? SourceLocation, string? FieldLabel) ResolveFactorValue(
         LegalDecisionService.NormalizedDependency dep,
         MatterContextSnapshot? matterContext)
     {
         if (matterContext is null)
-            return (null, AvailMissing, null);
+            return (null, AvailMissing, null, null);
 
         foreach (var (groupName, fields) in EnumerateMatterGroups(matterContext))
         {
@@ -188,11 +264,11 @@ public sealed partial class IntelligenceWide2Service
                     var source = string.Equals(groupName, "AVAILABLE EVIDENCE", StringComparison.OrdinalIgnoreCase)
                         ? FactorSourceDocument
                         : FactorSourceMatter;
-                    return (field.Value, source, $"{groupName}:{field.Label}");
+                    return (field.Value, source, $"{groupName}:{field.Label}", field.Label);
                 }
             }
         }
-        return (null, AvailMissing, null);
+        return (null, AvailMissing, null, null);
     }
 
     private static IEnumerable<(string GroupName, IReadOnlyList<MatterContextField> Fields)> EnumerateMatterGroups(

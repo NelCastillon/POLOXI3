@@ -1,9 +1,12 @@
 ﻿@page "/legal/personalinjury_decision2"
 @using Legal.Application.Features.Intelligence
 @using Legal.Application.Features.Intelligence.Decision
+@using Microsoft.AspNetCore.SignalR.Client
+@implements IAsyncDisposable
 @inject ApiClient Api
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Navigation
+@inject IConfiguration Configuration
 @inject IJSRuntime JS
 
 <LegalWorkspace ExtraClass="intel-compact">
@@ -22,19 +25,380 @@
             </div>
         </header>
 
+        <section class="dfi-console" aria-label="Decision Intelligence console">
+            <div class="dfi-console-topbar">
+                <div class="dfi-brand">
+                    <span class="dfi-brand-mark"><i class="bi bi-bank2" aria-hidden="true"></i></span>
+                    <div class="dfi-crumbs dfi-crumbs--header">
+                        MATTERS / @DfiPracticeAreaLabel / DECISION INTELLIGENCE
+                        @if (_matter is not null)
+                        {
+                            <a class="dfi-crumbs-matter-link" href="@($"/legal/matters/{_matter.DecisionMatterId}")">
+                                <i class="bi bi-box-arrow-up-right" aria-hidden="true"></i> @_matter.Title
+                            </a>
+                        }
+                    </div>
+                </div>
+                <div class="dfi-topbar-actions">
+                    <i class="bi bi-bell" aria-hidden="true"></i>
+                    <i class="bi bi-person-circle" aria-hidden="true"></i>
+                </div>
+            </div>
+
+            <div class="dfi-console-body">
+                <div class="dfi-matter-head">
+                    <div>
+                        <h2 class="dfi-matter-title">@DfiMatterTitle</h2>
+                        <p class="dfi-matter-sub">@DfiMatterSubtitle</p>
+                    </div>
+                    <span class="dfi-pill dfi-pill-@(DfiReviewRequired ? "warn" : "ok")">@(DfiReviewRequired ? "Review required" : "Decision ready")</span>
+                </div>
+                <div class="dfi-tag-row">
+                    @if (!string.IsNullOrWhiteSpace(DfiJurisdictionTag))
+                    {
+                        <span class="dfi-tag dfi-tag-info">@DfiJurisdictionTag</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(DfiPostureTag))
+                    {
+                        <span class="dfi-tag">@DfiPostureTag</span>
+                    }
+                    <span class="dfi-tag dfi-tag-@(TotalEvidenceCount > 0 ? "ok" : "warn")">@(TotalEvidenceCount > 0 ? "Evidence admitted" : "Evidence unverified")</span>
+                </div>
+
+                <div class="dfi-kpi-grid @(DfiLiveProvisional ? "dfi-kpi-grid--analyzing" : null)">
+                    <div class="dfi-kpi">
+                        <span class="dfi-kpi-lbl">Competing outcomes @if (DfiLiveProvisional) {<span class="dfi-kpi-live">analyzing…</span>}</span>
+                        <span class="dfi-kpi-val">@DfiLiveCompetingOutcomes</span>
+                    </div>
+                    <div class="dfi-kpi">
+                        <span class="dfi-kpi-lbl">Identified factors @if (DfiLiveProvisional) {<span class="dfi-kpi-live">analyzing…</span>}</span>
+                        <span class="dfi-kpi-val">@DfiLiveFactorCount</span>
+                    </div>
+                    <div class="dfi-kpi">
+                        <span class="dfi-kpi-lbl">Admitted evidence @if (DfiLiveProvisional) {<span class="dfi-kpi-live">analyzing…</span>}</span>
+                        <span class="dfi-kpi-val">@DfiLiveEvidenceCount</span>
+                    </div>
+                    <div class="dfi-kpi">
+                        <span class="dfi-kpi-lbl">Decision readiness</span>
+                        <span class="dfi-kpi-val dfi-kpi-val--status dfi-kpi-@DfiLiveReadinessTone">@DfiLiveReadinessLabel</span>
+                    </div>
+                </div>
+
+                @if (DfiShowIntegrityAlert)
+                {
+                    <div class="dfi-alert">
+                        <div class="dfi-alert-head"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i> Decision integrity alert</div>
+                        <p class="dfi-alert-body">@DfiIntegrityMessage</p>
+                        <span class="dfi-pill dfi-pill-warn">Attorney review required</span>
+                    </div>
+                }
+
+                <div class="dfi-workspace">
+                    <h3 class="dfi-workspace-title">Decision workspace</h3>
+                    <div class="dfi-tabs" role="tablist">
+                        @foreach (var tab in DfiTabs)
+                        {
+                            <button type="button" role="tab"
+                                    class="dfi-tab @(_dfiTab == tab ? "dfi-tab--active" : "")"
+                                    @onclick="() => _dfiTab = tab">@tab</button>
+                        }
+                    </div>
+
+                    <div class="dfi-tabpanel">
+                        @if (DfiShowLiveExecution)
+                        {
+                            <div class="dfi-live-exec @(DfiLiveProvisional ? "dfi-live-exec--running" : "dfi-live-exec--done")" role="status" aria-live="polite">
+                                <div class="dfi-live-exec-head">
+                                    <span class="dfi-live-exec-dot" aria-hidden="true"></span>
+                                    <span class="dfi-live-exec-phase">@DfiLivePhaseLabel</span>
+                                    @if (DfiLiveProvisional)
+                                    {
+                                        <span class="dfi-live-exec-tag">live</span>
+                                    }
+                                    <span class="dfi-live-exec-metrics">
+                                        <span title="Competing outcomes"><i class="bi bi-diagram-2" aria-hidden="true"></i> @DfiLiveCompetingOutcomes</span>
+                                        <span title="Identified factors"><i class="bi bi-list-check" aria-hidden="true"></i> @DfiLiveFactorCount</span>
+                                        <span title="Admitted evidence"><i class="bi bi-shield-check" aria-hidden="true"></i> @DfiLiveEvidenceCount</span>
+                                    </span>
+                                </div>
+                                <ol class="dfi-live-exec-log">
+                                    @foreach (var step in _livePhaseLog)
+                                    {
+                                        <li class="dfi-live-exec-step @(step.IsProvisional ? "" : "dfi-live-exec-step--done")">
+                                            <span class="dfi-live-exec-step-ico" aria-hidden="true">
+                                                <i class="bi @(step.IsProvisional ? "bi-arrow-repeat" : "bi-check-circle-fill")"></i>
+                                            </span>
+                                            <span class="dfi-live-exec-step-txt">
+                                                <strong>@step.Label</strong>
+                                                @if (!string.IsNullOrWhiteSpace(step.Message) && !string.Equals(step.Message, step.Label, StringComparison.Ordinal))
+                                                {
+                                                    <span class="dfi-live-exec-step-msg">@step.Message</span>
+                                                }
+                                            </span>
+                                        </li>
+                                    }
+                                </ol>
+                            </div>
+                        }
+                        @switch (_dfiTab)
+                        {
+                            case "Overview":
+                                <div class="dfi-panel-card">
+                                    <h4>Candidate dependency review</h4>
+                                    <p class="dfi-panel-sub">@(_response is null ? "Illustrative workspace — run a question to populate the latest execution." : $"Workspace populated from the latest {DfiMatterTitle} execution.")</p>
+                                    @if (DfiReviewedOutcomeName is not null)
+                                    {
+                                        <div class="dfi-dep-row">
+                                            <span class="dfi-dep-name">@DfiReviewedOutcomeName</span>
+                                            <span class="dfi-pill dfi-pill-@(DfiDecisionReady ? "ok" : "warn")">@(DfiDecisionReady ? "Verified" : "Unverified")</span>
+                                        </div>
+                                        <div class="dfi-dep-row">
+                                            <span>Competing outcomes</span>
+                                            <span class="dfi-pill dfi-pill-@(_response!.Candidates.Count > 0 ? "ok" : "warn")">@(_response.Candidates.Count > 0 ? $"{_response.Candidates.Count} competed" : $"{DfiL1OutcomeCount} proposed · not competed")</span>
+                                        </div>
+                                        <div class="dfi-dep-row">
+                                            <span>Dependency relationships</span>
+                                            <span class="dfi-pill dfi-pill-@(DfiDependencyCount > 0 ? "ok" : "warn")">@(DfiDependencyCount > 0 ? $"{DfiDependencyCount} mapped" : "Review needed")</span>
+                                        </div>
+                                        <div class="dfi-dep-row">
+                                            <span>Evidence coverage</span>
+                                            <span class="dfi-pill dfi-pill-@(_response!.DecisionEvidenceCoverage > 0 ? "ok" : "warn")">@_response.DecisionEvidenceCoverage.ToString("P0")</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <p class="dfi-empty">No outcomes have been proposed yet.</p>
+                                    }
+                                </div>
+                                break;
+                            case "Hierarchy":
+                                <div class="dfi-panel-card">
+                                    <h4>Decision Explorer</h4>
+                                    <p class="dfi-panel-sub">Hierarchy navigation · factor inspection · evidence context. Depth reached L@(_response?.DepthReached ?? 0).</p>
+                                    @if (SurvivingBranches.Count > 0 || DfiFactors.Count > 0)
+                                    {
+                                        <div class="dfi-explorer">
+                                            <div class="dfi-xpanel">
+                                                <div class="dfi-xpanel-head">Left · Hierarchy</div>
+                                                <div class="dfi-xpanel-body">
+                                                    @foreach (var b in SurvivingBranches.OrderBy(x => x.LevelNumber).ThenBy(x => x.SortOrder).Take(14))
+                                                    {
+                                                        <button type="button"
+                                                                class="dfi-xnode dfi-xnode--l@(Math.Min(b.LevelNumber, 3)) @(_dfiSelectedBranchId == b.WideBranchId ? "dfi-xnode--active" : "")"
+                                                                @onclick="() => _dfiSelectedBranchId = b.WideBranchId">
+                                                            <span class="dfi-lvl">L@(b.LevelNumber)</span> @b.DisplayName
+                                                        </button>
+                                                    }
+                                                </div>
+                                            </div>
+                                            <div class="dfi-xpanel">
+                                                <div class="dfi-xpanel-head">Center · Selected factor</div>
+                                                <div class="dfi-xpanel-body">
+                                                    @if (DfiSelectedBranch is not null)
+                                                    {
+                                                        var sb = DfiSelectedBranch;
+                                                        <div class="dfi-matter-head" style="align-items:center">
+                                                            <strong style="font-size:.95rem">L@(sb.LevelNumber) — @sb.DisplayName</strong>
+                                                            <span class="dfi-pill dfi-pill-@(sb.EvidenceCount > 0 ? "ok" : "warn")">@(sb.EvidenceCount > 0 ? "Grounded" : "Unverified")</span>
+                                                        </div>
+                                                        <div class="dfi-xfield">
+                                                            <span class="dfi-xfield-lbl">What must be established?</span>
+                                                            <span class="dfi-xfield-val">@sb.Interpretation</span>
+                                                        </div>
+                                                        <div class="dfi-xfield">
+                                                            <span class="dfi-xfield-lbl">Grounding status</span>
+                                                            <span class="dfi-xfield-val">@sb.GroundingStatusCode · @sb.EvidenceCount evidence item(s)</span>
+                                                        </div>
+                                                        <div class="dfi-xfield">
+                                                            <span class="dfi-xfield-lbl">Confidence</span>
+                                                            <span class="dfi-xfield-val">@sb.Confidence.ToString("P0")@(sb.ContinueNarrowing ? " · narrowing" : $" · terminal ({sb.StopReason})")</span>
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <p class="dfi-empty">Select a hierarchy node to inspect its proposition and grounding.</p>
+                                                    }
+                                                </div>
+                                            </div>
+                                            <div class="dfi-xpanel">
+                                                <div class="dfi-xpanel-head">Right · Sources</div>
+                                                <div class="dfi-xpanel-body">
+                                                    <div class="dfi-xfield">
+                                                        <span class="dfi-xfield-lbl">Evidence &amp; authority</span>
+                                                        <span class="dfi-xfield-val">Source documents, excerpts, authority references, contradictions and verification history appear here.</span>
+                                                    </div>
+                                                    @if (DfiSelectedBranch is { EvidenceCount: > 0 })
+                                                    {
+                                                        <span class="dfi-pill dfi-pill-ok">@DfiSelectedBranch.EvidenceCount source(s) linked</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="dfi-pill dfi-pill-warn">Source review required</span>
+                                                    }
+                                                    @if (_response?.ProposedLegalAuthorities.Count > 0)
+                                                    {
+                                                        <ul class="dfi-list">
+                                                            @foreach (var a in _response.ProposedLegalAuthorities.Take(4))
+                                                            {
+                                                                <li><span class="dfi-lvl">@a.Kind</span> @a.Name <span class="dfi-pill dfi-pill-@(a.VerificationStatus == "VERIFIED" ? "ok" : "muted")">@a.VerificationStatus</span></li>
+                                                            }
+                                                        </ul>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <p class="dfi-prototype-note">Clicking any L3 factor reveals its trace: Source → Proposition → Dependency → L2 dimension → L1 candidate. In the enterprise desktop UI these become resizable side-by-side panels.</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="dfi-empty">No hierarchy branches are available for this run.</p>
+                                    }
+                                </div>
+                                break;
+                            case "Factors":
+                                <div class="dfi-panel-card">
+                                    <h4>Factor Inventory</h4>
+                                    <p class="dfi-panel-sub">Interactive dependency review · @DfiFilteredFactors.Count of @DfiFactorCount factor(s) · @DfiMissingFactorCount missing value(s).</p>
+                                    <div class="dfi-review-bar">
+                                        <span class="dfi-review-label">Review mode</span>
+                                        @foreach (var mode in DfiFactorFilters)
+                                        {
+                                            <button type="button"
+                                                    class="dfi-chip-btn @(_dfiFactorFilter == mode ? "dfi-chip-btn--active" : "")"
+                                                    @onclick="() => _dfiFactorFilter = mode">@mode</button>
+                                        }
+                                    </div>
+                                    @if (DfiFilteredFactors.Count > 0)
+                                    {
+                                        <div class="dfi-grid-scroll">
+                                            <table class="dfi-grid">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Factor ID · L-level</th>
+                                                        <th>Factor / proposition</th>
+                                                        <th>Candidate</th>
+                                                        <th>Relationship</th>
+                                                        <th>Source</th>
+                                                        <th>Actual value</th>
+                                                        <th>Availability</th>
+                                                        <th>Verification</th>
+                                                        <th>Decision impact</th>
+                                                        <th>Review status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    @foreach (var f in DfiFilteredFactors)
+                                                    {
+                                                        <tr class="@(_dfiSelectedFactorId == f.FactorId ? "dfi-row--selected" : "")"
+                                                            @onclick="() => SelectDfiFactor(f.FactorId)">
+                                                            <td class="dfi-cell-id">@f.FactorId · @f.NodeKind</td>
+                                                            <td>@f.FactorName</td>
+                                                            <td>@DfiFactorCandidate(f)</td>
+                                                            <td><span class="dfi-badge dfi-badge-@DfiRelationTone(f)">@DfiFactorRelation(f)</span></td>
+                                                            <td>@f.Source</td>
+                                                            <td>@(f.ActualValue ?? "—")</td>
+                                                            <td><span class="dfi-badge dfi-badge-@(f.Availability == "AVAILABLE" ? "ok" : "warn")">@f.Availability</span></td>
+                                                            <td><span class="dfi-badge dfi-badge-@(f.VerificationStatus == "VERIFIED" ? "ok" : "muted")">@f.VerificationStatus</span></td>
+                                                            <td>@DfiFactorImpact(f)</td>
+                                                            <td><span class="dfi-badge dfi-badge-muted">Pending</span></td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <p class="dfi-prototype-note">Review controls surface provenance and validation state; they do not modify the original model output or matter data. An accepted correction creates a new authoritative decision-state version and audit entry.</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="dfi-empty">No factors match this review filter for the current run.</p>
+                                    }
+                                </div>
+                                break;
+                            case "Evidence":
+                                <div class="dfi-panel-card">
+                                    <h4>Admitted evidence</h4>
+                                    <p class="dfi-panel-sub">@_response?.EnterpriseEvidenceCount enterprise · @_response?.ExternalEvidenceCount external · decision coverage @((_response?.DecisionEvidenceCoverage ?? 0m).ToString("P0")).</p>
+                                    @if (TotalEvidenceCount == 0)
+                                    {
+                                        <p class="dfi-empty">No independently verified evidence was admitted in the referenced execution.</p>
+                                    }
+                                    @{
+                                        var retrieved = _response?.ExternalKnowledge ?? Array.Empty<WideExternalKnowledgeSnippet>();
+                                    }
+                                    @if (retrieved.Count > 0)
+                                    {
+                                        <div class="dfi-admission">
+                                            <div class="dfi-admission-head">
+                                                <h5>Why evidence was admitted or rejected</h5>
+                                                <p class="dfi-panel-sub">@retrieved.Count source(s) retrieved · @retrieved.Count(DfiIsAdmitted) admitted · @(retrieved.Count - retrieved.Count(DfiIsAdmitted)) rejected. Only identity-verified, in-scope sources count toward admitted evidence.</p>
+                                            </div>
+                                            <ul class="dfi-admission-list">
+                                                @foreach (var snip in retrieved.OrderByDescending(DfiIsAdmitted).ThenByDescending(s => s.Score))
+                                                {
+                                                    <li class="dfi-admission-item">
+                                                        <div class="dfi-admission-main">
+                                                            <span class="dfi-pill dfi-pill-@(DfiIsAdmitted(snip) ? "ok" : "warn")">@(DfiIsAdmitted(snip) ? "Admitted" : "Rejected")</span>
+                                                            @if (!string.IsNullOrWhiteSpace(snip.Url))
+                                                            {
+                                                                <a href="@snip.Url" target="_blank" rel="noopener" class="dfi-admission-title">@(string.IsNullOrWhiteSpace(snip.Title) ? snip.Url : snip.Title)</a>
+                                                            }
+                                                            else
+                                                            {
+                                                                <span class="dfi-admission-title">@(string.IsNullOrWhiteSpace(snip.Title) ? "(untitled source)" : snip.Title)</span>
+                                                            }
+                                                        </div>
+                                                        <div class="dfi-admission-meta">
+                                                            <span class="dfi-admission-reason">@DfiAdmissionReason(snip)</span>
+                                                            @if (!string.IsNullOrWhiteSpace(snip.AuthorityKind)) { <span class="dfi-admission-tag">@snip.AuthorityKind</span> }
+                                                            @if (!string.IsNullOrWhiteSpace(snip.Jurisdiction)) { <span class="dfi-admission-tag">@snip.Jurisdiction</span> }
+                                                            <span class="dfi-admission-tag">support @snip.PropositionSupportScore.ToString("P0")</span>
+                                                        </div>
+                                                    </li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    }
+                                </div>
+                                break;
+                            case "Integrity":
+                                <div class="dfi-panel-card">
+                                    <h4>Decision Integrity</h4>
+                                    <p class="dfi-panel-sub">Legal correctness is not a single confidence percentage. A technical execution can finish successfully without producing a sufficiently supported legal conclusion.</p>
+                                    <div class="dfi-integrity-grid">
+                                        @foreach (var ind in DfiIntegrityIndicators)
+                                        {
+                                            <div class="dfi-integrity-card">
+                                                <div class="dfi-integrity-lbl">
+                                                    <strong>@ind.Label</strong>
+                                                    <small>@ind.Meaning</small>
+                                                </div>
+                                                <span class="dfi-pill dfi-pill-@ind.Tone">@ind.Value</span>
+                                            </div>
+                                        }
+                                    </div>
+                                    <p class="dfi-prototype-note">A COMPLETED technical execution is not by itself a successful legal decision. The distinction between execution, grounding, competition, and readiness is essential for enterprise trust.</p>
+                                </div>
+                                break;
+                            case "Audit":
+                                <div class="dfi-panel-card">
+                                    <h4>Execution audit</h4>
+                                    <p class="dfi-panel-sub">Route @(_response?.DecisionInspector?.ExecutionMode.ExecutionRoute ?? "—") · prompt @(_response?.DecisionInspector?.ExecutionMode.PromptKey ?? "—").</p>
+                                    <ul class="dfi-list">
+                                        <li>Status <span class="dfi-pill">@(_response?.StatusCode ?? "—")</span></li>
+                                        <li>Narrowing trend <span class="dfi-pill">@(_response?.FinalNarrowingTrend ?? "—")</span></li>
+                                        <li>Information rounds <span class="dfi-pill">@(_response?.NarrowingIterations.Count ?? 0)</span></li>
+                                    </ul>
+                                </div>
+                                break;
+                        }
+                    </div>
+                </div>
+            </div>
+        </section>
+
         @if (_matter is not null)
         {
             <div class="decision-matter-banner">
-                <i class="bi bi-folder2-open"></i>
-                <div class="decision-matter-banner-body">
-                    <span>Deciding within matter</span>
-                    <a href="@($"/legal/personalinjury/{_matter.DecisionMatterId}/wizard")"><strong>@_matter.Title</strong></a>
-                </div>
-                <a class="um-btn um-btn-ghost um-btn-sm ms-auto" href="@($"/legal/personalinjury/{_matter.DecisionMatterId}/wizard")">
-                    <i class="bi bi-box-arrow-up-right"></i> Matter
-                </a>
-            </div>
-            <div class="decision-matter-banner mt-2">
                 <i class="bi bi-file-earmark-arrow-up"></i>
                 <div class="decision-matter-banner-body">
                     <span>Matter corpus</span>
@@ -162,6 +526,12 @@
                     {
                         <div class="poloxi-answer-section poloxi-reveal poloxi-legal-answer">
                             <h3><i class="bi bi-briefcase"></i> Attorney-ready answer</h3>
+                            @if (!DfiDecisionReady)
+                            {
+                                <div class="poloxi-proposed-caution" style="border-left: 4px solid #dc3545;">
+                                    <i class="bi bi-exclamation-triangle"></i> This analysis is <strong>not decision-ready</strong>. The authoritative Decision Inspector reports the matter decision contract or core evaluation is incomplete. Treat the content below as a draft to review, not a verified conclusion.
+                                </div>
+                            }
                             <div class="poloxi-legal-block">
                                 <h4>Conclusion</h4>
                                 <p>@legalAnswer.Conclusion</p>
@@ -410,6 +780,65 @@
                                             @(string.IsNullOrWhiteSpace(matterContext.CandidateCompetitionStatus) ? "" : $" Candidate competition: {matterContext.CandidateCompetitionStatus}.")
                                             Distinct legal fields with provenance; supplied allegations are never treated as verified evidence.
                                         </p>
+                                        @{
+                                            var reachedScoring = _response.Candidates.Count(c => !c.IsConstraintViolation);
+                                            // The competition genuinely executed once two or more competing outcomes reached
+                                            // scoring, even if zero evidence was admitted. That is distinct from "blocked":
+                                            // it adjudicated the dispositions but cannot certify a winner without verified
+                                            // evidence. Distinguish the two so a legitimately-competing but unverified run is
+                                            // not mislabeled as a failure. Trust the authoritative backend status first
+                                            // (CandidateCompetitionStatus = "RAN ..." / DecisionReadinessStatus =
+                                            // "CANDIDATES_REGISTERED_AND_COMPETED"); only fall back to the UI candidate
+                                            // count when no backend status was emitted, so an executed run is never
+                                            // mislabeled "Blocked" due to presentation-layer filtering.
+                                            var backendCompeted =
+                                                (matterContext.CandidateCompetitionStatus?.StartsWith("RAN", StringComparison.OrdinalIgnoreCase) ?? false)
+                                                || (matterContext.DecisionReadinessStatus?.StartsWith("CANDIDATES_REGISTERED_AND_COMPETED", StringComparison.OrdinalIgnoreCase) ?? false);
+                                            var competitionExecuted = backendCompeted || reachedScoring > 0;
+                                            var executedUnverified = competitionExecuted && TotalEvidenceCount == 0;
+                                            var blockers = DfiCompetitionBlockers;
+                                            var statusClass = competitionExecuted
+                                                ? (executedUnverified ? "poloxi-competition-status--unverified" : "poloxi-competition-status--ran")
+                                                : "poloxi-competition-status--blocked";
+                                            var badgeLabel = competitionExecuted
+                                                ? (executedUnverified ? "ran \u2014 no verified winner" : "evaluated decision")
+                                                : "interpretation only";
+                                        }
+                                        <div class="poloxi-competition-status @statusClass">
+                                            <div class="poloxi-competition-status-head">
+                                                <span class="poloxi-panel-icon"><i class="bi bi-diagram-3"></i></span>
+                                                <div>
+                                                    <span>Candidate Competition</span>
+                                                    <strong>@(competitionExecuted ? "Executed" : "Blocked")</strong>
+                                                </div>
+                                                <span class="poloxi-competition-badge @(competitionExecuted ? (executedUnverified ? "warn" : "ok") : "warn")">@badgeLabel</span>
+                                            </div>
+                                            <div class="poloxi-competition-metrics">
+                                                <div><span class="poloxi-competition-metric-label">Proposed outcomes</span><span class="poloxi-competition-metric-value">@matterContext.ProposedCandidateCount</span></div>
+                                                <div><span class="poloxi-competition-metric-label">Reached scoring</span><span class="poloxi-competition-metric-value">@reachedScoring</span></div>
+                                            </div>
+                                            @if (!string.IsNullOrWhiteSpace(matterContext.NormalizationGateStatus))
+                                            {
+                                                <p class="poloxi-competition-detail">Normalization gate: <code>@matterContext.NormalizationGateStatus</code>@(string.IsNullOrWhiteSpace(matterContext.DecisionReadinessStatus) ? "" : $" · Readiness: {matterContext.DecisionReadinessStatus}")</p>
+                                            }
+                                            @if (executedUnverified)
+                                            {
+                                                <p class="poloxi-competition-note">The competition executed and adjudicated the competing outcomes, but <strong>no independently verified evidence was admitted</strong>, so no outcome is presented as an established winner. The leading outcome below is a provisional, quality-weighted hypothesis pending evidence verification &mdash; not a machinery failure.</p>
+                                            }
+                                            @if (!competitionExecuted && blockers.Count > 0)
+                                            {
+                                                <div class="poloxi-competition-blockers">
+                                                    <span class="poloxi-competition-metric-label">Current blockers</span>
+                                                    <ul>
+                                                        @foreach (var blocker in blockers)
+                                                        {
+                                                            <li>@blocker</li>
+                                                        }
+                                                    </ul>
+                                                </div>
+                                                <p class="poloxi-competition-note">Illustrative presentation of the latest execution diagnostics. The values shown for leading interpretations are interpretation-prior confidence, not the result of a completed, evidence-verified candidate competition.</p>
+                                            }
+                                        </div>
                                         <pre class="poloxi-matter-context">@matterContext.SerializedContext</pre>
                                     </div>
                                 }
@@ -1154,6 +1583,32 @@
                     <span class="poloxi-status" title="Factors are derived from the actual normalized decision plan and matter data. Nothing is hardcoded.">@inventory.Factors.Count factors · @inventory.SharedFactorCount shared · @inventory.MissingFactorCount missing</span>
                 </div>
 
+                @if (inventory.IsProvisional || inventory.RejectedBindingCount > 0 || (inventory.BlockingObligations?.Count ?? 0) > 0)
+                {
+                    <div class="poloxi-provisional-banner" role="status">
+                        <i class="bi bi-exclamation-triangle-fill"></i>
+                        <div>
+                            <strong>Provisional comparison — not a validated recommendation.</strong>
+                            <span>
+                                @(string.IsNullOrWhiteSpace(inventory.DecisionReadinessStatus) ? "PROVISIONAL" : inventory.DecisionReadinessStatus)
+                                @if (inventory.RejectedBindingCount > 0)
+                                {
+                                    <text> · @inventory.RejectedBindingCount supplied value(s) could not establish their proposition</text>
+                                }
+                            </span>
+                            @if ((inventory.BlockingObligations?.Count ?? 0) > 0)
+                            {
+                                <ul class="poloxi-provisional-obligations">
+                                    @foreach (var obligation in inventory.BlockingObligations!)
+                                    {
+                                        <li><i class="bi bi-shield-exclamation"></i> @obligation</li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                }
+
                 <div class="poloxi-factor-sources">
                     <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.MatterDataLoaded ? "on" : "off")">Matter data: @(inventory.SourceStatus.MatterDataLoaded ? $"{inventory.SourceStatus.MatterFieldCount} fields" : "none")</span>
                     <span class="poloxi-factor-chip poloxi-factor-chip--@(inventory.SourceStatus.DomainPackResolved ? "on" : "off")">Domain pack: @(inventory.SourceStatus.DomainPackResolved ? (inventory.SourceStatus.DomainPackCode ?? "resolved") : "not resolved")</span>
@@ -1204,6 +1659,14 @@
                                                     {
                                                         <span class="poloxi-factor-badge poloxi-factor-badge--@factor.Availability.ToLowerInvariant()">@factor.Availability</span>
                                                         <span class="poloxi-factor-badge poloxi-factor-badge--@factor.VerificationStatus.ToLowerInvariant()">@factor.VerificationStatus</span>
+                                                        @if (!string.IsNullOrWhiteSpace(factor.EvidenceAdmissionState))
+                                                        {
+                                                            <span class="poloxi-factor-badge poloxi-factor-badge--@factor.EvidenceAdmissionState.ToLowerInvariant()" title="Evidence-admission state">@factor.EvidenceAdmissionState</span>
+                                                        }
+                                                        @if (string.Equals(factor.BindingAdmissibility, "REJECTED", StringComparison.OrdinalIgnoreCase))
+                                                        {
+                                                            <span class="poloxi-factor-badge poloxi-factor-badge--rejected" title="The supplied value does not establish this proposition (category mismatch).">BINDING REJECTED</span>
+                                                        }
                                                     }
                                                 </div>
                                                 <div class="poloxi-factorcheck-item-value">
@@ -1216,6 +1679,10 @@
                                                         <span class="poloxi-factorcheck-missing">@factor.MissingInformation</span>
                                                     }
                                                 </div>
+                                                @if (factor is not null && !string.IsNullOrWhiteSpace(factor.VerificationObligation))
+                                                {
+                                                    <div class="poloxi-factorcheck-item-obligation"><i class="bi bi-shield-exclamation"></i> Verification required: @factor.VerificationObligation</div>
+                                                }
                                                 @if (!string.IsNullOrWhiteSpace(rel.Rationale))
                                                 {
                                                     <div class="poloxi-factorcheck-item-effect"><i class="bi bi-arrow-return-right"></i> @rel.Rationale</div>
@@ -1876,6 +2343,112 @@
     private string? _error;
     private WideSearchResponse? _response;
 
+    // ── Real-time SignalR KPI feed ────────────────────────────────────────────────────────────
+    // The Wide2 pipeline pushes provisional KPI snapshots through the Wide2ProgressHub while the
+    // background search runs. _liveProgress holds the latest snapshot; it is set when a run starts
+    // (with the run's CorrelationId) and cleared onto the final response when the run completes.
+    private HubConnection? _hub;
+    private string? _liveCorrelationId;
+    private Wide2ProgressUpdate? _liveProgress;
+    // Rolling, newest-first log of execution phases pushed by the pipeline. Rendered as the shared
+    // real-time execution strip at the top of every workspace tab so progress is visible regardless
+    // of which tab the user is on. Capped to keep the strip compact.
+    private readonly List<LiveExecutionEntry> _livePhaseLog = new();
+    private const int LivePhaseLogCap = 8;
+    private bool DfiLiveProvisional => _loading && _liveProgress is { IsProvisional: true };
+    // The strip is shown while a run is streaming (provisional) and remains visible with the final
+    // "Decision complete" entry until the next run clears it.
+    private bool DfiShowLiveExecution => _livePhaseLog.Count > 0 && (_loading || _liveProgress is { IsProvisional: false });
+    private string DfiLivePhaseLabel => _liveProgress?.Phase switch
+    {
+        "ANALYZING" => "Interpreting",
+        "HIERARCHY" => "Framing outcomes",
+        "NARROWING" => "Narrowing",
+        "COMPLETED" => "Complete",
+        null => "Idle",
+        _ => _liveProgress!.Phase
+    };
+
+    private sealed record LiveExecutionEntry(string Phase, string Label, string? Message, int CompetingOutcomes, int IdentifiedFactors, int AdmittedEvidence, bool IsProvisional, DateTime TimestampUtc);
+    private int DfiLiveCompetingOutcomes => DfiLiveProvisional ? _liveProgress!.CompetingOutcomes : DfiCompetingOutcomes;
+    private int DfiLiveFactorCount => DfiLiveProvisional ? _liveProgress!.IdentifiedFactors : DfiFactorCount;
+    private int DfiLiveEvidenceCount => DfiLiveProvisional ? _liveProgress!.AdmittedEvidence : TotalEvidenceCount;
+    private string DfiLiveReadinessLabel => DfiLiveProvisional ? _liveProgress!.DecisionReadiness : DfiReadinessLabel;
+    private string DfiLiveReadinessTone => DfiLiveProvisional ? "warn" : DfiReadinessTone;
+
+    // Lazily creates and starts the hub connection to the API host, then subscribes to a run's
+    // correlation group. Fully fail-soft: any transport error leaves the poll-based result intact.
+    private async Task StartLiveProgressAsync(string correlationId)
+    {
+        _liveProgress = null;
+        _livePhaseLog.Clear();
+        _liveCorrelationId = correlationId;
+        try
+        {
+            if (_hub is null)
+            {
+                var apiBase = Configuration["Api:BaseUrl"] ?? "https://localhost:7251/";
+                var hubUrl = new Uri(new Uri(apiBase), "hubs/wide2-progress");
+                _hub = new HubConnectionBuilder().WithUrl(hubUrl).WithAutomaticReconnect().Build();
+                _hub.On<Wide2ProgressUpdate>("progress", update =>
+                {
+                    if (!string.Equals(update.CorrelationId, _liveCorrelationId, StringComparison.Ordinal)) return;
+                    _liveProgress = update;
+                    RecordLivePhase(update);
+                    _ = InvokeAsync(StateHasChanged);
+                });
+            }
+            if (_hub.State == HubConnectionState.Disconnected) await _hub.StartAsync();
+            await _hub.InvokeAsync("Subscribe", correlationId);
+        }
+        catch
+        {
+            // Real-time feed is best-effort; the start+poll result path is unchanged.
+        }
+    }
+
+    // Appends a phase snapshot to the newest-first rolling log used by the shared execution strip.
+    // Consecutive updates for the same phase replace the prior one so the strip advances instead of
+    // repeating identical rows while counters tick up within a phase.
+    private void RecordLivePhase(Wide2ProgressUpdate update)
+    {
+        var label = update.Phase switch
+        {
+            "ANALYZING" => "Interpreting the question",
+            "HIERARCHY" => "Framing candidate outcomes",
+            "NARROWING" => "Narrowing interpretation paths",
+            "COMPLETED" => "Decision complete",
+            _ => update.Phase
+        };
+        var entry = new LiveExecutionEntry(update.Phase, label, update.Message,
+            update.CompetingOutcomes, update.IdentifiedFactors, update.AdmittedEvidence,
+            update.IsProvisional, DateTime.UtcNow);
+        if (_livePhaseLog.Count > 0 && string.Equals(_livePhaseLog[0].Phase, update.Phase, StringComparison.Ordinal))
+            _livePhaseLog[0] = entry;
+        else
+            _livePhaseLog.Insert(0, entry);
+        if (_livePhaseLog.Count > LivePhaseLogCap)
+            _livePhaseLog.RemoveRange(LivePhaseLogCap, _livePhaseLog.Count - LivePhaseLogCap);
+    }
+
+    private async Task StopLiveProgressAsync()
+    {
+        _liveProgress = null;
+        var correlationId = _liveCorrelationId;
+        _liveCorrelationId = null;
+        if (_hub is null || string.IsNullOrEmpty(correlationId)) return;
+        try { if (_hub.State == HubConnectionState.Connected) await _hub.InvokeAsync("Unsubscribe", correlationId); }
+        catch { /* best-effort */ }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hub is not null)
+        {
+            try { await _hub.DisposeAsync(); } catch { /* best-effort */ }
+        }
+    }
+
     private bool ShowAnswerView => _showAnswerView && _response?.AnswerContext is not null && _response.StatusCode != "USER_CLARIFICATION_REQUIRED";
     // FinalConfidence equals the evidence-weighted DecisionConfidence ONLY when a Candidate × Branch
     // competition ran (DecisionConfidence non-null). Otherwise FinalConfidence is the interpretation-prior
@@ -1896,6 +2469,215 @@
     // continuation mechanism as a clarification answer (constraint-append + candidate reweighting).
     private Task PersonalizeAsync(string dimension) => SubmitClarificationAsync($"prioritize {dimension}");
 
+    // ── Decision Intelligence console (reads existing response + matter fields only) ──
+    private string _dfiTab = "Overview";
+    private static readonly string[] DfiTabs = ["Overview", "Hierarchy", "Factors", "Evidence", "Integrity", "Audit"];
+
+    private string DfiMatterTitle => _matter?.Title ?? "Decision Intelligence workspace";
+    private string DfiMatterSubtitle
+    {
+        get
+        {
+            var parts = new[] { _matter?.ClaimTypeCode ?? _matter?.MatterTypeCode, "Matter workspace" }
+                .Where(x => !string.IsNullOrWhiteSpace(x));
+            return string.Join(" · ", parts);
+        }
+    }
+    private string DfiPracticeAreaLabel => (_matter?.PracticeAreaCode ?? "PERSONAL INJURY").Replace('_', ' ').ToUpperInvariant();
+    private string? DfiJurisdictionTag
+    {
+        get
+        {
+            var jur = _matter?.State ?? _matter?.Jurisdiction;
+            if (string.IsNullOrWhiteSpace(jur)) return null;
+            return _documents.Count > 0 ? $"{jur} · Supplied" : jur;
+        }
+    }
+    private string? DfiPostureTag => _matter?.Posture ?? _matter?.RequestedDisposition;
+
+    private WideCandidateDto? DfiTopCandidate => FinalRankedCandidates.Count > 0 ? FinalRankedCandidates[0] : null;
+    // Competing outcomes = the formal candidate competition when it ran; otherwise the distinct L1
+    // outcome branches the hierarchy actually produced. The Mendoza run never executes candidate
+    // competition (Candidates is empty) yet the Explorer shows 5 competing L1 outcomes — the KPI must
+    // reflect them so the console is not self-contradictory. Integrity still reports "Not executed".
+    private int DfiL1OutcomeCount => SurvivingBranches.Count(b => b.LevelNumber == 1);
+    private int DfiCompetingOutcomes => _response is null ? 0
+        : _response.Candidates.Count > 0 ? _response.Candidates.Count
+        : DfiL1OutcomeCount;
+    // The outcome under review: the winning formal candidate if competition ran, else the top L1 branch.
+    private string? DfiReviewedOutcomeName => DfiTopCandidate?.DisplayName
+        ?? SurvivingBranches.Where(b => b.LevelNumber == 1).OrderByDescending(b => b.Confidence).FirstOrDefault()?.DisplayName;
+    private IReadOnlyCollection<WideFactorDto> DfiFactors => _response?.DecisionInspector?.FactorInventory?.Factors ?? [];
+    private int DfiFactorCount => _response?.DecisionInspector?.FactorInventory?.Factors.Count ?? 0;
+    private int DfiMissingFactorCount => _response?.DecisionInspector?.FactorInventory?.MissingFactorCount ?? 0;
+    private int DfiDependencyCount => _response?.DecisionInspector?.SharedDependencies.Count ?? 0;
+    private IReadOnlyCollection<WideCandidateFactorRelationDto> DfiRelations => _response?.DecisionInspector?.FactorInventory?.Relationships ?? [];
+
+    // Factor Inventory review grid state + helpers.
+    private string _dfiFactorFilter = "All";
+    private string? _dfiSelectedFactorId;
+    private Guid? _dfiSelectedBranchId;
+    private WideBranchDto? DfiSelectedBranch => SurvivingBranches.FirstOrDefault(b => b.WideBranchId == _dfiSelectedBranchId);
+    private static readonly string[] DfiFactorFilters = ["All", "Needs review", "Missing"];
+
+    private IReadOnlyList<WideFactorDto> DfiFilteredFactors => _dfiFactorFilter switch
+    {
+        "Missing" => DfiFactors.Where(f => f.Availability != "AVAILABLE").ToArray(),
+        "Needs review" => DfiFactors.Where(f => f.ValidationStatus != "VALID" || f.VerificationStatus == "UNVERIFIED").ToArray(),
+        _ => DfiFactors.ToArray(),
+    };
+
+    private void SelectDfiFactor(string factorId)
+    {
+        _dfiSelectedFactorId = factorId;
+        _dfiTab = "Hierarchy";
+    }
+
+    private WideCandidateFactorRelationDto? DfiRelationFor(WideFactorDto f) =>
+        DfiRelations.FirstOrDefault(r => r.FactorId == f.FactorId);
+
+    private string DfiFactorCandidate(WideFactorDto f) => DfiRelationFor(f)?.CandidateTitle ?? "All outcomes";
+    private string DfiFactorRelation(WideFactorDto f)
+    {
+        var rel = DfiRelationFor(f);
+        if (rel is not null) return rel.RelationType;
+        return f.Relationships.Count > 0 ? string.Join(", ", f.Relationships.Take(2)) : "—";
+    }
+    private string DfiRelationTone(WideFactorDto f)
+    {
+        var rel = DfiFactorRelation(f);
+        if (rel.Contains("REQUIRED", StringComparison.OrdinalIgnoreCase)) return "warn";
+        if (rel.Contains("SUPPORTS", StringComparison.OrdinalIgnoreCase)) return "ok";
+        return "muted";
+    }
+    private string DfiFactorImpact(WideFactorDto f) =>
+        (DfiRelationFor(f)?.IsRequired ?? f.Relationships.Any(r => r.Contains("REQUIRED", StringComparison.OrdinalIgnoreCase)))
+            ? "May change outcome" : "Evaluative";
+
+    // ── Authoritative readiness (driven by the Decision Inspector, never inferred from evidence alone) ──
+    // The presentation states ("Decision ready", "Verified", attorney-ready) must reflect the SAME
+    // authoritative result the inspector reports, not the mere existence of retrieved evidence. These
+    // read the captured stage statuses so the UI can never claim readiness while the inspector reports
+    // "Matter Decision Contract: INCOMPLETE" or "Core Evaluation" is BLOCKED/INCOMPLETE/NOT_REACHED.
+    private IReadOnlyCollection<WideInspectorStageDto> DfiInspectorStages =>
+        _response?.DecisionInspector?.Stages ?? [];
+    private string? DfiStageStatus(string stageCode) =>
+        DfiInspectorStages.FirstOrDefault(s => string.Equals(s.StageCode, stageCode, StringComparison.OrdinalIgnoreCase))?.Status;
+    private bool DfiHasInspector => _response?.DecisionInspector is not null;
+    private bool DfiDecisionContractComplete =>
+        !DfiHasInspector || string.Equals(DfiStageStatus("MATTER_CONTRACT"), "COMPLETED", StringComparison.OrdinalIgnoreCase);
+    private bool DfiCoreEvaluationReady =>
+        !DfiHasInspector || string.Equals(DfiStageStatus("CORE_EVALUATION"), "COMPLETED", StringComparison.OrdinalIgnoreCase);
+    // Authoritative attorney-ready predicate: every gating condition must hold, including the inspector's
+    // Decision Contract and Core Evaluation stages when present. Non-legal runs (no inspector) fall back
+    // to the evidence-based check so unrelated runs are unaffected.
+    private bool DfiDecisionReady =>
+        _response is not null && TotalEvidenceCount > 0 && !DfiReviewRequired;
+
+    private bool DfiReviewRequired => _response is null || TotalEvidenceCount == 0 || _response.StatusCode == "USER_CLARIFICATION_REQUIRED" || !DfiDecisionContractComplete || !DfiCoreEvaluationReady;
+    private bool DfiShowIntegrityAlert => _response is not null && TotalEvidenceCount == 0;
+    private string DfiIntegrityMessage =>
+        "Candidate dependencies require validation. No independently verified evidence was admitted in the referenced execution.";
+
+    private string DfiReadinessLabel
+    {
+        get
+        {
+            if (_response is null) return "Not established";
+            if (_response.StatusCode == "USER_CLARIFICATION_REQUIRED") return "Clarification needed";
+            if (TotalEvidenceCount == 0) return "Not established";
+            return (_response.DecisionConfidence ?? _response.FinalConfidence) >= 0.6m ? "Established" : "Provisional";
+        }
+    }
+    private string DfiReadinessTone => DfiReadinessLabel switch
+    {
+        "Established" => "ok",
+        "Provisional" or "Clarification needed" => "warn",
+        _ => "warn",
+    };
+
+    private sealed record DfiIndicator(string Label, string Meaning, string Value, string Tone);
+
+    // Authoritative, diagnostic-driven blockers for the Candidate Competition status card. Derived from
+    // the DTO fields the pipeline already emits (normalization gate state, decision-contract completeness,
+    // evidence grounding), NOT from ad-hoc UI inference. Empty when competition executed.
+    private IReadOnlyList<string> DfiCompetitionBlockers
+    {
+        get
+        {
+            var r = _response;
+            if (r is null) return [];
+            var blockers = new List<string>();
+            if (!DfiDecisionContractComplete)
+                blockers.Add("Decision Contract incomplete");
+            var gate = r.MatterContext?.NormalizationGateStatus;
+            if (gate is not null && gate.StartsWith("PLAN_INVALID", StringComparison.OrdinalIgnoreCase))
+                blockers.Add("Invalid candidate identity or ineligible outcome pool");
+            var readiness = r.MatterContext?.DecisionReadinessStatus;
+            if (readiness is not null && readiness.StartsWith("REGISTERED_SCORING_BLOCKED", StringComparison.OrdinalIgnoreCase))
+                blockers.Add("Dependency and evidence validation incomplete");
+            if (TotalEvidenceCount == 0)
+                blockers.Add("No independently verified evidence admitted");
+            return blockers;
+        }
+    }
+
+    private IReadOnlyList<DfiIndicator> DfiIntegrityIndicators
+    {
+        get
+        {
+            var r = _response;
+            bool competed = (r?.Candidates.Count ?? 0) > 0;
+            int reachedScoring = r?.Candidates.Count(c => !c.IsConstraintViolation) ?? 0;
+            bool grounded = TotalEvidenceCount > 0;
+            bool structural = (r?.DepthReached ?? 0) >= 2 && SurvivingBranches.Count > 0;
+            bool dependency = DfiDependencyCount > 0;
+            bool authority = (r?.ProposedLegalAuthorities.Any(a => a.VerificationStatus == "VERIFIED")) ?? false;
+            bool stable = (r?.WinnerStability ?? 0m) >= 0.6m;
+            bool ready = grounded && competed && !DfiReviewRequired;
+            // The competition "executed" once the pipeline actually produced competing candidates. Use the
+            // same signal the console used before the readiness rework: a delivered candidate field means the
+            // Candidate x Branch competition ran. The authoritative backend status (CandidateCompetitionStatus
+            // = "RAN ..." / DecisionReadinessStatus = "CANDIDATES_REGISTERED_AND_COMPETED") is honored first so
+            // a genuinely-executed run is never mislabeled; otherwise fall back to the presence of candidates.
+            // Do NOT gate execution on reachedScoring >= 2 or on evidence being admitted — an executed but
+            // unverified run is provisional, not "Not executed / Blocked".
+            var competitionStatus = r?.MatterContext?.CandidateCompetitionStatus;
+            var readinessStatus = r?.MatterContext?.DecisionReadinessStatus;
+            bool backendCompeted =
+                (competitionStatus?.StartsWith("RAN", StringComparison.OrdinalIgnoreCase) ?? false)
+                || (readinessStatus?.StartsWith("CANDIDATES_REGISTERED_AND_COMPETED", StringComparison.OrdinalIgnoreCase) ?? false);
+            // Use the SAME competing-outcomes signal the rest of this console trusts: the formal candidate
+            // pool when it populated, otherwise the distinct L1 outcome branches the hierarchy produced
+            // (DfiCompetingOutcomes). Before the readiness rework the card treated two or more competing
+            // outcomes as an executed competition; gating only on _response.Candidates made a run whose
+            // outcomes live on L1 branches (Candidates empty) read "Not executed" while the Explorer showed
+            // several competing outcomes — a self-contradiction. Restore the outcome-count signal.
+            bool competitionExecuted = backendCompeted || competed || DfiCompetingOutcomes >= 2;
+            string competitionValue = competitionExecuted
+                ? (grounded ? "Executed" : "Executed \u2014 no verified winner")
+                : "Not executed";
+            string competitionTone = competitionExecuted ? (grounded ? "ok" : "warn") : "warn";
+            // Readiness stays a three-state signal: READY (grounded + competed), REVIEW/PROVISIONAL (competed
+            // but evidence still pending — NOT a fault), BLOCKED only when the competition never executed.
+            string readinessValue = ready
+                ? "Ready"
+                : (competitionExecuted ? "Provisional \u2014 evidence pending" : "Blocked / unresolved");
+            string readinessTone = ready ? "ok" : (competitionExecuted ? "warn" : "danger");
+            return
+            [
+                new("Technical execution", "Did the pipeline finish?", r is null ? "Not run" : "Completed", r is null ? "muted" : "ok"),
+                new("Structural validity", "Is the hierarchy internally coherent?", structural ? "Valid" : "Incomplete", structural ? "ok" : "warn"),
+                new("Dependency validity", "Are candidate relationships justified?", dependency ? "Justified" : "Review needed", dependency ? "ok" : "warn"),
+                new("Evidence grounding", "Are material propositions supported by admitted evidence?", grounded ? $"{(r?.DecisionEvidenceCoverage ?? 0m):P0} coverage" : "Not established", grounded ? "ok" : "warn"),
+                new("Authority verification", "Are legal propositions backed by checked sources?", authority ? "Verified" : "Unverified", authority ? "ok" : "warn"),
+                new("Candidate competition", "Did the intended competition execute?", competitionValue, competitionTone),
+                new("Stability", "Are results consistent across equivalent executions?", stable ? "Stable" : "Unconfirmed", stable ? "ok" : "muted"),
+                new("Decision readiness", "Ready for attorney review, or blocked?", readinessValue, readinessTone),
+            ];
+        }
+    }
+
     private IReadOnlyCollection<WideBranchDto> SurvivingBranches => _response?.Branches.Where(x => !x.IsEliminated).ToArray() ?? [];
     private IReadOnlyCollection<WideInterpretiveResultDto> PrioritizedInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode != "DORMANT").ToArray() ?? [];
     private IReadOnlyCollection<WideInterpretiveResultDto> SecondaryInterpretiveResults => _response?.InterpretiveResults.Where(x => x.BranchStateCode == "DORMANT").ToArray() ?? [];
@@ -1910,6 +2692,30 @@
     // NOT_APPLICABLE). They read existing response counts only and never change core values.
     private int TotalEvidenceCount => _response is null ? 0 : _response.EnterpriseEvidenceCount + _response.ExternalEvidenceCount;
     private bool HasAnyEvidence => TotalEvidenceCount > 0;
+
+    // Evidence-admission diagnostic (pure presentation): mirrors the deterministic admission gate in
+    // IntelligenceWide2Service so the Evidence tab can explain WHY a retrieved source was or was not
+    // credited. A source counts as admitted only when it passed identity verification and is not marked
+    // UNVERIFIED / SCOPE_INELIGIBLE. Reads response fields only; never changes any pipeline value.
+    private static bool DfiIsAdmitted(WideExternalKnowledgeSnippet snip)
+        => snip.AuthorityIdentityVerified
+           && !string.Equals(snip.PropositionSupportStatus, "UNVERIFIED", StringComparison.OrdinalIgnoreCase)
+           && !string.Equals(snip.PropositionSupportStatus, "SCOPE_INELIGIBLE", StringComparison.OrdinalIgnoreCase);
+
+    private static string DfiAdmissionReason(WideExternalKnowledgeSnippet snip)
+    {
+        if (!snip.AuthorityIdentityVerified)
+            return "Rejected: identity verification failed — the retrieved source did not actually reference the cited authority.";
+        if (string.Equals(snip.PropositionSupportStatus, "SCOPE_INELIGIBLE", StringComparison.OrdinalIgnoreCase))
+            return "Rejected: out of jurisdiction — the source names a different governing-law sovereign than the matter.";
+        if (string.Equals(snip.PropositionSupportStatus, "UNVERIFIED", StringComparison.OrdinalIgnoreCase))
+            return "Rejected: unverified — the source could not be admitted as support for the proposition.";
+        if (string.Equals(snip.PropositionSupportStatus, "AUTHORITY_FOUND_BUT_SUPPORT_UNCLEAR", StringComparison.OrdinalIgnoreCase))
+            return "Admitted (weak): authority verified, but proposition support is unclear (low claim overlap).";
+        if (string.Equals(snip.PropositionSupportStatus, "VERIFIED_SUPPORT", StringComparison.OrdinalIgnoreCase))
+            return "Admitted: identity verified and the source text supports the proposition.";
+        return "Admitted: identity verified.";
+    }
     private string EvidenceConfidenceLabel => HasAnyEvidence ? $"{ConfidenceLabel} evidence confidence" : "Evidence confidence: NONE";
     private string SurvivalVerb => HasAnyEvidence ? "survived grounding" : "survived interpretive narrowing";
     // Candidate-basis uncertainty is only meaningful when a Candidate x Branch competition scored
@@ -2213,9 +3019,11 @@
         _error = null;
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
+        var correlationId = Guid.NewGuid().ToString("N");
+        await StartLiveProgressAsync(correlationId);
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
         }
         catch (OperationCanceledException)
         {
@@ -2228,6 +3036,7 @@
         finally
         {
             _loading = false;
+            await StopLiveProgressAsync();
         }
     }
 
@@ -2252,9 +3061,11 @@
         _error = null;
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
+        var correlationId = Guid.NewGuid().ToString("N");
+        await StartLiveProgressAsync(correlationId);
         try
         {
-            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, Guid.NewGuid().ToString("N")) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
+            _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, ClarificationAnswer = answer.Trim(), ClarificationTarget = target, ClarificationRound = round, PriorIntentEntropy = priorIntentEntropy, OriginalAnswerKind = originalAnswerKind, ParentWideExecutionId = parentExecutionId, ModelCode = string.IsNullOrWhiteSpace(_selectedModelCode) ? "gpt-4.1-mini" : _selectedModelCode, ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
             _clarificationAnswer = "";
         }
         catch (OperationCanceledException)
@@ -2268,6 +3079,7 @@
         finally
         {
             _loading = false;
+            await StopLiveProgressAsync();
         }
     }
 

@@ -284,6 +284,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<DecisionSettingDto>>([]);
 
+    public Task<Legal.Application.Features.Intelligence.Decision.Core.FactBindingConfig?> GetFactBindingConfigAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<Legal.Application.Features.Intelligence.Decision.Core.FactBindingConfig?>(null);
+
     public Task SaveSettingAsync(Guid actorUserId, SaveDecisionSettingRequest request, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
 

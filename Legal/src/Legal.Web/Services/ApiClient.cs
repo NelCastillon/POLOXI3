@@ -202,6 +202,16 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<IReadOnlyList<MathExecutionSummary>> GetMathRunsAsync(int take=50,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyList<MathExecutionSummary>>($"api/intelligence_math/runs?take={take}",token)??[];
     public Task<MathExecutionDetail?> GetMathRunAsync(Guid mathExecutionId,CancellationToken token=default)=>_httpClient.GetFromJsonAsync<MathExecutionDetail>($"api/intelligence_math/runs/{mathExecutionId}",token);
 
+    // ── Enterprise Error Log (Administrator → Error Logs) ──────────────────────
+    public async Task<IReadOnlyList<Legal.Application.Abstractions.Services.ErrorLogListItem>> GetErrorLogsAsync(int days=7,int take=200,string? module=null,string? severity=null,string? search=null,bool allTenants=false,CancellationToken token=default)
+    {
+        var query=$"api/error_logs?days={days}&take={take}&allTenants={allTenants.ToString().ToLowerInvariant()}";
+        if(!string.IsNullOrWhiteSpace(module))query+=$"&module={Uri.EscapeDataString(module)}";
+        if(!string.IsNullOrWhiteSpace(severity))query+=$"&severity={Uri.EscapeDataString(severity)}";
+        if(!string.IsNullOrWhiteSpace(search))query+=$"&search={Uri.EscapeDataString(search)}";
+        return await _httpClient.GetFromJsonAsync<IReadOnlyList<Legal.Application.Abstractions.Services.ErrorLogListItem>>(query,token)??[];
+    }
+
     // ── POLOXI Math solve (deterministic verification pipeline) ──────────────
     public async Task<Legal.Application.Features.Intelligence.Science.MathSolveResponse?> SolveMathAsync(Legal.Application.Features.Intelligence.Science.MathSolveRequest request,CancellationToken token=default)
     {

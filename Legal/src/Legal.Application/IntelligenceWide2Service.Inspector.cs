@@ -329,8 +329,15 @@ public sealed partial class IntelligenceWide2Service
             ProcessingPerformed: $"Candidate competition status: {_candidateCompetitionStatus ?? "(none)"}.",
             ActualOutput: _decisionReadinessStatus,
             DurationMilliseconds: null,
+            // Distinguish the two blocked shapes so the attorney sees WHY no authoritative winner emerged:
+            // (a) the competition RAN and produced competing dispositions but no independently verified
+            //     evidence was admitted, so no outcome can be presented as established (this is the safe,
+            //     expected state on a zero-evidence run - not a machinery fault); versus
+            // (b) the competition never produced competing candidates at all.
             BlockingReason: readinessBlocked
-                ? "Semantic registration succeeded but the unchanged evidence/readiness rules prevented an authoritative winner (zero admitted evidence blocks selection)."
+                ? (delivered >= 2
+                    ? "The competition ran and adjudicated the competing dispositions, but no independently verified evidence was admitted, so no outcome can be presented as an established winner. Admit verified authority for the material propositions to lift this block."
+                    : "Semantic registration succeeded but the competition did not reach two competing candidates, so no authoritative winner could be selected. Provide the missing decision-contract inputs or competing outcomes.")
                 : null));
 
         return stages;

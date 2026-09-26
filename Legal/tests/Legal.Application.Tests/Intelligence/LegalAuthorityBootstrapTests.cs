@@ -90,7 +90,7 @@ public sealed class LegalAuthorityBootstrapTests
         var bootstrapper=new StubBootstrapper([descriptor]);
         var detector=new StubDetector(new("NAME:EXAMPLELAND","STATUTE","Exampleland Code section 22"));
         var handler=new StubHandler(_=>Html("<main>Exampleland Code section 22 controlling text</main>"));
-        var sut=new OfficialLegalAuthorityRetriever(new HttpClient(handler),registry,bootstrapper,detector,new StubTenantAccessor(),NullLogger<OfficialLegalAuthorityRetriever>.Instance);
+        var sut=new OfficialLegalAuthorityRetriever(new HttpClient(handler),registry,bootstrapper,detector,new StubTenantAccessor(),Legal.Application.Abstractions.Services.NullErrorLogService.Instance,NullLogger<OfficialLegalAuthorityRetriever>.Instance);
 
         var result=await sut.SearchAsync("Apply Exampleland Code section 22",LegalConfiguration());
 

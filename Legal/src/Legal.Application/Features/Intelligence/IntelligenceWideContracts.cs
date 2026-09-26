@@ -352,7 +352,19 @@ public sealed record WideFactorInventoryDto(
     WideFactorInventorySourceStatusDto SourceStatus,
     int CandidateCount,
     int SharedFactorCount,
-    int MissingFactorCount);
+    int MissingFactorCount)
+{
+    // ── Validated Candidate Competition readiness summary (additive, non-breaking) ──
+    // True when the competition result must be presented as PROVISIONAL (unresolved decision contract or
+    // unresolved material dependency) rather than a validated/verified recommendation.
+    public bool IsProvisional { get; init; } = true;
+    // Human-facing readiness status (e.g. READY / BLOCKED / PROVISIONAL) surfaced alongside the ranking.
+    public string DecisionReadinessStatus { get; init; } = "PROVISIONAL";
+    // Count of source-value bindings the validator rejected as category mismatches (never established).
+    public int RejectedBindingCount { get; init; }
+    // Explicit, ordered blocking obligations that keep the decision from being safe to act on.
+    public IReadOnlyCollection<string> BlockingObligations { get; init; } = [];
+}
 
 // One global factor. Exposes the required eight-field contract plus the engineering identities needed
 // for correct registration. FactorId is the stable global identity; a single factor may relate to many
@@ -374,11 +386,25 @@ public sealed record WideFactorDto(
     string ValueSource,          // where the actual value came from (or MISSING)
     string? SourceLocation,      // document/matter-field reference, when known
     string ValidationStatus,     // VALID / INCOMPLETE / INVALID
-    string NodeKind = "ATOMIC"); // ATOMIC (leaf L3 factor) / PARENT (broad L1/L2 grouping)
+    string NodeKind = "ATOMIC")  // ATOMIC (leaf L3 factor) / PARENT (broad L1/L2 grouping)
+{
+    // ── Validated Candidate Competition (additive, non-breaking) ──
+    // Graded evidence-admission state for this factor's support, drawn from the DB-backed ladder
+    // (SUPPLIED / SOURCE_AVAILABLE / EXTRACTED / SUPPORTED / VERIFIED / CONTRADICTED / UNRESOLVED).
+    public string EvidenceAdmissionState { get; init; } = "SUPPLIED";
+    // Whether this factor's current admission state may influence the evidence-backed score component.
+    public bool CountsTowardEvidenceScore { get; init; }
+    // Outcome of proposition-specific fact binding: ADMITTED (source value matches the proposition),
+    // REJECTED (category mismatch — value preserved but not established), REQUIRES_VERIFICATION (ambiguous),
+    // or NONE (no value supplied).
+    public string BindingAdmissibility { get; init; } = "NONE";
+    // The precise, actionable verification obligation generated when a value is not established; null when none.
+    public string? VerificationObligation { get; init; }
+}
 
 // One Candidate×Factor relationship. The same shared factor may have different relationships with
 // different candidates (e.g. REQUIRED for one, SUPPORTS another). Reuses the existing relation
-// vocabulary: REQUIRED, SUPPORTS, OPPOSES, CONDITIONAL, DISTINGUISHES, NOT_APPLICABLE.
+// vocabulary: REQUIRED, SUPPORTS, DEFEATS, CONDITIONAL, ALTERNATIVE, NOT_APPLICABLE.
 public sealed record WideCandidateFactorRelationDto(
     string CandidateId,
     string CandidateTitle,
@@ -386,7 +412,12 @@ public sealed record WideCandidateFactorRelationDto(
     string FactorName,
     string RelationType,
     bool IsRequired,             // required-to-establish vs merely evaluative
-    string? Rationale);
+    string? Rationale)
+{
+    // Whether this relationship passed semantic dependency validation (vs mere lexical overlap). When
+    // false the relation is retained for transparency but must not be treated as an established REQUIRED link.
+    public bool IsValidatedRelation { get; init; } = true;
+}
 
 // Source availability + retrieval status for the four information sources (§4). Each flag reflects the
 // ACTUAL run: whether matter data was loaded, a domain pack was verifiably resolved, and whether the

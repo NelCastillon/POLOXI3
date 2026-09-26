@@ -84,6 +84,12 @@ public sealed partial class IntelligenceWide2Service
             if (string.IsNullOrWhiteSpace(name))
                 return;
             var trimmed = name.Trim();
+            // Step 1 (outcome-pool hygiene): a legal-authority citation title ("Cal. Civ. Code",
+            // "§ 377.60", "Code of Civil Procedure") is a SOURCE reference, never a competing outcome.
+            // Reject it here so it can never be registered as an eligible SubstantiveResolution and
+            // pollute the candidate competition. Supplied assertions/objectives are still admitted below.
+            if (IsLegalAuthorityCitationName(trimmed))
+                return;
             if (seenNames.Add(trimmed))
                 planned.Add((trimmed, outcome));
         }
@@ -186,6 +192,14 @@ public sealed partial class IntelligenceWide2Service
                 if (shared == 0)
                     continue; // Factor proposition does not touch this candidate — no relationship.
 
+                // Decision-factor isolation: a "factor" whose significant terms are entirely contained in
+                // this candidate's own outcome text is not an INDEPENDENT scoring dimension — it merely
+                // restates the L1 outcome. Emitting it would let the outcome score itself. Skip it so a
+                // candidate is only ever scored against factors external to its own disposition.
+                var branchTokens = NormalizationTokens(b.DisplayName ?? string.Empty);
+                if (branchTokens.Count > 0 && shared >= branchTokens.Count)
+                    continue;
+
                 var (relationType, rationale) = ClassifyFactorRelation(shared, b.DisplayName, c.DisplayName);
                 relations.Add(new LegalDecisionService.SemanticCandidateBranchRelation(
                     c.SemanticCandidateId!, b.SemanticBranchId!, relationType, rationale));
@@ -194,13 +208,16 @@ public sealed partial class IntelligenceWide2Service
         return new LegalDecisionService.SemanticProposalEnrichment(relations, [], []);
     }
 
-    // Deterministic relation classification: stronger token overlap => REQUIRED, otherwise SUPPORTS.
-    // (CONDITIONAL is reserved for a single incidental token touch.) Zero-LLM, provenance recorded.
+    // Deterministic relation classification. Lexical token overlap establishes only RELEVANCE, never a
+    // legal REQUIREMENT: a factor is "required to establish" an outcome by the decision contract / element
+    // set, not by sharing words with the outcome text. REQUIRED is deliberately never inferred here.
     private static (string RelationType, string Rationale) ClassifyFactorRelation(
         int sharedTokenCount, string factorLabel, string candidateName)
     {
-        var relation = sharedTokenCount >= 2 ? "REQUIRED" : "SUPPORTS";
-        var rationale = $"'{factorLabel}' shares {sharedTokenCount} material term(s) with candidate '{candidateName}'; relevance-derived ({relation}).";
+        // Overlap yields evaluative relations only — CONDITIONAL for an incidental single-term touch,
+        // otherwise SUPPORTS. The relation is a provisional relevance link, not a validated dependency.
+        var relation = sharedTokenCount >= 2 ? "SUPPORTS" : "CONDITIONAL";
+        var rationale = $"'{factorLabel}' shares {sharedTokenCount} material term(s) with candidate '{candidateName}'; lexical relevance only ({relation}) — not a validated legal requirement.";
         return (relation, rationale);
     }
 

@@ -15,8 +15,27 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,ILogger<IntelligenceWide2Service> logger):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null):IIntelligenceWide2Service
 {
+    // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
+    // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
+    private readonly IWide2ProgressPublisher _progressPublisher=progressPublisher??NullWide2ProgressPublisher.Instance;
+    private string _progressCorrelationId=string.Empty;
+    private int _progressCompetingOutcomes;
+    private int _progressIdentifiedFactors;
+    private int _progressAdmittedEvidence;
+    private async Task PublishProgressAsync(string phase,string readiness,bool isProvisional,string? message,CancellationToken cancellationToken)
+    {
+        if(string.IsNullOrEmpty(_progressCorrelationId))return;
+        try
+        {
+            await _progressPublisher.PublishAsync(new Wide2ProgressUpdate(_progressCorrelationId,phase,_progressCompetingOutcomes,_progressIdentifiedFactors,_progressAdmittedEvidence,readiness,isProvisional,message),cancellationToken);
+        }
+        catch(Exception ex)
+        {
+            logger.LogDebug(ex,"Wide2 progress publish failed for {CorrelationId} at phase {Phase}.",_progressCorrelationId,phase);
+        }
+    }
     private const int WideUserPromptBudget=48000;
     // Safe ceiling for the combined system+user prompt sent to a governed AI call. It sits below the
     // configured Intelligence.Safety.MaximumInputCharacters guard (raised to 60000 in migration 0194)
@@ -584,12 +603,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         _resolvedDomainPackCode=null;
         _candidateCompetitionStatus=null;
         _legalNormalization=null;
+        _factBindingValidator=null;
+        _factBindingSemanticProbe=null;
         _normalizationGateStatus=null;
         _decisionReadinessStatus=null;
         _scoredCandidateIds=[];
         _competitionBasis=[];
         _gateMode=null;
         _rankingCompletionRequired=false;
+        // Real-time cockpit feed: reset the running KPI counters for this run and announce the first
+        // provisional phase so the console fills in immediately after "Disambiguate & Answer" is clicked.
+        _progressCorrelationId=request.CorrelationId??string.Empty;
+        _progressCompetingOutcomes=0;
+        _progressIdentifiedFactors=0;
+        _progressAdmittedEvidence=0;
+        await PublishProgressAsync("ANALYZING","Analyzing…",true,"Interpreting the question",cancellationToken);
         // 'POLOXI Engine' filter disabled: pure LLM answer, no hierarchy, grounding, or elimination.
         if(!request.UsePoloxiEngine)return await SearchLlmOnlyAsync(request,timer,cancellationToken);
         // Matter context is only projected into the POLOXI proposal prompts, so load it after the LLM-only
@@ -697,6 +725,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             await wideRepository.SaveWideBranchesAsync(currentLevel,request.UserId,cancellationToken);
             allBranches.AddRange(currentLevel);
 
+            // Real-time cockpit feed: the Level-1 hierarchy is now framed. Surface the count of top-level
+            // outcomes/interpretations and the factors identified so far as provisional counters.
+            _progressCompetingOutcomes=currentLevel.Count(branch=>!branch.IsEliminated);
+            _progressIdentifiedFactors=allBranches.Count;
+            await PublishProgressAsync("HIERARCHY","Analyzing…",true,"Framing candidate outcomes",cancellationToken);
+
             // Stage 2: iterative loop — ground, eliminate, check confidence, then propose the next narrower level.
             while(currentLevel.Length>0)
             {
@@ -794,10 +828,33 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // Degenerate-progress guard: stop when the LLM merely rephrases the current level.
                 var currentCodes=currentLevel.Select(branch=>branch.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 nextLevel=nextLevel.Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray();
-                if(nextLevel.Length==0){terminationReason="NO_PROGRESS";break;}
+                if(nextLevel.Length==0)
+                {
+                    // Degenerate next level. On a legal-decision run that has NOT yet reached the minimum
+                    // atomic-factor depth, a rephrased proposal usually means the model treated the broad L1
+                    // dispositions/dimensions as terminal instead of decomposing them. Rather than stopping at
+                    // depth 1 (the "only L1" defect), retry ONCE with an explicit atomic-decomposition
+                    // directive so migration 0324's atomic-factor rule is enforced deterministically. The
+                    // LLM-call ceiling still bounds this; a second degenerate result concedes NO_PROGRESS.
+                    if(IsLegalDecisionEvaluationRun&&depth<minimumTerminationDepth&&llmCalls+2<=configuration.MaximumTotalLlmCalls)
+                    {
+                        const string atomicDirective="ATOMIC DECOMPOSITION REQUIRED: The parent branches above are broad evaluation dimensions or disposition outcomes, NOT atomic factors. Do NOT rephrase or restate them. For EACH parent, decompose it into its atomic, independently testable child propositions (the distinct legal elements, burden components, factual predicates, or evidentiary sub-issues that must each be established for that parent). Every child must have a NEW distinct branchCode, a narrower proposition than its parent, and continueNarrowing set appropriately. Return only genuinely narrower atomic children.";
+                        var retryProposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken,atomicDirective);
+                        llmCalls++;
+                        nextLevel=MaterializeBranches(retryProposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration)
+                            .Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray();
+                    }
+                    if(nextLevel.Length==0){terminationReason="NO_PROGRESS";break;}
+                }
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
                 allBranches.AddRange(nextLevel);
                 currentLevel=nextLevel;
+
+                // Real-time cockpit feed: a narrower level was generated and grounded. Update the running
+                // factor count and admitted-evidence count so the console auto-increments while processing.
+                _progressIdentifiedFactors=allBranches.Count;
+                _progressAdmittedEvidence=evidence.Count;
+                await PublishProgressAsync("NARROWING","Analyzing…",true,$"Decomposing factors (level {depth})",cancellationToken);
             }
 
             // Rank deduplicated evidence across surviving grounded paths only — evidence collected for
@@ -1634,11 +1691,20 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
             AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic(),DecisionInspector=BuildDecisionInspector(queryContract?.AnswerKind,interpretiveResults,candidates)};
+            // Real-time cockpit feed: final, authoritative snapshot. Reconcile the KPI counters with the
+            // completed response so the console lands on the true values and drops the provisional label.
+            _progressCompetingOutcomes=candidates.Count>0?candidates.Count:_progressCompetingOutcomes;
+            _progressIdentifiedFactors=response.DecisionInspector?.FactorInventory?.Factors?.Count??_progressIdentifiedFactors;
+            _progressAdmittedEvidence=relevantEvidence.Length;
+            var finalReadiness=answerStatus=="USER_CLARIFICATION_REQUIRED"?"Clarification needed":decisionConfidence>=configuration.TargetConfidence?"Established":"Provisional";
+            await PublishProgressAsync("COMPLETED",finalReadiness,false,"Decision complete",cancellationToken);
             return response;
         }
-        catch
+        catch(Exception fault)
         {
             timer.Stop();
+            if(fault is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
+                await errorLog.LogAsync("IntelligenceWide2Service",fault,"SearchDynamicAsync",correlationId:request.CorrelationId,contextJson:$"{{\"executionId\":\"{executionId}\",\"terminationReason\":\"{terminationReason}\",\"depth\":{depth},\"llmCalls\":{llmCalls}}}",cancellationToken:CancellationToken.None);
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,"FAILED",terminationReason,depth,llmCalls,aggregateConfidence,"NONE",null,timer.ElapsedMilliseconds,cancellationToken);
             throw;
         }
@@ -2016,7 +2082,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return JsonSerializer.Deserialize<WideIntentProposal>(result.Content,JsonOptions)??throw new ValidationException("The Wide intent response was empty.");
     }
 
-    private async Task<WideLevelProposal> ProposeNextLevelAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,WideConfiguration configuration,int levelNumber,List<PoloxiEvidenceDto> evidence,WideQueryContract? queryContract,CancellationToken cancellationToken)
+    private async Task<WideLevelProposal> ProposeNextLevelAsync(WideSearchRequest request,IReadOnlyCollection<WideBranchRecord> parents,IReadOnlyCollection<PoloxiCapabilityDto> capabilities,WideConfiguration configuration,int levelNumber,List<PoloxiEvidenceDto> evidence,WideQueryContract? queryContract,CancellationToken cancellationToken,string? atomicDecompositionDirective=null)
     {
         var catalog=BuildCatalog(capabilities);
         var parentSummary=string.Join('\n',parents.Select(parent=>
@@ -2025,7 +2091,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             return $"- {parent.BranchCode} \"{parent.DisplayName}\" ({parent.GroundingStatusCode}, evidence: {parent.EvidenceCount}, confidence: {parent.Confidence:P0}): {parent.Interpretation}{(parent.EvidenceCount>0?$" | sample evidence: {string.Join("; ",samples)}":string.Empty)}";
         }));
         var contractContext=(queryContract is null?string.Empty:$"\n{BuildQueryContractContext(queryContract)}")+BuildMatterContextSection();
-        var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel);
+        var userPrompt=BuildHierarchyUserPrompt(request.Query,contractContext,parentSummary,catalog,levelNumber,configuration.MaximumBranchesPerLevel,atomicDecompositionDirective);
         var result=await aiProviderRouter.GenerateAsync(request.TenantId,"INTELLIGENCE_WIDE_HIERARCHY_STEP",
                 await GetWideSystemPromptAsync(request,IntelligencePromptCodes.WideHierarchyStep,cancellationToken),
             userPrompt,
@@ -2042,13 +2108,14 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return $"Ambiguous question: {boundedQuery}{envelope}";
     }
 
-    private static string BuildHierarchyUserPrompt(string query,string contractContext,string parentSummary,string catalog,int levelNumber,int maximumBranches)
+    private static string BuildHierarchyUserPrompt(string query,string contractContext,string parentSummary,string catalog,int levelNumber,int maximumBranches,string? atomicDecompositionDirective=null)
     {
         var boundedQuery=Truncate(query,4500)??string.Empty;
         var boundedContract=Truncate(contractContext,9500)??string.Empty;
         var boundedParents=Truncate(parentSummary,3000)??string.Empty;
         var boundedCatalog=Truncate(catalog,1000)??string.Empty;
-        var prompt=$"Original question: {boundedQuery}{boundedContract}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {maximumBranches}\nSurviving parent branches with grounding outcomes:\n{boundedParents}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}";
+        var directive=string.IsNullOrWhiteSpace(atomicDecompositionDirective)?string.Empty:$"\n{atomicDecompositionDirective.Trim()}";
+        var prompt=$"Original question: {boundedQuery}{boundedContract}\nLevel to propose: {levelNumber}\nMaximum branches per parent: {maximumBranches}\nSurviving parent branches with grounding outcomes:\n{boundedParents}\nApproved capability catalog (for optional grounding):\n{boundedCatalog}{directive}";
         return Truncate(prompt,WideUserPromptBudget)!;
     }
 
@@ -2084,6 +2151,17 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 return;
             }
             _matterContext=snapshot;
+            // Validated Candidate Competition (0339): load the DB-backed proposition fact-binding config once
+            // per run so supplied values are validated BEFORE they can establish a proposition. Fail-soft: a
+            // missing/degraded config leaves the validator on its embedded DefaultConfig (guardrails still run).
+            // The optional LLM semantic probe stays null (disabled) so the standard path adds no model call.
+            try
+            {
+                var factBindingConfig=await legalDecisionRepository.GetFactBindingConfigAsync(cancellationToken);
+                if(factBindingConfig is not null)
+                    _factBindingValidator=new Features.Intelligence.Decision.Core.PropositionFactBindingValidator(factBindingConfig);
+            }
+            catch(Exception)when(!cancellationToken.IsCancellationRequested){/* config advisory; DefaultConfig guardrails apply */}
             // Bound the projection so it can never dominate the prompt budget; the original question and
             // query contract retain their own budgets in the prompt builders.
             _matterContextBlock=Truncate(snapshot.ToPromptBlock(),6000)??string.Empty;
@@ -2221,6 +2299,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(string.IsNullOrWhiteSpace(branch.DisplayName))return false;
         return IsDecisionOutcomeCandidate(branch.DisplayName);
     }
+
+    // R3 branch-echo scope fix: the V3.4.6 branch-echo rejection discards any candidate whose canonical
+    // identity equals a hierarchy branch name (a dimension label leaking into the pool). On a legal
+    // EVALUATE run the competing DISPOSITIONS are themselves survivor branches (demoted to NonScoring by
+    // IsDispositionBranch, never eliminated), so treating them as branch echoes silently removes EVERY
+    // disposition from the scored pool and the Candidate x Branch competition never executes. Build the
+    // echo-key set from ONLY the true scoring dimensions: disposition survivor branches are excluded so a
+    // genuine competing outcome is never mistaken for a dimension label. No-op outside a legal EVALUATE
+    // run (no branch is a disposition), so non-legal entity ranking keeps the full branch-echo guard.
+    private HashSet<string> BuildBranchEchoKeys(IReadOnlyCollection<WideBranchRecord> survivors)
+        =>survivors
+            .Where(branch=>!IsDispositionBranch(branch))
+            .Select(branch=>CandidateIdentityKey(branch.DisplayName))
+            .Where(key=>key.Length>0)
+            .ToHashSet(StringComparer.Ordinal);
 
     // R3 EVALUATE candidate generation hint: on a legal EVALUATE run the candidate enumeration stage must
     // produce GENUINELY COMPETING outcome candidates (mutually-exclusive dispositions the court could
@@ -4452,8 +4545,21 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // snippets. Venue/list pages often include names with apostrophes, ampersands, and business suffixes
     // ("Q's Billiard Club", "Danny K's Billiards & Sports Bar"); keep those concrete names so the
     // mini interpretive pass cannot starve the competition with category placeholders.
+    // A legal-authority SOURCE snippet is one retrieved from an official authority provider (statute,
+    // case, regulation) — it carries SourceProvider=OFFICIAL_AUTHORITY and/or an AuthorityKind. Such a
+    // snippet is EVIDENCE, not a competing outcome, so it must be kept out of candidate harvesting.
+    private static bool IsLegalAuthoritySourceSnippet(WideExternalKnowledgeSnippet snippet)
+        =>string.Equals(snippet.SourceProvider,"OFFICIAL_AUTHORITY",StringComparison.OrdinalIgnoreCase)
+          ||!string.IsNullOrWhiteSpace(snippet.AuthorityKind);
+
     private static IReadOnlyCollection<string> HarvestCandidateNames(IReadOnlyCollection<WideExternalKnowledgeSnippet> knowledge)
     {
+        // A legal-authority SOURCE object (an official statute/case retrieved through the mandatory
+        // identity gate) is EVIDENCE, never a competing outcome candidate. Harvesting proper-noun phrases
+        // from its title/body would inject the source's own name (e.g. "Cal Civ Code") into the candidate
+        // pool as a pseudo-outcome. Exclude those source snippets so a source can never cross into outcome
+        // normalization; only genuine web/knowledge snippets contribute candidate names.
+        knowledge=knowledge.Where(snippet=>!IsLegalAuthoritySourceSnippet(snippet)).ToArray();
         if(knowledge.Count<2)return [];
         var occurrences=new Dictionary<string,HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         // V3.11 Common-Word Corpus Evidence: Title-Case headlines capitalize EVERY word, so the
@@ -5026,9 +5132,34 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return tokens.Length==1&&CandidateArtifactWords.Contains(tokens[0]);
     }
 
+    // A legal SOURCE identity (a code/statute/case citation such as "Cal Civ Code", "Code of Civil
+    // Procedure § 377.60", "Cal. Civ. Code § 1714", or a reporter cite) is EVIDENCE, never a competing
+    // outcome candidate. Even after source snippets are excluded from harvesting, an LLM candidate seed
+    // or interpretive item can still echo a code/citation name; reject those deterministically so a
+    // source label can never normalize into an L1 outcome candidate (e.g. the "WC2 — Cal Civ Code" leak).
+    private static bool IsLegalAuthorityCitationName(string name)
+    {
+        if(string.IsNullOrWhiteSpace(name))return false;
+        var trimmed=name.Trim();
+        // A section-symbol citation is always a source reference, not an outcome.
+        if(trimmed.Contains('§'))return true;
+        // Named statutory codes and reporter/section citations.
+        return LegalCitationNamePatterns.Any(pattern=>pattern.IsMatch(trimmed));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex[] LegalCitationNamePatterns=
+    [
+        // "Civil Code", "Code of Civil Procedure", "Penal Code", "Cal Civ Code", "Cal. Civ. Code", etc.
+        new(@"\b(?:civ(?:il)?|pen(?:al)?|prob(?:ate)?|veh(?:icle)?|lab(?:or)?|gov(?:ernment)?|evid(?:ence)?|bus(?:iness)?|health|welfare)\.?\s*(?:&|and|proc(?:edure)?\.?)?\s*code\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant|System.Text.RegularExpressions.RegexOptions.Compiled),
+        new(@"\bcode\s+of\s+civil\s+procedure\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant|System.Text.RegularExpressions.RegexOptions.Compiled),
+        // Section-number citation forms: "section 377.60", "sec. 377", "§ 1714", "U.S.C. 1332".
+        new(@"\b(?:section|sec\.?|u\.?s\.?c\.?)\s*\d",System.Text.RegularExpressions.RegexOptions.IgnoreCase|System.Text.RegularExpressions.RegexOptions.CultureInvariant|System.Text.RegularExpressions.RegexOptions.Compiled),
+    ];
+
     private static bool IsValidCandidateForContract(string name,WideQueryContract? queryContract)
     {
         if(IsCandidateArtifact(name))return false;
+        if(IsLegalAuthorityCitationName(name))return false;
         var candidateKind=queryContract?.CandidateKind;
         if(candidateKind is CandidateKindActionableSolution or CandidateKindDiagnosticStep or CandidateKindProcedureStep)
             return IsActionCandidate(name);
@@ -5496,11 +5627,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         return new(candidates,llmCalls,recoveryAttempted);
     }
 
-    private static IReadOnlyCollection<WideCandidateDto> BuildInterpretiveFallbackCandidates(WideSearchRequest request,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration)
+    private IReadOnlyCollection<WideCandidateDto> BuildInterpretiveFallbackCandidates(WideSearchRequest request,WideQueryContract? queryContract,IReadOnlyCollection<WideBranchRecord> survivors,IReadOnlyCollection<WideInterpretiveResultDto> interpretiveResults,IReadOnlyCollection<WideExternalKnowledgeSnippet> externalKnowledge,WideConfiguration configuration)
     {
         if(interpretiveResults.Count==0)return [];
         var queryTopicTokens=BuildQueryTopicTokens(request.Query);
-        var branchIdentityKeys=survivors.Select(branch=>CandidateIdentityKey(branch.DisplayName)).Where(key=>key.Length>0).ToHashSet(StringComparer.Ordinal);
+        // Exclude disposition survivor branches from the echo keys on a legal EVALUATE run so a competing
+        // disposition is not discarded here as a dimension-label echo (mirrors CompeteCandidatesAsync).
+        var branchIdentityKeys=BuildBranchEchoKeys(survivors);
         var branchLookup=survivors.GroupBy(branch=>branch.DisplayName,StringComparer.OrdinalIgnoreCase).ToDictionary(group=>group.Key,group=>group.OrderByDescending(branch=>branch.PoloxiConfidence).First(),StringComparer.OrdinalIgnoreCase);
         var sourceBranches=interpretiveResults
             .Where(result=>result.Items.Count>0&&result.BranchStateCode!=WideBranchStates.Pruned)
@@ -5510,8 +5643,12 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
         if(sourceBranches.Length==0)return [];
         var scoringFallbackBranches=sourceBranches.Select(item=>item.Branch).Where(branch=>branch is not null).Select(branch=>branch!).ToArray();
         var branchWeights=scoringFallbackBranches.Length>0
-            ?CompileRfnGlobalBranchWeights(survivors,scoringFallbackBranches).ToDictionary(entry=>scoringFallbackBranches.First(branch=>branch.WideBranchId==entry.Key).DisplayName,entry=>entry.Value,StringComparer.OrdinalIgnoreCase)
-            :sourceBranches.ToDictionary(item=>item.Result.BranchDisplayName,item=>Math.Clamp(item.Result.Confidence,.05m,1m),StringComparer.OrdinalIgnoreCase);
+            ?CompileRfnGlobalBranchWeights(survivors,scoringFallbackBranches)
+                .GroupBy(entry=>scoringFallbackBranches.First(branch=>branch.WideBranchId==entry.Key).DisplayName,StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group=>group.Key,group=>group.Max(entry=>entry.Value),StringComparer.OrdinalIgnoreCase)
+            :sourceBranches
+                .GroupBy(item=>item.Result.BranchDisplayName,StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group=>group.Key,group=>group.Max(item=>Math.Clamp(item.Result.Confidence,.05m,1m)),StringComparer.OrdinalIgnoreCase);
         var totalBranchWeight=branchWeights.Values.Sum();
         if(totalBranchWeight<=0)return [];
         var requiredSupport=interpretiveResults.Count<=1?1:Math.Min(configuration.MinimumCandidateDimensionSupport,interpretiveResults.Count);
@@ -5647,8 +5784,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             // V3.4.6 Branch-Echo Rejection: mini-tier models sometimes emit a branch's own display name
             // ("Low Violent Crime Rates") as an interpretive result item. A candidate whose canonical
             // identity equals any hierarchy branch name is a dimension label leaking into the pool, never
-            // a competing entity.
-            var branchIdentityKeys=survivors.Select(branch=>CandidateIdentityKey(branch.DisplayName)).Where(key=>key.Length>0).ToHashSet(StringComparer.Ordinal);
+            // a competing entity. On a legal EVALUATE run disposition survivor branches are excluded from
+            // the echo keys so a competing disposition is never discarded as a dimension label.
+            var branchIdentityKeys=BuildBranchEchoKeys(survivors);
             // V3.11: IsContractScopeOrCategoryEcho previously ran only at the late admission gate, so
             // scope echoes (the query's own state/region) entered the pool, inflated N (corrupting the
             // entropy basis) and wasted matrix tokens before being ruled out. Same check, applied at
@@ -5666,14 +5804,39 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .Take(discoveryCount)
                 .Select(item=>(item.Name,Detail:(string?)$"Discovered from retrieved evidence ({item.Hosts} independent sources)."))
                 .ToArray();
-            var provisionalCandidateNames=CanonicalizeCandidates(interpretiveCandidates.Concat(evidenceCandidates).ToArray(),externalKnowledge,dimensionSupport).ToArray();
+            // R4 legal-decision pool entry: on a matter-backed EVALUATE run the REGISTERED competing
+            // dispositions arrive via discoveredCandidates (the normalization gate's competitionBasis).
+            // They are enumerated tribunal outcomes, NOT corpus entities, so on a zero-evidence run they
+            // carry no evidence hosts and are not interpretive-list items - the host-floor pool gates below
+            // would drop them BEFORE the in-pool disposition-admission logic (LIMITED tier) can fire,
+            // leaving the pool empty and the competition reported "Not executed" despite valid registration.
+            // Admit genuine dispositions into the pool here so the Candidate x Branch competition executes;
+            // evidence confidence stays 0 and the downstream determinacy gate keeps the run UNVERIFIED, so
+            // no verified winner is ever claimed. Strictly gated to a legal EVALUATE run + IsDecisionOutcome
+            // recognition, so non-legal entity ranking is untouched and only real dispositions bypass the
+            // host floor.
+            var dispositionCandidates=IsLegalDecisionEvaluationRun
+                ?discoveredCandidates
+                    .SelectMany(name=>ExpandNormalizedCandidateNames(name,queryContract))
+                    .Where(name=>IsDecisionOutcomeCandidate(name)&&IsValidCandidateForContract(name,queryContract)
+                        &&!knownNames.Contains(name)&&!branchIdentityKeys.Contains(CandidateIdentityKey(name)))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select(name=>(Name:name,Detail:(string?)"Registered competing legal disposition admitted for adjudication; evidence confidence is established separately."))
+                    .ToArray()
+                :[];
+            var dispositionPoolKeys=dispositionCandidates
+                .Select(item=>CandidateIdentityKey(item.Name))
+                .Where(key=>key.Length>0)
+                .ToHashSet(StringComparer.Ordinal);
+            var provisionalCandidateNames=CanonicalizeCandidates(interpretiveCandidates.Concat(evidenceCandidates).Concat(dispositionCandidates).ToArray(),externalKnowledge,dimensionSupport).ToArray();
             if(provisionalCandidateNames.Length==0)return [];
             var provisionalPoolNames=provisionalCandidateNames.Select(candidate=>candidate.Name).ToArray();
             var provisionalExclusiveHosts=CountExclusiveSourceHosts(provisionalPoolNames,externalKnowledge);
             var candidateNames=provisionalCandidateNames
                 .Select(candidate=>(Candidate:candidate,InterpretiveSupport:dimensionSupport.GetValueOrDefault(candidate.Name),EvidenceHosts:CountDistinctSourceHosts(candidate.Name,externalKnowledge),ExclusiveHosts:provisionalExclusiveHosts.GetValueOrDefault(candidate.Name)))
                 .Where(item=>!IsUnsupportedMethodologyOrCriterionLabel(item.Candidate.Name,branches,item.ExclusiveHosts)
-                    &&(item.EvidenceHosts>0||item.InterpretiveSupport>0))
+                    &&(item.EvidenceHosts>0||item.InterpretiveSupport>0
+                        ||dispositionPoolKeys.Contains(CandidateIdentityKey(item.Candidate.Name))))
                 .OrderByDescending(item=>item.InterpretiveSupport)
                 .ThenByDescending(item=>item.EvidenceHosts)
                 .ThenByDescending(item=>item.ExclusiveHosts)

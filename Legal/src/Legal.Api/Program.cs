@@ -8,7 +8,11 @@ using Microsoft.AspNetCore.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    // Enterprise error logging: persist every unhandled controller exception to POLOXI.Legal_ErrorLog.
+    options.Filters.Add<Legal.Api.Filters.ErrorLoggingExceptionFilter>();
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
@@ -57,6 +61,9 @@ builder.Services.AddSingleton<Legal.Application.Abstractions.Services.IExecution
 builder.Services.AddSingleton<Legal.Api.Services.WideSearchOperationStore>();
 // Isolated Wide2 transport backing /legal/personalinjury_decision2 (separate code path).
 builder.Services.AddSingleton<Legal.Api.Services.Wide2SearchOperationStore>();
+// Real-time Wide2 cockpit KPI feed: SignalR hub + fail-soft publisher injected into the pipeline.
+builder.Services.AddSignalR();
+builder.Services.AddScoped<Legal.Application.Features.Intelligence.IWide2ProgressPublisher, Legal.Api.Hubs.SignalRWide2ProgressPublisher>();
 // Transactional outbox drain worker
 builder.Services.AddHostedService<Legal.Api.Services.OutboxDrainHostedService>();
 builder.Services.AddHostedService<Legal.Api.Services.LegalDocumentSearchProjectionHostedService>();
@@ -76,5 +83,6 @@ app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<Legal.Api.Hubs.Wide2ProgressHub>(Legal.Api.Hubs.Wide2ProgressHub.HubPath);
 app.MapHealthChecks("/health");
 app.Run();

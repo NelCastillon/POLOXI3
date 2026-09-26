@@ -66,6 +66,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
         services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
 
+        // Enterprise error-log store: scoped Dapper repository plus a fail-soft service used by every
+        // pipeline module (API request filter, Wide2 decision pipeline, retrievers, workers). The service
+        // is a singleton so singleton pipeline components can capture errors; it opens its own DI scope
+        // per write to reach the scoped repository/connection.
+        services.AddScoped<IErrorLogRepository, ErrorLogRepository>();
+        services.AddSingleton<IErrorLogService, ErrorLogService>();
+
         // POLOXI Epistemic Authority Layer (EA-1/EA-2): deterministic, stateless governance services.
         // Settings are DB-backed and runtime-effective: resolved per scope from Core.ConfigurationSetting
         // (tenant override -> platform default -> code default). A default tenant accessor returns null so

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Legal.Api.Security;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
 
@@ -27,6 +28,11 @@ public sealed class Wide2SearchOperationStore(IServiceScopeFactory scopeFactory,
             try
             {
                 using var scope=scopeFactory.CreateScope();
+                // The pipeline runs detached from the HTTP request, so the tenant claim is unavailable
+                // in this scope. Seed the ambient tenant from the request so tenant-scoped retrieval
+                // (official legal authority sources, DB-backed epistemic settings) resolves correctly.
+                if(scope.ServiceProvider.GetService<IEpistemicTenantAccessor>() is HttpEpistemicTenantAccessor ambient)
+                    ambient.SetAmbientTenant(request.TenantId);
                 var service=scope.ServiceProvider.GetRequiredService<IIntelligenceWide2Service>();
                 var response=await service.SearchDynamicAsync(request,operation.Token);
                 operation.Complete(response);

@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using Legal.Api.Security;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
 
@@ -27,6 +28,10 @@ public sealed class WideSearchOperationStore(IServiceScopeFactory scopeFactory,I
             try
             {
                 using var scope=scopeFactory.CreateScope();
+                // Detached from the HTTP request: seed the ambient tenant from the request so
+                // tenant-scoped retrieval and DB-backed epistemic settings resolve correctly.
+                if(scope.ServiceProvider.GetService<IEpistemicTenantAccessor>() is HttpEpistemicTenantAccessor ambient)
+                    ambient.SetAmbientTenant(request.TenantId);
                 var service=scope.ServiceProvider.GetRequiredService<IIntelligenceWideService>();
                 var response=await service.SearchDynamicAsync(request,operation.Token);
                 operation.Complete(response);

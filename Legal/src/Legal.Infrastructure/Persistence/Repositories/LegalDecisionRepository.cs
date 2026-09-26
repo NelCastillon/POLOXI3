@@ -641,6 +641,62 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
         return rows.ToArray();
     }
 
+    public async Task<Legal.Application.Features.Intelligence.Decision.Core.FactBindingConfig?> GetFactBindingConfigAsync(CancellationToken cancellationToken = default)
+    {
+        // The 0339 config tables are optional infrastructure. If they are not yet present, return null so the
+        // caller falls back to the validator's embedded DefaultConfig (deterministic guardrails always run).
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var tablesExist = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            """
+            SELECT CASE WHEN OBJECT_ID(N'POLOXI.Legal_FactBindingKind', N'U') IS NOT NULL
+                         AND OBJECT_ID(N'POLOXI.Legal_FactBindingRule', N'U') IS NOT NULL
+                        THEN 1 ELSE 0 END;
+            """,
+            cancellationToken: cancellationToken));
+        if (tablesExist == 0)
+            return null;
+
+        var kindRows = await connection.QueryAsync<(string Scope, string KindCode, string KeywordPattern, int MatchPriority)>(new CommandDefinition(
+            """
+            SELECT Scope, KindCode, KeywordPattern, MatchPriority
+            FROM POLOXI.Legal_FactBindingKind
+            WHERE IsDeleted = 0 AND IsActive = 1 AND TenantId IS NULL
+            ORDER BY Scope, MatchPriority DESC;
+            """,
+            cancellationToken: cancellationToken));
+
+        var ruleRows = await connection.QueryAsync<(string FieldKindCode, string PropositionKindCode, string Admissibility, string? Rationale)>(new CommandDefinition(
+            """
+            SELECT FieldKindCode, PropositionKindCode, Admissibility, Rationale
+            FROM POLOXI.Legal_FactBindingRule
+            WHERE IsDeleted = 0 AND IsActive = 1 AND TenantId IS NULL;
+            """,
+            cancellationToken: cancellationToken));
+
+        var kindRules = kindRows
+            .Select(r => new Legal.Application.Features.Intelligence.Decision.Core.FactBindingKindRule(
+                r.Scope,
+                r.KindCode,
+                (r.KeywordPattern ?? string.Empty)
+                    .Split([' ', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                r.MatchPriority))
+            .ToArray();
+
+        var admissibilityRules = ruleRows
+            .Select(r => new Legal.Application.Features.Intelligence.Decision.Core.FactBindingAdmissibilityRule(
+                r.FieldKindCode,
+                r.PropositionKindCode,
+                string.Equals(r.Admissibility, "ALLOW", StringComparison.OrdinalIgnoreCase),
+                r.Rationale))
+            .ToArray();
+
+        if (kindRules.Length == 0 && admissibilityRules.Length == 0)
+            return null;
+
+        return new Legal.Application.Features.Intelligence.Decision.Core.FactBindingConfig(kindRules, admissibilityRules);
+    }
+
     public async Task SaveSettingAsync(
         Guid actorUserId,
         SaveDecisionSettingRequest request,

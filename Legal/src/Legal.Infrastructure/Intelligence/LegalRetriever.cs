@@ -1,4 +1,5 @@
 using Legal.Application.Abstractions.Intelligence;
+using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence;
 using Legal.Application.Features.Intelligence.Decision;
 using Microsoft.Extensions.Logging;
@@ -11,7 +12,7 @@ namespace Legal.Infrastructure.Intelligence;
 // Sources run in parallel and fail-soft: one source failing never discards the other's snippets.
 // The authority kind routes a specific extracted authority to the correct source: judicial opinions
 // to CourtListener, statutes/regulations to GovInfo/eCFR and Cornell LII. Any (concept search) queries all.
-public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovInfoLegalSource govInfo,ICornellLiiLegalSource cornellLii,IOfficialLegalAuthoritySource officialAuthority,ILogger<LegalRetriever> logger):ILegalRetriever
+public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovInfoLegalSource govInfo,ICornellLiiLegalSource cornellLii,IOfficialLegalAuthoritySource officialAuthority,IErrorLogService errorLog,ILogger<LegalRetriever> logger):ILegalRetriever
 {
     public Task<LegalRetrievalResult> SearchScopedAsync(LegalProviderSearchRequest request,WideLegalGroundingConfiguration configuration,CancellationToken cancellationToken=default) =>
         SearchWithDiagnosticsAsync(request.Query,configuration,request.AuthorityKind,request.AuthorityScope,cancellationToken);
@@ -59,10 +60,25 @@ public sealed class LegalRetriever(ICourtListenerLegalSource courtListener,IGovI
             ]);
         }
 
+        // The exact-authority path produced no snippets. Surface WHY (TENANT_UNAVAILABLE,
+        // NO_CITATIONS_RESOLVED, COVERAGE_GAP, PROVIDER_FAILURE, etc.) before falling through to the
+        // broad fan-out; otherwise a silent empty result is indistinguishable from "provider not routed".
+        if(queryOfficialAuthority)
+            logger.LogInformation("LEGAL-TRACE stage=2-exact-authority-empty provider={Provider} selected={Selected} outcome={Outcome} normalizedCitation={Citation} endpoint={Endpoint} httpStatus={Status} detail={Detail} query=\"{Query}\"",
+                officialAuthorityResult.Diagnostic.ProviderCode,officialAuthorityResult.Diagnostic.Selected,officialAuthorityResult.Diagnostic.OutcomeCode,officialAuthorityResult.Diagnostic.NormalizedCitation,officialAuthorityResult.Diagnostic.EndpointUrl,officialAuthorityResult.Diagnostic.HttpStatus,officialAuthorityResult.Diagnostic.Detail,query);
+
         var courtListenerTask=queryCourtListener?courtListener.SearchAsync(new LegalProviderSearchRequest(query,kind,scope),configuration,cancellationToken):Task.FromResult(Skipped("COURTLISTENER"));
         var govInfoTask=queryGovInfo?govInfo.SearchAsync(query,configuration,cancellationToken):Task.FromResult(CoverageSkipped("GOVINFO_ECFR",scope));
         var cornellLiiTask=queryCornellLii?cornellLii.SearchAsync(query,configuration,cancellationToken):Task.FromResult(CoverageSkipped("CORNELL_LII",scope));
-        await Task.WhenAll(courtListenerTask,govInfoTask,cornellLiiTask);
+        try
+        {
+            await Task.WhenAll(courtListenerTask,govInfoTask,cornellLiiTask);
+        }
+        catch(Exception exception)when(exception is not OperationCanceledException||!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception,"LEGAL-TRACE stage=2-routing outcome=PROVIDER_AGGREGATE_FAILURE kind={Kind}",kind);
+            await errorLog.LogAsync("LegalRetriever",exception,"SearchWithDiagnostics/ProviderFanout",severityCode:"Warning",contextJson:$"{{\"kind\":\"{kind}\"}}",cancellationToken:cancellationToken);
+        }
 
         var merged=courtListenerTask.Result.Snippets
             .Concat(govInfoTask.Result.Snippets)

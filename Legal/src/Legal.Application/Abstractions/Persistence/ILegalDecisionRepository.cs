@@ -20,6 +20,10 @@ public interface ILegalDecisionRepository
     Task CreatePromptConfigurationAsync(Guid tenantId, Guid actorUserId, CreateDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default);
     Task DeletePromptConfigurationAsync(Guid actorUserId, string promptCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default);
+    // Validated Candidate Competition (0339): loads the DB-backed proposition fact-binding configuration
+    // (semantic kind patterns + ALLOW/DENY admissibility rules). Fail-soft callers fall back to the
+    // validator's embedded DefaultConfig when this returns null (e.g. the config tables are absent).
+    Task<Legal.Application.Features.Intelligence.Decision.Core.FactBindingConfig?> GetFactBindingConfigAsync(CancellationToken cancellationToken = default);
     Task SaveSettingAsync(Guid actorUserId, SaveDecisionSettingRequest request, CancellationToken cancellationToken = default);
     Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default);
     Task PersistClarificationAsync(DecisionClarificationPersistence clarification, CancellationToken cancellationToken = default);
