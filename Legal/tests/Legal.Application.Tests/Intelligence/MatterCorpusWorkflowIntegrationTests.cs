@@ -21,7 +21,8 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         var interpreter=new AccidentReportInterpreter();
         var service=new LegalDocumentIntakeService(
             binaryStore,new AcceptingValidator(),new CleanScanner(),new AccidentReportExtractor(),interpreter,
-            corpus,DecisionRepositoryProxy.Create());
+            corpus,DecisionRepositoryProxy.Create(),new NoOpMatterChangeProcessor(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LegalDocumentIntakeService>.Instance);
         var request=new LegalDocumentIntakeRequest(
             tenantId,userId,matterId,"synthetic-accident-report.txt","text/plain",bytes.Length,"matter-corpus-e2e")
         {
@@ -180,5 +181,13 @@ public sealed class MatterCorpusWorkflowIntegrationTests
                 return Task.FromResult<DecisionDomainPackDto?>(null);
             throw new NotSupportedException(targetMethod?.Name);
         }
+    }
+
+    private sealed class NoOpMatterChangeProcessor:IMatterChangeProcessor
+    {
+        public Task<MatterChangeProcessingResult> ProcessDocumentChangeAsync(
+            Guid tenantId,Guid userId,Guid decisionMatterId,Guid legalDocumentId,Guid legalDocumentVersionId,
+            string sourceHash,string? sourceLabel,DateTime? documentDateUtc,CancellationToken cancellationToken=default)
+            =>Task.FromResult(new MatterChangeProcessingResult(Guid.NewGuid(),"NO_MATERIAL_IMPACT",0,0,[]));
     }
 }

@@ -35,6 +35,11 @@ public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,Strin
     // Model selection: null/empty = Auto (feature-policy primary/fallback routing); otherwise an
     // active CHAT AI.ModelDeployment.ModelCode the pipeline routes every LLM call through.
     [StringLength(100)]public string? ModelCode{get;init;}
+    // Page-scoped override: when true, the requested ModelCode is routed through EVERY LLM call,
+    // including the mechanical strict-JSON stages that tiered routing would otherwise force onto the
+    // fast tier (FastModelCode). Used by /legal/personalinjury_decision2 to guarantee gpt-6-astra end
+    // to end. Leaves the global tiered-routing default untouched for all other callers (default false).
+    public bool ForceRequestedModelAllStages{get;init;}
     // Search context (POLOXI.Legal_SearchContext.ContextCode): null/empty/GENERAL keeps the default
     // pipeline; LEGAL routes external grounding through legal sources (CourtListener + GovInfo/eCFR).
     [StringLength(50)]public string? ContextCode{get;init;}
@@ -364,6 +369,15 @@ public sealed record WideFactorInventoryDto(
     public int RejectedBindingCount { get; init; }
     // Explicit, ordered blocking obligations that keep the decision from being safe to act on.
     public IReadOnlyCollection<string> BlockingObligations { get; init; } = [];
+    // Count of factors whose proposition has conflicting values across more than one matter source/document.
+    // A non-zero count means at least one proposition is CONTRADICTED and the result must stay provisional.
+    public int ContradictedFactorCount { get; init; }
+    // Milestone B: count of REQUIRED candidate→factor relationships whose dependency basis is not validated
+    // (a REQUIRED link with no substantive legal/logical rationale). These must never present as established.
+    public int UnvalidatedRequiredCount { get; init; }
+    // Milestone B: count of REQUIRED dependencies that are validated but not yet established (missing,
+    // rejected, contradicted, or merely supplied). Protects against "2-of-3 required" over-crediting.
+    public int UnsatisfiedRequiredDependencyCount { get; init; }
 }
 
 // One global factor. Exposes the required eight-field contract plus the engineering identities needed
@@ -400,6 +414,11 @@ public sealed record WideFactorDto(
     public string BindingAdmissibility { get; init; } = "NONE";
     // The precise, actionable verification obligation generated when a value is not established; null when none.
     public string? VerificationObligation { get; init; }
+    // Conflicting values captured for THIS proposition from more than one matter source/document. Empty when
+    // no conflict exists. Each entry is a human-readable "source:value" conflict descriptor. A non-empty set
+    // means the proposition is CONTRADICTED and must not be treated as established regardless of any single
+    // supplied value.
+    public IReadOnlyCollection<string> Contradictions { get; init; } = [];
 }
 
 // One Candidate×Factor relationship. The same shared factor may have different relationships with
@@ -833,6 +852,12 @@ public sealed record WideCandidateDto(Guid WideCandidateId,int RankNumber,string
     public int EvidenceHostSupportCount{get;init;}
     // Total support credited at admission time (interpretive + hosts in recovery; capped host/interpretive rule in normal).
     public int TotalSupportCount{get;init;}
+    // Advisory, model-generated time-to-resolution band for this outcome (e.g. "3–6 months"). Optional:
+    // null when the pipeline did not produce an estimate; the UI shows an em dash and never fabricates one.
+    public string? EstimatedResolutionLabel{get;init;}
+    // Advisory, model-generated relative cost band for this outcome (e.g. "Lower", "Higher"). Optional
+    // in the same way as EstimatedResolutionLabel — advisory only, never a scoring criterion.
+    public string? EstimatedCostBand{get;init;}
 }
 
 public sealed record WideCandidateBranchScoreDto(string BranchDisplayName,decimal EvidenceScore)
@@ -1277,7 +1302,13 @@ public sealed record WideBranchRecord(Guid WideBranchId,Guid WideExecutionId,Gui
     public decimal PoloxiConfidence{get;init;}
 }
 
-public sealed record WideCandidateRecord(Guid WideCandidateId,Guid WideExecutionId,Guid TenantId,string DisplayName,string? Detail,decimal CompositeScore,int RankNumber,bool IsConstraintViolation,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchScoreRecord> BranchScores);
+public sealed record WideCandidateRecord(Guid WideCandidateId,Guid WideExecutionId,Guid TenantId,string DisplayName,string? Detail,decimal CompositeScore,int RankNumber,bool IsConstraintViolation,string? ConstraintViolationReason,IReadOnlyCollection<WideCandidateBranchScoreRecord> BranchScores)
+{
+    // Advisory, optional per-outcome estimates. Currently always null (no model population); the schema,
+    // persistence, and UI are wired so a future pipeline stage can fill them without further plumbing.
+    public string? EstimatedResolutionLabel{get;init;}
+    public string? EstimatedCostBand{get;init;}
+}
 
 public sealed record WideCandidateBranchScoreRecord(Guid WideCandidateBranchScoreId,Guid WideCandidateId,Guid WideBranchId,Guid TenantId,string BranchDisplayName,decimal EvidenceScore);
 

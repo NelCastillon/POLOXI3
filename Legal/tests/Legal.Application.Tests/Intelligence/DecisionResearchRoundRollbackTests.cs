@@ -584,6 +584,7 @@ internal static class RollbackFixture
             new EmptySupportSignalRepository(),
             verificationPipeline ?? DeterministicEvidenceVerificationFixture.Pipeline(),
             new UnusedDocumentCorpusRepository(),
+            new UnusedDecisionIntegrityRepository(),
             new UnusedMatterContextRetriever(),
             new DecisionResearchSourceRouter(),
             new TestExecutionEnvironment(),
@@ -630,6 +631,33 @@ internal sealed class UnusedMatterContextRetriever : ILegalMatterContextRetrieve
 {
     public Task<LegalMatterContextResult> RetrieveAsync(Guid tenantId, Guid userId, Guid matterId, string query, DecisionRetrievalArchitectureSettings settings, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("Matter context must not be called on the research-loop path.");
+}
+
+// No-op integrity repository: the research-loop tests are not matter-scoped, so integrity capture is
+// skipped; if it ever runs it must fail-soft rather than break the decision under test.
+internal sealed class UnusedDecisionIntegrityRepository : IDecisionIntegrityRepository
+{
+    public Task<Guid> CreateSnapshotAsync(DecisionSnapshotPersistence snapshot, CancellationToken cancellationToken = default) => Task.FromResult(snapshot.DecisionSnapshotId);
+    public Task<DecisionSnapshotDto?> GetSnapshotAsync(Guid tenantId, Guid decisionSnapshotId, CancellationToken cancellationToken = default) => Task.FromResult<DecisionSnapshotDto?>(null);
+    public Task<IReadOnlyCollection<DecisionSnapshotDto>> GetMatterSnapshotsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionSnapshotDto>>([]);
+    public Task<DecisionSnapshotDto?> GetLatestMatterSnapshotAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<DecisionSnapshotDto?>(null);
+    public Task<int> GetNextSnapshotNumberAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult(1);
+    public Task<bool> UpdateSnapshotRelianceAsync(Guid tenantId, Guid userId, Guid decisionSnapshotId, string relianceStatusCode, string? relianceReason, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    public Task SavePropositionEvidenceLinksAsync(IReadOnlyCollection<PropositionEvidenceLinkPersistence> links, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<IReadOnlyCollection<PropositionEvidenceLinkPersistence>> GetPropositionEvidenceLinksAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<PropositionEvidenceLinkPersistence>>([]);
+    public Task SaveDependenciesAsync(IReadOnlyCollection<MatterDependencyPersistence> dependencies, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<IReadOnlyCollection<string>> GetDependentKeysForPropositionAsync(Guid tenantId, Guid decisionMatterId, string dependsOnKindCode, string dependsOnKey, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<string>>([]);
+    public Task<(Guid EventId, bool AlreadyExisted)> CreateChangeEventAsync(MatterChangeEventPersistence changeEvent, CancellationToken cancellationToken = default) => Task.FromResult((changeEvent.MatterChangeEventId, false));
+    public Task UpdateChangeEventOutcomeAsync(Guid tenantId, Guid userId, Guid matterChangeEventId, string classificationCode, string processingStatusCode, string? processingError, string? summary, string? candidateFactsJson, int affectedPropositionCount, int affectedCandidateCount, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<MatterChangeEventDto?> GetChangeEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default) => Task.FromResult<MatterChangeEventDto?>(null);
+    public Task<IReadOnlyCollection<MatterChangeEventDto>> GetMatterChangeEventsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<MatterChangeEventDto>>([]);
+    public Task SaveImpactsAsync(IReadOnlyCollection<DecisionImpactPersistence> impacts, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<IReadOnlyCollection<DecisionImpactDto>> GetImpactsForEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionImpactDto>>([]);
+    public Task<Guid> CreateReviewTaskAsync(DecisionReviewTaskPersistence reviewTask, CancellationToken cancellationToken = default) => Task.FromResult(reviewTask.DecisionReviewTaskId);
+    public Task<IReadOnlyCollection<DecisionReviewTaskDto>> GetReviewTasksForEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionReviewTaskDto>>([]);
+    public Task<IReadOnlyCollection<DecisionReviewTaskDto>> GetOpenReviewTasksAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionReviewTaskDto>>([]);
+    public Task<bool> UpdateReviewTaskStatusAsync(Guid tenantId, Guid userId, Guid decisionReviewTaskId, string statusCode, string? resolutionNotes, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    public Task<IReadOnlyCollection<MatterChangeReviewSummaryDto>> GetChangeReviewSummariesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<MatterChangeReviewSummaryDto>>([]);
 }
 
 // Non-production execution environment so DEV Logic is permitted in tests.

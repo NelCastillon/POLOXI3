@@ -87,12 +87,20 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
     // latency on the handful of user-facing SYNTHESIS calls, not on the ~9 mechanical calls per run.
     // When tiered routing is disabled, every stage routes through the requested model (legacy behavior).
     private static string? MechanicalModel(WideConfiguration configuration,WideSearchRequest request)=>
-        configuration.EnableTieredModelRouting
-            ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
-            :ModelOverride(request);
+        request.ForceRequestedModelAllStages
+            ?ModelOverride(request)
+            :configuration.EnableTieredModelRouting
+                ?(string.IsNullOrWhiteSpace(configuration.FastModelCode)?"gpt-4.1-mini":configuration.FastModelCode.Trim())
+                :ModelOverride(request);
 
-    // Synthesis stages: honor the requested reasoning model (Auto still falls back to the fast tier).
-    private static string? SynthesisModel(WideSearchRequest request)=>ModelOverride(request);
+    // Synthesis stages: honor the requested reasoning model. Auto (no explicit model) routes the
+    // user-facing synthesis calls to the reasoning tier (gpt-6-astra) while the mechanical strict-JSON
+    // stages stay on the fast tier (gpt-4.1-mini) - the "combination of both" the page's Model dropdown
+    // exposes. An explicit model selection routes every stage through that single model instead.
+    private static string? SynthesisModel(WideSearchRequest request)=>
+        string.IsNullOrWhiteSpace(request.ModelCode)||request.ModelCode.Trim().Equals("Auto",StringComparison.OrdinalIgnoreCase)
+            ?"gpt-6-astra"
+            :request.ModelCode.Trim();
 
     public Task<IReadOnlyCollection<WideModelOptionDto>> GetWideModelsAsync(Guid tenantId,CancellationToken cancellationToken=default)=>wideRepository.GetWideModelsAsync(tenantId,cancellationToken);
 
@@ -821,6 +829,13 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // When forcing the minimum depth of 2, narrow all survivors even if none opted to continue.
                 var narrowingParents=survivors.Where(branch=>branch.ContinueNarrowing).ToArray();
                 if(narrowingParents.Length==0)narrowingParents=survivors.ToArray();
+                // Symmetric-depth enforcement: until the run reaches its minimum termination depth, EVERY
+                // surviving branch must be decomposed one more level — not only the ones the LLM flagged
+                // ContinueNarrowing. Otherwise the model typically marks just the first L1 subtree to
+                // continue and treats the later L1 siblings' children as terminal, producing the
+                // "only the first L1 generated L3s; the other L1s stopped at L2" asymmetry. Forcing all
+                // survivors here keeps L2->L3 (and every pre-minimum level) balanced across siblings.
+                if(depth<minimumTerminationDepth)narrowingParents=survivors.ToArray();
                 var proposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken);
                 llmCalls++;
                 var parentsByCode=survivors.ToDictionary(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase);
@@ -828,6 +843,16 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // Degenerate-progress guard: stop when the LLM merely rephrases the current level.
                 var currentCodes=currentLevel.Select(branch=>branch.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 nextLevel=nextLevel.Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray();
+                // Intra-level BranchCode dedup: now that every surviving parent is decomposed in a single
+                // hierarchy-step call, the model can emit the SAME child branchCode under two different
+                // parents (e.g. a shared "FULL_VALUE_SETTLEMENT_CANDIDATE" outcome). Duplicate codes at one
+                // level later break dictionary-keyed lookups (survivors/eligible ToDictionary by BranchCode).
+                // Keep the first occurrence of each code so codes stay unique per level while every parent
+                // still deepens. Uncovered parents are then backfilled by the sibling-coverage pass below.
+                nextLevel=nextLevel
+                    .GroupBy(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase)
+                    .Select(group=>group.First())
+                    .ToArray();
                 if(nextLevel.Length==0)
                 {
                     // Degenerate next level. On a legal-decision run that has NOT yet reached the minimum
@@ -842,9 +867,41 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                         var retryProposal=await ProposeNextLevelAsync(request,narrowingParents,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken,atomicDirective);
                         llmCalls++;
                         nextLevel=MaterializeBranches(retryProposal.Branches,executionId,request.TenantId,depth+1,parentsByCode,configuration)
-                            .Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray();
+                            .Where(branch=>!currentCodes.Contains(branch.BranchCode)).ToArray()
+                            .GroupBy(branch=>branch.BranchCode,StringComparer.OrdinalIgnoreCase)
+                            .Select(group=>group.First())
+                            .ToArray();
                     }
                     if(nextLevel.Length==0){terminationReason="NO_PROGRESS";break;}
+                }
+                // Sibling-coverage completion: a single hierarchy-step call that must decompose several
+                // surviving parents at once frequently deepens only the first parent(s) and returns no
+                // children for later siblings. That is exactly the "only the first L1 produced L3s; the
+                // other L1s stopped at L2" defect, and it also leaves the reasoning hierarchy asymmetric.
+                // Detect every narrowing parent that received zero children at this level and decompose it
+                // with a focused, single-parent call so all branches deepen symmetrically. Each focused
+                // child is force-attached to its parent. Bounded by the same LLM-call ceiling.
+                var coveredParentIds=nextLevel.Where(child=>child.ParentWideBranchId is not null).Select(child=>child.ParentWideBranchId!.Value).ToHashSet();
+                var uncoveredParents=narrowingParents.Where(parent=>!coveredParentIds.Contains(parent.WideBranchId)).ToArray();
+                if(uncoveredParents.Length>0)
+                {
+                    const string siblingCoverageDirective="SIBLING DECOMPOSITION REQUIRED: Decompose ONLY the single parent branch listed above into its atomic, independently testable child propositions (its distinct legal elements, burden components, factual predicates, or evidentiary sub-issues). Every child must have a NEW distinct branchCode, a narrower proposition than the parent, and its parentBranchCode set to that parent. Do not restate the parent and do not introduce children for any other branch.";
+                    var completionChildren=new List<WideBranchRecord>();
+                    var producedCodes=nextLevel.Select(child=>child.BranchCode).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach(var parent in uncoveredParents)
+                    {
+                        if(llmCalls+2>configuration.MaximumTotalLlmCalls)break;
+                        var singleParent=new[]{parent};
+                        var singleParentByCode=singleParent.ToDictionary(item=>item.BranchCode,StringComparer.OrdinalIgnoreCase);
+                        var focusedProposal=await ProposeNextLevelAsync(request,singleParent,capabilities,configuration,depth+1,evidence,queryContract,cancellationToken,siblingCoverageDirective);
+                        llmCalls++;
+                        var focusedChildren=MaterializeBranches(focusedProposal.Branches,executionId,request.TenantId,depth+1,singleParentByCode,configuration)
+                            .Where(child=>!currentCodes.Contains(child.BranchCode)&&producedCodes.Add(child.BranchCode))
+                            .Select(child=>child with{ParentWideBranchId=parent.WideBranchId})
+                            .ToArray();
+                        completionChildren.AddRange(focusedChildren);
+                    }
+                    if(completionChildren.Count>0)nextLevel=nextLevel.Concat(completionChildren).ToArray();
                 }
                 await wideRepository.SaveWideBranchesAsync(nextLevel,request.UserId,cancellationToken);
                 allBranches.AddRange(nextLevel);
@@ -854,7 +911,24 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 // factor count and admitted-evidence count so the console auto-increments while processing.
                 _progressIdentifiedFactors=allBranches.Count;
                 _progressAdmittedEvidence=evidence.Count;
-                await PublishProgressAsync("NARROWING","Analyzing…",true,$"Decomposing factors (level {depth})",cancellationToken);
+                // Surface the actual factor name(s) just decomposed so users see the pipeline is pulling
+                // real content, not a generic spinner. Show the first new branch label, with a "+N more"
+                // suffix when several were produced at this level.
+                var newFactorNames=nextLevel.Select(b=>b.DisplayName?.Trim()).Where(name=>!string.IsNullOrWhiteSpace(name)).ToArray();
+                string narrowingMessage;
+                if(newFactorNames.Length==0)
+                {
+                    narrowingMessage=$"Decomposing factors (level {depth})";
+                }
+                else if(newFactorNames.Length==1)
+                {
+                    narrowingMessage=newFactorNames[0]!;
+                }
+                else
+                {
+                    narrowingMessage=$"{newFactorNames[0]} (+{newFactorNames.Length-1} more)";
+                }
+                await PublishProgressAsync("NARROWING","Analyzing…",true,narrowingMessage,cancellationToken);
             }
 
             // Rank deduplicated evidence across surviving grounded paths only — evidence collected for
@@ -6340,7 +6414,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
                 .Select(entry=>entry.Record with{RankNumber=0}).ToArray();
             var persisted=ranked.Concat(ruledOut).ToArray();
             await wideRepository.SaveWideCandidatesAsync(persisted,request.UserId,cancellationToken);
-            return persisted.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("EXCLUDED",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"EXCLUDED")};}).ToArray();
+            return persisted.Select(record=>{var admission=admissionInfo.GetValueOrDefault(record.DisplayName,("EXCLUDED",0,0,0));var disclosure=rollUpDisclosures.GetValueOrDefault(record.DisplayName);var parentScores=record.BranchScores.Where(score=>scoringBranchIds.Contains(score.WideBranchId)).ToArray();return new WideCandidateDto(record.WideCandidateId,record.RankNumber,record.DisplayName,record.IsConstraintViolation?$"Ruled out: {record.ConstraintViolationReason}":record.Detail,record.CompositeScore,parentScores.Select(score=>{var detail=disclosure is not null&&disclosure.TryGetValue(score.BranchDisplayName,out var info)?info:default;return new WideCandidateBranchScoreDto(score.BranchDisplayName,score.EvidenceScore){DirectScore=detail.Children is{Count:>0}?detail.Direct:null,ChildScores=detail.Children??[]};}).ToArray()){EvidenceCoverage=branches.Length==0?0m:Math.Clamp((decimal)parentScores.Length/branches.Length,0,1),IsConstraintViolation=record.IsConstraintViolation,QualityScore=record.CompositeScore,EvidenceConfidence=evidenceConfidences.GetValueOrDefault(record.DisplayName),AdmissionModeCode=admission.Item1,InterpretiveSupportCount=admission.Item2,EvidenceHostSupportCount=admission.Item3,TotalSupportCount=admission.Item4,SupportTierCode=supportTiers.GetValueOrDefault(record.DisplayName,"EXCLUDED"),EstimatedResolutionLabel=record.EstimatedResolutionLabel,EstimatedCostBand=record.EstimatedCostBand};}).ToArray();
         }
         catch(Exception)when(!cancellationToken.IsCancellationRequested)
         {

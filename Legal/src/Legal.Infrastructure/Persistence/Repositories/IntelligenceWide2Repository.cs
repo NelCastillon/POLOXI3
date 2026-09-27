@@ -634,8 +634,8 @@ WHERE WideBranchId=@WideBranchId AND TenantId=@TenantId AND IsDeleted=0;
     {
         if(candidates.Count==0)return;
         const string sql="""
-INSERT POLOXI.Legal_WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,CreatedDateUtc,CreatedByUserId,IsDeleted)
-SELECT WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,SYSUTCDATETIME(),UserId,0
+INSERT POLOXI.Legal_WideCandidate(WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,EstimatedResolutionLabel,EstimatedCostBand,CreatedDateUtc,CreatedByUserId,IsDeleted)
+SELECT WideCandidateId,WideExecutionId,TenantId,DisplayName,Detail,CompositeScore,RankNumber,IsConstraintViolation,ConstraintViolationReason,EstimatedResolutionLabel,EstimatedCostBand,SYSUTCDATETIME(),UserId,0
 FROM OPENJSON(@CandidateRowsJson)
 WITH
 (
@@ -648,6 +648,8 @@ WITH
     RankNumber INT '$.RankNumber',
     IsConstraintViolation BIT '$.IsConstraintViolation',
     ConstraintViolationReason NVARCHAR(400) '$.ConstraintViolationReason',
+    EstimatedResolutionLabel NVARCHAR(60) '$.EstimatedResolutionLabel',
+    EstimatedCostBand NVARCHAR(40) '$.EstimatedCostBand',
     UserId UNIQUEIDENTIFIER '$.UserId'
 );
 
@@ -667,7 +669,7 @@ WITH
 """;
         using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         using var transaction=connection.BeginTransaction();
-        var candidateRows=candidates.Select(candidate=>new{candidate.WideCandidateId,candidate.WideExecutionId,candidate.TenantId,candidate.DisplayName,candidate.Detail,candidate.CompositeScore,candidate.RankNumber,candidate.IsConstraintViolation,candidate.ConstraintViolationReason,UserId=userId}).ToArray();
+        var candidateRows=candidates.Select(candidate=>new{candidate.WideCandidateId,candidate.WideExecutionId,candidate.TenantId,candidate.DisplayName,candidate.Detail,candidate.CompositeScore,candidate.RankNumber,candidate.IsConstraintViolation,candidate.ConstraintViolationReason,candidate.EstimatedResolutionLabel,candidate.EstimatedCostBand,UserId=userId}).ToArray();
         var scoreRows=candidates.SelectMany(candidate=>candidate.BranchScores.Select(score=>new{score.WideCandidateBranchScoreId,score.WideCandidateId,score.WideBranchId,score.TenantId,score.BranchDisplayName,score.EvidenceScore,UserId=userId})).ToArray();
         await connection.ExecuteAsync(new CommandDefinition(sql,new{CandidateRowsJson=JsonSerializer.Serialize(candidateRows),ScoreRowsJson=JsonSerializer.Serialize(scoreRows)},transaction,cancellationToken:cancellationToken));
         transaction.Commit();

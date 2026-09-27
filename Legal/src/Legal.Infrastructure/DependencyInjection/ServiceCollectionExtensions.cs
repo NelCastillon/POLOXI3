@@ -66,6 +66,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
         services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
 
+        // Continuous Decision Integrity (Phase 1): change-awareness persistence + Matter Change Processor.
+        services.AddScoped<IDecisionIntegrityRepository, LegalDecisionIntegrityRepository>();
+
         // Enterprise error-log store: scoped Dapper repository plus a fail-soft service used by every
         // pipeline module (API request filter, Wide2 decision pipeline, retrievers, workers). The service
         // is a singleton so singleton pipeline components can capture errors; it opens its own DI scope
@@ -151,7 +154,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVerificationCandidatePreScreen, DeterministicVerificationCandidatePreScreen>();
         services.AddSingleton<ISemanticVerificationCache, SemanticVerificationCache>();
         services.AddScoped<ISemanticEvidenceVerifier, StructuredLlmSemanticEvidenceVerifier>();
-        services.AddSingleton<IPoloxiVerificationDeepener, DisabledPoloxiVerificationDeepener>();
+        services.AddSingleton<IPoloxiVerificationDeepener, DeterministicPoloxiVerificationDeepener>();
         services.AddSingleton<IAuthorityEvidenceVerifier, DeterministicAuthorityEvidenceVerifier>();
         services.AddSingleton<IEvidenceVerificationAggregator, EvidenceVerificationAggregator>();
         services.AddScoped<IIndependentEvidenceVerificationPipeline, IndependentEvidenceVerificationPipeline>();
@@ -205,6 +208,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalDocumentSearchProjectionDispatcher, LegalDocumentSearchProjectionDispatcher>();
         services.AddScoped<ILegalDocumentSemanticInterpreter, Legal.Application.Features.Intelligence.Decision.LegalDocumentSemanticInterpreter>();
         services.AddScoped<ILegalDocumentIntakeService, Legal.Application.Features.Intelligence.Decision.LegalDocumentIntakeService>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.IMatterChangeProcessor, Legal.Application.Features.Intelligence.Decision.MatterChangeProcessor>();
         services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
         services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.IDependencyPropagationService, Legal.Application.Features.Intelligence.Decision.Core.DependencyPropagationService>();

@@ -53,7 +53,7 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
                 MaxOutputTokensPerEvidence = I("Decision.Verification.Semantic.MaxOutputTokens", 700),
                 AllowSchemaRepair = B("Decision.Verification.Semantic.AllowSchemaRepair", true),
                 MaxSchemaRepairAttempts = I("Decision.Verification.Semantic.MaxSchemaRepairAttempts", 1),
-                PoloxiDeepeningEnabled = B("Decision.Verification.PoloxiDeepening.Enabled", false),
+                PoloxiDeepeningEnabled = B("Decision.Verification.PoloxiDeepening.Enabled", true),
                 PoloxiDecisionMaterialOnly = B("Decision.Verification.PoloxiDeepening.DecisionMaterialOnly", true),
                 PoloxiMaxRounds = I("Decision.Verification.PoloxiDeepening.MaxRounds", 1),
                 EnforceVerifiedEvidenceOnly = B("Decision.Verification.Authorization.EnforceVerifiedOnly", false),

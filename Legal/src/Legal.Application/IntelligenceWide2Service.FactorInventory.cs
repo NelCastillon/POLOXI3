@@ -89,6 +89,7 @@ public sealed partial class IntelligenceWide2Service
         var relationships = new List<WideCandidateFactorRelationDto>();
         var missingCount = 0;
         var rejectedBindingCount = 0;
+        var contradictedCount = 0;
         var blockingObligations = new List<string>();
 
         foreach (var dep in plan.Dependencies)
@@ -100,11 +101,20 @@ public sealed partial class IntelligenceWide2Service
 
             // Resolve the actual value from matter data only (never invented). MISSING when no matter
             // field materially matches the factor's label/question.
-            var (actualValue, valueSource, sourceLocation, matchedFieldLabel) = ResolveFactorValue(dep, matterContext);
+            var matterMatches = ResolveFactorMatches(dep, matterContext);
+            var (actualValue, valueSource, sourceLocation, matchedFieldLabel) = matterMatches.Count == 0
+                ? ((string?)null, AvailMissing, (string?)null, (string?)null)
+                : (matterMatches[0].Value, matterMatches[0].ValueSource, matterMatches[0].SourceLocation, matterMatches[0].FieldLabel);
             var hasValue = !string.IsNullOrWhiteSpace(actualValue);
 
+            // Cross-source contradiction: the same proposition carries more than one distinct value across
+            // matter data / documents. A contradicted proposition is never established regardless of the
+            // primary supplied value.
+            var contradictions = DetectContradictions(matterMatches);
+            var isContradicted = contradictions.Count > 0;
+
             var relationTypes = edges
-                .Select(e => e.RelationType)
+                .Select(e => MapRelationVocabulary(e.RelationType))
                 .Where(r => !string.IsNullOrWhiteSpace(r))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -135,7 +145,21 @@ public sealed partial class IntelligenceWide2Service
                 bindingAdmissibility = verdict.Admissibility;
                 verificationObligation = verdict.VerificationObligation;
 
-                if (verdict.Establishes)
+                if (isContradicted)
+                {
+                    // Conflicting values across sources: preserve the primary value but never establish the
+                    // proposition; force an explicit CONTRADICTED evidence state and blocking obligation.
+                    availability = AvailIncomplete;
+                    verification = VerifUnverified;
+                    evidenceState = PropositionFactBindingValidator.StateContradicted;
+                    var conflictObligation = $"Resolve conflicting values for '{dep.Label}': {string.Join(" vs ", contradictions)}.";
+                    verificationObligation = conflictObligation;
+                    missingInformation = conflictObligation;
+                    validationStatus = "CONTRADICTED";
+                    contradictedCount++;
+                    blockingObligations.Add(conflictObligation);
+                }
+                else if (verdict.Establishes)
                 {
                     // Value legitimately populates the proposition (still SUPPLIED, never VERIFIED here).
                     availability = AvailAvailable;
@@ -191,6 +215,7 @@ public sealed partial class IntelligenceWide2Service
                 CountsTowardEvidenceScore = false, // dynamic path attaches no admitted per-factor evidence yet
                 BindingAdmissibility = bindingAdmissibility,
                 VerificationObligation = verificationObligation,
+                Contradictions = contradictions,
             });
 
             // One relationship row per candidate edge. The same factor may be REQUIRED for one candidate
@@ -198,15 +223,24 @@ public sealed partial class IntelligenceWide2Service
             foreach (var edge in edges)
             {
                 candidateTitles.TryGetValue(edge.CandidateSemanticId, out var title);
-                var relation = string.IsNullOrWhiteSpace(edge.RelationType) ? "DEPENDS_ON" : edge.RelationType;
+                var relation = MapRelationVocabulary(edge.RelationType);
+                var isRequiredEdge = string.Equals(relation, "REQUIRED", StringComparison.OrdinalIgnoreCase);
+                // Milestone B: a relationship is VALIDATED only when it carries a semantic rationale (the
+                // justification for why the factor matters to THIS candidate). REQUIRED links demand a
+                // substantive rationale; a bare edge is a lexical/structural link — retained for
+                // transparency, but it must NOT be presented as an established REQUIRED dependency.
+                var isValidated = IsRelationValidated(relation, edge.Rationale);
                 relationships.Add(new WideCandidateFactorRelationDto(
                     CandidateId: edge.CandidateSemanticId,
                     CandidateTitle: title ?? edge.CandidateSemanticId,
                     FactorId: dep.DependencyId,
                     FactorName: dep.Label,
                     RelationType: relation,
-                    IsRequired: string.Equals(relation, "REQUIRED", StringComparison.OrdinalIgnoreCase),
-                    Rationale: edge.Rationale));
+                    IsRequired: isRequiredEdge,
+                    Rationale: edge.Rationale)
+                {
+                    IsValidatedRelation = isValidated,
+                });
             }
         }
 
@@ -224,6 +258,28 @@ public sealed partial class IntelligenceWide2Service
         var sharedFactorCount = factors.Count(f => f.Relationships.Count > 1
             || relationships.Count(r => string.Equals(r.FactorId, f.FactorId, StringComparison.OrdinalIgnoreCase)) > 1);
 
+        // ── Milestone B: backend REQUIRED-dependency protection (mirrors the UI, but authoritative) ──
+        // A factor is "established" only when its value legitimately populated the proposition (VALID).
+        var factorById = factors.ToDictionary(f => f.FactorId, f => f, StringComparer.OrdinalIgnoreCase);
+        static bool IsEstablished(WideFactorDto f) =>
+            string.Equals(f.ValidationStatus, "VALID", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(f.Availability, "AVAILABLE", StringComparison.OrdinalIgnoreCase);
+
+        var requiredEdges = relationships.Where(r => r.IsRequired).ToArray();
+        // REQUIRED links with no substantive legal/logical basis — never present these as established.
+        var unvalidatedRequiredCount = requiredEdges.Count(r => !r.IsValidatedRelation);
+        // Validated REQUIRED dependencies that are not yet established (missing/rejected/contradicted/supplied).
+        var unsatisfiedRequiredCount = requiredEdges.Count(r =>
+            r.IsValidatedRelation
+            && !(factorById.TryGetValue(r.FactorId, out var rf) && IsEstablished(rf)));
+
+        if (unvalidatedRequiredCount > 0)
+            blockingObligations.Add(
+                $"{unvalidatedRequiredCount} REQUIRED dependency relationship(s) lack a validated legal or logical basis — establish the basis before treating them as required.");
+        if (unsatisfiedRequiredCount > 0)
+            blockingObligations.Add(
+                $"{unsatisfiedRequiredCount} REQUIRED dependency(ies) are not established — strong support for other requirements does not satisfy an unresolved requirement.");
+
         return new WideFactorInventoryDto(
             Factors: factors,
             Relationships: relationships,
@@ -235,23 +291,28 @@ public sealed partial class IntelligenceWide2Service
             // Competition may run to surface hypotheses, but an unresolved material dependency or a rejected
             // binding keeps the result provisional — never presented as a verified recommendation.
             IsProvisional = true,
-            DecisionReadinessStatus = (blockingObligations.Count > 0 || missingCount > 0 || rejectedBindingCount > 0)
+            DecisionReadinessStatus = (blockingObligations.Count > 0 || missingCount > 0 || rejectedBindingCount > 0
+                    || contradictedCount > 0 || unvalidatedRequiredCount > 0 || unsatisfiedRequiredCount > 0)
                 ? "BLOCKED"
                 : "PROVISIONAL",
             RejectedBindingCount = rejectedBindingCount,
             BlockingObligations = blockingObligations,
+            ContradictedFactorCount = contradictedCount,
+            UnvalidatedRequiredCount = unvalidatedRequiredCount,
+            UnsatisfiedRequiredDependencyCount = unsatisfiedRequiredCount,
         };
     }
 
-    // Resolve a factor's actual value from matter data ONLY (never invented). Matches the dependency
-    // label/question against the populated matter fields across all groups; returns the field value,
-    // its source category, and a source location reference when found.
-    private static (string? Value, string ValueSource, string? SourceLocation, string? FieldLabel) ResolveFactorValue(
+    // All materially-matching matter values for a factor across every group. Used both to resolve the
+    // primary value (first match) and to detect cross-source contradictions (distinct values for the same
+    // proposition). Never fabricates: only returns values actually present in matter data / documents.
+    private static IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel)> ResolveFactorMatches(
         LegalDecisionService.NormalizedDependency dep,
         MatterContextSnapshot? matterContext)
     {
+        var matches = new List<(string, string, string, string)>();
         if (matterContext is null)
-            return (null, AvailMissing, null, null);
+            return matches;
 
         foreach (var (groupName, fields) in EnumerateMatterGroups(matterContext))
         {
@@ -264,12 +325,36 @@ public sealed partial class IntelligenceWide2Service
                     var source = string.Equals(groupName, "AVAILABLE EVIDENCE", StringComparison.OrdinalIgnoreCase)
                         ? FactorSourceDocument
                         : FactorSourceMatter;
-                    return (field.Value, source, $"{groupName}:{field.Label}", field.Label);
+                    matches.Add((field.Value!, source, $"{groupName}:{field.Label}", field.Label));
                 }
             }
         }
-        return (null, AvailMissing, null, null);
+        return matches;
     }
+
+    // Distinct conflicting values (case-insensitive) captured for the same proposition from more than one
+    // matter source. Returns an empty set when zero or one distinct value exists (no contradiction).
+    private static IReadOnlyList<string> DetectContradictions(
+        IReadOnlyList<(string Value, string ValueSource, string SourceLocation, string FieldLabel)> matches)
+    {
+        if (matches.Count < 2)
+            return [];
+
+        var distinctValues = matches
+            .Select(m => m.Value.Trim())
+            .Where(v => v.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (distinctValues.Length < 2)
+            return [];
+
+        return matches
+            .Where(m => !string.IsNullOrWhiteSpace(m.Value))
+            .Select(m => $"{m.SourceLocation} = {m.Value.Trim()}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
 
     private static IEnumerable<(string GroupName, IReadOnlyList<MatterContextField> Fields)> EnumerateMatterGroups(
         MatterContextSnapshot ctx)
@@ -332,4 +417,41 @@ public sealed partial class IntelligenceWide2Service
             return $"Considered ({string.Join("/", relationTypes)}): {basis}";
         return $"Relevant consideration: {basis}";
     }
+
+    // Milestone B: map the internal proposal-layer relation role (produced by NormalizeRelationType:
+    // required/supporting/opposing/conditional/distinguishing/non_applicable) onto the spec's controlled
+    // dependency vocabulary. An unknown/blank role becomes UNRESOLVED — it is NEVER silently promoted to
+    // SUPPORTS, so a weak or unclassified link cannot overstate support for a candidate.
+    private static string MapRelationVocabulary(string? internalRelation)
+    {
+        var r = (internalRelation ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        return r switch
+        {
+            "required" => "REQUIRED",
+            "supporting" or "supports" => "SUPPORTS",
+            "opposing" or "defeats" => "DEFEATS",
+            "conditional" => "CONDITIONAL",
+            "distinguishing" or "alternative" => "ALTERNATIVE",
+            "non_applicable" or "not_applicable" or "na" or "n_a" => "NOT_APPLICABLE",
+            "" or "depends_on" or "unknown" => "UNRESOLVED",
+            _ => "UNRESOLVED",
+        };
+    }
+
+    // A REQUIRED dependency is validated only when it carries a SUBSTANTIVE legal/logical rationale — a
+    // bare or trivially short rationale is not an authoritative basis. Non-REQUIRED relations keep the
+    // lighter presence-of-rationale rule (retained for transparency).
+    private static bool IsRelationValidated(string mappedRelation, string? rationale)
+    {
+        if (string.IsNullOrWhiteSpace(rationale))
+            return false;
+        if (!string.Equals(mappedRelation, "REQUIRED", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // REQUIRED: require a rationale with real content (more than a single stub token).
+        var significant = rationale.Split(TokenSeparators, StringSplitOptions.RemoveEmptyEntries)
+            .Count(t => t.Trim().Length > 2);
+        return significant >= 2;
+    }
+
+    private static readonly char[] TokenSeparators = [' ', '\t', '-', '\u2014', ',', '/', '(', ')', ':', ';', '.'];
 }

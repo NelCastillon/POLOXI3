@@ -58,18 +58,18 @@ public sealed record DecisionExecutionModeDto(
 // row; nullable overrides clear to "use existing routed value" when omitted. DisplayName/Description
 // are editable labels; the execution safeguards (AllowReplay, IsProductionAllowed) are editable flags.
 public sealed record SaveDecisionExecutionModeRequest(
-    [property: Required, StringLength(20)] string ExecutionModeCode,
-    [property: Required, StringLength(80)] string DisplayName,
-    [property: StringLength(400)] string? Description,
-    [property: StringLength(100)] string? DefaultModelCode,
+    [Required, StringLength(20)] string ExecutionModeCode,
+    [Required, StringLength(80)] string DisplayName,
+    [StringLength(400)] string? Description,
+    [StringLength(100)] string? DefaultModelCode,
     bool AllowReplay,
     bool IsProductionAllowed,
-    [property: StringLength(50)] string? ProviderTypeCode,
-    [property: StringLength(400)] string? EndpointReference,
-    [property: StringLength(40)] string? ApiVersion,
-    [property: Range(0, 2)] decimal? Temperature,
-    [property: Range(1, 1000000)] int? MaxOutputTokens,
-    [property: Range(1, 900)] int? TimeoutSeconds);
+    [StringLength(50)] string? ProviderTypeCode,
+    [StringLength(400)] string? EndpointReference,
+    [StringLength(40)] string? ApiVersion,
+    [Range(0, 2)] decimal? Temperature,
+    [Range(1, 1000000)] int? MaxOutputTokens,
+    [Range(1, 900)] int? TimeoutSeconds);
 
 // A prompt family row (POLOXI.Legal_DecisionPrompt).
 public sealed record DecisionPromptDefinition(
@@ -90,15 +90,15 @@ public sealed record DecisionPromptConfigurationDto(
     DateTime? ModifiedDateUtc);
 
 public sealed record SaveDecisionPromptConfigurationRequest(
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(120)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(120)]
     string PromptCode,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(60)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(60)]
     string StageCode,
-    [property: System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.Required]
     string SystemPrompt,
-    [property: System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.Required]
     string UserPromptTemplate,
     string? OutputSchemaJson,
     bool IsActive);
@@ -107,100 +107,100 @@ public sealed record SaveDecisionPromptConfigurationRequest(
 // (kept read-only in the UI); the remaining fields mirror the editable table columns. Governance and
 // verification gates are unaffected — this only adjusts model/endpoint routing settings.
 public sealed record SaveDecisionModelRouteRequest(
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(120)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(120)]
     string FeatureCode,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(60)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(60)]
     string ProviderTypeCode,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(100)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(100)]
     string ModelCode,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(100)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(100)]
     string DeploymentName,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(400)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(400)]
     string EndpointReference,
-    [property: System.ComponentModel.DataAnnotations.StringLength(400)]
+    [System.ComponentModel.DataAnnotations.StringLength(400)]
     string? CredentialReference,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(40)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(40)]
     string ApiVersion,
-    [property: System.ComponentModel.DataAnnotations.Range(1, 3600)]
+    [System.ComponentModel.DataAnnotations.Range(1, 3600)]
     int TimeoutSeconds,
-    [property: System.ComponentModel.DataAnnotations.Range(1, 100000000)]
+    [System.ComponentModel.DataAnnotations.Range(1, 100000000)]
     int MaxOutputTokens,
-    [property: System.ComponentModel.DataAnnotations.Range(0, 2)]
+    [System.ComponentModel.DataAnnotations.Range(0, 2)]
     decimal Temperature,
-    [property: System.ComponentModel.DataAnnotations.Range(0, 100000)]
+    [System.ComponentModel.DataAnnotations.Range(0, 100000)]
     int Priority,
     bool IsActive);
 
 // Create a brand-new POLOXI.Legal_DecisionPrompt row (distinct from the update-only save above).
 public sealed record CreateDecisionPromptConfigurationRequest(
-    [property: Required, StringLength(120)] string PromptCode,
-    [property: Required, StringLength(60)] string StageCode,
-    [property: Required] string SystemPrompt,
-    [property: Required] string UserPromptTemplate,
+    [Required, StringLength(120)] string PromptCode,
+    [Required, StringLength(60)] string StageCode,
+    [Required] string SystemPrompt,
+    [Required] string UserPromptTemplate,
     string? OutputSchemaJson,
     bool IsActive);
 
 // ── Domain Pack child CRUD requests (advisory domain configuration) ──────────────────────────
 // Each request targets a specific pack (DecisionDomainPackId) and upserts by business code.
 public sealed record SaveDomainPackDimensionRequest(
-    [property: Required, StringLength(60)] string DimensionCode,
-    [property: Required, StringLength(200)] string Name,
-    [property: StringLength(1000)] string? Description,
+    [Required, StringLength(60)] string DimensionCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(1000)] string? Description,
     int SortOrder,
     bool IsActive);
 
 public sealed record SaveDomainPackEvidenceTypeRequest(
-    [property: Required, StringLength(60)] string EvidenceTypeCode,
-    [property: Required, StringLength(200)] string Name,
-    [property: StringLength(60)] string? DimensionCode,
-    [property: StringLength(1000)] string? Description,
+    [Required, StringLength(60)] string EvidenceTypeCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(60)] string? DimensionCode,
+    [StringLength(1000)] string? Description,
     int SortOrder,
     bool IsActive);
 
 public sealed record SaveDomainPackVerificationProfileRequest(
-    [property: Required, StringLength(60)] string ProfileCode,
-    [property: Required, StringLength(200)] string Name,
-    [property: StringLength(60)] string? EvidenceTypeCode,
-    [property: StringLength(1000)] string? Description,
+    [Required, StringLength(60)] string ProfileCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(60)] string? EvidenceTypeCode,
+    [StringLength(1000)] string? Description,
     int SortOrder,
     bool IsActive);
 
 public sealed record SaveDomainPackMatterTypeRequest(
-    [property: Required, StringLength(120)] string MatterTypeCode,
-    [property: Required, StringLength(200)] string Name,
-    [property: StringLength(1000)] string? Description,
+    [Required, StringLength(120)] string MatterTypeCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(1000)] string? Description,
     int SortOrder,
     bool IsActive);
 
 public sealed record SaveDomainPackConceptRequest(
-    [property: Required, StringLength(80)] string ConceptCode,
-    [property: Required, StringLength(60)] string DimensionCode,
-    [property: Required, StringLength(200)] string Name,
-    [property: StringLength(1200)] string? Description,
-    [property: Required, StringLength(40)] string ConceptKindCode,
-    [property: Required, StringLength(40)] string SourceClassCode,
-    [property: StringLength(60)] string? VerificationProfileCode,
-    [property: StringLength(120)] string? JurisdictionCode,
-    [property: StringLength(120)] string? MatterTypeCode,
+    [Required, StringLength(80)] string ConceptCode,
+    [Required, StringLength(60)] string DimensionCode,
+    [Required, StringLength(200)] string Name,
+    [StringLength(1200)] string? Description,
+    [Required, StringLength(40)] string ConceptKindCode,
+    [Required, StringLength(40)] string SourceClassCode,
+    [StringLength(60)] string? VerificationProfileCode,
+    [StringLength(120)] string? JurisdictionCode,
+    [StringLength(120)] string? MatterTypeCode,
     bool IsRequiredCoverage,
     bool IsFallbackEligible,
     int SortOrder,
     bool IsActive);
 
 public sealed record SaveDomainPackConceptRelationRequest(
-    [property: Required, StringLength(80)] string SourceConceptCode,
-    [property: Required, StringLength(80)] string TargetConceptCode,
-    [property: Required, StringLength(40)] string RelationTypeCode,
-    [property: StringLength(80)] string? ConstraintCode,
-    [property: StringLength(1200)] string? Description,
-    [property: StringLength(120)] string? JurisdictionCode,
-    [property: StringLength(120)] string? MatterTypeCode,
+    [Required, StringLength(80)] string SourceConceptCode,
+    [Required, StringLength(80)] string TargetConceptCode,
+    [Required, StringLength(40)] string RelationTypeCode,
+    [StringLength(80)] string? ConstraintCode,
+    [StringLength(1200)] string? Description,
+    [StringLength(120)] string? JurisdictionCode,
+    [StringLength(120)] string? MatterTypeCode,
     bool IsHardConstraint,
     int SortOrder,
     bool IsActive);
@@ -217,11 +217,11 @@ public sealed record DecisionSettingDto(
     DateTime? ModifiedDateUtc);
 
 public sealed record SaveDecisionSettingRequest(
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(200)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(200)]
     string SettingKey,
-    [property: System.ComponentModel.DataAnnotations.Required]
-    [property: System.ComponentModel.DataAnnotations.StringLength(1000)]
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(1000)]
     string SettingValue);
 
 // The Core control weights/thresholds loaded from POLOXI.Legal_DecisionSetting (§11,§12,§34).

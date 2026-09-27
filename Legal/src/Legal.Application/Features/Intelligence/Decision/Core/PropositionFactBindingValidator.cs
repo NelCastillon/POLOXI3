@@ -64,6 +64,8 @@ public sealed class PropositionFactBindingValidator
     // Evidence-admission ladder codes (mirrors POLOXI.Legal_EvidenceAdmissionState).
     public const string StateSupplied = "SUPPLIED";
     public const string StateUnresolved = "UNRESOLVED";
+    // Conflicting values captured for the same proposition across more than one matter source/document.
+    public const string StateContradicted = "CONTRADICTED";
 
     private static readonly char[] TokenSeparators =
         [' ', '\t', '-', '\u2014', ',', '/', '(', ')', ':', ';', '.', '\u00a7'];

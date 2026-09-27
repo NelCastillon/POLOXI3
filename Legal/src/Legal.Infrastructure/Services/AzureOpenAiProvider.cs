@@ -159,6 +159,11 @@ public sealed class AzureOpenAiProvider(HttpClient httpClient,ILogger<AzureOpenA
     public static int ResolveInitialOutputBudget(string? modelCode,string featureCode,int configuredBudget,string reasoningEffort)
     {
         if(!IsReasoningModel(modelCode)||reasoningEffort is not ("minimal" or "low"))return configuredBudget;
+        // Large structured-output stages emit big JSON payloads (graphs, full dual-hierarchy discovery
+        // forests + a global candidate universe), so they must keep their full configured budget rather
+        // than the small mechanical-extraction cap. Capping DISCOVERY at 4000 truncates the forest and
+        // surfaces a misleading "increase MaximumOutputTokens" error even when it is already at the max.
+        if(featureCode.Contains("DISCOVERY",StringComparison.OrdinalIgnoreCase))return configuredBudget;
         var stageCap=featureCode.Equals("DECISION_GRAPH",StringComparison.OrdinalIgnoreCase)?8000:4000;
         return Math.Min(configuredBudget,stageCap);
     }

@@ -112,4 +112,181 @@ public sealed class AishaPatelValidatedCompetitionRegressionTests
                 $"Outcome '{rel.CandidateTitle}' must not score itself via factor '{rel.FactorName}'.");
         }
     }
+
+    [Fact]
+    public void Relationships_WithSemanticRationale_AreValidated_LexicalOnlyLinksAreNot()
+    {
+        var gate = LegalDecisionService.RunNormalizationGateForTest(AishaJson, 16);
+
+        var inventory = IntelligenceWide2Service.ProjectFactorInventory(
+            gate.Plan, BuildMatterContext(), domainPackResolved: true, domainPackCode: "PI_GENERAL", anyCandidateDelivered: true);
+
+        // Milestone B: every edge in the fixture carries a rationale, so each relationship must be
+        // recognized as VALIDATED (a legal/logical basis exists) rather than a bare lexical link.
+        Assert.NotEmpty(inventory.Relationships);
+        Assert.All(inventory.Relationships, rel => Assert.True(rel.IsValidatedRelation));
+
+        // A relationship whose edge has NO rationale must NOT be treated as validated — it is retained
+        // for transparency but cannot present a REQUIRED dependency as established on lexical overlap alone.
+        const string lexicalOnlyJson = """
+        {
+          "schemaVersion": "v2",
+          "decisionIntent": { "decisionTarget": "Lexical link", "decisionType": "EVALUATE" },
+          "queryUnderstanding": "Evaluate.",
+          "outcomeProposalHierarchy": { "nodes": [
+            { "outcomeNodeId": "O1", "parentOutcomeNodeId": null, "level": 1, "title": "Enforce confidential settlement", "description": "x", "distinguishingProposition": "x" },
+            { "outcomeNodeId": "O2", "parentOutcomeNodeId": null, "level": 1, "title": "Reopen for additional damages", "description": "y", "distinguishingProposition": "y" }
+          ] },
+          "semanticRoots": [
+            { "rootId": "B1", "rootKind": "legal_element", "label": "Liability established", "semanticQuestion": "Is liability established?", "whyOutcomeRelevant": "x", "children": [] }
+          ],
+          "candidates": [
+            { "candidateId": "C1", "resolution": "Enforce confidential settlement", "candidateType": "resolution", "rationaleSummary": "x", "score": 0.6, "originatingOutcomeNodeIds": ["O1"] },
+            { "candidateId": "C2", "resolution": "Reopen for additional damages", "candidateType": "resolution", "rationaleSummary": "y", "score": 0.4, "originatingOutcomeNodeIds": ["O2"] }
+          ],
+          "candidateBranchRelations": [
+            { "candidateId": "C1", "branchId": "B1", "relationType": "required", "rationale": "" }
+          ],
+          "unresolvedPropositions": [],
+          "factProvenance": []
+        }
+        """;
+
+        var lexicalGate = LegalDecisionService.RunNormalizationGateForTest(lexicalOnlyJson, 16);
+        var lexicalInventory = IntelligenceWide2Service.ProjectFactorInventory(
+            lexicalGate.Plan, BuildMatterContext(), domainPackResolved: true, domainPackCode: "PI_GENERAL", anyCandidateDelivered: true);
+
+        Assert.Contains(lexicalInventory.Relationships, rel => !rel.IsValidatedRelation);
+    }
+
+    [Fact]
+    public void ConflictingSourceValues_ForSameProposition_AreFlaggedContradicted_AndBlockReadiness()
+    {
+        var gate = LegalDecisionService.RunNormalizationGateForTest(AishaJson, 16);
+
+        // Two matter sources supply DIFFERENT values for the same "Liability established" proposition:
+        // the matter facts say "Established" while an uploaded document says "Denied". The projector must
+        // surface this as a contradiction rather than silently establishing either value.
+        var conflicted = new MatterContextSnapshot(
+            MatterId: Guid.NewGuid(),
+            TenantId: Guid.NewGuid(),
+            OriginalQuestion: "Evaluate the Aisha Patel settlement posture.",
+            DomainPackCode: "PI_GENERAL",
+            PracticeAreaCode: "PI",
+            Decision: [],
+            LegalScope: [],
+            PersonalInjuryProfile: [],
+            Facts: [new MatterContextField("Liability established", "Established", MatterFieldProvenance.Supplied)],
+            Evidence: [new MatterContextField("Liability established", "Denied", MatterFieldProvenance.Supplied)]);
+
+        var inventory = IntelligenceWide2Service.ProjectFactorInventory(
+            gate.Plan, conflicted, domainPackResolved: true, domainPackCode: "PI_GENERAL", anyCandidateDelivered: true);
+
+        var contradicted = inventory.Factors
+            .Where(f => f.Contradictions.Count > 0)
+            .ToArray();
+
+        Assert.NotEmpty(contradicted);
+        Assert.True(inventory.ContradictedFactorCount > 0);
+
+        // A contradicted proposition is never presented as established and carries a CONTRADICTED state.
+        Assert.All(contradicted, f =>
+        {
+            Assert.NotEqual("VALID", f.ValidationStatus);
+            Assert.NotEqual("AVAILABLE", f.Availability);
+            Assert.Equal("CONTRADICTED", f.EvidenceAdmissionState);
+        });
+
+        // The conflict blocks readiness and surfaces an explicit obligation to resolve it.
+        Assert.True(inventory.IsProvisional);
+        Assert.Equal("BLOCKED", inventory.DecisionReadinessStatus);
+        Assert.Contains(inventory.BlockingObligations, o => o.Contains("conflicting", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void UnknownRelationRole_MapsToUnresolved_NeverToSupports()
+    {
+        // An unrecognized relation role must degrade to UNRESOLVED — it must NEVER be silently upgraded to
+        // SUPPORTS, which would overstate a candidate's support on a link the domain never validated.
+        const string unknownRelationJson = """
+        {
+          "schemaVersion": "v2",
+          "decisionIntent": { "decisionTarget": "Unknown relation", "decisionType": "EVALUATE" },
+          "queryUnderstanding": "Evaluate.",
+          "outcomeProposalHierarchy": { "nodes": [
+            { "outcomeNodeId": "O1", "parentOutcomeNodeId": null, "level": 1, "title": "Enforce confidential settlement", "description": "x", "distinguishingProposition": "x" },
+            { "outcomeNodeId": "O2", "parentOutcomeNodeId": null, "level": 1, "title": "Reopen for additional damages", "description": "y", "distinguishingProposition": "y" }
+          ] },
+          "semanticRoots": [
+            { "rootId": "B1", "rootKind": "legal_element", "label": "Liability established", "semanticQuestion": "Is liability established?", "whyOutcomeRelevant": "x", "children": [] }
+          ],
+          "candidates": [
+            { "candidateId": "C1", "resolution": "Enforce confidential settlement", "candidateType": "resolution", "rationaleSummary": "x", "score": 0.6, "originatingOutcomeNodeIds": ["O1"] },
+            { "candidateId": "C2", "resolution": "Reopen for additional damages", "candidateType": "resolution", "rationaleSummary": "y", "score": 0.4, "originatingOutcomeNodeIds": ["O2"] }
+          ],
+          "candidateBranchRelations": [
+            { "candidateId": "C1", "branchId": "B1", "relationType": "totally-made-up-role", "rationale": "Some rationale text here." }
+          ],
+          "unresolvedPropositions": [],
+          "factProvenance": []
+        }
+        """;
+
+        var gate = LegalDecisionService.RunNormalizationGateForTest(unknownRelationJson, 16);
+        var inventory = IntelligenceWide2Service.ProjectFactorInventory(
+            gate.Plan, BuildMatterContext(), domainPackResolved: true, domainPackCode: "PI_GENERAL", anyCandidateDelivered: true);
+
+        Assert.NotEmpty(inventory.Relationships);
+        Assert.All(inventory.Relationships, rel =>
+        {
+            Assert.NotEqual("SUPPORTS", rel.RelationType);
+            Assert.False(rel.IsRequired);
+        });
+        Assert.Contains(inventory.Relationships, rel =>
+            string.Equals(rel.RelationType, "UNRESOLVED", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RequiredDependencies_WithoutValidatedBasis_BlockReadiness_AndRollUpBackend()
+    {
+        // A REQUIRED edge whose rationale is trivially short is NOT a validated legal/logical basis. The
+        // backend must roll this up (UnvalidatedRequiredCount > 0), keep the inventory BLOCKED, and surface
+        // an obligation — never present the requirement as established from a bare link.
+        const string weakRequiredJson = """
+        {
+          "schemaVersion": "v2",
+          "decisionIntent": { "decisionTarget": "Weak required", "decisionType": "EVALUATE" },
+          "queryUnderstanding": "Evaluate.",
+          "outcomeProposalHierarchy": { "nodes": [
+            { "outcomeNodeId": "O1", "parentOutcomeNodeId": null, "level": 1, "title": "Enforce confidential settlement", "description": "x", "distinguishingProposition": "x" },
+            { "outcomeNodeId": "O2", "parentOutcomeNodeId": null, "level": 1, "title": "Reopen for additional damages", "description": "y", "distinguishingProposition": "y" }
+          ] },
+          "semanticRoots": [
+            { "rootId": "B1", "rootKind": "legal_element", "label": "Liability established", "semanticQuestion": "Is liability established?", "whyOutcomeRelevant": "x", "children": [] }
+          ],
+          "candidates": [
+            { "candidateId": "C1", "resolution": "Enforce confidential settlement", "candidateType": "resolution", "rationaleSummary": "x", "score": 0.6, "originatingOutcomeNodeIds": ["O1"] },
+            { "candidateId": "C2", "resolution": "Reopen for additional damages", "candidateType": "resolution", "rationaleSummary": "y", "score": 0.4, "originatingOutcomeNodeIds": ["O2"] }
+          ],
+          "candidateBranchRelations": [
+            { "candidateId": "C1", "branchId": "B1", "relationType": "required", "rationale": "x" }
+          ],
+          "unresolvedPropositions": [],
+          "factProvenance": []
+        }
+        """;
+
+        var gate = LegalDecisionService.RunNormalizationGateForTest(weakRequiredJson, 16);
+        var inventory = IntelligenceWide2Service.ProjectFactorInventory(
+            gate.Plan, BuildMatterContext(), domainPackResolved: true, domainPackCode: "PI_GENERAL", anyCandidateDelivered: true);
+
+        // The REQUIRED link's bare rationale fails the substantive-basis test.
+        Assert.Contains(inventory.Relationships, rel => rel.IsRequired && !rel.IsValidatedRelation);
+        Assert.True(inventory.UnvalidatedRequiredCount > 0);
+
+        // Backend keeps the comparison blocked and surfaces the obligation — not a UI-only safeguard.
+        Assert.True(inventory.IsProvisional);
+        Assert.Equal("BLOCKED", inventory.DecisionReadinessStatus);
+        Assert.Contains(inventory.BlockingObligations, o => o.Contains("validated", StringComparison.OrdinalIgnoreCase));
+    }
 }

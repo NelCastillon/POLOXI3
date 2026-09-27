@@ -15,7 +15,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,IDecisionIntegrityRepository integrityRepository,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -119,6 +119,72 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterDocuments(Guid matterId, CancellationToken cancellationToken)
         => Ok(await documentCorpusRepository.GetMatterDocumentsAsync(TenantId, matterId, cancellationToken));
+
+    // ── Continuous Decision Integrity — Decision Change Review workspace ─────────────────────────
+    // Tenant-wide list of matters with change activity (workspace landing list).
+    [HttpGet("change-reviews")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ChangeReviews(CancellationToken cancellationToken)
+        => Ok(await integrityRepository.GetChangeReviewSummariesAsync(TenantId, cancellationToken));
+
+    // Immutable snapshot history for a matter (readiness at eval time + current reliance).
+    [HttpGet("matters/{matterId:guid}/snapshots")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterSnapshots(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await integrityRepository.GetMatterSnapshotsAsync(TenantId, matterId, cancellationToken));
+    }
+
+    // All change events for a matter.
+    [HttpGet("matters/{matterId:guid}/change-events")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterChangeEvents(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await integrityRepository.GetMatterChangeEventsAsync(TenantId, matterId, cancellationToken));
+    }
+
+    // Open review tasks for a matter.
+    [HttpGet("matters/{matterId:guid}/review-tasks")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterReviewTasks(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await integrityRepository.GetOpenReviewTasksAsync(TenantId, matterId, cancellationToken));
+    }
+
+    // Composed before/after Decision Change Review for a single change event.
+    [HttpGet("change-events/{changeEventId:guid}")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ChangeReviewDetail(Guid changeEventId, CancellationToken cancellationToken)
+    {
+        var changeEvent = await integrityRepository.GetChangeEventAsync(TenantId, changeEventId, cancellationToken);
+        if (changeEvent is null) return NotFound();
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, changeEvent.DecisionMatterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var impacts = await integrityRepository.GetImpactsForEventAsync(TenantId, changeEventId, cancellationToken);
+        var reviewTasks = await integrityRepository.GetReviewTasksForEventAsync(TenantId, changeEventId, cancellationToken);
+        var affectedSnapshot = changeEvent.DecisionMatterId == Guid.Empty
+            ? null
+            : await integrityRepository.GetLatestMatterSnapshotAsync(TenantId, changeEvent.DecisionMatterId, cancellationToken);
+        return Ok(new DecisionChangeReviewDto(changeEvent, affectedSnapshot, impacts, reviewTasks));
+    }
+
+    // Attorney action on a review task (acknowledge / resolve / dismiss). Never auto-executes
+    // consequential changes; the attorney remains in control (Phase 3 governs replacing an approved decision).
+    [HttpPut("review-tasks/{reviewTaskId:guid}/status")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> UpdateReviewTaskStatus(Guid reviewTaskId, [FromBody] UpdateReviewTaskStatusRequest request, CancellationToken cancellationToken)
+    {
+        var updated = await integrityRepository.UpdateReviewTaskStatusAsync(TenantId, ActorUserId, reviewTaskId, request.StatusCode, request.ResolutionNotes, cancellationToken);
+        return updated ? NoContent() : NotFound();
+    }
+
 
     [HttpPost("matters/{matterId:guid}/documents")]
     [Consumes("multipart/form-data")]

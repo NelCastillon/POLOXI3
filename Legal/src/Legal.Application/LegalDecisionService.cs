@@ -32,6 +32,7 @@ public sealed partial class LegalDecisionService(
     Abstractions.Persistence.IDecisionSupportSignalRepository decisionSupportSignalRepository,
     IIndependentEvidenceVerificationPipeline evidenceVerificationPipeline,
     ILegalDocumentCorpusRepository documentCorpusRepository,
+    Abstractions.Persistence.IDecisionIntegrityRepository integrityRepository,
     ILegalMatterContextRetriever matterContextRetriever,
     IDecisionResearchSourceRouter researchSourceRouter,
     IExecutionEnvironment executionEnvironment,
@@ -1724,9 +1725,13 @@ public sealed partial class LegalDecisionService(
                             // the refreshed session so DB and response agree.
                             var refreshed = await GetSessionResultAsync(request.TenantId, sessionId, cancellationToken);
                             if (refreshed is not null)
-                                return DecorateTrace(refreshed, proposalIntegritySummary, researchSummary,
+                            {
+                                var refreshedTraced = DecorateTrace(refreshed, proposalIntegritySummary, researchSummary,
                                     researchEligibility, outputAuthorizations, outputTransformSummary,
                                     outputClaimExtraction, timer.ElapsedMilliseconds);
+                                await CaptureDecisionIntegritySnapshotAsync(request, refreshedTraced, cancellationToken);
+                                return refreshedTraced;
+                            }
                         }
                         catch (Exception loopEx)
                         {
@@ -1750,12 +1755,86 @@ public sealed partial class LegalDecisionService(
         var responseWithVerifications = await HydrateEvidenceVerificationsAsync(
             BuildResponse(persistence, nextAction, readiness, useGraph, v2, governanceVerdict, graphDiagnostic, solverShadow),
             request.TenantId, sessionId, cancellationToken);
-        return await HydrateVerifiedSignalsAsync(
+        var finalResponse = await HydrateVerifiedSignalsAsync(
             DecorateTrace(
                 responseWithVerifications,
                 proposalIntegritySummary, researchSummary, researchEligibility, outputAuthorizations,
                 outputTransformSummary, outputClaimExtraction, timer.ElapsedMilliseconds),
             request.TenantId, sessionId, cancellationToken);
+        await CaptureDecisionIntegritySnapshotAsync(request, finalResponse, cancellationToken);
+        return finalResponse;
+    }
+
+    // ── Continuous Decision Integrity capture (Phase 1) ──────────────────────────────────────────
+    // After a matter-scoped decision completes, persist an immutable snapshot of the winning
+    // conclusion plus proposition→evidence links, so later document changes can be matched against
+    // it and reliance can be tracked. Fail-soft: integrity capture must never break a decision.
+    private async Task CaptureDecisionIntegritySnapshotAsync(
+        DecisionSearchRequest request, DecisionSearchResponse response, CancellationToken cancellationToken)
+    {
+        if (request.MatterId is not { } matterId || matterId == Guid.Empty)
+            return;
+        // Only capture a decided outcome; clarification-pending / empty results are not conclusions yet.
+        if (string.IsNullOrWhiteSpace(response.FinalAnswer) || !string.IsNullOrWhiteSpace(response.ClarificationQuestion))
+            return;
+
+        try
+        {
+            var winner = response.WinnerCandidateId is { } winnerId
+                ? response.Candidates.FirstOrDefault(c => c.DecisionCandidateId == winnerId)
+                : response.Candidates.FirstOrDefault(c => c.IsWinner);
+            var readiness = response.ReadinessVerdict is { } verdict
+                ? (verdict.Satisfied ? "READY" : "NOT_READY")
+                : (response.TerminalStateCode ?? response.StatusCode);
+
+            var snapshotNumber = await integrityRepository.GetNextSnapshotNumberAsync(request.TenantId, matterId, cancellationToken);
+            var snapshotId = Guid.NewGuid();
+            await integrityRepository.CreateSnapshotAsync(new Features.Intelligence.Decision.DecisionSnapshotPersistence(
+                snapshotId, matterId, response.DecisionSessionId, snapshotNumber,
+                Title: winner?.DisplayName ?? "Decision",
+                PropositionStatement: response.FinalAnswer,
+                ReadinessStatusCode: readiness,
+                RelianceStatusCode: Features.Intelligence.Decision.DecisionRelianceStatus.Current,
+                RelianceReason: null,
+                IsAttorneyApproved: false, ApprovedByUserId: null, ApprovedDateUtc: null,
+                SupersededBySnapshotId: null,
+                EvidenceSummaryJson: null,
+                EvaluatedDateUtc: DateTime.UtcNow, request.TenantId, request.UserId), cancellationToken);
+
+            // Supersede the previous CURRENT snapshot lineage marker is out of Phase 1 scope; the latest
+            // snapshot is resolved by snapshot number, so the newest conclusion is authoritative for reliance.
+
+            // Link the winning conclusion to the verified evidence that supports it. These links are what
+            // the MatterChangeProcessor matches new documents against.
+            var links = new List<Features.Intelligence.Decision.PropositionEvidenceLinkPersistence>();
+            var propositionKey = $"SESSION:{response.DecisionSessionId:N}";
+            foreach (var ev in response.Evidence)
+            {
+                var statement = ev.SupportingPassage ?? ev.Snippet ?? ev.SourceTitle;
+                if (string.IsNullOrWhiteSpace(statement))
+                    continue;
+                var kind = ev.VerificationStatus is "CONTRADICTED" or "REFUTED"
+                    ? Features.Intelligence.Decision.PropositionEvidenceLinkKind.Contradiction
+                    : Features.Intelligence.Decision.PropositionEvidenceLinkKind.Support;
+                links.Add(new Features.Intelligence.Decision.PropositionEvidenceLinkPersistence(
+                    Guid.NewGuid(), matterId, snapshotId,
+                    propositionKey, statement,
+                    LegalDocumentVersionId: null, LegalDocumentPassageId: null,
+                    kind, SupportWeight: ev.VerificationValue,
+                    Features.Intelligence.Decision.PropositionEvidenceLinkStatus.Active,
+                    Notes: ev.SourceRef, request.TenantId, request.UserId));
+            }
+            if (links.Count > 0)
+                await integrityRepository.SavePropositionEvidenceLinksAsync(links, cancellationToken);
+
+            logger.LogInformation(
+                "Captured decision integrity snapshot {SnapshotId} (#{Number}) for matter {MatterId} with {LinkCount} evidence link(s).",
+                snapshotId, snapshotNumber, matterId, links.Count);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Decision integrity snapshot capture failed for matter {MatterId}; decision unaffected.", request.MatterId);
+        }
     }
 
     // ── Decision Integrity Trace assembly ────────────────────────────────────────────────────────
@@ -4486,7 +4565,9 @@ public sealed partial class LegalDecisionService(
         {
             "required" or "supporting" or "opposing" or "conditional" or "distinguishing" or "non_applicable" => normalized,
             "not_applicable" or "na" or "n_a" => "non_applicable",
-            _ => "supporting",
+            // An unrecognized role must stay explicitly UNKNOWN — never silently upgraded to "supporting",
+            // which would overstate a candidate's support on a link the domain never validated.
+            _ => "unknown",
         };
     }
 

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
+using Microsoft.Extensions.Logging;
 
 namespace Legal.Application.Features.Intelligence.Decision;
 
@@ -11,7 +12,9 @@ public sealed class LegalDocumentIntakeService(
     ILegalDocumentExtractionRouter extractionRouter,
     ILegalDocumentSemanticInterpreter semanticInterpreter,
     ILegalDocumentCorpusRepository corpusRepository,
-    ILegalDecisionRepository decisionRepository) : ILegalDocumentIntakeService
+    ILegalDecisionRepository decisionRepository,
+    IMatterChangeProcessor matterChangeProcessor,
+    ILogger<LegalDocumentIntakeService> logger) : ILegalDocumentIntakeService
 {
     public async Task<LegalDocumentDto> IngestAsync(LegalDocumentIntakeRequest request, Stream content, CancellationToken cancellationToken = default)
     {
@@ -82,6 +85,20 @@ public sealed class LegalDocumentIntakeService(
                 request.TenantId, request.UserId, version.LegalDocumentVersionId,
                 ex.GetType().Name, ex.Message, CancellationToken.None);
             throw;
+        }
+
+        // Continuous Decision Integrity — fire the Matter Change Processor so a newly arrived document
+        // is evaluated for material impact on existing conclusions. Fail-soft: change awareness must
+        // never block or fail the upload itself; the change event is idempotent on the source version.
+        try
+        {
+            await matterChangeProcessor.ProcessDocumentChangeAsync(
+                request.TenantId, request.UserId, request.MatterId, documentId, version.LegalDocumentVersionId,
+                sha256Hash, request.FileName, DateTime.UtcNow, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Continuous Decision Integrity change processing failed for document {DocumentId}; upload preserved.", documentId);
         }
 
         return (await corpusRepository.GetMatterDocumentsAsync(request.TenantId, request.MatterId, cancellationToken))

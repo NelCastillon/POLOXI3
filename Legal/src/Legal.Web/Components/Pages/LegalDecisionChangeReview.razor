@@ -1,0 +1,402 @@
+@page "/legal/decision/change-review"
+@page "/legal/decision/change-review/{MatterId:guid}"
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+@inject BreadcrumbService Breadcrumbs
+@inject NavigationManager Navigation
+
+<LegalWorkspace>
+    <div class="decision-page">
+        <header class="decision-hero">
+            <div class="decision-hero-icon"><i class="bi bi-shield-check"></i></div>
+            <div class="decision-hero-copy">
+                <span>Continuous Decision Integrity — a legal conclusion must stay connected to the evidence that made it valid</span>
+                <h1>Decision Change Review</h1>
+                <p>When new evidence arrives, Judz does not silently overwrite a prior conclusion. It preserves the historical decision (readiness at evaluation time) and separately tracks whether that decision remains supported by the matter's current evidence (reliance today).</p>
+            </div>
+        </header>
+
+        @if (_loadError is not null)
+        {
+            <div class="alert alert-danger" role="alert" style="border-left: 4px solid #dc3545;">
+                <i class="bi bi-exclamation-triangle"></i> @_loadError
+            </div>
+        }
+
+        @if (_selectedMatterId is null)
+        {
+            <section class="decision-panel">
+                <div class="decision-panel-head">
+                    <h2><i class="bi bi-list-check"></i> Matters with change activity</h2>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadSummariesAsync" disabled="@_busy">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+                @if (_busy)
+                {
+                    <p class="decision-muted">Loading change reviews…</p>
+                }
+                else if (_summaries.Count == 0)
+                {
+                    <p class="decision-muted">No matter changes have been detected yet. As new documents are ingested, changes that affect existing conclusions will appear here.</p>
+                }
+                else
+                {
+                    <table class="decision-table">
+                        <thead>
+                            <tr>
+                                <th>Matter</th>
+                                <th>Current reliance</th>
+                                <th>Open reviews</th>
+                                <th>Pending changes</th>
+                                <th>Latest change</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in _summaries)
+                            {
+                                <tr class="decision-row" @onclick="() => SelectMatter(item.DecisionMatterId)">
+                                    <td><strong>@item.MatterTitle</strong></td>
+                                    <td><span class="decision-chip @RelianceClass(item.LatestRelianceStatusCode)">@RelianceLabel(item.LatestRelianceStatusCode)</span></td>
+                                    <td>@item.OpenReviewTaskCount</td>
+                                    <td>@item.PendingChangeCount</td>
+                                    <td>@(item.LatestChangeDateUtc?.ToString("g") ?? "—")</td>
+                                    <td class="text-end"><i class="bi bi-chevron-right"></i></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+        }
+        else
+        {
+            <div class="decision-matter-banner">
+                <i class="bi bi-folder2-open"></i>
+                <div class="decision-matter-banner-body">
+                    <span>Reviewing change integrity for matter</span>
+                    <a href="@($"/legal/matters/{_selectedMatterId}")"><strong>@_selectedMatterTitle</strong></a>
+                </div>
+                <button class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="BackToList">
+                    <i class="bi bi-arrow-left"></i> All matters
+                </button>
+            </div>
+
+            <section class="decision-panel">
+                <div class="decision-panel-head">
+                    <h2><i class="bi bi-clipboard2-check"></i> Open review tasks</h2>
+                    <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadMatterAsync" disabled="@_busy">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+                @if (_reviewTasks.Count == 0)
+                {
+                    <p class="decision-muted">No open review tasks. Current conclusions remain supported by the matter's evidence.</p>
+                }
+                else
+                {
+                    @foreach (var task in _reviewTasks)
+                    {
+                        <div class="decision-review-task">
+                            <div class="decision-review-task-head">
+                                <span class="decision-chip @PriorityClass(task.PriorityCode)">@task.PriorityCode</span>
+                                <strong>@task.Title</strong>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(task.Detail))
+                            {
+                                <p class="decision-muted">@task.Detail</p>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(task.RequiredAction))
+                            {
+                                <p class="decision-review-task-action"><i class="bi bi-arrow-return-right"></i> @task.RequiredAction</p>
+                            }
+                            <div class="decision-review-task-actions">
+                                <button class="um-btn um-btn-sm um-btn-primary" @onclick='() => UpdateTask(task.DecisionReviewTaskId, "IN_PROGRESS")' disabled="@_busy">Start review</button>
+                                <button class="um-btn um-btn-sm" @onclick='() => UpdateTask(task.DecisionReviewTaskId, "RESOLVED")' disabled="@_busy">Resolve</button>
+                                <button class="um-btn um-btn-sm um-btn-ghost" @onclick='() => UpdateTask(task.DecisionReviewTaskId, "DISMISSED")' disabled="@_busy">Dismiss</button>
+                            </div>
+                        </div>
+                    }
+                }
+            </section>
+
+            <section class="decision-panel">
+                <div class="decision-panel-head">
+                    <h2><i class="bi bi-camera"></i> Decision snapshots</h2>
+                </div>
+                @if (_snapshots.Count == 0)
+                {
+                    <p class="decision-muted">No decision snapshots recorded for this matter yet.</p>
+                }
+                else
+                {
+                    <table class="decision-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Decision</th>
+                                <th>Readiness (at eval)</th>
+                                <th>Reliance (today)</th>
+                                <th>Evaluated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var snap in _snapshots)
+                            {
+                                <tr>
+                                    <td>@snap.SnapshotNumber</td>
+                                    <td><strong>@(snap.Title ?? snap.PropositionStatement ?? "Decision")</strong></td>
+                                    <td><span class="decision-chip">@snap.ReadinessStatusCode</span></td>
+                                    <td><span class="decision-chip @RelianceClass(snap.RelianceStatusCode)">@RelianceLabel(snap.RelianceStatusCode)</span></td>
+                                    <td>@snap.EvaluatedDateUtc.ToString("g")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+
+            <section class="decision-panel">
+                <div class="decision-panel-head">
+                    <h2><i class="bi bi-clock-history"></i> Change events</h2>
+                </div>
+                @if (_changeEvents.Count == 0)
+                {
+                    <p class="decision-muted">No change events recorded for this matter yet.</p>
+                }
+                else
+                {
+                    <table class="decision-table">
+                        <thead>
+                            <tr>
+                                <th>Source</th>
+                                <th>Classification</th>
+                                <th>Affected props</th>
+                                <th>Status</th>
+                                <th>Detected</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var evt in _changeEvents)
+                            {
+                                <tr class="decision-row" @onclick="() => SelectChangeEvent(evt.MatterChangeEventId)">
+                                    <td><strong>@(evt.SourceLabel ?? evt.ChangeSourceCode)</strong></td>
+                                    <td><span class="decision-chip @ClassificationClass(evt.ClassificationCode)">@(evt.ClassificationCode ?? "—")</span></td>
+                                    <td>@evt.AffectedPropositionCount</td>
+                                    <td>@evt.ProcessingStatusCode</td>
+                                    <td>@evt.CreatedDateUtc.ToString("g")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </section>
+
+            @if (_selectedReview is not null)
+            {
+                <section class="decision-panel">
+                    <div class="decision-panel-head">
+                        <h2><i class="bi bi-arrow-left-right"></i> Change impact — before / after</h2>
+                        <button class="um-btn um-btn-ghost um-btn-sm" @onclick="() => _selectedReview = null">
+                            <i class="bi bi-x-lg"></i> Close
+                        </button>
+                    </div>
+                    @if (_selectedReview.Impacts.Count == 0)
+                    {
+                        <p class="decision-muted">This change did not materially affect any existing proposition.</p>
+                    }
+                    else
+                    {
+                        <table class="decision-table">
+                            <thead>
+                                <tr>
+                                    <th>Affected</th>
+                                    <th>Before</th>
+                                    <th>After</th>
+                                    <th>Severity</th>
+                                    <th>Rationale</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var impact in _selectedReview.Impacts)
+                                {
+                                    <tr>
+                                        <td><strong>@(impact.AffectedLabel ?? impact.AffectedKey)</strong><br /><span class="decision-muted">@impact.AffectedKindCode</span></td>
+                                        <td>@(impact.PreviousStateCode ?? "—")</td>
+                                        <td>@(impact.CurrentStateCode ?? "—")</td>
+                                        <td><span class="decision-chip @SeverityClass(impact.ImpactSeverityCode)">@impact.ImpactSeverityCode</span></td>
+                                        <td>@(impact.Rationale ?? "—")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </section>
+            }
+        }
+    </div>
+</LegalWorkspace>
+
+@code {
+    [Parameter] public Guid? MatterId { get; set; }
+
+    private readonly List<MatterChangeReviewSummaryDto> _summaries = new();
+    private readonly List<DecisionSnapshotDto> _snapshots = new();
+    private readonly List<MatterChangeEventDto> _changeEvents = new();
+    private readonly List<DecisionReviewTaskDto> _reviewTasks = new();
+    private DecisionChangeReviewDto? _selectedReview;
+    private Guid? _selectedMatterId;
+    private string? _selectedMatterTitle;
+    private string? _loadError;
+    private bool _busy;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Breadcrumbs.SetCrumbs(
+            new BreadcrumbService.BreadcrumbItem("Legal", "/legal"),
+            new BreadcrumbService.BreadcrumbItem("Decision Intelligence", "/legal/decision"),
+            new BreadcrumbService.BreadcrumbItem("Change Review"));
+        if (MatterId is { } id && id != Guid.Empty)
+        {
+            _selectedMatterId = id;
+            await LoadMatterAsync();
+        }
+        else
+        {
+            _selectedMatterId = null;
+            await LoadSummariesAsync();
+        }
+    }
+
+    private async Task LoadSummariesAsync()
+    {
+        _busy = true;
+        _loadError = null;
+        try
+        {
+            var items = await Api.GetLegalDecisionChangeReviewsAsync();
+            _summaries.Clear();
+            _summaries.AddRange(items);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load change reviews: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadMatterAsync()
+    {
+        if (_selectedMatterId is not { } id)
+            return;
+        _busy = true;
+        _loadError = null;
+        try
+        {
+            var snapshotsTask = Api.GetLegalDecisionMatterSnapshotsAsync(id);
+            var eventsTask = Api.GetLegalDecisionMatterChangeEventsAsync(id);
+            var tasksTask = Api.GetLegalDecisionMatterReviewTasksAsync(id);
+            await Task.WhenAll(snapshotsTask, eventsTask, tasksTask);
+
+            _snapshots.Clear();
+            _snapshots.AddRange(await snapshotsTask);
+            _changeEvents.Clear();
+            _changeEvents.AddRange(await eventsTask);
+            _reviewTasks.Clear();
+            _reviewTasks.AddRange(await tasksTask);
+            _selectedMatterTitle ??= _summaries.FirstOrDefault(s => s.DecisionMatterId == id)?.MatterTitle ?? "Matter";
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load matter change integrity: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SelectMatter(Guid matterId)
+        => Navigation.NavigateTo($"/legal/decision/change-review/{matterId}");
+
+    private void BackToList()
+        => Navigation.NavigateTo("/legal/decision/change-review");
+
+    private async Task SelectChangeEvent(Guid changeEventId)
+    {
+        try
+        {
+            _selectedReview = await Api.GetLegalDecisionChangeReviewAsync(changeEventId);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load change detail: {ex.Message}";
+        }
+    }
+
+    private async Task UpdateTask(Guid reviewTaskId, string statusCode)
+    {
+        _busy = true;
+        try
+        {
+            await Api.UpdateLegalDecisionReviewTaskStatusAsync(reviewTaskId, new UpdateReviewTaskStatusRequest(statusCode, null));
+            await LoadMatterAsync();
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to update review task: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string RelianceLabel(string? code) => code switch
+    {
+        null => "—",
+        "CURRENT" => "Current",
+        "REVIEW_PENDING" => "Review pending",
+        "REASSESSMENT_REQUIRED" => "Reassessment required",
+        "SUPERSEDED" => "Superseded",
+        "WITHDRAWN" => "Withdrawn",
+        _ => code
+    };
+
+    private static string RelianceClass(string? code) => code switch
+    {
+        "CURRENT" => "decision-chip--ok",
+        "REVIEW_PENDING" => "decision-chip--warn",
+        "REASSESSMENT_REQUIRED" => "decision-chip--danger",
+        "SUPERSEDED" => "decision-chip--danger",
+        "WITHDRAWN" => "decision-chip--danger",
+        _ => string.Empty
+    };
+
+    private static string PriorityClass(string? code) => code switch
+    {
+        "CRITICAL" => "decision-chip--danger",
+        "HIGH" => "decision-chip--danger",
+        "NORMAL" => "decision-chip--warn",
+        _ => string.Empty
+    };
+
+    private static string ClassificationClass(string? code) => code switch
+    {
+        "MATERIAL_CONTRADICTION" => "decision-chip--danger",
+        "NEW_MATERIAL_FACT" => "decision-chip--warn",
+        "POTENTIAL_IMPACT" => "decision-chip--warn",
+        _ => string.Empty
+    };
+
+    private static string SeverityClass(string? code) => code switch
+    {
+        "MATERIAL" => "decision-chip--danger",
+        "POTENTIAL" => "decision-chip--warn",
+        _ => string.Empty
+    };
+}
