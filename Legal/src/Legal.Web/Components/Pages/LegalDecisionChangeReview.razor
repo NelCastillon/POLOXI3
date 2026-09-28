@@ -85,6 +85,50 @@
 
             <section class="decision-panel">
                 <div class="decision-panel-head">
+                    <h2><i class="bi bi-activity"></i> What changed since &mdash; decision timeline</h2>
+                </div>
+                <p class="decision-muted">Every material change is reevaluated by POLOXI Core into an immutable decision delta: what changed, why it matters, and what to examine next.</p>
+                @if (_deltas.Count == 0)
+                {
+                    <p class="decision-muted">No decision deltas yet. As material changes are reevaluated, each recomputation appears here as a traceable before/after record.</p>
+                }
+                else
+                {
+                    @foreach (var delta in _deltas)
+                    {
+                        <div class="decision-review-task">
+                            <div class="decision-review-task-head">
+                                <span class="decision-chip @DeltaKindClass(delta.DeltaKindCode)">@DeltaKindLabel(delta.DeltaKindCode)</span>
+                                @if (delta.AttorneyReviewRequired)
+                                {
+                                    <span class="decision-chip decision-chip--danger">Attorney review</span>
+                                }
+                                <strong>@(delta.Summary ?? "Decision reevaluated")</strong>
+                                <span class="decision-muted ms-auto">@delta.OccurredDateUtc.ToString("g")</span>
+                            </div>
+                            @if (delta.WinnerChanged)
+                            {
+                                <p class="decision-muted">
+                                    Leading outcome: <strong>@(delta.PreviousWinnerLabel ?? "—")</strong>
+                                    <i class="bi bi-arrow-right"></i> <strong>@(delta.CurrentWinnerLabel ?? "—")</strong>
+                                </p>
+                            }
+                            <p class="decision-muted">
+                                Margin @FormatScore(delta.PreviousMargin) <i class="bi bi-arrow-right"></i> @FormatScore(delta.CurrentMargin)
+                                &nbsp;·&nbsp; Uncertainty @FormatScore(delta.PreviousEntropy) <i class="bi bi-arrow-right"></i> @FormatScore(delta.CurrentEntropy)
+                                &nbsp;·&nbsp; @delta.AffectedPropositionCount props / @delta.AffectedCandidateCount candidates affected
+                            </p>
+                            @if (!string.IsNullOrWhiteSpace(delta.RequiredAction))
+                            {
+                                <p class="decision-review-task-action"><i class="bi bi-arrow-return-right"></i> @delta.RequiredAction</p>
+                            }
+                        </div>
+                    }
+                }
+            </section>
+
+            <section class="decision-panel">
+                <div class="decision-panel-head">
                     <h2><i class="bi bi-clipboard2-check"></i> Open review tasks</h2>
                     <button class="um-btn um-btn-ghost um-btn-sm" @onclick="LoadMatterAsync" disabled="@_busy">
                         <i class="bi bi-arrow-clockwise"></i> Refresh
@@ -245,6 +289,7 @@
     private readonly List<DecisionSnapshotDto> _snapshots = new();
     private readonly List<MatterChangeEventDto> _changeEvents = new();
     private readonly List<DecisionReviewTaskDto> _reviewTasks = new();
+    private readonly List<DecisionDeltaDto> _deltas = new();
     private DecisionChangeReviewDto? _selectedReview;
     private Guid? _selectedMatterId;
     private string? _selectedMatterTitle;
@@ -308,6 +353,8 @@
             _changeEvents.AddRange(await eventsTask);
             _reviewTasks.Clear();
             _reviewTasks.AddRange(await tasksTask);
+            _deltas.Clear();
+            _deltas.AddRange(await Api.GetLegalDecisionMatterDeltasAsync(id));
             _selectedMatterTitle ??= _summaries.FirstOrDefault(s => s.DecisionMatterId == id)?.MatterTitle ?? "Matter";
         }
         catch (Exception ex)
@@ -399,4 +446,21 @@
         "POTENTIAL" => "decision-chip--warn",
         _ => string.Empty
     };
+
+    private static string DeltaKindLabel(string? code) => code switch
+    {
+        "WINNER_CHANGED" => "Winner changed",
+        "MARGIN_SHIFTED" => "Margin shifted",
+        "REEVALUATED_NO_CHANGE" => "Reevaluated · no change",
+        _ => code ?? "—"
+    };
+
+    private static string DeltaKindClass(string? code) => code switch
+    {
+        "WINNER_CHANGED" => "decision-chip--danger",
+        "MARGIN_SHIFTED" => "decision-chip--warn",
+        _ => "decision-chip--ok"
+    };
+
+    private static string FormatScore(double? value) => value is { } v ? v.ToString("0.00") : "—";
 }

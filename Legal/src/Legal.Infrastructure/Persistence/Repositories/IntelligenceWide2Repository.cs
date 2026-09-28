@@ -302,6 +302,7 @@ WHEN NOT MATCHED THEN
             UseClaimReadinessBlocking=Bool("UseClaimReadinessBlocking",d.UseClaimReadinessBlocking),
             UseOutputClaimAudit=Bool("UseOutputClaimAudit",d.UseOutputClaimAudit),
             UseEpistemicDecisionBridge=Bool("UseEpistemicDecisionBridge",d.UseEpistemicDecisionBridge),
+            UsePropositionIntegrityGate=Bool("UsePropositionIntegrityGate",d.UsePropositionIntegrityGate),
             OverrideMode=mode,
             MaxVerificationActionsPerRound=Int("MaxVerificationActionsPerRound",d.MaxVerificationActionsPerRound),
             MaxOutputRepairAttempts=Int("MaxOutputRepairAttempts",d.MaxOutputRepairAttempts),

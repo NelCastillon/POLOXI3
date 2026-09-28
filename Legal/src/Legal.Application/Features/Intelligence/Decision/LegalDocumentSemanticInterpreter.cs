@@ -16,6 +16,7 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
         IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,
         IReadOnlyCollection<LegalDocumentPassageDto> passages,
         string correlationId,
+        string? modelCodeOverride = null,
         CancellationToken cancellationToken = default)
     {
         if (passages.Count == 0)
@@ -55,6 +56,7 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
             OutputSchemaJson,
             correlationId,
             new AiExecutionContext("LEGAL_DOCUMENT_INTELLIGENCE", "LEGAL_DOCUMENT", documentId, null, "MATTER_DOCUMENT", documentVersionId, null, null),
+            modelCodeOverride: string.IsNullOrWhiteSpace(modelCodeOverride) ? null : modelCodeOverride.Trim(),
             cancellationToken: cancellationToken);
         var proposal = Parse(result.StructuredOutputJson ?? result.Content) ?? EmptyProposal();
         return Govern(proposal, domainConcepts, passages);

@@ -44,6 +44,33 @@ public interface ILegalDocumentCorpusRepository
         Guid documentVersionId,
         CancellationToken cancellationToken = default);
 
+    Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+    // Enrichment/activation state for a matter: how many clean document versions have extracted text,
+    // and how many of those still lack any derived evidence (i.e. are prepared but not yet activated).
+    Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
+    // Returns up to <paramref name="maximumVersions"/> prepared-but-not-activated versions (extracted
+    // text present, no evidence rows yet) so activation can enrich them in observable chunks.
+    Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(
+        Guid tenantId,
+        Guid matterId,
+        int maximumVersions,
+        CancellationToken cancellationToken = default);
+
+    // evidence items → fact propositions → support edges) for a matter so the Document
+    // Intelligence workspace renders real DB-backed content. Idempotent: no-op if documents exist.
+    Task<int> GenerateRandomTestCorpusAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<LegalMatterContextItem>> SearchMatterContextAsync(
         Guid tenantId,
         Guid userId,
@@ -67,6 +94,18 @@ public interface ILegalDocumentCorpusRepository
         string sha256Hash,
         string storageReference,
         string malwareStatusCode,
+        CancellationToken cancellationToken = default);
+
+    Task<Guid?> FindActiveDocumentByHashAsync(
+        Guid tenantId,
+        Guid matterId,
+        string sha256Hash,
+        CancellationToken cancellationToken = default);
+
+    Task PurgeDocumentAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid documentId,
         CancellationToken cancellationToken = default);
 
     Task SaveExtractionAsync(

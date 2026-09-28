@@ -15,7 +15,10 @@ builder.Services.AddControllers(options =>
 });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddProblemDetails();
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck<Legal.Infrastructure.Intelligence.PoloxiDocumentPassageBridgeHealthCheck>(
+        "poloxi_document_passage_bridge",
+        tags: ["poloxi", "intelligence"]);
 // Authentication: the Development scheme (open, demo fallback) is used only in the
 // Development environment. In all other environments the hardened ForwardedIdentity
 // scheme validates an HMAC signature over the forwarded X-Acting-* headers, so the
@@ -67,7 +70,8 @@ builder.Services.AddScoped<Legal.Application.Features.Intelligence.IWide2Progres
 // Transactional outbox drain worker
 builder.Services.AddHostedService<Legal.Api.Services.OutboxDrainHostedService>();
 builder.Services.AddHostedService<Legal.Api.Services.LegalDocumentSearchProjectionHostedService>();
-
+// Continuous Decision Integrity Phase 2: automatic reevaluation trigger worker.
+builder.Services.AddHostedService<Legal.Api.Services.DecisionReevaluationHostedService>();
 var app = builder.Build();
 
 // ── Run Legal database migrations on startup ─────────────────────

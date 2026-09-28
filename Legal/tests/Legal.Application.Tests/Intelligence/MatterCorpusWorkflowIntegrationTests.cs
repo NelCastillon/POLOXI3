@@ -90,7 +90,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
     private sealed class AccidentReportInterpreter:ILegalDocumentSemanticInterpreter
     {
         public string? DomainPackCode{get;private set;}
-        public Task<LegalDocumentSemanticProposal> InterpretAsync(Guid tenantId,Guid matterId,Guid documentId,Guid documentVersionId,string? domainPackCode,IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,IReadOnlyCollection<LegalDocumentPassageDto> passages,string correlationId,CancellationToken cancellationToken=default)
+        public Task<LegalDocumentSemanticProposal> InterpretAsync(Guid tenantId,Guid matterId,Guid documentId,Guid documentVersionId,string? domainPackCode,IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,IReadOnlyCollection<LegalDocumentPassageDto> passages,string correlationId,string? modelCodeOverride=null,CancellationToken cancellationToken=default)
         {
             DomainPackCode=domainPackCode;
             var passage=Assert.Single(passages);
@@ -119,6 +119,10 @@ public sealed class MatterCorpusWorkflowIntegrationTests
                 [new LegalDocumentVersionDto(versionId,1,sha256Hash,storageReference,request.FileSizeBytes,malwareStatusCode,LegalDocumentProcessingStates.Processing,null,null,null,DateTime.UtcNow)]));
             return Task.FromResult(versionId);
         }
+
+        public Task<Guid?> FindActiveDocumentByHashAsync(Guid tenantId,Guid matterId,string sha256Hash,CancellationToken cancellationToken=default)=>Task.FromResult<Guid?>(null);
+
+        public Task PurgeDocumentAsync(Guid tenantId,Guid userId,Guid documentId,CancellationToken cancellationToken=default)=>Task.CompletedTask;
 
         public Task SaveExtractionAsync(Guid tenantId,Guid userId,Guid documentVersionId,string correlationId,DocumentExtractionResult extraction,IReadOnlyCollection<LegalDocumentPassageDto> passages,CancellationToken cancellationToken=default)
         {
@@ -155,6 +159,10 @@ public sealed class MatterCorpusWorkflowIntegrationTests
 
         public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalDocumentDto>>(documents);
         public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalDocumentPassageDto>>(Passages);
+        public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterEvidenceGraphDto(matterId,documents.Count,[],[]));
+        public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterCorpusActivationStatus(matterId,documents.Count,documents.Count,0,0));
+        public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId,Guid matterId,int maximumVersions,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalPendingCorpusVersion>>([]);
+        public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId,Guid userId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(0);
         public Task<DecisionRetrievalArchitectureSettings> GetRetrievalArchitectureSettingsAsync(CancellationToken cancellationToken=default)=>Task.FromResult(Settings);
         public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId,Guid matterId,string query,IReadOnlyCollection<string> documentTypeCodes,int maximumItems,CancellationToken cancellationToken=default)=>SearchMatterContextAsync(tenantId,Guid.Empty,matterId,query,maximumItems,int.MaxValue,cancellationToken);
         public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchLegacyProjectionAsync(Guid tenantId,Guid userId,Guid matterId,string query,int maximumItems,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalMatterContextItem>>([]);

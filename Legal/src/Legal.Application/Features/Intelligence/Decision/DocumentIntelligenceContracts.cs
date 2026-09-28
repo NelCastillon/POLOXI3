@@ -52,6 +52,160 @@ public static class LegalDocumentRelationshipTypes
     public const string Qualifies = "QUALIFIES";
     public const string DerivedFrom = "DERIVED_FROM";
     public const string RelatedTo = "RELATED_TO";
+    // Assigned when a support edge cannot ground its proposition because the source evidence was not admitted
+    // (for example, it lacks a traceable source span). The edge is preserved for audit but proves nothing.
+    public const string Insufficient = "INSUFFICIENT";
+}
+
+// T11 span-presence admission policy. An LLM-proposed evidence item may only be admitted as decision
+// evidence when it is anchored to a passage that carries a traceable source span; otherwise it is recorded
+// in a non-admitted state and its support edges are downgraded so it can never establish a proposition.
+// Kept as a pure, side-effect-free policy so it is unit-testable without a database.
+public static class LegalEvidenceAdmissionPolicy
+{
+    public const string NonAdmittedStateCode = LegalEvidenceStates.Invalidated;
+    public const string NonAdmittedRationale =
+        "Excluded: source passage lacks a traceable source span; evidence is not admissible to establish this proposition.";
+
+    public static bool IsAdmissible(Guid? passageId, IReadOnlySet<Guid> spannedPassageIds)
+        => passageId is Guid id && spannedPassageIds.Contains(id);
+
+    public static string ResolveEvidenceStateCode(Guid? passageId, IReadOnlySet<Guid> spannedPassageIds)
+        => IsAdmissible(passageId, spannedPassageIds) ? LegalEvidenceStates.Proposed : NonAdmittedStateCode;
+
+    public static string ResolveRelationshipTypeCode(bool evidenceAdmitted, string proposedRelationshipTypeCode)
+        => evidenceAdmitted ? proposedRelationshipTypeCode : LegalDocumentRelationshipTypes.Insufficient;
+
+    public static string? ResolveRelationshipRationale(bool evidenceAdmitted, string? proposedRationale)
+        => evidenceAdmitted ? proposedRationale : NonAdmittedRationale;
+
+    // Phase 2 promotion gate. Evidence recorded in a non-admitted state (for example, INVALIDATED because its
+    // source passage lacks a traceable span) must never be treated as a promotable candidate for independent
+    // verification. Non-admitted evidence remains persisted for audit but is excluded from the SUPPLIED -> VERIFIED
+    // path so it can never be promoted to VERIFIED / decision-authorized state.
+    public static bool CanBePromoted(string? evidenceStateCode)
+        => !string.IsNullOrWhiteSpace(evidenceStateCode)
+           && !string.Equals(evidenceStateCode, NonAdmittedStateCode, StringComparison.OrdinalIgnoreCase);
+}
+
+// Disposition of an intake-time proposition-binding decision (blueprint §5/§12.3/§14).
+public enum LegalPropositionBindingDisposition
+{
+    // No existing matter proposition matched: insert a new, non-authoritative issue proposition.
+    NewIssue,
+    // A confident match was found and the new evidence agrees: reuse the existing proposition (SUPPORTS edge).
+    ReuseSupport,
+    // A confident match was found but the new evidence conflicts: reuse the existing proposition, transition it
+    // to DISPUTED and record a CONTRADICTS edge. The prior proposition text is never overwritten.
+    ReuseContradict
+}
+
+// Outcome of resolving one LLM-proposed fact against the matter's existing canonical propositions.
+public sealed record LegalPropositionBindingDecision(
+    LegalPropositionBindingDisposition Disposition,
+    Guid? MatchedPropositionId,
+    string RelationshipTypeCode,
+    string? MatchedFactStateCode,
+    string? MatchedPropositionText = null)
+{
+    public bool IsReuse => Disposition != LegalPropositionBindingDisposition.NewIssue;
+    public bool IsContradiction => Disposition == LegalPropositionBindingDisposition.ReuseContradict;
+}
+
+// Existing canonical proposition candidate presented to the binding policy (DB-shaped but DB-free).
+public sealed record LegalExistingProposition(Guid PropositionId, string PropositionText, string FactStateCode);
+
+// Intake-time proposition binding/matching policy (blueprint §5 "Proposed links to known canonical proposition
+// IDs only, or NEW_ISSUE_PROPOSAL when no valid match", §12.3, §14). Matches an LLM-proposed fact against the
+// matter's existing propositions so intake reuses canonical identity instead of duplicating (T04), preserves
+// contradictions as DISPUTED without overwriting (T12), and emits a new issue when no valid match exists
+// (T18/T19/T31). Kept as a pure, side-effect-free, unit-testable policy mirroring LegalEvidenceAdmissionPolicy.
+public static class LegalPropositionBindingPolicy
+{
+    // Conservative reuse threshold: we favor NEW_ISSUE over an incorrect merge so distinct facts are never
+    // collapsed and matter history is preserved. Below this Jaccard similarity, a proposed fact is a new issue.
+    public const double ReuseSimilarityThreshold = 0.5;
+
+    // Tokens hinting the proposed fact conflicts with (rather than corroborates) an existing proposition.
+    private static readonly string[] ContradictionCues =
+    [
+        "not", "no ", "never", "deny", "denied", "denies", "dispute", "disputed", "reject", "rejected",
+        "false", "incorrect", "contrary", "refute", "refuted", "without", "absence", "failed to", "did not"
+    ];
+
+    public static LegalPropositionBindingDecision Resolve(
+        string proposedPropositionText,
+        string proposedFactStateCode,
+        IReadOnlyCollection<LegalExistingProposition> existingPropositions)
+    {
+        var proposedTokens = Tokenize(proposedPropositionText);
+        LegalExistingProposition? best = null;
+        var bestScore = 0d;
+        if (proposedTokens.Count > 0)
+        {
+            foreach (var existing in existingPropositions)
+            {
+                var score = Jaccard(proposedTokens, Tokenize(existing.PropositionText));
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = existing;
+                }
+            }
+        }
+
+        if (best is null || bestScore < ReuseSimilarityThreshold)
+            return new LegalPropositionBindingDecision(
+                LegalPropositionBindingDisposition.NewIssue, null, LegalDocumentRelationshipTypes.Supports, null);
+
+        var contradicts = ContradictionPolarity(proposedPropositionText) != ContradictionPolarity(best.PropositionText)
+            || IsDisputedState(proposedFactStateCode);
+        return contradicts
+            ? new LegalPropositionBindingDecision(
+                LegalPropositionBindingDisposition.ReuseContradict, best.PropositionId,
+                LegalDocumentRelationshipTypes.Contradicts, best.FactStateCode, best.PropositionText)
+            : new LegalPropositionBindingDecision(
+                LegalPropositionBindingDisposition.ReuseSupport, best.PropositionId,
+                LegalDocumentRelationshipTypes.Supports, best.FactStateCode, best.PropositionText);
+    }
+
+    // A contradiction reuse transitions the matched proposition to DISPUTED, but never downgrades a stronger,
+    // already-established or already-disputed state, and never overwrites the proposition text.
+    public static string ResolveReusedFactStateCode(string existingFactStateCode)
+        => string.Equals(existingFactStateCode, LegalFactStates.Established, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(existingFactStateCode, LegalFactStates.Disputed, StringComparison.OrdinalIgnoreCase)
+            ? existingFactStateCode
+            : LegalFactStates.Disputed;
+
+    private static bool IsDisputedState(string? factStateCode)
+        => string.Equals(factStateCode, LegalFactStates.Disputed, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(factStateCode, LegalFactStates.Invalidated, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContradictionPolarity(string text)
+    {
+        var lowered = " " + text.ToLowerInvariant() + " ";
+        return ContradictionCues.Any(cue => lowered.Contains(cue, StringComparison.Ordinal));
+    }
+
+    private static HashSet<string> Tokenize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+        return text
+            .ToLowerInvariant()
+            .Split([' ', '\t', '\n', '\r', '.', ',', ';', ':', '(', ')', '"', '\'', '/', '-'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(token => token.Length >= 4)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static double Jaccard(HashSet<string> a, HashSet<string> b)
+    {
+        if (a.Count == 0 || b.Count == 0)
+            return 0;
+        var intersection = a.Count(b.Contains);
+        var union = a.Count + b.Count - intersection;
+        return union == 0 ? 0 : (double)intersection / union;
+    }
 }
 
 public static class DecisionRetrievalStages
@@ -80,7 +234,35 @@ public sealed record LegalDocumentIntakeRequest(
 {
     [StringLength(60)] public string? DomainPackCode { get; init; }
     [StringLength(80)] public string? DocumentTypeCode { get; init; }
+    // Optional explicit CHAT model for Stage 1 semantic enrichment. When null, the feature-policy
+    // default route is used; when set, it overrides the deployment selected for proposition extraction.
+    [StringLength(80)] public string? ModelCode { get; init; }
+    // When true, intake performs only the deterministic prepare steps (validate, scan, store, persist,
+    // extract text). The metered Stage 1 semantic enrichment and Continuous Decision Integrity (CDC)
+    // re-check are deferred to explicit activation on the Disambiguate & Answer path.
+    public bool PrepareOnly { get; init; }
 }
+
+// Summary of a matter's corpus enrichment/activation state. Prepared versions have extracted text but
+// no derived propositions yet; activation enriches them and re-runs Continuous Decision Integrity.
+public sealed record LegalMatterCorpusActivationStatus(
+    Guid MatterId,
+    int TotalVersions,
+    int EnrichedVersions,
+    int PendingVersions,
+    int ActivatedThisCall)
+{
+    public bool IsComplete => PendingVersions == 0;
+}
+
+// A prepared-but-not-activated document version: extracted text exists, but Stage 1 semantic
+// enrichment (atomic propositions) has not yet produced any evidence rows for it.
+public sealed record LegalPendingCorpusVersion(
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    string FileName,
+    string Sha256Hash,
+    string? DocumentTypeCode);
 
 public sealed record LegalDocumentDto(
     Guid LegalDocumentId,
@@ -149,6 +331,49 @@ public sealed record LegalPropositionSupportDto(
     Guid LegalEvidenceItemId,
     string RelationshipTypeCode,
     string? AssessmentReason);
+
+// ── Document Intelligence workspace read (matter-scoped evidence ↔ proposition graph) ──
+// Source-traceable evidence: EvidenceItem joined to its originating document + passage so the
+// UI can show the source citation (file, page, passage text) alongside the assertion.
+public sealed record LegalEvidenceGraphItemDto(
+    Guid LegalEvidenceItemId,
+    Guid MatterId,
+    Guid LegalDocumentVersionId,
+    Guid? LegalDocumentPassageId,
+    string EvidenceTypeCode,
+    string DimensionCode,
+    string Summary,
+    string EvidenceStateCode,
+    decimal? Confidence,
+    string GenerationOriginCode,
+    string? DomainConceptCode,
+    string? VerificationProfileCode,
+    Guid LegalDocumentId,
+    string DocumentFileName,
+    string? DocumentTypeCode,
+    int DocumentVersionNumber,
+    int? PageNumber,
+    string? SectionPath,
+    string? PassageText,
+    decimal? ExtractionConfidence);
+
+// Fact proposition with its evidence support edges (SUPPORTS / CONTRADICTS / CONTEXT / INSUFFICIENT).
+public sealed record LegalEvidenceGraphPropositionDto(
+    Guid LegalFactPropositionId,
+    Guid MatterId,
+    string PropositionText,
+    string FactStateCode,
+    string GenerationOriginCode,
+    decimal? Confidence,
+    bool IsDecisionAuthoritative,
+    IReadOnlyCollection<LegalPropositionSupportDto> Support);
+
+// Aggregate matter-level payload for the Document Intelligence tab.
+public sealed record LegalMatterEvidenceGraphDto(
+    Guid MatterId,
+    int DocumentCount,
+    IReadOnlyCollection<LegalEvidenceGraphItemDto> Evidence,
+    IReadOnlyCollection<LegalEvidenceGraphPropositionDto> Propositions);
 
 public sealed record LegalMatterContextItem(
     Guid MatterId,

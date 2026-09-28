@@ -44,4 +44,11 @@ public interface IDecisionIntegrityRepository
 
     // ── Workspace summaries ────────────────────────────────────────────────────────────────────
     Task<IReadOnlyCollection<MatterChangeReviewSummaryDto>> GetChangeReviewSummariesAsync(Guid tenantId, CancellationToken cancellationToken = default);
+
+    // ── Decision Change Intelligence — first-class DecisionDelta (migration 0344; append-only) ────────
+    // One immutable "what changed" record per material reevaluation. Never scores; it is a durable
+    // projection of an already-computed recompetition used by the "what changed since" attorney timeline.
+    Task<Guid> CreateDecisionDeltaAsync(DecisionDeltaPersistence delta, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<DecisionDeltaDto>> GetMatterDecisionDeltasAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
+    Task<DecisionDeltaDto?> GetDecisionDeltaForEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default);
 }

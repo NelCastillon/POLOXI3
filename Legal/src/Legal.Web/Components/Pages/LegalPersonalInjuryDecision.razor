@@ -39,7 +39,7 @@
                     <span>Matter corpus</span>
                     <strong>@_documents.Count document(s)</strong>
                 </div>
-                <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" class="form-control form-control-sm ms-auto" style="max-width: 320px" />
+                <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" multiple class="form-control form-control-sm ms-auto" style="max-width: 320px" />
                 @if (_uploading)
                 {
                     <span class="decision-chip">Scanning and extracting…</span>
@@ -1050,11 +1050,27 @@
             return;
         _uploading = true;
         _error = null;
+        var failures = new List<string>();
+        var succeeded = 0;
         try
         {
-            await Api.UploadLegalMatterDocumentAsync(matterId, args.File, null, DecisionDomainPackCodes.PersonalInjury);
+            var files = args.GetMultipleFiles(maximumFileCount: 50);
+            foreach (var file in files)
+            {
+                try
+                {
+                    await Api.UploadLegalMatterDocumentAsync(matterId, file, null, DecisionDomainPackCodes.PersonalInjury);
+                    succeeded++;
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{file.Name}: {ex.Message}");
+                }
+            }
             _documents = await Api.GetLegalMatterDocumentsAsync(matterId);
             _retrievalTelemetry = await Api.GetLegalMatterRetrievalTelemetryAsync(matterId);
+            if (failures.Count > 0)
+                _error = $"{succeeded} uploaded, {failures.Count} failed: {string.Join("; ", failures)}";
         }
         catch (Exception ex)
         {

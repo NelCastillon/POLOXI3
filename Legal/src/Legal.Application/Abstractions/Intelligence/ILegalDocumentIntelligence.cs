@@ -14,6 +14,13 @@ public interface ILegalDocumentSearchProjectionDispatcher
     Task<int> ProcessBatchAsync(int batchSize, CancellationToken cancellationToken = default);
 }
 
+// Phase 2 Continuous Decision Integrity: claims material PROCESSED change events and runs the
+// authoritative reevaluation (DecisionReevaluationService) automatically. Driven by a hosted worker.
+public interface IDecisionReevaluationDispatcher
+{
+    Task<int> ProcessBatchAsync(int batchSize, CancellationToken cancellationToken = default);
+}
+
 public interface ILegalDocumentExtractionRouter
 {
     Task<DocumentExtractionResult> ExtractAsync(
@@ -63,6 +70,25 @@ public interface ILegalDocumentIntakeService
         CancellationToken cancellationToken = default);
 }
 
+// Activates prepared corpus documents on the Disambiguate & Answer path: runs Stage 1 semantic
+// enrichment (atomic propositions) and Continuous Decision Integrity for versions that were uploaded
+// prepare-only. Processes at most one batch per call so the UI can drive observable progress.
+public interface ILegalMatterCorpusActivationService
+{
+    Task<LegalMatterCorpusActivationStatus> GetStatusAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
+    Task<LegalMatterCorpusActivationStatus> ActivateAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        string? modelCode,
+        int batchSize,
+        CancellationToken cancellationToken = default);
+}
+
 public interface ILegalDocumentSemanticInterpreter
 {
     Task<LegalDocumentSemanticProposal> InterpretAsync(
@@ -74,6 +100,7 @@ public interface ILegalDocumentSemanticInterpreter
         IReadOnlyCollection<DecisionDomainConceptDto> domainConcepts,
         IReadOnlyCollection<LegalDocumentPassageDto> passages,
         string correlationId,
+        string? modelCodeOverride = null,
         CancellationToken cancellationToken = default);
 }
 

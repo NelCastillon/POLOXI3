@@ -326,4 +326,63 @@ public sealed class LegalDecisionIntegrityRepository(ISqlConnectionFactory conne
             """, new { tenantId }, cancellationToken: cancellationToken));
         return rows.ToArray();
     }
+
+    // ── Decision Change Intelligence — first-class DecisionDelta (migration 0344; append-only) ────────
+
+    public async Task<Guid> CreateDecisionDeltaAsync(DecisionDeltaPersistence delta, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO POLOXI.Legal_DecisionDelta
+                (DecisionDeltaId, DecisionMatterId, MatterChangeEventId, FromSnapshotId, ToSnapshotId, DeltaKindCode,
+                 ClassificationCode, Summary, ChangeSourceLabel, WinnerChanged, PreviousWinnerId, CurrentWinnerId,
+                 PreviousWinnerLabel, CurrentWinnerLabel, PreviousMargin, CurrentMargin, PreviousEntropy, CurrentEntropy,
+                 AffectedPropositionCount, AffectedCandidateCount, AffectedEvidenceCount, InformationValueDelta, FrontierChanged,
+                 PreviousReadinessCode, CurrentReadinessCode, AttorneyReviewRequired, RequiredAction, DetailJson,
+                 OccurredDateUtc, TenantId, CreatedByUserId)
+            VALUES
+                (@DecisionDeltaId, @DecisionMatterId, @MatterChangeEventId, @FromSnapshotId, @ToSnapshotId, @DeltaKindCode,
+                 @ClassificationCode, @Summary, @ChangeSourceLabel, @WinnerChanged, @PreviousWinnerId, @CurrentWinnerId,
+                 @PreviousWinnerLabel, @CurrentWinnerLabel, @PreviousMargin, @CurrentMargin, @PreviousEntropy, @CurrentEntropy,
+                 @AffectedPropositionCount, @AffectedCandidateCount, @AffectedEvidenceCount, @InformationValueDelta, @FrontierChanged,
+                 @PreviousReadinessCode, @CurrentReadinessCode, @AttorneyReviewRequired, @RequiredAction, @DetailJson,
+                 @OccurredDateUtc, @TenantId, @ActorUserId);
+            """,
+            new
+            {
+                delta.DecisionDeltaId, delta.DecisionMatterId, delta.MatterChangeEventId, delta.FromSnapshotId, delta.ToSnapshotId,
+                delta.DeltaKindCode, delta.ClassificationCode, delta.Summary, delta.ChangeSourceLabel, delta.WinnerChanged,
+                delta.PreviousWinnerId, delta.CurrentWinnerId, delta.PreviousWinnerLabel, delta.CurrentWinnerLabel,
+                delta.PreviousMargin, delta.CurrentMargin, delta.PreviousEntropy, delta.CurrentEntropy,
+                delta.AffectedPropositionCount, delta.AffectedCandidateCount, delta.AffectedEvidenceCount,
+                delta.InformationValueDelta, delta.FrontierChanged, delta.PreviousReadinessCode, delta.CurrentReadinessCode,
+                delta.AttorneyReviewRequired, delta.RequiredAction, delta.DetailJson, delta.OccurredDateUtc, delta.TenantId, delta.ActorUserId
+            },
+            cancellationToken: cancellationToken));
+        return delta.DecisionDeltaId;
+    }
+
+    private const string DeltaColumns =
+        "DecisionDeltaId, DecisionMatterId, MatterChangeEventId, FromSnapshotId, ToSnapshotId, DeltaKindCode, " +
+        "ClassificationCode, Summary, ChangeSourceLabel, WinnerChanged, PreviousWinnerId, CurrentWinnerId, " +
+        "PreviousWinnerLabel, CurrentWinnerLabel, PreviousMargin, CurrentMargin, PreviousEntropy, CurrentEntropy, " +
+        "AffectedPropositionCount, AffectedCandidateCount, AffectedEvidenceCount, InformationValueDelta, FrontierChanged, " +
+        "PreviousReadinessCode, CurrentReadinessCode, AttorneyReviewRequired, RequiredAction, OccurredDateUtc, CreatedDateUtc";
+
+    public async Task<IReadOnlyCollection<DecisionDeltaDto>> GetMatterDecisionDeltasAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<DecisionDeltaDto>(new CommandDefinition(
+            $"SELECT {DeltaColumns} FROM POLOXI.Legal_DecisionDelta WHERE TenantId=@tenantId AND DecisionMatterId=@decisionMatterId AND IsDeleted=0 ORDER BY OccurredDateUtc DESC, CreatedDateUtc DESC;",
+            new { tenantId, decisionMatterId }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<DecisionDeltaDto?> GetDecisionDeltaForEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QueryFirstOrDefaultAsync<DecisionDeltaDto>(new CommandDefinition(
+            $"SELECT TOP 1 {DeltaColumns} FROM POLOXI.Legal_DecisionDelta WHERE TenantId=@tenantId AND MatterChangeEventId=@matterChangeEventId AND IsDeleted=0 ORDER BY OccurredDateUtc DESC, CreatedDateUtc DESC;",
+            new { tenantId, matterChangeEventId }, cancellationToken: cancellationToken));
+    }
 }

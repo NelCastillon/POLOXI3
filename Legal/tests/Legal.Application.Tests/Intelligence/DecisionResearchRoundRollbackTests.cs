@@ -614,12 +614,18 @@ internal sealed class UnusedDocumentCorpusRepository : ILegalDocumentCorpusRepos
         Task.FromResult(new DecisionRetrievalArchitectureSettings(false, false, 12, 18000, false, true, false, false));
     public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId, Guid? matterId, Guid? decisionSessionId, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchMatterContextAsync(Guid tenantId, Guid userId, Guid matterId, string query, int maximumItems, int maximumCharacters, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchLegacyProjectionAsync(Guid tenantId, Guid userId, Guid matterId, string query, int maximumItems, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task<Guid> CreateDocumentAsync(Guid documentId, LegalDocumentIntakeRequest request, string sha256Hash, string storageReference, string malwareStatusCode, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task<Guid?> FindActiveDocumentByHashAsync(Guid tenantId, Guid matterId, string sha256Hash, CancellationToken cancellationToken = default) => throw Unexpected();
+    public Task PurgeDocumentAsync(Guid tenantId, Guid userId, Guid documentId, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task SaveExtractionAsync(Guid tenantId, Guid userId, Guid documentVersionId, string correlationId, DocumentExtractionResult extraction, IReadOnlyCollection<LegalDocumentPassageDto> passages, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task MarkProcessingFailedAsync(Guid tenantId, Guid userId, Guid documentVersionId, string errorCode, string errorMessage, CancellationToken cancellationToken = default) => throw Unexpected();
     public Task SaveSemanticProposalAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, LegalDocumentSemanticProposal proposal, CancellationToken cancellationToken = default) => throw Unexpected();
@@ -658,6 +664,9 @@ internal sealed class UnusedDecisionIntegrityRepository : IDecisionIntegrityRepo
     public Task<IReadOnlyCollection<DecisionReviewTaskDto>> GetOpenReviewTasksAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionReviewTaskDto>>([]);
     public Task<bool> UpdateReviewTaskStatusAsync(Guid tenantId, Guid userId, Guid decisionReviewTaskId, string statusCode, string? resolutionNotes, CancellationToken cancellationToken = default) => Task.FromResult(false);
     public Task<IReadOnlyCollection<MatterChangeReviewSummaryDto>> GetChangeReviewSummariesAsync(Guid tenantId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<MatterChangeReviewSummaryDto>>([]);
+    public Task<Guid> CreateDecisionDeltaAsync(DecisionDeltaPersistence delta, CancellationToken cancellationToken = default) => Task.FromResult(delta.DecisionDeltaId);
+    public Task<IReadOnlyCollection<DecisionDeltaDto>> GetMatterDecisionDeltasAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyCollection<DecisionDeltaDto>>([]);
+    public Task<DecisionDeltaDto?> GetDecisionDeltaForEventAsync(Guid tenantId, Guid matterChangeEventId, CancellationToken cancellationToken = default) => Task.FromResult<DecisionDeltaDto?>(null);
 }
 
 // Non-production execution environment so DEV Logic is permitted in tests.

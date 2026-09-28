@@ -45,6 +45,11 @@ public static class MatterChangeProcessingStatus
     public const string Pending = "PENDING";
     public const string Processed = "PROCESSED";
     public const string Failed = "FAILED";
+    // Phase 2 reevaluation lifecycle (worker-driven, reuses ProcessingStatusCode; no schema change).
+    // PROCESSED events are claimed for reevaluation, then advanced to one of the terminal states below.
+    public const string Reevaluating = "REEVALUATING";
+    public const string Reevaluated = "REEVALUATED";
+    public const string ReevaluationFailed = "REEVALUATION_FAILED";
 }
 
 public static class MatterChangeSource
@@ -99,6 +104,19 @@ public static class DecisionReviewTaskPriority
     public const string Normal = "NORMAL";
     public const string High = "HIGH";
     public const string Critical = "CRITICAL";
+}
+
+// ── Decision Change Intelligence: the kind of a first-class DecisionDelta. ─────────────────────────
+// Every material reevaluation of a change event produces exactly one immutable delta. The kind answers
+// "what actually moved" at a glance for the attorney "what changed since yesterday" timeline.
+public static class DecisionDeltaKind
+{
+    // The leading candidate outcome changed (e.g. Liability established → not established).
+    public const string WinnerChanged = "WINNER_CHANGED";
+    // The winner held, but the margin/entropy between candidates moved materially.
+    public const string MarginShifted = "MARGIN_SHIFTED";
+    // A material change was reevaluated but POLOXI Core left the ranking and margins unchanged.
+    public const string ReevaluatedNoChange = "REEVALUATED_NO_CHANGE";
 }
 
 // ── Persistence records (mirror the 0340 tables). ──────────────────────────────────────────────
@@ -176,6 +194,42 @@ public sealed record DecisionReviewTaskPersistence(
     Guid TenantId,
     Guid? ActorUserId);
 
+// Immutable "what changed" record produced by one material reevaluation (migration 0344). This is a
+// durable projection of an already-computed recompetition — it never scores. IV / Frontier / Readiness
+// deltas are recorded when available and left null when not computed at the CDC join point (never faked).
+public sealed record DecisionDeltaPersistence(
+    Guid DecisionDeltaId,
+    Guid DecisionMatterId,
+    Guid? MatterChangeEventId,
+    Guid? FromSnapshotId,
+    Guid? ToSnapshotId,
+    string DeltaKindCode,
+    string? ClassificationCode,
+    string? Summary,
+    string? ChangeSourceLabel,
+    bool WinnerChanged,
+    Guid? PreviousWinnerId,
+    Guid? CurrentWinnerId,
+    string? PreviousWinnerLabel,
+    string? CurrentWinnerLabel,
+    double? PreviousMargin,
+    double? CurrentMargin,
+    double? PreviousEntropy,
+    double? CurrentEntropy,
+    int AffectedPropositionCount,
+    int AffectedCandidateCount,
+    int AffectedEvidenceCount,
+    double? InformationValueDelta,
+    bool? FrontierChanged,
+    string? PreviousReadinessCode,
+    string? CurrentReadinessCode,
+    bool AttorneyReviewRequired,
+    string? RequiredAction,
+    string? DetailJson,
+    DateTime OccurredDateUtc,
+    Guid TenantId,
+    Guid? ActorUserId);
+
 public sealed record MatterDependencyPersistence(
     Guid DecisionDependencyId,
     Guid DecisionMatterId,
@@ -245,6 +299,38 @@ public sealed record DecisionReviewTaskDto(
     string? RequiredAction,
     string PriorityCode,
     string StatusCode,
+    DateTime CreatedDateUtc);
+
+// Read DTO for the Decision Change Intelligence "what changed since" timeline.
+public sealed record DecisionDeltaDto(
+    Guid DecisionDeltaId,
+    Guid DecisionMatterId,
+    Guid? MatterChangeEventId,
+    Guid? FromSnapshotId,
+    Guid? ToSnapshotId,
+    string DeltaKindCode,
+    string? ClassificationCode,
+    string? Summary,
+    string? ChangeSourceLabel,
+    bool WinnerChanged,
+    Guid? PreviousWinnerId,
+    Guid? CurrentWinnerId,
+    string? PreviousWinnerLabel,
+    string? CurrentWinnerLabel,
+    double? PreviousMargin,
+    double? CurrentMargin,
+    double? PreviousEntropy,
+    double? CurrentEntropy,
+    int AffectedPropositionCount,
+    int AffectedCandidateCount,
+    int AffectedEvidenceCount,
+    double? InformationValueDelta,
+    bool? FrontierChanged,
+    string? PreviousReadinessCode,
+    string? CurrentReadinessCode,
+    bool AttorneyReviewRequired,
+    string? RequiredAction,
+    DateTime OccurredDateUtc,
     DateTime CreatedDateUtc);
 
 public sealed record MatterChangeEventDto(

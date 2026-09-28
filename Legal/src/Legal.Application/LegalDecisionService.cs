@@ -2703,7 +2703,16 @@ public sealed partial class LegalDecisionService(
                     {
                         var matterItems = await documentCorpusRepository.SearchRoutedMatterContextAsync(
                             tenantId, matterId, searchQuery, route.DocumentTypeCodes, 5, cancellationToken);
-                        sources = matterItems.Select(item => new DecisionRetrievedSource(item.SourceReference, item.Title, item.Text)
+                        // Phase 2 promotion gate: non-admitted matter evidence (for example, INVALIDATED because its
+                        // source passage lacks a traceable span) is preserved for audit but must never enter the
+                        // SUPPLIED -> VERIFIED path, so it is excluded from the verification candidate set here.
+                        var promotableItems = matterItems
+                            .Where(item => LegalEvidenceAdmissionPolicy.CanBePromoted(item.EvidenceStateCode))
+                            .ToArray();
+                        var excludedCount = matterItems.Count - promotableItems.Length;
+                        if (excludedCount > 0)
+                            narrative.Add($"Excluded {excludedCount} non-admitted matter-evidence item(s) from verification; they lack a traceable source span and cannot be promoted to VERIFIED.");
+                        sources = promotableItems.Select(item => new DecisionRetrievedSource(item.SourceReference, item.Title, item.Text)
                         {
                             SourceType = EvidenceSourceType.MatterDocument,
                             SourceProvider = "LEGAL_MATTER_CORPUS",

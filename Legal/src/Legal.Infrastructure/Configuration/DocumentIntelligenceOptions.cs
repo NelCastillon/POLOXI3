@@ -16,7 +16,10 @@ public sealed class DocumentIntelligenceOptions
     public int BlobRetentionDays { get; set; } = 2555;
     public bool ApplyLegalHold { get; set; }
     public string MalwareScanEndpoint { get; set; } = string.Empty;
-    public string MalwareScannerProvider { get; set; } = "DefenderForStorage";
+
+    // Document Malware scanning is OFF by default. When "Disabled", intake neither executes a scan
+    // nor bypasses a configured scanner. Set to "Http" or "DefenderForStorage" to enforce scanning.
+    public string MalwareScannerProvider { get; set; } = "Disabled";
     public string DefenderScanContainerName { get; set; } = "legal-quarantine";
     public int DefenderScanTimeoutSeconds { get; set; } = 300;
     public int DefenderScanPollSeconds { get; set; } = 5;

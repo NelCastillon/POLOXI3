@@ -55,6 +55,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             LEFT JOIN POLOXI.Legal_MatterFactProposition proposition ON proposition.LegalFactPropositionId=support.LegalFactPropositionId AND proposition.IsDeleted=0
             WHERE document.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND document.IsDeleted=0
               AND document.StatusCode<>N'QUARANTINED' AND version.MalwareStatusCode IN (N'CLEAN',N'NOT_DETECTED',N'PASSED')
+              AND COALESCE(evidence.EvidenceStateCode,passage.EpistemicStateCode,N'PROPOSED')<>N'INVALIDATED'
               AND (NOT EXISTS (SELECT 1 FROM OPENJSON(@DocumentTypesJson)) OR document.DocumentTypeCode IN (SELECT [value] FROM OPENJSON(@DocumentTypesJson)))
             ORDER BY COALESCE(proposition.IsDecisionAuthoritative,0) DESC,
                      CASE COALESCE(evidence.EvidenceStateCode,passage.EpistemicStateCode) WHEN N'VERIFIED' THEN 0 WHEN N'DISPUTED' THEN 1 ELSE 2 END,
@@ -119,6 +120,349 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             """, new { TenantId = tenantId, DocumentVersionId = documentVersionId }, cancellationToken: cancellationToken));
         return rows.Select(ToDto).ToArray();
     }
+
+    public async Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var multi = await connection.QueryMultipleAsync(new CommandDefinition(
+            """
+            SELECT COUNT(1)
+            FROM POLOXI.Legal_MatterDocument document
+            WHERE document.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND document.IsDeleted=0;
+
+            SELECT evidence.LegalEvidenceItemId, evidence.DecisionMatterId AS MatterId, evidence.LegalDocumentVersionId,
+                   evidence.LegalDocumentPassageId, evidence.EvidenceTypeCode, evidence.DimensionCode, evidence.Summary,
+                   evidence.EvidenceStateCode, evidence.Confidence, evidence.GenerationOriginCode, evidence.DomainConceptCode,
+                   evidence.VerificationProfileCode, document.LegalDocumentId, document.FileName AS DocumentFileName,
+                   document.DocumentTypeCode, version.VersionNumber AS DocumentVersionNumber,
+                   passage.PageNumber, passage.SectionPath, passage.PassageText, passage.ExtractionConfidence
+            FROM POLOXI.Legal_MatterEvidenceItem evidence
+            INNER JOIN POLOXI.Legal_MatterDocumentVersion version ON version.LegalDocumentVersionId=evidence.LegalDocumentVersionId AND version.IsDeleted=0
+            INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
+            LEFT JOIN POLOXI.Legal_DocumentPassage passage ON passage.LegalDocumentPassageId=evidence.LegalDocumentPassageId AND passage.IsDeleted=0
+            WHERE evidence.TenantId=@TenantId AND evidence.DecisionMatterId=@MatterId AND evidence.IsDeleted=0
+            ORDER BY document.FileName, passage.PageNumber, evidence.CreatedDateUtc;
+
+            SELECT proposition.LegalFactPropositionId, proposition.DecisionMatterId AS MatterId, proposition.PropositionText,
+                   proposition.FactStateCode, proposition.GenerationOriginCode, proposition.Confidence, proposition.IsDecisionAuthoritative
+            FROM POLOXI.Legal_MatterFactProposition proposition
+            WHERE proposition.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId AND proposition.IsDeleted=0
+            ORDER BY proposition.IsDecisionAuthoritative DESC, proposition.CreatedDateUtc;
+
+            SELECT support.LegalPropositionSupportId, support.LegalFactPropositionId, support.LegalEvidenceItemId,
+                   support.RelationshipTypeCode, support.AssessmentReason
+            FROM POLOXI.Legal_MatterPropositionSupport support
+            INNER JOIN POLOXI.Legal_MatterFactProposition proposition ON proposition.LegalFactPropositionId=support.LegalFactPropositionId AND proposition.IsDeleted=0
+            WHERE support.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId AND support.IsDeleted=0;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+
+        var documentCount = await multi.ReadSingleAsync<int>();
+        var evidence = (await multi.ReadAsync<LegalEvidenceGraphItemDto>()).ToArray();
+        var propositionRows = (await multi.ReadAsync<PropositionHeadRow>()).ToArray();
+        var supports = (await multi.ReadAsync<LegalPropositionSupportDto>()).ToArray();
+
+        var propositions = propositionRows.Select(head => new LegalEvidenceGraphPropositionDto(
+            head.LegalFactPropositionId, head.MatterId, head.PropositionText, head.FactStateCode,
+            head.GenerationOriginCode, head.Confidence, head.IsDecisionAuthoritative,
+            supports.Where(support => support.LegalFactPropositionId == head.LegalFactPropositionId).ToArray()))
+            .ToArray();
+
+        return new LegalMatterEvidenceGraphDto(matterId, documentCount, evidence, propositions);
+    }
+
+    public async Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row = await connection.QuerySingleAsync<ActivationStatusRow>(new CommandDefinition(
+            """
+            SELECT
+                COUNT(1) AS TotalVersions,
+                ISNULL(SUM(version.IsEnriched), 0) AS EnrichedVersions
+            FROM
+            (
+                SELECT
+                    version.LegalDocumentVersionId,
+                    CASE WHEN EXISTS
+                        (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
+                         WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
+                        THEN 1 ELSE 0 END AS IsEnriched
+                FROM POLOXI.Legal_MatterDocumentVersion version
+                INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
+                WHERE version.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND version.IsDeleted=0
+                  AND document.StatusCode<>N'QUARANTINED'
+                  AND version.MalwareStatusCode IN (N'CLEAN',N'NOT_DETECTED',N'PASSED')
+                  AND EXISTS (SELECT 1 FROM POLOXI.Legal_DocumentPassage passage
+                              WHERE passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0)
+            ) version;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+        var pending = Math.Max(row.TotalVersions - row.EnrichedVersions, 0);
+        return new LegalMatterCorpusActivationStatus(matterId, row.TotalVersions, row.EnrichedVersions, pending, 0);
+    }
+
+    private sealed record ActivationStatusRow(int TotalVersions, int EnrichedVersions);
+
+    public async Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<LegalPendingCorpusVersion>(new CommandDefinition(
+            """
+            SELECT TOP(@MaximumVersions)
+                   document.LegalDocumentId, version.LegalDocumentVersionId, document.FileName,
+                   version.Sha256Hash, document.DocumentTypeCode
+            FROM POLOXI.Legal_MatterDocumentVersion version
+            INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
+            WHERE version.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND version.IsDeleted=0
+              AND document.StatusCode<>N'QUARANTINED'
+              AND version.MalwareStatusCode IN (N'CLEAN',N'NOT_DETECTED',N'PASSED')
+              AND EXISTS (SELECT 1 FROM POLOXI.Legal_DocumentPassage passage
+                          WHERE passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0)
+              AND NOT EXISTS (SELECT 1 FROM POLOXI.Legal_MatterEvidenceItem evidence
+                              WHERE evidence.LegalDocumentVersionId=version.LegalDocumentVersionId AND evidence.IsDeleted=0)
+            ORDER BY version.CreatedDateUtc;
+            """, new { TenantId = tenantId, MatterId = matterId, MaximumVersions = Math.Clamp(maximumVersions, 1, 100) }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+
+    public async Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        // Idempotent: skip when the matter already has any documents.
+        var existing = await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(1) FROM POLOXI.Legal_MatterDocument WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0;",
+            new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+        if (existing > 0)
+            return 0;
+
+        var rng = Random.Shared;
+        var now = DateTime.UtcNow;
+
+        // Three source-traceable documents mirroring the canonical corpus shape:
+        // incident/police report (liability), medical record (causation/damages), CGL policy (coverage).
+        var incidentPassages = new[]
+        {
+            _incidentNarrativePassages[rng.Next(_incidentNarrativePassages.Length)],
+            _incidentEmployeePassages[rng.Next(_incidentEmployeePassages.Length)]
+        };
+        var medicalPassages = new[]
+        {
+            _medicalDiagnosisPassages[rng.Next(_medicalDiagnosisPassages.Length)],
+            _medicalTreatmentPassages[rng.Next(_medicalTreatmentPassages.Length)]
+        };
+        var policyPassage = _policyPassages[rng.Next(_policyPassages.Length)];
+
+        var docReport = Guid.NewGuid();
+        var docMedical = Guid.NewGuid();
+        var docPolicy = Guid.NewGuid();
+        var verReport = Guid.NewGuid();
+        var verMedical = Guid.NewGuid();
+        var verPolicy = Guid.NewGuid();
+        var pasReport1 = Guid.NewGuid();
+        var pasReport2 = Guid.NewGuid();
+        var pasMedical1 = Guid.NewGuid();
+        var pasMedical2 = Guid.NewGuid();
+        var pasPolicy1 = Guid.NewGuid();
+        var eviSpill = Guid.NewGuid();
+        var eviEmployee = Guid.NewGuid();
+        var eviFracture = Guid.NewGuid();
+        var eviTreatment = Guid.NewGuid();
+        var eviPolicy = Guid.NewGuid();
+        var propNotice = Guid.NewGuid();
+        var propCausation = Guid.NewGuid();
+        var propCoverage = Guid.NewGuid();
+
+        static decimal Conf(Random r) => Math.Round(0.88m + (decimal)r.NextDouble() * 0.11m, 4);
+        static string Hash() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            // 1) Documents.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_MatterDocument (LegalDocumentId, DecisionMatterId, DocumentControlNumber, FileName, ContentType, DocumentTypeCode, StatusCode, CurrentVersionNumber, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@DocReport,  @MatterId, @CtrlReport,  @FileReport,  N'application/pdf', N'POLICE_COLLISION_REPORT', N'ENRICHED', 1, @TenantId, @CreatedReport,  @UserId),
+                    (@DocMedical, @MatterId, @CtrlMedical, @FileMedical, N'application/pdf', N'MEDICAL_RECORD',          N'ENRICHED', 1, @TenantId, @CreatedReport,  @UserId),
+                    (@DocPolicy,  @MatterId, @CtrlPolicy,  @FilePolicy,  N'application/pdf', N'INSURANCE_POLICY',       N'ENRICHED', 1, @TenantId, @CreatedReport,  @UserId);
+                """,
+                new
+                {
+                    DocReport = docReport, DocMedical = docMedical, DocPolicy = docPolicy,
+                    MatterId = matterId, TenantId = tenantId, UserId = userId,
+                    CtrlReport = $"TG-{now:yyyyMMddHHmmss}-0001", CtrlMedical = $"TG-{now:yyyyMMddHHmmss}-0002", CtrlPolicy = $"TG-{now:yyyyMMddHHmmss}-0003",
+                    FileReport = _incidentFileNames[rng.Next(_incidentFileNames.Length)],
+                    FileMedical = _medicalFileNames[rng.Next(_medicalFileNames.Length)],
+                    FilePolicy = _policyFileNames[rng.Next(_policyFileNames.Length)],
+                    CreatedReport = now.AddMinutes(-rng.Next(30, 2880))
+                }, transaction, cancellationToken: cancellationToken));
+
+            // 2) Versions.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_MatterDocumentVersion (LegalDocumentVersionId, LegalDocumentId, VersionNumber, Sha256Hash, StorageReference, FileSizeBytes, MalwareStatusCode, ProcessingStatusCode, NativeTextAvailable, ExtractionProviderCode, ExtractionModelCode, ExtractionModelVersion, ProcessedDateUtc, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@VerReport,  @DocReport,  1, @HashReport,  @RefReport,  @SizeReport,  N'CLEAN', N'PROCESSED', 1, N'AZURE_DOCUMENT_INTELLIGENCE', N'prebuilt-document', N'2024-07-31', @Now, @TenantId, @Now, @UserId),
+                    (@VerMedical, @DocMedical, 1, @HashMedical, @RefMedical, @SizeMedical, N'CLEAN', N'PROCESSED', 1, N'AZURE_DOCUMENT_INTELLIGENCE', N'prebuilt-document', N'2024-07-31', @Now, @TenantId, @Now, @UserId),
+                    (@VerPolicy,  @DocPolicy,  1, @HashPolicy,  @RefPolicy,  @SizePolicy,  N'CLEAN', N'PROCESSED', 1, N'AZURE_DOCUMENT_INTELLIGENCE', N'prebuilt-document', N'2024-07-31', @Now, @TenantId, @Now, @UserId);
+                """,
+                new
+                {
+                    VerReport = verReport, VerMedical = verMedical, VerPolicy = verPolicy,
+                    DocReport = docReport, DocMedical = docMedical, DocPolicy = docPolicy,
+                    HashReport = Hash(), HashMedical = Hash(), HashPolicy = Hash(),
+                    RefReport = $"seed://test-matter/{matterId:N}/incident-report/v1",
+                    RefMedical = $"seed://test-matter/{matterId:N}/medical-records/v1",
+                    RefPolicy = $"seed://test-matter/{matterId:N}/cgl-policy/v1",
+                    SizeReport = rng.Next(180_000, 320_000), SizeMedical = rng.Next(420_000, 620_000), SizePolicy = rng.Next(700_000, 950_000),
+                    TenantId = tenantId, UserId = userId, Now = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            // 3) Passages.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_DocumentPassage (LegalDocumentPassageId, LegalDocumentVersionId, PageNumber, SectionPath, SequenceNumber, PassageText, ExtractionMethodCode, ExtractionConfidence, EpistemicStateCode, ContentHash, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@PasReport1,  @VerReport,  1, N'Incident Narrative',   1, @TxtReport1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport1,  N'VERIFIED', @HashR1, @TenantId, @Now, @UserId),
+                    (@PasReport2,  @VerReport,  2, N'Employee Observations', 2, @TxtReport2,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport2,  N'VERIFIED', @HashR2, @TenantId, @Now, @UserId),
+                    (@PasMedical1, @VerMedical, 3, N'Diagnosis',            1, @TxtMedical1, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical1, N'VERIFIED', @HashM1, @TenantId, @Now, @UserId),
+                    (@PasMedical2, @VerMedical, 5, N'Treatment Plan',       2, @TxtMedical2, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical2, N'VERIFIED', @HashM2, @TenantId, @Now, @UserId),
+                    (@PasPolicy1,  @VerPolicy,  1, N'Declarations',         1, @TxtPolicy1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfPolicy1,  N'VERIFIED', @HashP1, @TenantId, @Now, @UserId);
+                """,
+                new
+                {
+                    PasReport1 = pasReport1, PasReport2 = pasReport2, PasMedical1 = pasMedical1, PasMedical2 = pasMedical2, PasPolicy1 = pasPolicy1,
+                    VerReport = verReport, VerMedical = verMedical, VerPolicy = verPolicy,
+                    TxtReport1 = incidentPassages[0], TxtReport2 = incidentPassages[1],
+                    TxtMedical1 = medicalPassages[0], TxtMedical2 = medicalPassages[1], TxtPolicy1 = policyPassage,
+                    CfReport1 = Conf(rng), CfReport2 = Conf(rng), CfMedical1 = Conf(rng), CfMedical2 = Conf(rng), CfPolicy1 = Conf(rng),
+                    HashR1 = Hash(), HashR2 = Hash(), HashM1 = Hash(), HashM2 = Hash(), HashP1 = Hash(),
+                    TenantId = tenantId, UserId = userId, Now = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            // 4) Evidence items.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_MatterEvidenceItem (LegalEvidenceItemId, DecisionMatterId, LegalDocumentVersionId, LegalDocumentPassageId, EvidenceTypeCode, DimensionCode, Summary, EvidenceStateCode, Confidence, GenerationOriginCode, DomainConceptCode, VerificationProfileCode, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@EviSpill,     @MatterId, @VerReport,  @PasReport1,  N'ACCIDENT_REPORT',   N'LIABILITY_FACTS',   @SumSpill,     N'VERIFIED', @CfSpill,     N'DYNAMIC_LLM', N'CONSTRUCTIVE_NOTICE', N'LIABILITY_FACTS',   @TenantId, @Now, @UserId),
+                    (@EviEmployee,  @MatterId, @VerReport,  @PasReport2,  N'ACCIDENT_REPORT',   N'LIABILITY_FACTS',   @SumEmployee,  N'VERIFIED', @CfEmployee,  N'DYNAMIC_LLM', N'BREACH_OF_DUTY',      N'LIABILITY_FACTS',   @TenantId, @Now, @UserId),
+                    (@EviFracture,  @MatterId, @VerMedical, @PasMedical1, N'MEDICAL_RECORDS',   N'MEDICAL_CAUSATION', @SumFracture,  N'VERIFIED', @CfFracture,  N'DYNAMIC_LLM', N'INJURY_CAUSATION',    N'MEDICAL_CAUSATION', @TenantId, @Now, @UserId),
+                    (@EviTreatment, @MatterId, @VerMedical, @PasMedical2, N'MEDICAL_RECORDS',   N'DAMAGES_QUANTUM',   @SumTreatment, N'VERIFIED', @CfTreatment, N'DYNAMIC_LLM', N'SPECIAL_DAMAGES',     N'DAMAGES_QUANTUM',   @TenantId, @Now, @UserId),
+                    (@EviPolicy,    @MatterId, @VerPolicy,  @PasPolicy1,  N'INSURANCE_COVERAGE', N'INSURANCE_COVERAGE', @SumPolicy,   N'VERIFIED', @CfPolicy,    N'DYNAMIC_LLM', N'POLICY_LIMITS',       NULL,                @TenantId, @Now, @UserId);
+                """,
+                new
+                {
+                    EviSpill = eviSpill, EviEmployee = eviEmployee, EviFracture = eviFracture, EviTreatment = eviTreatment, EviPolicy = eviPolicy,
+                    MatterId = matterId, VerReport = verReport, VerMedical = verMedical, VerPolicy = verPolicy,
+                    PasReport1 = pasReport1, PasReport2 = pasReport2, PasMedical1 = pasMedical1, PasMedical2 = pasMedical2, PasPolicy1 = pasPolicy1,
+                    SumSpill = "Hazard present for an extended period before the fall (surveillance-timed).",
+                    SumEmployee = "Store associates passed the hazard without remediation.",
+                    SumFracture = "Diagnosed injury is consistent with the reported fall mechanism.",
+                    SumTreatment = "Surgical and rehabilitative treatment documents the damages scope.",
+                    SumPolicy = "CGL per-occurrence and aggregate limits apply to the defendant.",
+                    CfSpill = Conf(rng), CfEmployee = Conf(rng), CfFracture = Conf(rng), CfTreatment = Conf(rng), CfPolicy = Conf(rng),
+                    TenantId = tenantId, UserId = userId, Now = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            // 5) Fact propositions.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_MatterFactProposition (LegalFactPropositionId, DecisionMatterId, PropositionText, FactStateCode, GenerationOriginCode, Confidence, IsDecisionAuthoritative, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@PropNotice,    @MatterId, @TxtNotice,    N'SUPPORTED',   N'DYNAMIC_LLM', @CfNotice,    1, @TenantId, @Now, @UserId),
+                    (@PropCausation, @MatterId, @TxtCausation, N'SUPPORTED',   N'DYNAMIC_LLM', @CfCausation, 1, @TenantId, @Now, @UserId),
+                    (@PropCoverage,  @MatterId, @TxtCoverage,  N'ESTABLISHED', N'DYNAMIC_LLM', @CfCoverage,  1, @TenantId, @Now, @UserId);
+                """,
+                new
+                {
+                    PropNotice = propNotice, PropCausation = propCausation, PropCoverage = propCoverage,
+                    MatterId = matterId,
+                    TxtNotice = "The defendant had constructive notice of the hazardous condition and failed to remediate it.",
+                    TxtCausation = "The incident caused the plaintiff's diagnosed injury requiring treatment.",
+                    TxtCoverage = "Applicable CGL coverage provides sufficient per-occurrence limits for this claim.",
+                    CfNotice = Conf(rng), CfCausation = Conf(rng), CfCoverage = Conf(rng),
+                    TenantId = tenantId, UserId = userId, Now = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            // 6) Proposition support edges.
+            await connection.ExecuteAsync(new CommandDefinition(
+                """
+                INSERT POLOXI.Legal_MatterPropositionSupport (LegalFactPropositionId, LegalEvidenceItemId, RelationshipTypeCode, AssessmentReason, TenantId, CreatedDateUtc, CreatedByUserId)
+                VALUES
+                    (@PropNotice,    @EviSpill,     N'SUPPORTS', N'Hazard duration establishes constructive notice.',        @TenantId, @Now, @UserId),
+                    (@PropNotice,    @EviEmployee,  N'SUPPORTS', N'Employees passing the hazard corroborates failure to act.', @TenantId, @Now, @UserId),
+                    (@PropCausation, @EviFracture,  N'SUPPORTS', N'Diagnosis ties the injury mechanism to the incident.',     @TenantId, @Now, @UserId),
+                    (@PropCausation, @EviTreatment, N'SUPPORTS', N'Treatment documents the injury severity and scope.',       @TenantId, @Now, @UserId),
+                    (@PropCoverage,  @EviPolicy,    N'SUPPORTS', N'Declarations state the applicable per-occurrence limit.',   @TenantId, @Now, @UserId);
+                """,
+                new
+                {
+                    PropNotice = propNotice, PropCausation = propCausation, PropCoverage = propCoverage,
+                    EviSpill = eviSpill, EviEmployee = eviEmployee, EviFracture = eviFracture, EviTreatment = eviTreatment, EviPolicy = eviPolicy,
+                    TenantId = tenantId, UserId = userId, Now = now
+                }, transaction, cancellationToken: cancellationToken));
+
+            transaction.Commit();
+            return 3;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
+    private static readonly string[] _incidentFileNames =
+    {
+        "Store-Incident-Report.pdf", "Premises-Incident-Report.pdf", "Scene-Investigation-Report.pdf", "Loss-Prevention-Report.pdf"
+    };
+
+    private static readonly string[] _medicalFileNames =
+    {
+        "Orthopedic-Records.pdf", "Emergency-Department-Records.pdf", "Treating-Physician-Records.pdf", "Imaging-and-Surgical-Records.pdf"
+    };
+
+    private static readonly string[] _policyFileNames =
+    {
+        "CGL-Policy.pdf", "Commercial-Liability-Policy.pdf", "Declarations-and-Coverage.pdf", "Liability-Coverage-Policy.pdf"
+    };
+
+    private static readonly string[] _incidentNarrativePassages =
+    {
+        "Store surveillance footage shows the spill was present on the floor for approximately 38 minutes before the customer fall.",
+        "Video timestamps indicate the hazardous condition existed for roughly 42 minutes prior to the reported fall.",
+        "The incident narrative records a wet-floor hazard that remained unaddressed for over half an hour before the fall."
+    };
+
+    private static readonly string[] _incidentEmployeePassages =
+    {
+        "Two store associates are recorded walking past the hazard without placing a warning cone or initiating cleanup.",
+        "Staff logs show no inspection sweep was completed during the window the hazard was present.",
+        "An employee acknowledged awareness of the condition but no remediation was documented before the fall."
+    };
+
+    private static readonly string[] _medicalDiagnosisPassages =
+    {
+        "Imaging confirms a displaced left distal radius fracture consistent with a fall onto an outstretched hand.",
+        "Diagnostic imaging documents a comminuted fracture consistent with the reported fall mechanism.",
+        "Clinical findings confirm an acute injury temporally and mechanically consistent with the incident."
+    };
+
+    private static readonly string[] _medicalTreatmentPassages =
+    {
+        "Patient underwent open reduction and internal fixation followed by a course of occupational therapy.",
+        "Treatment included surgical repair and a documented course of physical rehabilitation.",
+        "The treatment plan comprised operative intervention and ongoing supervised therapy."
+    };
+
+    private static readonly string[] _policyPassages =
+    {
+        "Commercial General Liability declarations list a per-occurrence limit of $1,000,000 and a general aggregate limit of $2,000,000 for the named insured.",
+        "The declarations page states a $1,000,000 per-occurrence limit and a $2,000,000 aggregate limit applicable to the defendant.",
+        "Coverage declarations confirm applicable CGL limits of $1,000,000 each occurrence and $2,000,000 aggregate."
+    };
 
     public async Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default)
     {
@@ -274,6 +618,36 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         }, cancellationToken: cancellationToken));
     }
 
+    public async Task<Guid?> FindActiveDocumentByHashAsync(Guid tenantId, Guid matterId, string sha256Hash, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
+            """
+            SELECT TOP 1 document.LegalDocumentId
+            FROM POLOXI.Legal_MatterDocument document
+            INNER JOIN POLOXI.Legal_MatterDocumentVersion version ON version.LegalDocumentId=document.LegalDocumentId AND version.IsDeleted=0
+            WHERE document.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND document.IsDeleted=0
+              AND document.StatusCode<>N'FAILED' AND version.Sha256Hash=@Sha256Hash
+            ORDER BY document.CreatedDateUtc;
+            """, new { TenantId = tenantId, MatterId = matterId, Sha256Hash = sha256Hash }, cancellationToken: cancellationToken));
+    }
+
+    public async Task PurgeDocumentAsync(Guid tenantId, Guid userId, Guid documentId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            SET XACT_ABORT ON; BEGIN TRANSACTION;
+            UPDATE version SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+            FROM POLOXI.Legal_MatterDocumentVersion version
+            WHERE version.LegalDocumentId=@DocumentId AND version.TenantId=@TenantId;
+            UPDATE document SET IsDeleted=1,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId
+            FROM POLOXI.Legal_MatterDocument document
+            WHERE document.LegalDocumentId=@DocumentId AND document.TenantId=@TenantId;
+            COMMIT;
+            """, new { TenantId = tenantId, UserId = userId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
     public async Task SaveExtractionAsync(Guid tenantId, Guid userId, Guid documentVersionId, string correlationId, DocumentExtractionResult extraction, IReadOnlyCollection<LegalDocumentPassageDto> passages, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -289,7 +663,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             WHERE NOT EXISTS (SELECT 1 FROM POLOXI.Legal_DocumentPage existing WHERE existing.LegalDocumentVersionId=@DocumentVersionId AND existing.PageNumber=source.PageNumber AND existing.IsDeleted=0);
             INSERT POLOXI.Legal_DocumentLayoutArtifact
                 (LegalDocumentLayoutArtifactId,LegalDocumentVersionId,LegalDocumentPageId,ArtifactTypeCode,SequenceNumber,RoleCode,ArtifactText,Confidence,BoundingRegionJson,SourceSpanJson,ContentJson,ContentHash,TenantId,CreatedByUserId)
-            SELECT LegalDocumentLayoutArtifactId,@DocumentVersionId,page.LegalDocumentPageId,ArtifactTypeCode,SequenceNumber,RoleCode,ArtifactText,Confidence,BoundingRegionJson,SourceSpanJson,ContentJson,ContentHash,@TenantId,@UserId
+            SELECT LegalDocumentLayoutArtifactId,@DocumentVersionId,page.LegalDocumentPageId,ArtifactTypeCode,SequenceNumber,RoleCode,ArtifactText,Confidence,BoundingRegionJson,SourceSpanJson,ContentJson,source.ContentHash,@TenantId,@UserId
             FROM OPENJSON(@ArtifactsJson) WITH
             (LegalDocumentLayoutArtifactId uniqueidentifier,PageNumber int,ArtifactTypeCode nvarchar(40),SequenceNumber int,RoleCode nvarchar(80),ArtifactText nvarchar(max),Confidence decimal(5,4),BoundingRegionJson nvarchar(max),SourceSpanJson nvarchar(max),ContentJson nvarchar(max),ContentHash char(64)) source
             LEFT JOIN POLOXI.Legal_DocumentPage page ON page.LegalDocumentVersionId=@DocumentVersionId AND page.PageNumber=source.PageNumber AND page.IsDeleted=0
@@ -407,23 +781,116 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 return;
             }
 
+            // T11 span-presence enforcement: an evidence item may only be admitted (PROPOSED) when it is
+            // anchored to a passage that carries a traceable source span. Span-less passages cannot ground
+            // decision evidence, so any item bound to one is recorded in a non-admitted state (INVALIDATED)
+            // and its support edges are downgraded so it can never establish a proposition.
+            var spannedPassageIds = (await connection.QueryAsync<Guid>(new CommandDefinition(
+                """
+                SELECT LegalDocumentPassageId FROM POLOXI.Legal_DocumentPassage
+                WHERE LegalDocumentVersionId=@VersionId AND TenantId=@TenantId AND IsDeleted=0
+                  AND SourceSpanJson IS NOT NULL AND LEN(LTRIM(RTRIM(SourceSpanJson)))>0;
+                """, new { VersionId = documentVersionId, TenantId = tenantId }, transaction, cancellationToken: cancellationToken))).ToHashSet();
+
             var evidenceIds = proposal.EvidenceItems.ToDictionary(item => item.ProposalKey, _ => Guid.NewGuid(), StringComparer.OrdinalIgnoreCase);
-            var factIds = proposal.FactPropositions.ToDictionary(item => item.ProposalKey, _ => Guid.NewGuid(), StringComparer.OrdinalIgnoreCase);
+            var nonAdmittedEvidenceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in proposal.EvidenceItems)
+            {
+                var admitted = LegalEvidenceAdmissionPolicy.IsAdmissible(item.PassageId, spannedPassageIds);
+                if (!admitted)
+                    nonAdmittedEvidenceKeys.Add(item.ProposalKey);
                 await connection.ExecuteAsync(new CommandDefinition(
-                    """INSERT POLOXI.Legal_MatterEvidenceItem (LegalEvidenceItemId,DecisionMatterId,LegalDocumentVersionId,LegalDocumentPassageId,EvidenceTypeCode,DimensionCode,Summary,EvidenceStateCode,Confidence,GenerationOriginCode,DomainConceptCode,VerificationProfileCode,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@VersionId,@PassageId,@EvidenceTypeCode,@DimensionCode,@Summary,N'PROPOSED',@Confidence,N'DYNAMIC_LLM',@DomainConceptCode,@VerificationProfileCode,@TenantId,@UserId);""",
-                    new { Id = evidenceIds[item.ProposalKey], MatterId = matterId, VersionId = documentVersionId, PassageId = item.PassageId, item.EvidenceTypeCode, item.DimensionCode, item.Summary, item.Confidence, item.DomainConceptCode, item.VerificationProfileCode, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                    """INSERT POLOXI.Legal_MatterEvidenceItem (LegalEvidenceItemId,DecisionMatterId,LegalDocumentVersionId,LegalDocumentPassageId,EvidenceTypeCode,DimensionCode,Summary,EvidenceStateCode,Confidence,GenerationOriginCode,DomainConceptCode,VerificationProfileCode,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@VersionId,@PassageId,@EvidenceTypeCode,@DimensionCode,@Summary,@EvidenceStateCode,@Confidence,N'DYNAMIC_LLM',@DomainConceptCode,@VerificationProfileCode,@TenantId,@UserId);""",
+                    new { Id = evidenceIds[item.ProposalKey], MatterId = matterId, VersionId = documentVersionId, PassageId = item.PassageId, item.EvidenceTypeCode, item.DimensionCode, item.Summary, EvidenceStateCode = LegalEvidenceAdmissionPolicy.ResolveEvidenceStateCode(item.PassageId, spannedPassageIds), item.Confidence, item.DomainConceptCode, item.VerificationProfileCode, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+            }
+
+            // Intake-time proposition binding/matching (blueprint §5/§12.3/§14). Match each LLM-proposed fact
+            // against the matter's existing canonical propositions so intake reuses canonical identity instead of
+            // duplicating (T04). A confident conflicting match reuses the proposition, transitions it to DISPUTED
+            // without overwriting its text (T12), and records CONTRADICTS. No confident match => NEW_ISSUE_PROPOSAL
+            // inserted as a new, non-authoritative proposition (T18/T19/T31).
+            var existingPropositions = (await connection.QueryAsync<LegalExistingProposition>(new CommandDefinition(
+                """
+                SELECT LegalFactPropositionId AS PropositionId, PropositionText, FactStateCode
+                FROM POLOXI.Legal_MatterFactProposition
+                WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0;
+                """, new { MatterId = matterId, TenantId = tenantId }, transaction, cancellationToken: cancellationToken))).ToList();
+
+            var factIds = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+            var contradictionReuseTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var disputedPropositionIds = new HashSet<Guid>();
+            // Attorney-gated binding outcomes surfaced from intake: a contradiction reuse (proposition moved to
+            // DISPUTED) and a NEW_ISSUE_PROPOSAL are never authoritative on their own — each becomes an OPEN review
+            // task so the attorney decides. Pure reuse-support needs no action and is intentionally not queued.
+            var reviewTasks = new List<(string KindCode, string Title, string Detail, string RequiredAction, string PriorityCode)>();
             foreach (var fact in proposal.FactPropositions)
+            {
+                var decision = LegalPropositionBindingPolicy.Resolve(fact.PropositionText, fact.FactStateCode, existingPropositions);
+                if (decision.IsReuse && decision.MatchedPropositionId is { } matchedId)
+                {
+                    // Reuse the canonical proposition identity; do NOT insert a duplicate.
+                    factIds[fact.ProposalKey] = matchedId;
+                    if (decision.IsContradiction)
+                    {
+                        contradictionReuseTargets.Add(fact.ProposalKey);
+                        // Preserve history: only transition to DISPUTED (never overwrite text), and do it once.
+                        if (disputedPropositionIds.Add(matchedId))
+                        {
+                            var newState = LegalPropositionBindingPolicy.ResolveReusedFactStateCode(decision.MatchedFactStateCode ?? fact.FactStateCode);
+                            await connection.ExecuteAsync(new CommandDefinition(
+                                """UPDATE POLOXI.Legal_MatterFactProposition SET FactStateCode=@State,ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE LegalFactPropositionId=@Id AND DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0;""",
+                                new { State = newState, Id = matchedId, MatterId = matterId, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                            reviewTasks.Add((
+                                "PROPOSITION_CONTRADICTION",
+                                "New evidence contradicts an existing matter proposition",
+                                $"Intake matched a proposed fact to an existing proposition but with opposing polarity, so it was transitioned to DISPUTED (not overwritten). Existing: \"{decision.MatchedPropositionText ?? "(matched proposition)"}\". New assertion: \"{fact.PropositionText}\".",
+                                "Review the contradiction and decide whether the proposition remains disputed, is resolved in favor of one assertion, or requires further investigation.",
+                                "HIGH"));
+                        }
+                    }
+                    continue;
+                }
+
+                // NEW_ISSUE_PROPOSAL: no confident match => insert a new, non-authoritative proposition.
+                var newId = Guid.NewGuid();
+                factIds[fact.ProposalKey] = newId;
+                existingPropositions.Add(new LegalExistingProposition(newId, fact.PropositionText, fact.FactStateCode));
                 await connection.ExecuteAsync(new CommandDefinition(
                     """INSERT POLOXI.Legal_MatterFactProposition (LegalFactPropositionId,DecisionMatterId,PropositionText,FactStateCode,GenerationOriginCode,Confidence,IsDecisionAuthoritative,TenantId,CreatedByUserId) VALUES (@Id,@MatterId,@Text,@FactStateCode,N'DYNAMIC_LLM',@Confidence,0,@TenantId,@UserId);""",
-                    new { Id = factIds[fact.ProposalKey], MatterId = matterId, Text = fact.PropositionText, fact.FactStateCode, fact.Confidence, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                    new { Id = newId, MatterId = matterId, Text = fact.PropositionText, fact.FactStateCode, fact.Confidence, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                reviewTasks.Add((
+                    "NEW_ISSUE_PROPOSAL",
+                    "New issue proposed from intake",
+                    $"Intake found no confident match for a proposed fact and recorded it as a new, non-authoritative proposition: \"{fact.PropositionText}\".",
+                    "Confirm this is a genuine new issue for the matter, or merge it into an existing proposition if it is a duplicate.",
+                    "NORMAL"));
+            }
             foreach (var relationship in proposal.Relationships)
             {
                 if (!factIds.TryGetValue(relationship.TargetProposalKey, out var factId) || !evidenceIds.TryGetValue(relationship.SourceProposalKey, out var evidenceId))
                     continue;
+                var nonAdmitted = nonAdmittedEvidenceKeys.Contains(relationship.SourceProposalKey);
+                // A contradiction-reused proposition records a CONTRADICTS edge; otherwise the LLM-proposed relation.
+                var proposedRelationshipType = contradictionReuseTargets.Contains(relationship.TargetProposalKey)
+                    ? LegalDocumentRelationshipTypes.Contradicts
+                    : relationship.RelationshipTypeCode;
+                // Non-admitted (span-less) evidence cannot support a proposition: the edge is projected as
+                // INSUFFICIENT with an explicit disposition rationale so the UI/read model shows why it was excluded.
+                // The span-admission downgrade is the outermost rule and takes precedence over the CONTRADICTS relabel.
+                var relationshipTypeCode = LegalEvidenceAdmissionPolicy.ResolveRelationshipTypeCode(!nonAdmitted, proposedRelationshipType);
+                var rationale = LegalEvidenceAdmissionPolicy.ResolveRelationshipRationale(!nonAdmitted, relationship.Rationale);
                 await connection.ExecuteAsync(new CommandDefinition(
                     """INSERT POLOXI.Legal_MatterPropositionSupport (LegalPropositionSupportId,LegalFactPropositionId,LegalEvidenceItemId,RelationshipTypeCode,AssessmentReason,TenantId,CreatedByUserId) VALUES (NEWID(),@FactId,@EvidenceId,@RelationshipTypeCode,@Rationale,@TenantId,@UserId);""",
-                    new { FactId = factId, EvidenceId = evidenceId, relationship.RelationshipTypeCode, relationship.Rationale, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+                    new { FactId = factId, EvidenceId = evidenceId, RelationshipTypeCode = relationshipTypeCode, Rationale = rationale, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
+            }
+            // Surface each material binding outcome as an OPEN, attorney-gated review task in the same transaction,
+            // so DISPUTED transitions and NEW_ISSUE_PROPOSAL insertions are never applied silently. The attorney
+            // controls resolution; these tasks are advisory and carry no authoritative decision effect.
+            foreach (var task in reviewTasks)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    """INSERT POLOXI.Legal_DecisionReviewTask (DecisionReviewTaskId,DecisionMatterId,TaskKindCode,Title,Detail,RequiredAction,PriorityCode,StatusCode,TenantId,CreatedByUserId) VALUES (NEWID(),@MatterId,@KindCode,@Title,@Detail,@RequiredAction,@PriorityCode,N'OPEN',@TenantId,@UserId);""",
+                    new { MatterId = matterId, task.KindCode, task.Title, task.Detail, task.RequiredAction, task.PriorityCode, TenantId = tenantId, UserId = userId }, transaction, cancellationToken: cancellationToken));
             }
             await connection.ExecuteAsync(new CommandDefinition(
                 """UPDATE POLOXI.Legal_MatterDocument SET DocumentTypeCode=COALESCE(@DocumentTypeCode,DocumentTypeCode),StatusCode=N'ENRICHED',ModifiedDateUtc=SYSUTCDATETIME(),ModifiedByUserId=@UserId WHERE LegalDocumentId=@DocumentId AND DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0;""",
@@ -477,6 +944,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
     private sealed record DocumentRow(Guid LegalDocumentId, Guid MatterId, string FileName, string ContentType, string StatusCode, string? DocumentTypeCode, string? DomainPackCode, DateTime CreatedDateUtc);
     private sealed record DocumentVersionRow(Guid LegalDocumentVersionId, Guid LegalDocumentId, int VersionNumber, string Sha256Hash, string StorageReference, long FileSizeBytes, string MalwareStatusCode, string ProcessingStatusCode, string? ExtractionProviderCode, string? ExtractionModelCode, string? ExtractionModelVersion, DateTime CreatedDateUtc);
     private sealed record PassageRow(Guid LegalDocumentPassageId, Guid LegalDocumentVersionId, int? PageNumber, string? SectionPath, int SequenceNumber, string Text, string ExtractionMethodCode, decimal? ExtractionConfidence, string? BoundingRegionJson, string? SourceSpanJson, string EpistemicStateCode);
+    private sealed record PropositionHeadRow(Guid LegalFactPropositionId, Guid MatterId, string PropositionText, string FactStateCode, string GenerationOriginCode, decimal? Confidence, bool IsDecisionAuthoritative);
     private sealed record MatterContextRow(Guid MatterId, Guid LegalDocumentId, Guid LegalDocumentVersionId, Guid PassageId, Guid? EvidenceItemId, Guid? FactPropositionId, string Title, string? Text, string SourceReference, int? PageNumber, string ExtractionMethodCode, string EvidenceStateCode, string FactStateCode, bool IsDecisionAuthoritative, string? DocumentTypeCode, string? DimensionCode);
     private sealed record LegacyProjectionRow(Guid SearchDocumentId, Guid EntityId, string Title, string Text);
 }

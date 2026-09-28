@@ -43,7 +43,7 @@ public static class ServiceCollectionExtensions
                 "Azure Blob storage requires DocumentIntelligence:BlobConnectionString or BlobServiceUri.")
             .Validate(options => !options.BinaryStoreProvider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase) || options.BlobRetentionDays > 0,
                 "DocumentIntelligence:BlobRetentionDays must be positive for Azure Blob storage.")
-            .Validate(options => options.MalwareScannerProvider.Equals("Http", StringComparison.OrdinalIgnoreCase) ||
+            .Validate(options => !options.MalwareScannerProvider.Equals("DefenderForStorage", StringComparison.OrdinalIgnoreCase) ||
                                  !string.IsNullOrWhiteSpace(options.BlobConnectionString) || Uri.TryCreate(options.BlobServiceUri, UriKind.Absolute, out _),
                 "Defender for Storage requires DocumentIntelligence:BlobConnectionString or BlobServiceUri.")
             .Validate(options => !options.MalwareScannerProvider.Equals("DefenderForStorage", StringComparison.OrdinalIgnoreCase) ||
@@ -125,6 +125,11 @@ public static class ServiceCollectionExtensions
         // and runs readiness/output governance. Scoped: composes the scoped EA services.
         services.AddScoped<IEpistemicDecisionBridge, EpistemicDecisionBridge>();
 
+        // Matter-proposition Information Value: advisory overlay that scores atomic matter fact
+        // propositions on POLOXI's shared VIV scale by reusing the ClaimVerificationPrioritizer. Scoped:
+        // composes the scoped corpus + epistemic-claim repositories.
+        services.AddScoped<IMatterPropositionInformationValueService, MatterPropositionInformationValueService>();
+
         services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IAiProviderRouter, AiProviderRouter>();
         // Disable the HttpClient-level timeout (default 100s) so the per-request timeout defined by the
@@ -201,14 +206,19 @@ public static class ServiceCollectionExtensions
             services.AddSingleton<ILegalDocumentBinaryStore, AzureBlobLegalDocumentBinaryStore>();
         if (configuration[$"{DocumentIntelligenceOptions.SectionName}:MalwareScannerProvider"]?.Equals("Http", StringComparison.OrdinalIgnoreCase) == true)
             services.AddHttpClient<ILegalDocumentSecurityScanner, HttpLegalDocumentSecurityScanner>();
-        else
+        else if (configuration[$"{DocumentIntelligenceOptions.SectionName}:MalwareScannerProvider"]?.Equals("DefenderForStorage", StringComparison.OrdinalIgnoreCase) == true)
             services.AddSingleton<ILegalDocumentSecurityScanner, AzureDefenderLegalDocumentSecurityScanner>();
+        else
+            services.AddSingleton<ILegalDocumentSecurityScanner, DisabledLegalDocumentSecurityScanner>();
         services.AddSingleton<INativeDocumentTextProvider, NativeDocumentTextProvider>();
         services.AddScoped<ILegalDocumentExtractionRouter, Legal.Application.Features.Intelligence.Decision.LegalDocumentExtractionRouter>();
         services.AddScoped<ILegalDocumentSearchProjectionDispatcher, LegalDocumentSearchProjectionDispatcher>();
         services.AddScoped<ILegalDocumentSemanticInterpreter, Legal.Application.Features.Intelligence.Decision.LegalDocumentSemanticInterpreter>();
         services.AddScoped<ILegalDocumentIntakeService, Legal.Application.Features.Intelligence.Decision.LegalDocumentIntakeService>();
+        services.AddScoped<Legal.Application.Abstractions.Intelligence.ILegalMatterCorpusActivationService, Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationService>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IMatterChangeProcessor, Legal.Application.Features.Intelligence.Decision.MatterChangeProcessor>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.DecisionReevaluationService>();
+        services.AddScoped<IDecisionReevaluationDispatcher, DecisionReevaluationDispatcher>();
         services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
         services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.Core.IDependencyPropagationService, Legal.Application.Features.Intelligence.Decision.Core.DependencyPropagationService>();

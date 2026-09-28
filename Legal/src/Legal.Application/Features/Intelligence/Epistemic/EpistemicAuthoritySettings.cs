@@ -23,6 +23,11 @@ public sealed class EpistemicAuthoritySettings
     // authoritative EA claims and runs readiness/output governance. Never blocks the V1/V2 decision.
     public bool UseEpistemicDecisionBridge { get; init; } = true;
 
+    // v4.0: advisory overlay that runs the §5 APR / §6 MECE / Light Evidence Graph pillars through the
+    // §9 Proposition Integrity Gate for each matter proposition. Display-only — surfaces a disposition
+    // and structural/evidence eligibility flags alongside the IV overlay; never blocks the decision.
+    public bool UsePropositionIntegrityGate { get; init; } = true;
+
     // EA-7: how strongly the epistemic readiness verdict may affect the effective decision. Advisory
     // (default) only annotates and never changes the authoritative V2 verdict. SoftGate/HardGate are
     // downgrade-only and always preserve the V2 verdict + all claims for reference.

@@ -105,7 +105,7 @@
                         {
                             <button type="button" role="tab"
                                     class="dfi-tab @(_dfiTab == tab ? "dfi-tab--active" : "")"
-                                    @onclick="() => _dfiTab = tab">@tab</button>
+                                    @onclick="() => SelectDfiTab(tab)">@tab</button>
                         }
                     </div>
 
@@ -511,6 +511,9 @@
                                             case "Continuous Decision Calibration (CDC)":
                                                 @CdcDashboard
                                                 break;
+                                            case "Decision Change Intelligence (DCI)":
+                                                @DciDashboard
+                                                break;
                                             case "Decision Contract":
                                 <div class="dfi-panel-card">
                                     <h4>Decision Contract</h4>
@@ -870,9 +873,28 @@
                                 <div class="dfi-panel-card">
                                     <h4>Admitted evidence</h4>
                                     <p class="dfi-panel-sub">@_response?.EnterpriseEvidenceCount enterprise · @_response?.ExternalEvidenceCount external · decision coverage @((_response?.DecisionEvidenceCoverage ?? 0m).ToString("P0")).</p>
+                                    @if (!string.IsNullOrEmpty(_activationNotice))
+                                    {
+                                        <div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+                                            <i class="bi bi-exclamation-triangle-fill"></i>
+                                            <div>
+                                                <strong>Corpus activation did not complete</strong>
+                                                <div>@_activationNotice</div>
+                                            </div>
+                                        </div>
+                                    }
                                     @if (TotalEvidenceCount == 0)
                                     {
-                                        <p class="dfi-empty">No independently verified evidence was admitted in the referenced execution.</p>
+                                        <p class="dfi-empty">No corpus evidence from your uploaded documents was admitted in the referenced execution.</p>
+                                        @if ((_response?.DecisionEvidenceCoverage ?? 0m) > 0m)
+                                        {
+                                            <p class="dfi-panel-sub">
+                                                Note: the answer above reports @(( _response?.DecisionEvidenceCoverage ?? 0m).ToString("P0")) decision coverage,
+                                                but that is drawn from the model's external/legal sources (@_response?.ExternalEvidenceCount external ·
+                                                @_response?.EnterpriseEvidenceCount enterprise) — not from your uploaded Matter Corpus. Corpus evidence
+                                                appears here only after uploaded documents are activated into propositions during Disambiguate &amp; Answer.
+                                            </p>
+                                        }
                                     }
                                     @{
                                         var retrieved = _response?.ExternalKnowledge ?? Array.Empty<WideExternalKnowledgeSnippet>();
@@ -905,13 +927,116 @@
                                                             @if (!string.IsNullOrWhiteSpace(snip.Jurisdiction)) { <span class="dfi-admission-tag">@snip.Jurisdiction</span> }
                                                             <span class="dfi-admission-tag">support @snip.PropositionSupportScore.ToString("P0")</span>
                                                         </div>
-                                                    </li>
-                                                }
-                                            </ul>
-                                        </div>
-                                             }
-                                         </div>
-                                         break;
+                                                                 </li>
+                                                            }
+                                                        </ul>
+                                                    </div>
+                                                         }
+                                                         @{
+                                                             var corpusProps = _evidenceGraph?.Propositions
+                                                                 ?.Where(p => p.Support.Count > 0)
+                                                                 .ToArray() ?? Array.Empty<Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphPropositionDto>();
+                                                             var evidenceById = _evidenceGraph?.Evidence
+                                                                 ?.ToDictionary(e => e.LegalEvidenceItemId)
+                                                                 ?? new Dictionary<Guid, Legal.Application.Features.Intelligence.Decision.LegalEvidenceGraphItemDto>();
+                                                         }
+                                                         @if (corpusProps.Length > 0)
+                                                         {
+                                                             <div class="dfi-admission">
+                                                                 <div class="dfi-admission-head">
+                                                                     <h5>Atomic propositions matched to document evidence</h5>
+                                                                     <p class="dfi-panel-sub">
+                                                                         @corpusProps.Length proposition(s) derived from your uploaded corpus ·
+                                                                         @corpusProps.Count(p => p.IsDecisionAuthoritative) decision-authoritative.
+                                                                         Each row links an atomic proposition to the extracted document evidence that supports, contradicts, or contextualizes it.
+                                                                     </p>
+                                                                 </div>
+                                                                 <ul class="dfi-admission-list">
+                                                                     @foreach (var prop in corpusProps.OrderByDescending(p => p.IsDecisionAuthoritative).ThenByDescending(p => p.Confidence ?? 0m))
+                                                                     {
+                                                                         <li class="dfi-admission-item">
+                                                                             <div class="dfi-admission-main">
+                                                                                 <span class="dfi-pill dfi-pill-@(prop.IsDecisionAuthoritative ? "ok" : "warn")">@prop.FactStateCode</span>
+                                                                                 <span class="dfi-admission-title">@prop.PropositionText</span>
+                                                                             </div>
+                                                                             <div class="dfi-admission-meta">
+                                                                                 @if (prop.Confidence is { } pc)
+                                                                                 {
+                                                                                     <span class="dfi-admission-tag">confidence @pc.ToString("P0")</span>
+                                                                                 }
+                                                                                 @if (prop.IsDecisionAuthoritative)
+                                                                                 {
+                                                                                     <span class="dfi-admission-tag"><i class="bi bi-shield-check"></i> authoritative</span>
+                                                                                 }
+                                                                                 <span class="dfi-admission-tag">@prop.Support.Count supporting evidence link(s)</span>
+                                                                             </div>
+                                                                             <ul class="dfi-support-list">
+                                                                                 @foreach (var sup in prop.Support)
+                                                                                 {
+                                                                                     evidenceById.TryGetValue(sup.LegalEvidenceItemId, out var ev);
+                                                                                     <li class="dfi-support-row">
+                                                                                         <span class="dfi-pill @DiRelationToneClass(sup.RelationshipTypeCode)" title="@sup.AssessmentReason">@sup.RelationshipTypeCode</span>
+                                                                                         <span class="dfi-support-text">
+                                                                                             @(ev is null ? "(evidence detail unavailable)" : ev.Summary)
+                                                                                         </span>
+                                                                                         @if (ev is not null)
+                                                                                         {
+                                                                                             <div class="dfi-support-meta">
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DocumentFileName))
+                                                                                                 {
+                                                                                                     <span class="dfi-support-source">
+                                                                                                         <i class="bi bi-file-earmark-text"></i> @ev.DocumentFileName
+                                                                                                         @(ev.DocumentVersionNumber > 0 ? $" v{ev.DocumentVersionNumber}" : "")
+                                                                                                     </span>
+                                                                                                 }
+                                                                                                 @if (ev.PageNumber is { } pg)
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag"><i class="bi bi-file-text"></i> p.@pg</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.SectionPath))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag" title="Section">@ev.SectionPath</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DocumentTypeCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.DocumentTypeCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.EvidenceTypeCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.EvidenceTypeCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.DimensionCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.DimensionCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (!string.IsNullOrWhiteSpace(ev.EvidenceStateCode))
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">@ev.EvidenceStateCode.Replace('_', ' ')</span>
+                                                                                                 }
+                                                                                                 @if (ev.Confidence is { } evc)
+                                                                                                 {
+                                                                                                     <span class="dfi-admission-tag">confidence @evc.ToString("P0")</span>
+                                                                                                 }
+                                                                                             </div>
+                                                                                             @if (!string.IsNullOrWhiteSpace(ev.PassageText))
+                                                                                             {
+                                                                                                 <blockquote class="dfi-support-passage">&ldquo;@ev.PassageText&rdquo;</blockquote>
+                                                                                             }
+                                                                                         }
+                                                                                         @if (!string.IsNullOrWhiteSpace(sup.AssessmentReason))
+                                                                                         {
+                                                                                             <span class="dfi-support-reason">@sup.AssessmentReason</span>
+                                                                                         }
+                                                                                     </li>
+                                                                                 }
+                                                                             </ul>
+                                                                         </li>
+                                                                     }
+                                                                 </ul>
+                                                             </div>
+                                                         }
+                                                     </div>
+                                                     break;
                                     case "Competition":
                                         <div class="dfi-panel-card">
                                             <h4>Candidate competition</h4>
@@ -1022,6 +1147,175 @@
                                     <p class="dfi-prototype-note">A COMPLETED technical execution is not by itself a successful legal decision. The distinction between execution, grounding, competition, and readiness is essential for enterprise trust.</p>
                                 </div>
                                 break;
+                            case "Document Intelligence":
+                                <div class="di-workspace">
+                                    <div class="di-head">
+                                        <div class="di-head-icon"><i class="bi bi-file-earmark-text"></i></div>
+                                        <div class="di-head-body">
+                                            <span>Decision-aware document intelligence</span>
+                                            <h4>Source-traceable evidence &amp; supported facts</h4>
+                                            <p class="dfi-panel-sub">Every extracted assertion is linked to the originating document, page, and passage — and to the fact propositions it supports or contradicts.</p>
+                                        </div>
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm di-refresh" @onclick="LoadEvidenceGraphAsync" disabled="@_evidenceGraphLoading" title="Reload document intelligence">
+                                            <i class="bi @(_evidenceGraphLoading ? "bi-arrow-repeat di-spin" : "bi-arrow-clockwise")"></i>
+                                        </button>
+                                        <label class="um-btn um-btn-primary um-btn-sm di-upload @(_uploading ? "disabled" : "")" title="Upload one or more documents for real extraction (Blob storage + SHA-256 + Azure Document Intelligence)">
+                                            <i class="bi @(_uploading ? "bi-hourglass-split di-spin" : "bi-cloud-arrow-up")"></i>
+                                            <span>@(_uploading ? (_uploadTotal > 1 ? $"Analyzing {_uploadIndex}/{_uploadTotal}…" : "Analyzing…") : "Upload documents")</span>
+                                            <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" multiple accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.tif,.tiff" style="display:none;" />
+                                        </label>
+                                    </div>
+
+                                    @if (_error is not null)
+                                    {
+                                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_error</div>
+                                    }
+
+                                    @if (_evidenceGraphError is not null)
+                                    {
+                                        <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_evidenceGraphError</div>
+                                    }
+                                    else if (_evidenceGraphLoading && _evidenceGraph is null)
+                                    {
+                                        <div class="di-empty"><i class="bi bi-hourglass-split"></i><p>Loading document intelligence…</p></div>
+                                    }
+                                    else if (_evidenceGraph is null || (_evidenceGraph.Evidence.Count == 0 && _evidenceGraph.Propositions.Count == 0))
+                                    {
+                                        <div class="di-empty">
+                                            <i class="bi bi-inbox"></i>
+                                            <p>No analyzed documents yet for this matter. Upload documents in the matter corpus and the extracted evidence graph will appear here.</p>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="di-kpis">
+                                            <div class="di-kpi"><span class="di-kpi-val">@_evidenceGraph.DocumentCount</span><span class="di-kpi-lbl">Documents</span></div>
+                                            <div class="di-kpi"><span class="di-kpi-val">@_evidenceGraph.Evidence.Count</span><span class="di-kpi-lbl">Evidence items</span></div>
+                                            <div class="di-kpi"><span class="di-kpi-val">@_evidenceGraph.Propositions.Count</span><span class="di-kpi-lbl">Fact propositions</span></div>
+                                            <div class="di-kpi"><span class="di-kpi-val">@_evidenceGraph.Propositions.Count(p => p.IsDecisionAuthoritative)</span><span class="di-kpi-lbl">Decision-authoritative</span></div>
+                                        </div>
+
+                                        <div class="di-grid">
+                                            <div class="di-col">
+                                                <h5 class="di-col-title"><i class="bi bi-folder2-open"></i> Documents</h5>
+                                                <button type="button" class="di-doc @(_diSelectedDocumentId is null ? "di-doc--active" : "")" @onclick="() => _diSelectedDocumentId = null">
+                                                    <div class="di-doc-main"><i class="bi bi-collection"></i><span>All documents</span></div>
+                                                    <span class="di-doc-count">@_evidenceGraph.Evidence.Count</span>
+                                                </button>
+                                                @foreach (var doc in _documents)
+                                                {
+                                                    <button type="button" class="di-doc @(_diSelectedDocumentId == doc.LegalDocumentId ? "di-doc--active" : "")" @onclick="() => _diSelectedDocumentId = doc.LegalDocumentId">
+                                                        <div class="di-doc-main">
+                                                            <i class="bi bi-file-earmark-text"></i>
+                                                            <span class="di-doc-name" title="@doc.FileName">@doc.FileName</span>
+                                                        </div>
+                                                        <div class="di-doc-meta">
+                                                            @if (!string.IsNullOrWhiteSpace(doc.DocumentTypeCode))
+                                                            {
+                                                                <span class="di-tag">@doc.DocumentTypeCode.Replace('_', ' ')</span>
+                                                            }
+                                                            <span class="di-doc-count">@DiEvidenceCountFor(doc.LegalDocumentId)</span>
+                                                        </div>
+                                                        @{
+                                                            var latestVersion = doc.Versions.OrderByDescending(v => v.VersionNumber).FirstOrDefault();
+                                                        }
+                                                        @if (latestVersion is not null)
+                                                        {
+                                                            <div class="di-doc-provenance" title="@($"SHA-256 {latestVersion.Sha256Hash}\nStored at {latestVersion.StorageReference}")">
+                                                                <span class="di-prov-badge @DiProcessingBadgeClass(latestVersion.ProcessingStatusCode)">
+                                                                    <i class="bi bi-cpu"></i> @latestVersion.ProcessingStatusCode.Replace('_', ' ')
+                                                                </span>
+                                                                @if (!string.IsNullOrWhiteSpace(latestVersion.ExtractionModelCode))
+                                                                {
+                                                                    <span class="di-prov-model">
+                                                                        @latestVersion.ExtractionModelCode@(string.IsNullOrWhiteSpace(latestVersion.ExtractionModelVersion) ? "" : $" · {latestVersion.ExtractionModelVersion}")
+                                                                    </span>
+                                                                }
+                                                                <span class="di-prov-hash"><i class="bi bi-fingerprint"></i> @DiShortHash(latestVersion.Sha256Hash)</span>
+                                                            </div>
+                                                        }
+                                                    </button>
+                                                }
+                                            </div>
+
+                                            <div class="di-col">
+                                                <h5 class="di-col-title"><i class="bi bi-chat-square-quote"></i> Extracted evidence <small>@(_diSelectedDocumentId is null ? "(all)" : "(filtered)")</small></h5>
+                                                @if (!DiVisibleEvidence.Any())
+                                                {
+                                                    <div class="di-empty di-empty--sm"><i class="bi bi-search"></i><p>No evidence for the selected document.</p></div>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var ev in DiVisibleEvidence)
+                                                    {
+                                                        <div class="di-evidence @(DiIsExcludedEvidence(ev.EvidenceStateCode) ? "di-evidence--excluded" : "")">
+                                                           <div class="di-evidence-top">
+                                                               <span class="di-dim">@ev.DimensionCode.Replace('_', ' ')</span>
+                                                               <span class="di-pill @DiEvidenceStateToneClass(ev.EvidenceStateCode)" title="@(DiIsExcludedEvidence(ev.EvidenceStateCode) ? "Excluded: source passage lacks a traceable source span, so this assertion is not admissible as decision evidence." : "Evidence admission state")">@ev.EvidenceStateCode</span>
+                                                               @if (ev.Confidence is { } c)
+                                                               {
+                                                                   <span class="di-conf" title="Extraction confidence">@c.ToString("P0")</span>
+                                                               }
+                                                           </div>
+                                                           <p class="di-evidence-summary">@ev.Summary</p>
+                                                           @if (DiIsExcludedEvidence(ev.EvidenceStateCode))
+                                                           {
+                                                               <p class="di-evidence-exclusion"><i class="bi bi-exclamation-triangle"></i> Not admitted — no traceable source span to ground this assertion.</p>
+                                                           }
+                                                            @if (!string.IsNullOrWhiteSpace(ev.PassageText))
+                                                            {
+                                                                <blockquote class="di-passage">“@ev.PassageText”</blockquote>
+                                                            }
+                                                            <div class="di-cite">
+                                                                <i class="bi bi-file-earmark-text"></i>
+                                                                <span class="di-cite-doc" title="@ev.DocumentFileName">@ev.DocumentFileName</span>
+                                                                <span class="di-cite-loc">v@ev.DocumentVersionNumber@(ev.PageNumber is { } pg ? $" · p.{pg}" : "")@(string.IsNullOrWhiteSpace(ev.SectionPath) ? "" : $" · {ev.SectionPath}")</span>
+                                                            </div>
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+
+                                            <div class="di-col">
+                                                <h5 class="di-col-title"><i class="bi bi-diagram-3"></i> Supported facts</h5>
+                                                @if (_evidenceGraph.Propositions.Count == 0)
+                                                {
+                                                    <div class="di-empty di-empty--sm"><i class="bi bi-diagram-3"></i><p>No fact propositions derived yet.</p></div>
+                                                }
+                                                else
+                                                {
+                                                    @foreach (var prop in _evidenceGraph.Propositions)
+                                                    {
+                                                        <div class="di-prop @(prop.IsDecisionAuthoritative ? "di-prop--authoritative" : "")">
+                                                            <div class="di-prop-top">
+                                                                <span class="di-pill di-pill--state">@prop.FactStateCode</span>
+                                                                @if (prop.IsDecisionAuthoritative)
+                                                                {
+                                                                    <span class="di-pill di-pill--auth"><i class="bi bi-shield-check"></i> Authoritative</span>
+                                                                }
+                                                                @if (prop.Confidence is { } pc)
+                                                                {
+                                                                    <span class="di-conf">@pc.ToString("P0")</span>
+                                                                }
+                                                            </div>
+                                                            <p class="di-prop-text">@prop.PropositionText</p>
+                                                            @if (prop.Support.Count > 0)
+                                                            {
+                                                                <div class="di-support">
+                                                                    @foreach (var sup in prop.Support)
+                                                                    {
+                                                                        <span class="di-pill @DiRelationToneClass(sup.RelationshipTypeCode)" title="@sup.AssessmentReason">@sup.RelationshipTypeCode</span>
+                                                                    }
+                                                                </div>
+                                                            }
+                                                        </div>
+                                                    }
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                                break;
                             case "Audit":
                                 <div class="dfi-panel-card">
                                     <h4>Execution audit</h4>
@@ -1048,12 +1342,56 @@
                     <span>Matter corpus</span>
                     <strong>@_documents.Count document(s)</strong>
                 </div>
-                <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" class="form-control form-control-sm ms-auto" style="max-width: 320px" />
+                <InputFile OnChange="UploadDocumentAsync" disabled="@_uploading" multiple class="form-control form-control-sm ms-auto" style="max-width: 320px" />
                 @if (_uploading)
                 {
-                    <span class="decision-chip">Scanning and extracting…</span>
+                    <span class="decision-chip">@(_uploadTotal > 1 ? $"Scanning and extracting {_uploadIndex}/{_uploadTotal}…" : "Scanning and extracting…")</span>
                 }
             </div>
+            @if (_uploadStages is not null)
+            {
+                <div class="intake-pipeline" role="list" aria-label="Document intake pipeline">
+                    <span class="intake-phase-label" aria-hidden="true"><i class="bi bi-cloud-arrow-up"></i> Prepared on upload</span>
+                    @for (var i = 0; i < _uploadStages.Count; i++)
+                    {
+                        var stage = _uploadStages[i];
+                        @if (i > 0 && _uploadStages[i - 1].Segment != stage.Segment)
+                        {
+                            <i class="bi bi-chevron-double-right intake-step-arrow intake-phase-divider" aria-hidden="true"></i>
+                            <span class="intake-phase-label intake-phase-activate" aria-hidden="true"><i class="bi bi-lightning-charge"></i> Activated on answer</span>
+                        }
+                        <div class="intake-step @UploadStageCss(stage.State)" role="listitem" title="@stage.Label">
+                            <span class="intake-step-icon">
+                                <i class="bi @UploadStageIcon(stage)"></i>
+                            </span>
+                            <span class="intake-step-label">@stage.Label</span>
+                        </div>
+                        @if (i < _uploadStages.Count - 1 && _uploadStages[i + 1].Segment == stage.Segment)
+                        {
+                            <i class="bi bi-chevron-right intake-step-arrow" aria-hidden="true"></i>
+                        }
+                    }
+                    @if (_uploadResult != UploadResult.None)
+                    {
+                        <i class="bi bi-chevron-right intake-step-arrow" aria-hidden="true"></i>
+                        <span class="intake-result @UploadResultCss(_uploadResult)" role="status" aria-live="polite">
+                            <i class="bi @UploadResultIcon(_uploadResult)"></i>
+                            <span>@UploadResultLabel(_uploadResult)</span>
+                        </span>
+                    }
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(_uploadOutcome))
+            {
+                <div class="alert @(_uploadEnriched ? "alert-success" : "alert-warning") d-flex align-items-start gap-2 mt-2" role="status">
+                    <i class="bi @(_uploadEnriched ? "bi-check-circle-fill" : "bi-exclamation-triangle-fill")"></i>
+                    <div>
+                        <strong>@(_uploadEnriched ? "Upload complete — here's what happened" : "Upload stored — but not yet in the reasoning engine")</strong>
+                        <div>@_uploadOutcome</div>
+                    </div>
+                    <button type="button" class="um-btn um-btn-ghost um-btn-sm ms-auto" @onclick="() => _uploadOutcome = null" title="Dismiss"><i class="bi bi-x-lg"></i></button>
+                </div>
+            }
         }
 
         <section class="poloxi-composer" aria-label="Wide enterprise question">
@@ -1095,7 +1433,7 @@
                 <i class="bi bi-water poloxi-spinner"></i>
                 <div>
                     <strong>Deep-sea-searching&hellip; @(_usePoloxiEngine ? "running progressive disambiguation" : "generating LLM answer")</strong>
-                    <p>@(_usePoloxiEngine ? "Proposing a problem-specific hierarchy, progressively narrowing interpretation paths, eliminating weak candidates, and composing an answer from LLM knowledge." : "POLOXI Engine is off — composing a direct LLM answer without progressive narrowing.")</p>
+                    <p>@(_usePoloxiEngine ? "Proposing a problem-specific hierarchy, progressively refining interpretation paths, eliminating weak candidates, and composing an answer from LLM knowledge." : "POLOXI Engine is off — composing a direct LLM answer without progressive refinement.")</p>
                     <div class="poloxi-loading-track"><span></span></div>
                 </div>
                 <button type="button" class="um-btn um-btn-ghost um-btn-sm" title="Stop this search — the running pipeline is cancelled server-side too." @onclick="CancelSearch"><i class="bi bi-x-circle"></i> Cancel</button>
@@ -1896,6 +2234,105 @@
     private DecisionMatterDto? _matter;
     private IReadOnlyCollection<LegalDocumentDto> _documents = [];
     private bool _uploading;
+    private int _uploadTotal;
+    private int _uploadIndex;
+    private string? _uploadOutcome;
+    private bool _uploadEnriched;
+
+    // ── Real-time intake pipeline stepper (directional stage indicator) ──
+    // One integrated indicator with two phases: "Prepared on upload" (deterministic intake) and
+    // "Activated on answer" (metered reasoning that runs on Disambiguate & Answer). The Queued state
+    // marks activation stages that are prepared but deferred until the answer path runs.
+    private enum UploadStageState { Pending, Active, Done, Skipped, Failed, Queued }
+    private enum UploadResult { None, Pass, Warn, Fail }
+    private UploadResult _uploadResult = UploadResult.None;
+    private sealed class UploadStage
+    {
+        public required string Key { get; init; }
+        public required string Label { get; init; }
+        public required string Icon { get; init; }
+        // "prepare" (runs on upload) or "activate" (runs on Disambiguate & Answer).
+        public required string Segment { get; init; }
+        public UploadStageState State { get; set; } = UploadStageState.Pending;
+    }
+    private List<UploadStage>? _uploadStages;
+
+    private List<UploadStage> BuildUploadStages() =>
+    [
+        new() { Key = "upload", Label = "Upload", Icon = "bi-cloud-arrow-up", Segment = "prepare" },
+        new() { Key = "scan", Label = "Malware scan", Icon = "bi-shield-check", Segment = "prepare" },
+        new() { Key = "blob", Label = "Store to Blob", Icon = "bi-hdd-network", Segment = "prepare" },
+        new() { Key = "db", Label = "Save to database", Icon = "bi-database", Segment = "prepare" },
+        new() { Key = "extract", Label = "Extract text", Icon = "bi-file-text", Segment = "prepare" },
+        new() { Key = "propositions", Label = "Atomic propositions", Icon = "bi-diagram-3", Segment = "activate" },
+        new() { Key = "cdc", Label = "Re-check decisions (CDC)", Icon = "bi-arrow-repeat", Segment = "activate" },
+    ];
+
+    private void SetUploadStage(string key, UploadStageState state)
+    {
+        var stage = _uploadStages?.FirstOrDefault(s => s.Key == key);
+        if (stage is not null)
+        {
+            stage.State = state;
+            StateHasChanged();
+        }
+    }
+
+    private static string UploadStageCss(UploadStageState state) => state switch
+    {
+        UploadStageState.Active => "is-active",
+        UploadStageState.Done => "is-done",
+        UploadStageState.Skipped => "is-skipped",
+        UploadStageState.Failed => "is-failed",
+        UploadStageState.Queued => "is-queued",
+        _ => "is-pending"
+    };
+
+    private static string UploadStageIcon(UploadStage stage) => stage.State switch
+    {
+        UploadStageState.Done => "bi-check-circle-fill",
+        UploadStageState.Active => "bi-arrow-repeat intake-spin",
+        UploadStageState.Skipped => "bi-slash-circle",
+        UploadStageState.Failed => "bi-x-circle-fill",
+        UploadStageState.Queued => "bi-hourglass-split",
+        _ => stage.Icon
+    };
+
+    private void SetUploadResult(UploadResult result)
+    {
+        _uploadResult = result;
+        StateHasChanged();
+    }
+
+    private static string UploadResultCss(UploadResult result) => result switch
+    {
+        UploadResult.Pass => "is-pass",
+        UploadResult.Warn => "is-warn",
+        UploadResult.Fail => "is-fail",
+        _ => string.Empty
+    };
+
+    private static string UploadResultIcon(UploadResult result) => result switch
+    {
+        UploadResult.Pass => "bi-check2-all",
+        UploadResult.Warn => "bi-exclamation-triangle-fill",
+        UploadResult.Fail => "bi-x-octagon-fill",
+        _ => "bi-dash-circle"
+    };
+
+    private static string UploadResultLabel(UploadResult result) => result switch
+    {
+        UploadResult.Pass => "Prepared — activates on Disambiguate & Answer",
+        UploadResult.Warn => "Stored — no propositions were derived yet (semantic enrichment disabled or CHAT route unavailable)",
+        UploadResult.Fail => "Failed",
+        _ => string.Empty
+    };
+
+    // ── Document Intelligence workspace (matter-scoped evidence ↔ proposition graph, DB-backed) ──
+    private Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto? _evidenceGraph;
+    private bool _evidenceGraphLoading;
+    private string? _evidenceGraphError;
+    private Guid? _diSelectedDocumentId;
 
     // ── Continuous Decision Calibration (CDC) — matter-scoped calibration history ──────────────────
     // Real, DB-backed data loaded through the legal_decision API. Snapshots track prior calibrated
@@ -1907,28 +2344,171 @@
     private IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionReviewTaskDto> _cdcReviewTasks = [];
     private Guid? _cdcSelectedSnapshotId;
 
+    // ── Decision Change Intelligence (DCI) — attorney-facing interpretation of matter changes ──────────
+    // DB-backed: first-class DecisionDelta records ("what changed, why it matters, what to examine next")
+    // loaded via the legal_decision API, plus the per-event impact rows used by the "Why It Changed" view.
+    // Nothing is fabricated; empty collections render the corresponding empty-states.
+    private IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionDeltaDto> _dciDeltas = [];
+    private string _dciView = "Changes";
+    private static readonly string[] DciViews = ["Changes", "Before vs After", "Why It Changed", "What Matters Now", "Review Queue"];
+    private Guid? _dciSelectedDeltaId;
+    private Legal.Application.Features.Intelligence.Decision.DecisionChangeReviewDto? _dciChangeReview;
+    private bool _dciChangeReviewLoading;
+    private bool _dciOnlyChangedNodes;
+
+    // Advisory proposition-level Information Value (POLOXI VIV scale). Display-only overlay reusing the
+    // claim-level scorer; loaded for the matter's latest decision session and rendered separately from the
+    // authoritative branch-target IV table. An empty result renders the corresponding empty-state.
+    private Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult? _propositionInfoValue;
+    private bool _propositionInfoValueLoading;
+
     private async Task UploadDocumentAsync(InputFileChangeEventArgs args)
     {
         if (MatterId is not { } matterId || _uploading)
             return;
         _uploading = true;
         _error = null;
+        _uploadOutcome = null;
+        _uploadEnriched = false;
+        _uploadResult = UploadResult.None;
+        _uploadStages = BuildUploadStages();
+        var failures = new List<string>();
+        var succeeded = 0;
         try
         {
-            await Api.UploadLegalMatterDocumentAsync(matterId, args.File, null, DecisionDomainPackCodes.PersonalInjury);
+            // Real intake: each file is streamed to Blob storage, the true SHA-256 of the uploaded
+            // bytes is computed, and Azure Document Intelligence extraction runs server-side. Multiple
+            // files are uploaded one request per file so a single bad file does not fail the batch.
+            var files = args.GetMultipleFiles(maximumFileCount: 50);
+            _uploadTotal = files.Count;
+            _uploadIndex = 0;
+            SetUploadStage("upload", UploadStageState.Active);
+            foreach (var file in files)
+            {
+                _uploadIndex++;
+                StateHasChanged();
+                try
+                {
+                    await Api.UploadLegalMatterDocumentAsync(matterId, file, null, DecisionDomainPackCodes.PersonalInjury, string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode);
+                    succeeded++;
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{file.Name}: {ex.Message}");
+                }
+            }
+            // The intake endpoint is synchronous and prepare-only: on a successful response the server
+            // has already run malware scan → Blob storage → database persistence → text extraction. The
+            // metered reasoning (atomic propositions + CDC) is deferred to the Disambiguate & Answer path.
+            if (succeeded > 0)
+            {
+                SetUploadStage("upload", UploadStageState.Done);
+                SetUploadStage("scan", UploadStageState.Done);
+                SetUploadStage("blob", UploadStageState.Done);
+                SetUploadStage("db", UploadStageState.Done);
+                SetUploadStage("extract", UploadStageState.Done);
+                SetUploadStage("propositions", UploadStageState.Queued);
+                SetUploadStage("cdc", UploadStageState.Queued);
+            }
+            else if (failures.Count > 0)
+            {
+                SetUploadStage("upload", UploadStageState.Failed);
+                SetUploadResult(UploadResult.Fail);
+            }
             _documents = await Api.GetLegalMatterDocumentsAsync(matterId);
+            // Surface the machine-extracted evidence for the freshly analyzed documents.
+            await LoadEvidenceGraphAsync();
+            if (succeeded > 0)
+            {
+                // Prepare-only: documents are stored and text-extracted. Atomic propositions and CDC are
+                // activated when the user clicks Disambiguate & Answer, using the answer-time model.
+                _uploadEnriched = false;
+                SetUploadResult(UploadResult.Pass);
+                _uploadOutcome =
+                    $"{succeeded} document(s) prepared. Each was scanned, stored, and its text extracted into passages. " +
+                    "Atomic propositions and the decision re-check (CDC) run automatically when you click Disambiguate & Answer, " +
+                    "so they enrich the corpus using the model you select for the answer. Review the Evidence Graph below after answering.";
+            }
+            if (failures.Count > 0)
+                _error = $"{succeeded} uploaded, {failures.Count} failed: {string.Join("; ", failures)}";
         }
         catch (Exception ex)
         {
             _error = $"Document upload failed: {ex.Message}";
+            SetUploadResult(UploadResult.Fail);
         }
         finally
         {
             _uploading = false;
+            _uploadTotal = 0;
+            _uploadIndex = 0;
             StateHasChanged();
         }
     }
-    // POLOXI ABV (Actionable Business Value): advisory next-action panel. The LLM proposes intent only;
+
+    private async Task LoadEvidenceGraphAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _evidenceGraphLoading)
+            return;
+        _evidenceGraphLoading = true;
+        _evidenceGraphError = null;
+        try
+        {
+            _evidenceGraph = await Api.GetLegalMatterEvidenceGraphAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _evidenceGraphError = $"Failed to load document intelligence: {ex.Message}";
+        }
+        finally
+        {
+            _evidenceGraphLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private IEnumerable<LegalEvidenceGraphItemDto> DiVisibleEvidence
+        => _evidenceGraph is null
+            ? []
+            : _diSelectedDocumentId is { } docId
+                ? _evidenceGraph.Evidence.Where(e => e.LegalDocumentId == docId)
+                : _evidenceGraph.Evidence;
+
+    private int DiEvidenceCountFor(Guid documentId)
+        => _evidenceGraph?.Evidence.Count(e => e.LegalDocumentId == documentId) ?? 0;
+
+    private static string DiProcessingBadgeClass(string? processingStatusCode) => (processingStatusCode ?? "").ToUpperInvariant() switch
+    {
+        "COMPLETED" or "PROCESSED" or "EXTRACTED" or "SUCCEEDED" => "di-prov-badge--ok",
+        "FAILED" or "ERROR" or "QUARANTINED" => "di-prov-badge--fail",
+        "PENDING" or "PROCESSING" or "QUEUED" or "RUNNING" => "di-prov-badge--pending",
+        _ => "di-prov-badge--neutral",
+    };
+
+    private static string DiShortHash(string? sha256Hash)
+        => string.IsNullOrWhiteSpace(sha256Hash) ? "—" : sha256Hash.Length <= 12 ? sha256Hash : sha256Hash[..12].ToLowerInvariant();
+
+    private static string DiRelationToneClass(string relationshipTypeCode) => relationshipTypeCode switch
+    {
+        "SUPPORTS" => "di-pill--supports",
+        "CONTRADICTS" => "di-pill--contradicts",
+        "QUALIFIES" => "di-pill--qualifies",
+        "INSUFFICIENT" => "di-pill--insufficient",
+        _ => "di-pill--context",
+    };
+
+    // Evidence admission disposition: span-less evidence is persisted as INVALIDATED (not admitted) so the
+    // cockpit visibly distinguishes admitted evidence from excluded, non-traceable assertions.
+    private static string DiEvidenceStateToneClass(string evidenceStateCode) => evidenceStateCode switch
+    {
+        "VERIFIED" => "di-pill--supports",
+        "DISPUTED" => "di-pill--qualifies",
+        "INVALIDATED" => "di-pill--insufficient",
+        _ => "di-pill--state",
+    };
+
+    private static bool DiIsExcludedEvidence(string evidenceStateCode)
+        => string.Equals(evidenceStateCode, "INVALIDATED", StringComparison.OrdinalIgnoreCase);
     // impact/urgency/owner/action resolve deterministically from a database-backed Domain Pack, each with
     // provenance. Review-only in phase 1 (ExecutionAllowed=false, human approval required).
     private RenderFragment AbvActionPanel => __builder =>
@@ -2365,6 +2945,363 @@
         }
     };
 
+    // ══ Decision Change Intelligence (DCI) ═══════════════════════════════════════════════════════════
+    // Attorney-facing interpretation of matter changes. Pure, read-only projections over the DB-backed
+    // DecisionDelta records (_dciDeltas), calibration snapshots (_cdcSnapshots), the per-event impact
+    // rows (_dciChangeReview) and the advisory proposition frontier (_propositionInfoValue). Nothing is
+    // fabricated — when the pipeline produced no delta the views render their empty-states.
+    private IReadOnlyList<Legal.Application.Features.Intelligence.Decision.DecisionDeltaDto> DciDeltas =>
+        _dciDeltas.OrderByDescending(d => d.OccurredDateUtc).ToArray();
+
+    private Legal.Application.Features.Intelligence.Decision.DecisionDeltaDto? DciSelectedDelta =>
+        DciDeltas.FirstOrDefault(d => d.DecisionDeltaId == _dciSelectedDeltaId) ?? DciDeltas.FirstOrDefault();
+
+    // "Since last review" cutoff: the evaluation time of the most recent attorney-approved snapshot.
+    // KPIs count only deltas that occurred after this point so the header ("Changes Since Last Review")
+    // stays truthful. When nothing has been approved yet, every recorded delta is "since last review".
+    private DateTime? DciLastReviewedUtc =>
+        _cdcSnapshots.Where(s => s.IsAttorneyApproved)
+                     .OrderByDescending(s => s.EvaluatedDateUtc)
+                     .Select(s => (DateTime?)s.EvaluatedDateUtc)
+                     .FirstOrDefault();
+
+    private IReadOnlyList<Legal.Application.Features.Intelligence.Decision.DecisionDeltaDto> DciDeltasSinceReview =>
+        DciLastReviewedUtc is { } cutoff
+            ? DciDeltas.Where(d => d.OccurredDateUtc > cutoff).ToArray()
+            : DciDeltas;
+
+    // Live Decision Monitor KPIs — aggregated strictly from recorded delta data since the last reviewed
+    // snapshot (0 when not computed).
+    private int DciNewEvidenceCount => DciDeltasSinceReview.Sum(d => d.AffectedEvidenceCount);
+    private int DciChangedPropositionCount => DciDeltasSinceReview.Sum(d => d.AffectedPropositionCount);
+    private int DciAffectedOutcomeCount => DciDeltasSinceReview.Sum(d => d.AffectedCandidateCount);
+    private int DciNewContradictionCount => DciDeltasSinceReview.Count(d =>
+        (d.ClassificationCode ?? "").Contains("CONTRADICT", StringComparison.OrdinalIgnoreCase));
+    private int DciFrontierChangeCount => DciDeltasSinceReview.Count(d => d.FrontierChanged == true);
+    private int DciReviewRequiredCount => DciDeltasSinceReview.Count(d => d.AttorneyReviewRequired);
+
+    private static string DciDeltaKindLabel(string? code) => (code ?? "").ToUpperInvariant() switch
+    {
+        "WINNER_CHANGED" => "Material decision change",
+        "MARGIN_SHIFTED" => "Margin shifted",
+        "REEVALUATED_NO_CHANGE" => "Reevaluated · no change",
+        _ => string.IsNullOrWhiteSpace(code) ? "Decision reevaluated" : code,
+    };
+
+    private static string DciDeltaKindTone(string? code) => (code ?? "").ToUpperInvariant() switch
+    {
+        "WINNER_CHANGED" => "danger",
+        "MARGIN_SHIFTED" => "warn",
+        _ => "info",
+    };
+
+    private static string DciScore(double? value) => value is { } v ? $"{Math.Round(v * 100)}%" : "—";
+    private static string DciDelta(double? previous, double? current)
+    {
+        if (previous is not { } p || current is not { } c) return "";
+        var diff = (int)Math.Round((c - p) * 100);
+        return diff == 0 ? "±0%" : diff > 0 ? $"+{diff}%" : $"{diff}%";
+    }
+
+    private Legal.Application.Features.Intelligence.Decision.DecisionSnapshotDto? DciSnapshotById(Guid? id) =>
+        id is { } sid ? _cdcSnapshots.FirstOrDefault(s => s.DecisionSnapshotId == sid) : null;
+
+    private string DciSnapshotLabel(Guid? id)
+    {
+        var snap = DciSnapshotById(id);
+        return snap is null ? "—" : $"Snapshot #{snap.SnapshotNumber}";
+    }
+
+    private async Task SelectDciDeltaAsync(Legal.Application.Features.Intelligence.Decision.DecisionDeltaDto delta)
+    {
+        _dciSelectedDeltaId = delta.DecisionDeltaId;
+        _dciChangeReview = null;
+        if (delta.MatterChangeEventId is { } eventId)
+            await LoadDciChangeReviewAsync(eventId);
+    }
+
+    // Loads the DB-backed impact rows for the selected delta's change event (Why It Changed traceability).
+    private async Task LoadDciChangeReviewAsync(Guid changeEventId)
+    {
+        if (_dciChangeReviewLoading) return;
+        _dciChangeReviewLoading = true;
+        try { _dciChangeReview = await Api.GetLegalDecisionChangeReviewAsync(changeEventId); }
+        catch { _dciChangeReview = null; }
+        finally { _dciChangeReviewLoading = false; StateHasChanged(); }
+    }
+
+    private async Task SelectDciViewAsync(string view)
+    {
+        _dciView = view;
+        if (view == "Why It Changed" && _dciChangeReview is null && DciSelectedDelta?.MatterChangeEventId is { } eventId)
+            await LoadDciChangeReviewAsync(eventId);
+    }
+
+    private RenderFragment DciDashboard => __builder =>
+    {
+        var deltas = DciDeltas;
+        var selected = DciSelectedDelta;
+        var latest = deltas.FirstOrDefault();
+
+        <div class="dci-root">
+            <div class="dci-topbar">
+                <div class="dci-topbar-title">
+                    <span class="dci-topbar-icon"><i class="bi bi-graph-up-arrow" aria-hidden="true"></i></span>
+                    <div>
+                        <div class="dci-topbar-heading">
+                            <h4>Decision Intelligence &mdash; Changes Since Last Review</h4>
+                            @if (latest is not null)
+                            {
+                                <span class="dci-badge dci-badge--live"><span class="dci-live-dot" aria-hidden="true"></span> Live</span>
+                            }
+                        </div>
+                        <p class="dci-topbar-sub">
+                            @if (latest is not null)
+                            {
+                                <span>Last updated: @latest.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                @if (DciLastReviewedUtc is { } reviewed)
+                                {
+                                    <span> · since reviewed snapshot of @reviewed.ToString("MMM dd, yyyy h:mm tt")</span>
+                                }
+                                else
+                                {
+                                    <span> · no reviewed snapshot yet — showing all recorded changes</span>
+                                }
+                            }
+                            else
+                            {
+                                <span>Every material change is reevaluated by POLOXI Core into an immutable decision delta.</span>
+                            }
+                        </p>
+                    </div>
+                </div>
+                @if (DciReviewRequiredCount > 0)
+                {
+                    <button type="button" class="dci-btn dci-btn--primary" @onclick='() => SelectDciViewAsync("Review Queue")'>
+                        Review Required (@DciReviewRequiredCount) <i class="bi bi-chevron-right"></i>
+                    </button>
+                }
+            </div>
+
+            @* ── Live Decision Monitor KPI strip (all values DB-backed; 0 when not computed) ── *@
+            <div class="dci-kpi-strip">
+                <div class="dci-kpi dci-kpi--evidence">
+                    <span class="dci-kpi-ic"><i class="bi bi-file-earmark-text"></i></span>
+                    <div><span class="dci-kpi-num">@DciNewEvidenceCount</span><span class="dci-kpi-lbl">New Evidence</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--props">
+                    <span class="dci-kpi-ic"><i class="bi bi-diagram-2"></i></span>
+                    <div><span class="dci-kpi-num">@DciChangedPropositionCount</span><span class="dci-kpi-lbl">Changed Propositions</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--outcomes">
+                    <span class="dci-kpi-ic"><i class="bi bi-bank"></i></span>
+                    <div><span class="dci-kpi-num">@DciAffectedOutcomeCount</span><span class="dci-kpi-lbl">Affected Outcomes</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--contradictions">
+                    <span class="dci-kpi-ic"><i class="bi bi-exclamation-triangle"></i></span>
+                    <div><span class="dci-kpi-num">@DciNewContradictionCount</span><span class="dci-kpi-lbl">New Contradictions</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--frontier">
+                    <span class="dci-kpi-ic"><i class="bi bi-bullseye"></i></span>
+                    <div><span class="dci-kpi-num">@DciFrontierChangeCount</span><span class="dci-kpi-lbl">Decision-Frontier Changes</span></div>
+                </div>
+                <div class="dci-kpi dci-kpi--review">
+                    <span class="dci-kpi-ic"><i class="bi bi-flag"></i></span>
+                    <div><span class="dci-kpi-num">@DciReviewRequiredCount</span><span class="dci-kpi-lbl">Material Changes Requiring Review</span></div>
+                </div>
+            </div>
+
+            @if (deltas.Count == 0)
+            {
+                <div class="dci-empty">
+                    <i class="bi bi-activity" aria-hidden="true"></i>
+                    <h5>No decision changes yet</h5>
+                    <p>As new documents and evidence are ingested, POLOXI reevaluates the matter and records each material change here as a traceable before/after decision delta.</p>
+                </div>
+            }
+            else
+            {
+                @* ── Inner view tabs ── *@
+                <div class="dci-views" role="tablist">
+                    @foreach (var view in DciViews)
+                    {
+                        <button type="button" role="tab"
+                                class="dci-view-tab @(_dciView == view ? "dci-view-tab--active" : "")"
+                                @onclick="() => SelectDciViewAsync(view)">@view</button>
+                    }
+                </div>
+
+                <div class="dci-view-panel">
+                    @switch (_dciView)
+                    {
+                        case "Changes":
+                            <div class="dci-feed">
+                                @foreach (var d in deltas)
+                                {
+                                    <button type="button" class="dci-feed-item @(d.DecisionDeltaId == _dciSelectedDeltaId ? "dci-feed-item--active" : "")"
+                                            @onclick="() => SelectDciDeltaAsync(d)">
+                                        <span class="dci-feed-time">@d.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                        <span class="dci-feed-body">
+                                            <span class="dci-feed-head">
+                                                <span class="dci-chip dci-chip--@DciDeltaKindTone(d.DeltaKindCode)">@DciDeltaKindLabel(d.DeltaKindCode)</span>
+                                                @if (d.AttorneyReviewRequired)
+                                                {
+                                                    <span class="dci-chip dci-chip--danger">Review required</span>
+                                                }
+                                            </span>
+                                            <strong class="dci-feed-title">@(d.Summary ?? d.ChangeSourceLabel ?? "Decision reevaluated")</strong>
+                                            <span class="dci-feed-meta">
+                                                @d.AffectedPropositionCount propositions · @d.AffectedCandidateCount candidates · @d.AffectedEvidenceCount evidence
+                                                @if (d.FrontierChanged == true)
+                                                {
+                                                    <span> · frontier changed</span>
+                                                }
+                                            </span>
+                                        </span>
+                                        <i class="bi bi-chevron-right dci-feed-arrow"></i>
+                                    </button>
+                                }
+                            </div>
+                            break;
+
+                        case "Before vs After":
+                            @if (selected is null)
+                            {
+                                <p class="dci-muted">Select a change from the Changes feed to compare snapshots.</p>
+                            }
+                            else
+                            {
+                                <div class="dci-compare">
+                                    <div class="dci-compare-col">
+                                        <h6>@DciSnapshotLabel(selected.FromSnapshotId)</h6>
+                                        <span class="dci-compare-sub">Before</span>
+                                        <ul class="dci-compare-metrics">
+                                            <li><span>Leading outcome</span><strong>@(selected.PreviousWinnerLabel ?? "—")</strong></li>
+                                            <li><span>Margin</span><strong>@DciScore(selected.PreviousMargin)</strong></li>
+                                            <li><span>Uncertainty</span><strong>@DciScore(selected.PreviousEntropy)</strong></li>
+                                            <li><span>Readiness</span><strong>@(selected.PreviousReadinessCode ?? "—")</strong></li>
+                                        </ul>
+                                    </div>
+                                    <div class="dci-compare-arrow"><i class="bi bi-arrow-right"></i></div>
+                                    <div class="dci-compare-col dci-compare-col--after">
+                                        <h6>@DciSnapshotLabel(selected.ToSnapshotId)</h6>
+                                        <span class="dci-compare-sub">After</span>
+                                        <ul class="dci-compare-metrics">
+                                            <li><span>Leading outcome</span><strong>@(selected.CurrentWinnerLabel ?? "—")</strong></li>
+                                            <li><span>Margin</span><strong>@DciScore(selected.CurrentMargin) <em class="dci-delta">@DciDelta(selected.PreviousMargin, selected.CurrentMargin)</em></strong></li>
+                                            <li><span>Uncertainty</span><strong>@DciScore(selected.CurrentEntropy)</strong></li>
+                                            <li><span>Readiness</span><strong>@(selected.CurrentReadinessCode ?? "—")</strong></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                                <p class="dci-illustrative"><i class="bi bi-info-circle"></i> Percentages are illustrative decision-state indicators, not legal win probabilities.</p>
+                            }
+                            break;
+
+                        case "Why It Changed":
+                            @if (selected is null)
+                            {
+                                <p class="dci-muted">Select a change to trace why it changed.</p>
+                            }
+                            else if (_dciChangeReviewLoading)
+                            {
+                                <p class="dci-muted">Loading traceability…</p>
+                            }
+                            else if (_dciChangeReview is null || _dciChangeReview.Impacts.Count == 0)
+                            {
+                                <div class="dci-why">
+                                    <p class="dci-muted">@(selected.RequiredAction ?? "No detailed impact rows were recorded for this change.")</p>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="dci-why">
+                                    @if (!string.IsNullOrWhiteSpace(_dciChangeReview.ChangeEvent.SourceLabel))
+                                    {
+                                        <div class="dci-why-source"><i class="bi bi-file-earmark-text"></i> @_dciChangeReview.ChangeEvent.SourceLabel</div>
+                                    }
+                                    <ul class="dci-why-chain">
+                                        @foreach (var impact in _dciChangeReview.Impacts)
+                                        {
+                                            <li class="dci-why-node">
+                                                <span class="dci-chip dci-chip--info">@impact.AffectedKindCode</span>
+                                                <strong>@(impact.AffectedLabel ?? impact.AffectedKey)</strong>
+                                                <span class="dci-why-transition">@(impact.PreviousStateCode ?? "—") <i class="bi bi-arrow-right"></i> @(impact.CurrentStateCode ?? "—")</span>
+                                                @if (!string.IsNullOrWhiteSpace(impact.Rationale))
+                                                {
+                                                    <span class="dci-why-reason">@impact.Rationale</span>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+                            break;
+
+                        case "What Matters Now":
+                            <div class="dci-frontier">
+                                <h6>Current decision frontier</h6>
+                                <p class="dci-muted">Highest-information-value propositions after the latest changes. POLOXI ranks what to investigate next.</p>
+                                @if (PropositionInfoValues.Count == 0)
+                                {
+                                    <p class="dci-muted">No proposition frontier is available yet for this matter.</p>
+                                }
+                                else
+                                {
+                                    <ul class="dci-frontier-list">
+                                        @foreach (var p in PropositionInfoValues)
+                                        {
+                                            <li class="dci-frontier-item">
+                                                <div class="dci-frontier-bar" style="width:@(Math.Round((double)(p.InformationValue / PropositionInfoValueMax) * 100))%"></div>
+                                                <div class="dci-frontier-copy">
+                                                    <strong>@p.PropositionText</strong>
+                                                    <span class="dci-frontier-meta">IV @p.InformationValue.ToString("0.00") · <span class="dci-chip dci-chip--@PropositionStateTone(p.VerificationStateCode)">@(p.VerificationStateCode ?? "Unresolved")</span></span>
+                                                </div>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            break;
+
+                        case "Review Queue":
+                            var reviewDeltas = deltas.Where(d => d.AttorneyReviewRequired).ToArray();
+                            @if (reviewDeltas.Length == 0)
+                            {
+                                <p class="dci-muted">No material changes are currently awaiting attorney review.</p>
+                            }
+                            else
+                            {
+                                <div class="dci-queue">
+                                    @foreach (var d in reviewDeltas)
+                                    {
+                                        <div class="dci-queue-item">
+                                            <div class="dci-queue-head">
+                                                <span class="dci-chip dci-chip--danger">Material change</span>
+                                                <strong>@DciSnapshotLabel(d.ToSnapshotId)</strong>
+                                                <span class="dci-muted ms-auto">@d.OccurredDateUtc.ToString("MMM dd, yyyy h:mm tt")</span>
+                                            </div>
+                                            <p class="dci-queue-summary">@(d.Summary ?? "New evidence changed the decision state.")</p>
+                                            <p class="dci-queue-meta">@d.AffectedPropositionCount propositions · @d.AffectedCandidateCount candidate outcomes affected@(d.FrontierChanged == true ? " · decision frontier changed" : "")</p>
+                                            @if (!string.IsNullOrWhiteSpace(d.RequiredAction))
+                                            {
+                                                <p class="dci-queue-action"><i class="bi bi-arrow-return-right"></i> @d.RequiredAction</p>
+                                            }
+                                            <div class="dci-queue-actions">
+                                                <button type="button" class="dci-btn dci-btn--ghost" @onclick="() => SelectDciDeltaAsync(d)">Review evidence</button>
+                                                <button type="button" class="dci-btn dci-btn--ghost" @onclick='async () => { await SelectDciDeltaAsync(d); _dciView = "Before vs After"; }'>Compare snapshots</button>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            break;
+                    }
+                </div>
+            }
+        </div>
+    };
+
     private RenderFragment CdcDashboard => __builder =>
     {
         <div class="cdc-root">
@@ -2570,6 +3507,51 @@
                     else
                     {
                         <p class="dfi-empty">No information-value targets were produced for this execution.</p>
+                    }
+                </div>
+
+                <div class="cdc-panel cdc-panel--wide">
+                    <div class="cdc-panel-head">
+                        <h5>Proposition Information Value (Top 5)</h5>
+                        <span class="cdc-panel-sub">Advisory · atomic fact propositions on the POLOXI VIV scale</span>
+                    </div>
+                    @if (PropositionInfoValues.Count > 0)
+                    {
+                        <table class="cdc-table">
+                            <thead><tr><th>Proposition</th><th>IV Score</th><th>Fact State</th><th>Verification</th><th>Redundancy</th><th>Integrity</th></tr></thead>
+                            <tbody>
+                                @foreach (var p in PropositionInfoValues)
+                                {
+                                    <tr>
+                                        <td>@p.PropositionText @if (p.IsEssential){<span class="cdc-chip cdc-chip--warn">Essential</span>}</td>
+                                        <td>
+                                            <div class="cdc-iv"><span class="cdc-iv-num">@p.InformationValue.ToString("0.000")</span><span class="cdc-iv-bar"><span style="width:@((int)Math.Round((double)(p.InformationValue / PropositionInfoValueMax) * 100))%"></span></span></div>
+                                        </td>
+                                        <td>@p.FactStateCode</td>
+                                        <td><span class="cdc-chip cdc-chip--@PropositionStateTone(p.VerificationStateCode)">@p.VerificationStateCode</span></td>
+                                        <td>@if (p.RedundancyPenalty > 0m){<span class="cdc-chip cdc-chip--warn" title="Supporting evidence collapses onto few distinct source documents (correlated, not independent corroboration).">@p.RedundancyPenalty.ToString("P0")</span>}else{<span class="cdc-muted">—</span>}</td>
+                                        <td>
+                                            @if (p.IntegrityDisposition is not null)
+                                            {
+                                                <span class="cdc-chip cdc-chip--@PropositionIntegrityTone(p.IntegrityDisposition)" title="@PropositionIntegrityTitle(p)">@PropositionIntegrityLabel(p.IntegrityDisposition)</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="cdc-muted">—</span>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else if (_propositionInfoValueLoading)
+                    {
+                        <p class="dfi-empty">Scoring propositions…</p>
+                    }
+                    else
+                    {
+                        <p class="dfi-empty">No proposition-level information value is available for this matter yet.</p>
                     }
                 </div>
 
@@ -3123,14 +4105,14 @@
                     <div class="poloxi-panel-header">
                         <div class="poloxi-panel-title">
                             <span class="poloxi-panel-icon"><i class="bi bi-diagram-3"></i></span>
-                            <div><span>End-to-end POLOXI pipeline</span><h2>MECE + hierarchical decomposition</h2></div>
+                            <div><span>End-to-end POLOXI pipeline</span><h2>Structured decision analysis</h2></div>
                         </div>
                         <span class="poloxi-status" title="Interpretation defines quality, evidence supports confidence, constraints veto only explicit requirements.">QUALITY FIRST</span>
                     </div>
                     <ol class="poloxi-pipeline-steps">
                         <li><strong>Query contract</strong><span>Separate fixed constraints from the ambiguous concept being ranked.</span></li>
-                        <li><strong>MECE hierarchy</strong><span>Decompose the ambiguous concept into non-overlapping, collectively exhaustive parent dimensions.</span></li>
-                        <li><strong>Hierarchical sub-criteria</strong><span>Break parent dimensions into child criteria, then roll children back into the parent so nothing is double counted.</span></li>
+                        <li><strong>Structured hierarchy</strong><span>Organize the ambiguous concept into distinct, comprehensive parent dimensions.</span></li>
+                        <li><strong>Hierarchical sub-criteria</strong><span>Expand parent dimensions into child criteria, then roll children back into the parent so nothing is double counted.</span></li>
                         <li><strong>Candidate discovery</strong><span>@(FinalRankedCandidates.Count > 0 ? "Merge interpretive candidates, harvested evidence names, and verified seed candidates; reject query echoes and pseudo-candidates." : "Candidate competition data was not produced for this execution.")</span></li>
                         <li><strong>Candidate × Branch matrix</strong><span>@(FinalRankedCandidates.Count > 0 ? "Score every candidate against every scoreable dimension and compute quality from interpretation-weighted dimensions." : "No final Candidate × Branch matrix is available for this run.")</span></li>
                         <li><strong>Evidence confidence</strong><span>Use source diversity and dimension coverage to disclose confidence/support, not to override quality.</span></li>
@@ -3140,7 +4122,7 @@
                     <div class="poloxi-formula-grid">
                         <article><span>Branch confidence</span><strong>0.45 × Interpretation + 0.55 × Evidence</strong><small>Used for lifecycle, support, and diagnostics.</small></article>
                         <article><span>Quality weighting</span><strong>Interpretation prior</strong><small>Determines dimension importance in the candidate composite.</small></article>
-                        <article><span>Roll-up</span><strong>50% parent + 50% children</strong><small>Uses hierarchical decomposition without double counting.</small></article>
+                        <article><span>Roll-up</span><strong>50% parent + 50% children</strong><small>Uses structured hierarchy without double counting.</small></article>
                         <article><span>Ranking order</span><strong>Quality → Support tier</strong><small>Evidence validates confidence; quality leads the answer.</small></article>
                     </div>
                 </section>
@@ -3350,7 +4332,7 @@
     {
         "ANALYZING" => "Interpreting",
         "HIERARCHY" => "Framing outcomes",
-        "NARROWING" => "Narrowing",
+        "NARROWING" => "Refining",
         "COMPLETED" => "Complete",
         null => "Idle",
         _ => _liveProgress!.Phase
@@ -3366,8 +4348,8 @@
     private sealed record DfiPipelineStage(string Title, string Subtitle);
     private static readonly IReadOnlyList<DfiPipelineStage> DfiPipelineStages = new[]
     {
-        new DfiPipelineStage("Narrowing", "Decomposing factors (level 1)"),
-        new DfiPipelineStage("Interpretation", "Narrowing interpretation paths"),
+        new DfiPipelineStage("Framing", "Structuring decision factors"),
+        new DfiPipelineStage("Interpretation", "Refining interpretation paths"),
         new DfiPipelineStage("Candidate Outcomes", "Framing candidate outcomes"),
         new DfiPipelineStage("Question Analysis", "Interpreting the question"),
         new DfiPipelineStage("Factor Registration", "Registering dependencies"),
@@ -3407,9 +4389,7 @@
             var raw = _livePhaseLog.Count > 0
                 ? (!string.IsNullOrWhiteSpace(_livePhaseLog[0].Message) ? _livePhaseLog[0].Message : _livePhaseLog[0].Label)
                 : DfiPipelineStages[DfiPipelineActiveIndex - 1].Subtitle;
-            raw = (raw ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
-            const int max = 64;
-            return raw.Length > max ? raw[..max].TrimEnd() + "…" : raw;
+            return (raw ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
         }
     }
     // Wall-clock elapsed since the first streamed phase, rendered as mm:ss in the cockpit header.
@@ -3471,7 +4451,7 @@
         {
             "ANALYZING" => "Interpreting the question",
             "HIERARCHY" => "Framing candidate outcomes",
-            "NARROWING" => "Narrowing interpretation paths",
+            "NARROWING" => "Refining interpretation paths",
             "COMPLETED" => "Decision complete",
             _ => update.Phase
         };
@@ -3526,7 +4506,14 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     private string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Continuous Decision Calibration (CDC)", "Decision Contract", "Hierarchy", "Factor Matrix", "Evidence", "Competition", "Investigation", "Readiness", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Decision Contract", "Hierarchy", "Factor Matrix", "Evidence", "Competition", "Investigation", "Readiness", "Document Intelligence", "Audit"];
+
+    private void SelectDfiTab(string tab)
+    {
+        _dfiTab = tab;
+        if (tab == "Document Intelligence" && _evidenceGraph is null && !_evidenceGraphLoading)
+            _ = LoadEvidenceGraphAsync();
+    }
 
     // ══ Continuous Decision Calibration (CDC) projections ═══════════════════════════════════════════
     // All projections are pure, read-only views over already-loaded, DB-backed data (_response,
@@ -3538,8 +4525,82 @@
         try { _cdcSnapshots = await Api.GetLegalDecisionMatterSnapshotsAsync(matterId); } catch { _cdcSnapshots = []; }
         try { _cdcChangeEvents = await Api.GetLegalDecisionMatterChangeEventsAsync(matterId); } catch { _cdcChangeEvents = []; }
         try { _cdcReviewTasks = await Api.GetLegalDecisionMatterReviewTasksAsync(matterId); } catch { _cdcReviewTasks = []; }
+        try { _dciDeltas = await Api.GetLegalDecisionMatterDeltasAsync(matterId); } catch { _dciDeltas = []; }
         _cdcSelectedSnapshotId ??= CdcSnapshots.FirstOrDefault()?.DecisionSnapshotId;
+        _dciSelectedDeltaId ??= DciDeltas.FirstOrDefault()?.DecisionDeltaId;
+        await LoadPropositionInfoValueAsync(matterId);
     }
+
+    // Advisory proposition-IV load: scores the matter's atomic fact-propositions for the latest decision
+    // session. Fails soft — any error leaves the panel in its empty-state without disrupting the CDC tab.
+    private async Task LoadPropositionInfoValueAsync(Guid matterId)
+    {
+        if (_propositionInfoValueLoading)
+            return;
+        _propositionInfoValueLoading = true;
+        try
+        {
+            var sessions = await Api.GetLegalDecisionMatterSessionsAsync(matterId);
+            var sessionId = sessions
+                .OrderByDescending(s => s.CreatedDateUtc)
+                .Select(s => (Guid?)s.DecisionSessionId)
+                .FirstOrDefault();
+            _propositionInfoValue = sessionId is { } id
+                ? await Api.GetLegalMatterPropositionInformationValueAsync(matterId, id)
+                : null;
+        }
+        catch
+        {
+            _propositionInfoValue = null;
+        }
+        finally
+        {
+            _propositionInfoValueLoading = false;
+        }
+    }
+
+    // Top proposition-IV targets (highest information value first) for the cockpit table.
+    private IReadOnlyList<Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValue> PropositionInfoValues =>
+        _propositionInfoValue is null
+            ? []
+            : _propositionInfoValue.Propositions
+                .OrderByDescending(p => p.InformationValue)
+                .Take(5)
+                .ToArray();
+
+    private decimal PropositionInfoValueMax =>
+        PropositionInfoValues.Count > 0 ? Math.Max(0.001m, PropositionInfoValues.Max(p => p.InformationValue)) : 1m;
+
+    private static string PropositionStateTone(string? verificationStateCode) => verificationStateCode?.ToUpperInvariant() switch
+    {
+        "SUPPORTED" => "ok",
+        "CONTRADICTED" => "err",
+        "DISPUTED" => "warn",
+        "VERIFICATIONREQUIRED" or "VERIFICATION_REQUIRED" => "info",
+        _ => "info",
+    };
+
+    // v4.0 advisory §9 Proposition Integrity Gate overlay tone/label/tooltip.
+    private static string PropositionIntegrityTone(string? disposition) => disposition switch
+    {
+        "Pass" => "ok",
+        "PassWithUnresolved" => "info",
+        "RepairRequired" => "warn",
+        "Blocked" => "err",
+        _ => "info",
+    };
+
+    private static string PropositionIntegrityLabel(string? disposition) => disposition switch
+    {
+        "Pass" => "Pass",
+        "PassWithUnresolved" => "Unresolved",
+        "RepairRequired" => "Repair",
+        "Blocked" => "Blocked",
+        _ => disposition ?? "—",
+    };
+
+    private static string PropositionIntegrityTitle(Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValue p)
+        => $"Integrity: {p.IntegrityDisposition} · structurally {(p.StructurallyEligible ? "eligible" : "ineligible")} · evidence {(p.EvidenceEligible ? "eligible" : "ineligible")}.";
 
     // Snapshots newest-first (highest SnapshotNumber = latest calibrated version).
     private IReadOnlyList<Legal.Application.Features.Intelligence.Decision.DecisionSnapshotDto> CdcSnapshots =>
@@ -4706,6 +5767,10 @@
         _error = null;
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
+        // Activate any prepared-but-not-enriched corpus documents before answering, using the model
+        // selected for this answer. Enrichment + CDC were deferred at upload; run them just-in-time so
+        // the answer reasons over a fully activated corpus. Fail-soft: activation must not block the answer.
+        await ActivateMatterCorpusForAnswerAsync();
         var correlationId = Guid.NewGuid().ToString("N");
         await StartLiveProgressAsync(correlationId);
         try
@@ -4724,6 +5789,87 @@
         {
             _loading = false;
             await StopLiveProgressAsync();
+        }
+    }
+
+    // Drives just-in-time corpus activation on the Disambiguate & Answer path. Uploaded documents are
+    // prepared only (extracted text, no propositions); this enriches the pending versions and runs CDC
+    // in bounded batches, animating the integrated pipeline's "Activated on answer" chips, before the
+    // answer request runs. Fail-soft: any activation failure is surfaced only in stage state, never fatal.
+    private bool _activating;
+    // Human-readable outcome of the most recent answer-time activation. Non-null only when activation
+    // was attempted and either failed outright or could not enrich every prepared version (e.g. the
+    // tenant has no usable CHAT route). Surfaced in the UI so an empty Evidence tab is never silent.
+    private string? _activationNotice;
+    private bool _activationFailed;
+    private async Task ActivateMatterCorpusForAnswerAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _activating) return;
+        _activating = true;
+        try
+        {
+            var status = await Api.GetLegalMatterCorpusStatusAsync(matterId, _searchCancellation?.Token ?? default);
+            if (status is null || status.PendingVersions <= 0) return;
+
+            _uploadStages ??= BuildUploadStages();
+            SetUploadStage("propositions", UploadStageState.Active);
+            SetUploadStage("cdc", UploadStageState.Active);
+            _activationNotice = null;
+            _activationFailed = false;
+
+            var model = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode;
+            var guard = 0;
+            // Process bounded batches until no prepared versions remain (or a safety cap is reached).
+            while (guard++ < 50)
+            {
+                var token = _searchCancellation?.Token ?? default;
+                token.ThrowIfCancellationRequested();
+                var result = await Api.ActivateLegalMatterCorpusAsync(matterId, model, 3, token);
+                if (result is null || result.IsComplete || result.ActivatedThisCall <= 0)
+                    break;
+            }
+
+            await LoadEvidenceGraphAsync();
+            var final = await Api.GetLegalMatterCorpusStatusAsync(matterId, _searchCancellation?.Token ?? default);
+            if (final is null || final.PendingVersions <= 0)
+            {
+                SetUploadStage("propositions", UploadStageState.Done);
+                SetUploadStage("cdc", UploadStageState.Done);
+                // Activation succeeded — the prepared-only banner is now stale, so clear it.
+                _uploadOutcome = null;
+                _activationNotice = null;
+                _activationFailed = false;
+            }
+            else
+            {
+                // Some versions could not be enriched (e.g. no CHAT route); keep them visibly deferred
+                // and tell the user why the Evidence tab may still be empty.
+                SetUploadStage("propositions", UploadStageState.Skipped);
+                SetUploadStage("cdc", UploadStageState.Skipped);
+                _activationFailed = true;
+                _activationNotice =
+                    $"{final.PendingVersions} document version(s) could not be activated into the reasoning engine, " +
+                    "so no propositions or evidence were derived for them. This usually means the tenant has no active " +
+                    "CHAT model route configured for LEGAL_DOCUMENT_SEMANTIC_EXTRACTION. The answer was still produced " +
+                    "from available sources, but the Evidence Graph may remain empty until routing is fixed.";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Answer was cancelled during activation — leave stage state as-is.
+        }
+        catch (Exception ex)
+        {
+            SetUploadStage("propositions", UploadStageState.Skipped);
+            SetUploadStage("cdc", UploadStageState.Skipped);
+            _activationFailed = true;
+            _activationNotice =
+                "Corpus activation failed before any evidence could be derived, so the Evidence Graph may be empty. " +
+                $"The answer was still produced from available sources. Details: {ex.Message}";
+        }
+        finally
+        {
+            _activating = false;
         }
     }
 

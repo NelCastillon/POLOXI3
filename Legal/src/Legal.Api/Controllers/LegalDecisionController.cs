@@ -3,6 +3,7 @@ using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Intelligence.Epistemic;
 using Legal.Application.Features.Saas;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,9 +16,12 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,IDecisionIntegrityRepository integrityRepository,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
+    // Corpus/matter management (uploads, prepare-only intake) uses the non-metered matter capability so
+    // that preparing documents never consumes the answer-time 'legal.decision.run' quota.
+    private const string MatterCapabilityCode = JudzCapabilities.Matters;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
     private Guid ActorUserId => AuthenticatedRequestContext.GetUserId(User) ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
 
@@ -120,6 +124,27 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> MatterDocuments(Guid matterId, CancellationToken cancellationToken)
         => Ok(await documentCorpusRepository.GetMatterDocumentsAsync(TenantId, matterId, cancellationToken));
 
+    // Matter-scoped evidence ↔ proposition graph for the Document Intelligence workspace.
+    [HttpGet("matters/{matterId:guid}/evidence-graph")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterEvidenceGraph(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await documentCorpusRepository.GetMatterEvidenceGraphAsync(TenantId, matterId, cancellationToken));
+
+    // Advisory proposition-level Information Value: scores each atomic matter fact-proposition on POLOXI's
+    // shared VIV scale (reusing ClaimVerificationPrioritizer) so the cockpit can surface which propositions
+    // are most worth investigating next. Display-only — it never blocks or alters the authoritative decision.
+    [HttpGet("matters/{matterId:guid}/sessions/{sessionId:guid}/proposition-information-value")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterPropositionInformationValue(Guid matterId, Guid sessionId, CancellationToken cancellationToken)
+        => Ok(await propositionInformationValueService.ScoreAsync(TenantId, matterId, sessionId, ActorUserId, persist: true, cancellationToken));
+
+    // Generates a randomized, source-traceable test corpus for a matter (used by "Generate Test Matter").
+    // Idempotent: returns the number of documents created (0 when the matter already has documents).
+    [HttpPost("matters/{matterId:guid}/generate-test-corpus")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> GenerateTestCorpus(Guid matterId, CancellationToken cancellationToken)
+        => Ok(new { DocumentsCreated = await documentCorpusRepository.GenerateRandomTestCorpusAsync(TenantId, ActorUserId, matterId, cancellationToken) });
+
     // ── Continuous Decision Integrity — Decision Change Review workspace ─────────────────────────
     // Tenant-wide list of matters with change activity (workspace landing list).
     [HttpGet("change-reviews")]
@@ -175,6 +200,25 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         return Ok(new DecisionChangeReviewDto(changeEvent, affectedSnapshot, impacts, reviewTasks));
     }
 
+    // Decision Change Intelligence — first-class DecisionDelta "what changed since" timeline for a matter.
+    [HttpGet("matters/{matterId:guid}/deltas")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterDecisionDeltas(Guid matterId, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await integrityRepository.GetMatterDecisionDeltasAsync(TenantId, matterId, cancellationToken));
+    }
+
+    // The DecisionDelta produced by reevaluating a single change event (null if not yet reevaluated).
+    [HttpGet("change-events/{changeEventId:guid}/delta")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ChangeEventDelta(Guid changeEventId, CancellationToken cancellationToken)
+    {
+        var delta = await integrityRepository.GetDecisionDeltaForEventAsync(TenantId, changeEventId, cancellationToken);
+        return delta is null ? NotFound() : Ok(delta);
+    }
+
     // Attorney action on a review task (acknowledge / resolve / dismiss). Never auto-executes
     // consequential changes; the attorney remains in control (Phase 3 governs replacing an approved decision).
     [HttpPut("review-tasks/{reviewTaskId:guid}/status")]
@@ -195,9 +239,10 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         IFormFile file,
         [FromForm] string? documentTypeCode,
         [FromForm] string? domainPackCode,
+        [FromForm] string? modelCode,
         CancellationToken cancellationToken)
     {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, MatterCapabilityCode, matterId, null, cancellationToken);
         if (denied is not null) return denied;
         if (file.Length <= 0)
             return BadRequest("A non-empty document is required.");
@@ -211,10 +256,38 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
             file.Length, HttpContext.TraceIdentifier)
         {
             DocumentTypeCode = documentTypeCode,
-            DomainPackCode = domainPackCode
+            DomainPackCode = domainPackCode,
+            ModelCode = modelCode,
+            // Upload only prepares the document (validate, scan, store, persist, extract). The metered
+            // Stage 1 semantic enrichment and Continuous Decision Integrity run later, on the
+            // Disambiguate & Answer path, via corpus activation.
+            PrepareOnly = true
         };
         return Ok(await documentIntakeService.IngestAsync(request, content, cancellationToken));
     }
+
+    // Activates prepared corpus documents (one bounded batch per call): runs Stage 1 semantic
+    // enrichment and Continuous Decision Integrity for versions uploaded prepare-only. Metered on the
+    // decision capability because this is where the expensive reasoning work is charged.
+    [HttpPost("matters/{matterId:guid}/corpus/activate")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ActivateMatterCorpus(
+        Guid matterId,
+        [FromQuery] string? modelCode,
+        [FromQuery] int batchSize,
+        CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await corpusActivationService.ActivateAsync(
+            TenantId, ActorUserId, matterId, modelCode, batchSize <= 0 ? 3 : batchSize, cancellationToken));
+    }
+
+    // Read-only enrichment/activation state for a matter's corpus (prepared vs activated counts).
+    [HttpGet("matters/{matterId:guid}/corpus/enrichment-status")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterCorpusEnrichmentStatus(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await corpusActivationService.GetStatusAsync(TenantId, matterId, cancellationToken));
 
     [HttpGet("documents/versions/{documentVersionId:guid}/passages")]
     [Authorize(Policy = IntelligencePolicies.Search)]
