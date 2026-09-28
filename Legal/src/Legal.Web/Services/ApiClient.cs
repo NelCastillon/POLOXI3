@@ -94,9 +94,17 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<bool> GetSearch2ShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide2/show-pipeline",token);
 
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
-    public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default)
+    public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default,string? idempotencyKey=null)
     {
-        using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/decide",request,token);
+        using var message=new HttpRequestMessage(HttpMethod.Post,"api/legal_decision/decide")
+        {
+            Content=JsonContent.Create(request)
+        };
+        // A stable per-answer key lets a retried submit reuse the original governed execution
+        // instead of committing a second legal.decision.run meter unit.
+        if(!string.IsNullOrWhiteSpace(idempotencyKey))
+            message.Headers.TryAddWithoutValidation("Idempotency-Key",idempotencyKey);
+        using var response=await _httpClient.SendAsync(message,token);
         await EnsureSuccessWithDetailAsync(response,token);
         return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse>(cancellationToken:token);
     }

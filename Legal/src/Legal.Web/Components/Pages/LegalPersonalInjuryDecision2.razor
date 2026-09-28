@@ -5728,6 +5728,16 @@
             {
                 _matter = await Api.GetLegalDecisionMatterAsync(matterId);
                 try { _documents = await Api.GetLegalMatterDocumentsAsync(matterId); } catch { _documents = []; }
+                // Show the intake pipeline whenever the matter already owns a corpus, so the
+                // "Prepared on upload -> Activated on answer" indicator is visible before the first
+                // answer. Prepared stages reflect stored documents; activation stages await the answer.
+                if (_documents.Count > 0)
+                {
+                    _uploadStages = BuildUploadStages();
+                    foreach (var key in new[] { "upload", "scan", "blob", "db", "extract" })
+                        SetUploadStage(key, UploadStageState.Done);
+                    await SyncActivationIndicatorAsync(matterId);
+                }
                 await LoadCalibrationDataAsync(matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
@@ -5802,6 +5812,31 @@
     // tenant has no usable CHAT route). Surfaced in the UI so an empty Evidence tab is never silent.
     private string? _activationNotice;
     private bool _activationFailed;
+    // Reflects the current corpus activation state into the pipeline's "Activated on answer" chips
+    // without running activation. Pending versions -> Queued; fully enriched -> Done; unknown -> Queued.
+    private async Task SyncActivationIndicatorAsync(Guid matterId)
+    {
+        try
+        {
+            var status = await Api.GetLegalMatterCorpusStatusAsync(matterId, _searchCancellation?.Token ?? default);
+            _uploadStages ??= BuildUploadStages();
+            if (status is not null && status.PendingVersions <= 0 && status.EnrichedVersions > 0)
+            {
+                SetUploadStage("propositions", UploadStageState.Done);
+                SetUploadStage("cdc", UploadStageState.Done);
+            }
+            else
+            {
+                SetUploadStage("propositions", UploadStageState.Queued);
+                SetUploadStage("cdc", UploadStageState.Queued);
+            }
+        }
+        catch
+        {
+            // Status is best-effort here; leave stages at their default (Queued) so the indicator still shows.
+            _uploadStages ??= BuildUploadStages();
+        }
+    }
     private async Task ActivateMatterCorpusForAnswerAsync()
     {
         if (MatterId is not { } matterId || matterId == Guid.Empty || _activating) return;

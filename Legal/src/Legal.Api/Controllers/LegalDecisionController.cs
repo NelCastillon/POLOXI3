@@ -19,9 +19,6 @@ namespace Legal.Api.Controllers;
 public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
-    // Corpus/matter management (uploads, prepare-only intake) uses the non-metered matter capability so
-    // that preparing documents never consumes the answer-time 'legal.decision.run' quota.
-    private const string MatterCapabilityCode = JudzCapabilities.Matters;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
     private Guid ActorUserId => AuthenticatedRequestContext.GetUserId(User) ?? throw new UnauthorizedAccessException("An authenticated user context is required.");
 
@@ -29,7 +26,12 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Decide([FromBody] DecisionSearchRequest request, CancellationToken cancellationToken)
     {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, null, cancellationToken);
+        // Honor a client-supplied Idempotency-Key so a retried answer (network retry, double submit)
+        // reuses the original governed execution instead of committing a second legal.decision.run unit.
+        var idempotencyKey = Request.Headers.TryGetValue("Idempotency-Key", out var key) && !string.IsNullOrWhiteSpace(key)
+            ? key.ToString()
+            : null;
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, idempotencyKey, cancellationToken);
         if (denied is not null) return denied;
         return Ok(await service.DecideAsync(
             request with
@@ -242,7 +244,10 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         [FromForm] string? modelCode,
         CancellationToken cancellationToken)
     {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, MatterCapabilityCode, matterId, null, cancellationToken);
+        // Upload is prepare-only and must NOT consume the metered legal.decision run quota.
+        // Gate on the matter-management capability instead; the expensive Stage 1 semantic
+        // enrichment and Continuous Decision Integrity are metered later on corpus activation.
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
         if (denied is not null) return denied;
         if (file.Length <= 0)
             return BadRequest("A non-empty document is required.");
@@ -267,8 +272,11 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     }
 
     // Activates prepared corpus documents (one bounded batch per call): runs Stage 1 semantic
-    // enrichment and Continuous Decision Integrity for versions uploaded prepare-only. Metered on the
-    // decision capability because this is where the expensive reasoning work is charged.
+    // enrichment and Continuous Decision Integrity for versions uploaded prepare-only. The answer
+    // path calls this in a loop (one call per bounded batch), so it must NOT charge the metered
+    // legal.decision.run meter per batch -- that would burn dozens of decision-run units per answer.
+    // The single metered decision charge is applied on the 'decide' answer endpoint; activation is
+    // gated on the non-metered 'legal.matters' capability.
     [HttpPost("matters/{matterId:guid}/corpus/activate")]
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> ActivateMatterCorpus(
@@ -277,7 +285,7 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         [FromQuery] int batchSize,
         CancellationToken cancellationToken)
     {
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
         if (denied is not null) return denied;
         return Ok(await corpusActivationService.ActivateAsync(
             TenantId, ActorUserId, matterId, modelCode, batchSize <= 0 ? 3 : batchSize, cancellationToken));
