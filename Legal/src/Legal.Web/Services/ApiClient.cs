@@ -94,17 +94,9 @@ public sealed class ApiClient(HttpClient httpClient)
     public async Task<bool> GetSearch2ShowPipelineAsync(CancellationToken token=default)=>await TryGetShowPipelineAsync("api/intelligence_wide2/show-pipeline",token);
 
     // POLOXI Legal Decision Intelligence (/legal/decision) — self-contained module.
-    public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default,string? idempotencyKey=null)
+    public async Task<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse?> LegalDecideAsync(Legal.Application.Features.Intelligence.Decision.DecisionSearchRequest request,CancellationToken token=default)
     {
-        using var message=new HttpRequestMessage(HttpMethod.Post,"api/legal_decision/decide")
-        {
-            Content=JsonContent.Create(request)
-        };
-        // A stable per-answer key lets a retried submit reuse the original governed execution
-        // instead of committing a second legal.decision.run meter unit.
-        if(!string.IsNullOrWhiteSpace(idempotencyKey))
-            message.Headers.TryAddWithoutValidation("Idempotency-Key",idempotencyKey);
-        using var response=await _httpClient.SendAsync(message,token);
+        using var response=await _httpClient.PostAsJsonAsync("api/legal_decision/decide",request,token);
         await EnsureSuccessWithDetailAsync(response,token);
         return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionSearchResponse>(cancellationToken:token);
     }
@@ -141,6 +133,7 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>> GetLegalDecisionMatterSessionsAsync(Guid matterId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSessionSummaryDto>>($"api/legal_decision/matters/{matterId}/sessions",token)??[];
         public async Task<IReadOnlyCollection<LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto?> GetLegalMatterEvidenceGraphAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto>($"api/legal_decision/matters/{matterId}/evidence-graph",token);
+        public async Task<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto?> GetLegalMatterHumanIntelligenceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto>($"api/legal_decision/matters/{matterId}/human-intelligence",token);
         public async Task<Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult?> GetLegalMatterPropositionInformationValueAsync(Guid matterId,Guid sessionId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult>($"api/legal_decision/matters/{matterId}/sessions/{sessionId}/proposition-information-value",token);
         public async Task GenerateLegalMatterTestCorpusAsync(Guid matterId,CancellationToken token=default){using var response=await _httpClient.PostAsync($"api/legal_decision/matters/{matterId}/generate-test-corpus",null,token);await EnsureSuccessWithDetailAsync(response,token);}
         public async Task<LegalDocumentDto?> UploadLegalMatterDocumentAsync(Guid matterId,IBrowserFile file,string? documentTypeCode,string? domainPackCode,string? modelCode=null,CancellationToken token=default)

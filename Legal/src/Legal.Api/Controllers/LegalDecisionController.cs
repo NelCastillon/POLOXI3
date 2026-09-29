@@ -16,7 +16,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -26,12 +26,7 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> Decide([FromBody] DecisionSearchRequest request, CancellationToken cancellationToken)
     {
-        // Honor a client-supplied Idempotency-Key so a retried answer (network retry, double submit)
-        // reuses the original governed execution instead of committing a second legal.decision.run unit.
-        var idempotencyKey = Request.Headers.TryGetValue("Idempotency-Key", out var key) && !string.IsNullOrWhiteSpace(key)
-            ? key.ToString()
-            : null;
-        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, idempotencyKey, cancellationToken);
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, request.MatterId, null, cancellationToken);
         if (denied is not null) return denied;
         return Ok(await service.DecideAsync(
             request with
@@ -131,6 +126,13 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterEvidenceGraph(Guid matterId, CancellationToken cancellationToken)
         => Ok(await documentCorpusRepository.GetMatterEvidenceGraphAsync(TenantId, matterId, cancellationToken));
+
+    // Attorney Decision Input (Human Intelligence): DB-backed canonical decision nodes with attorney
+    // relative assessments and the single approved matter assessment per node. Read-only (Phase 1).
+    [HttpGet("matters/{matterId:guid}/human-intelligence")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterHumanIntelligence(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await attorneyDecisionInputRepository.GetMatterHumanIntelligenceAsync(TenantId, matterId, cancellationToken));
 
     // Advisory proposition-level Information Value: scores each atomic matter fact-proposition on POLOXI's
     // shared VIV scale (reusing ClaimVerificationPrioritizer) so the cockpit can surface which propositions

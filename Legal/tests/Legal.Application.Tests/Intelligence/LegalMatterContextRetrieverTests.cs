@@ -51,7 +51,7 @@ public sealed class LegalMatterContextRetrieverTests
     }
 
     private static DecisionRetrievalArchitectureSettings Settings(bool enabled) =>
-        new(false, enabled, 12, 18000, true, true, false, true);
+        new(false, enabled, 12, 18000, true, true, false, true, false);
 
     private static LegalMatterContextItem Item(string extractionMethod) => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null, null,
@@ -86,7 +86,9 @@ public sealed class LegalMatterContextRetrieverTests
         public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId, Guid? matterId, Guid? decisionSessionId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
-        public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, IReadOnlyCollection<float>? queryEmbedding = null, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<IReadOnlyCollection<LegalPassageEmbeddingCandidate>> GetPassagesMissingEmbeddingAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task SavePassageEmbeddingAsync(Guid tenantId, Guid passageId, string embeddingJson, string embeddingModelCode, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<Guid> CreateDocumentAsync(Guid documentId, LegalDocumentIntakeRequest request, string sha256Hash, string storageReference, string malwareStatusCode, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<Guid?> FindActiveDocumentByHashAsync(Guid tenantId, Guid matterId, string sha256Hash, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task PurgeDocumentAsync(Guid tenantId, Guid userId, Guid documentId, CancellationToken cancellationToken = default) => throw Unexpected();

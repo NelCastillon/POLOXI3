@@ -7,6 +7,7 @@
 @inject BreadcrumbService Breadcrumbs
 @inject NavigationManager Navigation
 @inject IConfiguration Configuration
+@inject IWebHostEnvironment HostEnvironment
 @inject IJSRuntime JS
 
 <LegalWorkspace ExtraClass="intel-compact">
@@ -125,7 +126,14 @@
                                         </span>
                                     </div>
                                     <div class="dfi-pipeline-metrics">
-                                        <span class="dfi-pipeline-flag" title="Live feed"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Live</span>
+                                        @if (_liveFeedConnected)
+                                        {
+                                            <span class="dfi-pipeline-flag" title="Live feed connected"><i class="bi bi-lightning-charge-fill" aria-hidden="true"></i> Live</span>
+                                        }
+                                        else if (DfiLiveProvisional)
+                                        {
+                                            <span class="dfi-pipeline-flag dfi-pipeline-flag--offline" title="@(_liveFeedError ?? "Live feed not connected — showing estimated progress.")"><i class="bi bi-wifi-off" aria-hidden="true"></i> Offline</span>
+                                        }
                                         <span title="Competing outcomes"><i class="bi bi-list-ul" aria-hidden="true"></i> @DfiLiveCompetingOutcomes</span>
                                         <span title="Identified factors"><i class="bi bi-diagram-2" aria-hidden="true"></i> @DfiLiveFactorCount</span>
                                         <span title="Admitted evidence"><i class="bi bi-chat-square-text" aria-hidden="true"></i> @DfiLiveEvidenceCount</span>
@@ -507,6 +515,9 @@
                                         </div>
                                                     </div>
                                                 }
+                                                break;
+                                            case "Decision Analysis":
+                                                @DecisionAnalysisDashboard
                                                 break;
                                             case "Continuous Decision Calibration (CDC)":
                                                 @CdcDashboard
@@ -1145,10 +1156,142 @@
                                         }
                                     </div>
                                     <p class="dfi-prototype-note">A COMPLETED technical execution is not by itself a successful legal decision. The distinction between execution, grounding, competition, and readiness is essential for enterprise trust.</p>
-                                </div>
-                                break;
-                            case "Document Intelligence":
-                                <div class="di-workspace">
+                                     </div>
+                                     break;
+                                case "Human Intelligence":
+                                    <div class="hi-workspace">
+                                        <div class="di-head">
+                                            <div class="di-head-icon"><i class="bi bi-people"></i></div>
+                                            <div class="di-head-body">
+                                                <span>Attorney Decision Input</span>
+                                                <h4>Human Intelligence</h4>
+                                                <p class="dfi-panel-sub">Authorized attorneys contribute structured professional judgment — inclusion, placement, relative value and rationale — directly into the decision model. POLOXI remains the single authoritative evaluator.</p>
+                                            </div>
+                                            <button type="button" class="um-btn um-btn-ghost um-btn-sm di-refresh" @onclick="LoadHumanIntelligenceAsync" disabled="@_humanIntelLoading" title="Reload human intelligence">
+                                                <i class="bi @(_humanIntelLoading ? "bi-arrow-repeat di-spin" : "bi-arrow-clockwise")"></i>
+                                            </button>
+                                        </div>
+
+                                        @if (_humanIntelError is not null)
+                                        {
+                                            <div class="alert alert-danger" style="border-left: 4px solid #dc3545; animation: um-shake 0.3s ease;">@_humanIntelError</div>
+                                        }
+                                        else if (_humanIntelLoading && _humanIntel is null)
+                                        {
+                                            <div class="di-empty"><i class="bi bi-hourglass-split"></i><p>Loading human intelligence…</p></div>
+                                        }
+                                        else if (_humanIntel is { AttorneyDecisionInputEnabled: false })
+                                        {
+                                            <div class="di-empty">
+                                                <i class="bi bi-lock"></i>
+                                                <p>Attorney Decision Input is not enabled for this workspace. Enable <code>AttorneyDecisionInput.Enabled</code> in decision settings to contribute and view attorney decision nodes.</p>
+                                            </div>
+                                        }
+                                        else if (_humanIntel is null || _humanIntel.NodeCount == 0)
+                                        {
+                                            <div class="di-empty">
+                                                <i class="bi bi-person-plus"></i>
+                                                <p>No attorney decision input yet for this matter. When authorized attorneys add candidates, factors or propositions to the decision model, their assessments and approvals will appear here.</p>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="di-kpis">
+                                                <div class="di-kpi"><span class="di-kpi-val">@_humanIntel.NodeCount</span><span class="di-kpi-lbl">Decision nodes</span></div>
+                                                <div class="di-kpi"><span class="di-kpi-val">@_humanIntel.AttorneyCount</span><span class="di-kpi-lbl">Attorneys</span></div>
+                                                <div class="di-kpi"><span class="di-kpi-val">@_humanIntel.AssessmentCount</span><span class="di-kpi-lbl">Assessments</span></div>
+                                                <div class="di-kpi"><span class="di-kpi-val">@_humanIntel.ApprovedAssessmentCount</span><span class="di-kpi-lbl">Approved</span></div>
+                                                <div class="di-kpi"><span class="di-kpi-val">@_humanIntel.OpenChallengeCount</span><span class="di-kpi-lbl">Open challenges</span></div>
+                                            </div>
+
+                                            <div class="di-grid">
+                                                <div class="di-col">
+                                                    <h5 class="di-col-title"><i class="bi bi-diagram-3"></i> Decision model hierarchy</h5>
+                                                    @foreach (var node in HiNodes)
+                                                    {
+                                                        <button type="button" class="di-doc @(_hiSelectedNodeId == node.DecisionNodeId ? "di-doc--active" : "")"
+                                                                style="padding-left:@(8 + Math.Max(0, node.NodeLevel - 1) * 14)px"
+                                                                @onclick="() => _hiSelectedNodeId = node.DecisionNodeId">
+                                                            <div class="di-doc-main">
+                                                                <span class="di-pill di-pill-@HiKindTone(node.NodeKindCode)">L@node.NodeLevel</span>
+                                                                <span class="di-doc-name" title="@node.NodeText">@node.NodeText</span>
+                                                            </div>
+                                                            <div class="di-doc-meta">
+                                                                <span class="di-tag">@node.OriginCode</span>
+                                                                @if (node.ApprovedAssessment is { } approved)
+                                                                {
+                                                                    <span class="di-doc-count" title="Approved matter assessment">@approved.ConfirmedValue.ToString("0.##")</span>
+                                                                }
+                                                                else if (node.Assessments.Count > 0)
+                                                                {
+                                                                    <span class="di-doc-count" title="Attorney assessments">@node.Assessments.Count</span>
+                                                                }
+                                                            </div>
+                                                        </button>
+                                                    }
+                                                </div>
+
+                                                <div class="di-col">
+                                                    @if (HiSelectedNode is { } sel)
+                                                    {
+                                                        <h5 class="di-col-title"><i class="bi bi-card-list"></i> Selected node</h5>
+                                                        <div class="dfi-panel-card">
+                                                            <p class="di-prop-text">@sel.NodeText</p>
+                                                            <ul class="dfi-list">
+                                                                <li>Kind <span class="dfi-pill">@sel.NodeKindCode (L@sel.NodeLevel)</span></li>
+                                                                <li>Origin <span class="dfi-pill">@sel.OriginCode</span></li>
+                                                                <li>Structural <span class="dfi-pill">@sel.StructuralStateCode</span></li>
+                                                                <li>Evidence <span class="dfi-pill">@sel.EvidenceStateCode</span></li>
+                                                                <li>Authority <span class="dfi-pill">@sel.AuthorityStateCode</span></li>
+                                                                <li>Final evaluated POLOXI value <span class="dfi-pill">@(sel.EvaluatedValue?.ToString("0.##") ?? "Pending")</span></li>
+                                                                @if (sel.ApprovedAssessment is { } ap)
+                                                                {
+                                                                    <li>Approved matter assessment <span class="dfi-pill">@ap.ConfirmedValue.ToString("0.##") · @ap.ApprovedByDisplayName</span></li>
+                                                                }
+                                                            </ul>
+                                                        </div>
+
+                                                        <h5 class="di-col-title"><i class="bi bi-people"></i> Attorney assessments</h5>
+                                                        @if (sel.Assessments.Count == 0)
+                                                        {
+                                                            <p class="dfi-empty">No attorney assessments recorded for this node yet.</p>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="dfi-table-wrap">
+                                                                <table class="dfi-table">
+                                                                    <thead>
+                                                                        <tr><th>Attorney</th><th>Role</th><th>Assessment</th><th>Rationale</th><th>Status</th><th>Date</th></tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        @foreach (var a in sel.Assessments)
+                                                                        {
+                                                                            <tr>
+                                                                                <td>@(string.IsNullOrWhiteSpace(a.AttorneyDisplayName) ? "—" : a.AttorneyDisplayName)</td>
+                                                                                <td>@(a.AttorneyRole ?? "—")</td>
+                                                                                <td>@a.ConfirmedValue.ToString("0.##")</td>
+                                                                                <td>@(string.IsNullOrWhiteSpace(a.Rationale) ? "—" : a.Rationale)</td>
+                                                                                <td><span class="dfi-pill">@a.StatusCode</span></td>
+                                                                                <td>@a.CreatedDateUtc.ToString("yyyy-MM-dd")</td>
+                                                                            </tr>
+                                                                        }
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                            <p class="dfi-prototype-note">Multiple attorneys may independently assess one canonical node. Assessments are never automatically averaged; only a single governance-approved matter assessment is eligible for authoritative POLOXI scoring.</p>
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="di-empty"><i class="bi bi-hand-index"></i><p>Select a decision node to review its attorney assessments and approval status.</p></div>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                    break;
+                                case "Document Intelligence":
+                                    <div class="di-workspace">
                                     <div class="di-head">
                                         <div class="di-head-icon"><i class="bi bi-file-earmark-text"></i></div>
                                         <div class="di-head-body">
@@ -2334,6 +2477,12 @@
     private string? _evidenceGraphError;
     private Guid? _diSelectedDocumentId;
 
+    // ── Human Intelligence (Attorney Decision Input) — matter-scoped, DB-backed, read-only ──────────
+    private Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto? _humanIntel;
+    private bool _humanIntelLoading;
+    private string? _humanIntelError;
+    private Guid? _hiSelectedNodeId;
+
     // ── Continuous Decision Calibration (CDC) — matter-scoped calibration history ──────────────────
     // Real, DB-backed data loaded through the legal_decision API. Snapshots track prior calibrated
     // decision versions; change events represent new information processed by the pipeline; review
@@ -2466,6 +2615,41 @@
             StateHasChanged();
         }
     }
+
+    // Loads the DB-backed Attorney Decision Input (Human Intelligence) projection for this matter.
+    private async Task LoadHumanIntelligenceAsync()
+    {
+        if (MatterId is not { } matterId || matterId == Guid.Empty || _humanIntelLoading)
+            return;
+        _humanIntelLoading = true;
+        _humanIntelError = null;
+        try
+        {
+            _humanIntel = await Api.GetLegalMatterHumanIntelligenceAsync(matterId);
+        }
+        catch (Exception ex)
+        {
+            _humanIntelError = $"Failed to load human intelligence: {ex.Message}";
+        }
+        finally
+        {
+            _humanIntelLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.AttorneyDecisionNodeDto> HiNodes
+        => _humanIntel?.Nodes ?? [];
+
+    private Legal.Application.Features.Intelligence.Decision.AttorneyDecisionNodeDto? HiSelectedNode
+        => _hiSelectedNodeId is { } id ? HiNodes.FirstOrDefault(n => n.DecisionNodeId == id) : null;
+
+    private static string HiKindTone(string kind) => kind switch
+    {
+        "Candidate" => "info",
+        "Factor" => "warn",
+        _ => "muted"
+    };
 
     private IEnumerable<LegalEvidenceGraphItemDto> DiVisibleEvidence
         => _evidenceGraph is null
@@ -3297,6 +3481,449 @@
                             }
                             break;
                     }
+                </div>
+            }
+        </div>
+    };
+
+    // ── Decision Analysis tab state ──────────────────────────────────────────────────────────────
+    // Every value on this tab is a PROJECTION of the authoritative POLOXI DecisionSnapshot held in
+    // _response (candidates, factor inventory, shared dependencies, proposed authorities, evidence).
+    // Nothing here computes a new score, IV, hierarchy, or candidate — read-model only.
+    private string _daSubTab = "Decision Brief";
+    private static readonly string[] DaSubTabs =
+        ["Decision Brief", "Factors", "Propositions", "Evidence", "Contradictions", "Authority",
+         "Proof Map", "Causation", "Chronology", "Entities", "Frontier & Gaps", "Flip Points",
+         "Scenario Lab", "Investigation", "Attorney Input", "Decision Changes", "Full Trace"];
+    private string? _daSelectedFactorId;
+    private Guid? _daSelectedCandidateId;
+
+    private IReadOnlyList<WideCandidateDto> DaCandidates => FinalRankedCandidates.Take(4).ToArray();
+    private WideCandidateDto? DaSelectedCandidate => DaCandidates.Count == 0 ? null
+        : (_daSelectedCandidateId is null ? DaCandidates[0]
+            : DaCandidates.FirstOrDefault(c => c.WideCandidateId == _daSelectedCandidateId) ?? DaCandidates[0]);
+    private int DaSelectedCandidateIndex
+    {
+        get
+        {
+            var sel = DaSelectedCandidate;
+            if (sel is null) return 0;
+            for (var i = 0; i < DaCandidates.Count; i++)
+            {
+                if (DaCandidates[i].WideCandidateId == sel.WideCandidateId) return i;
+            }
+            return 0;
+        }
+    }
+    private void DaSelectCandidate(Guid id) => _daSelectedCandidateId = id;
+    private WideFactorInventoryDto? DaInventory => _response?.DecisionInspector?.FactorInventory;
+    private IReadOnlyList<WideFactorDto> DaFactors => DaInventory?.Factors?.ToArray() ?? [];
+    private IReadOnlyList<WideFactorDto> DaParentFactors => DaFactors.Where(f => f.NodeKind == "PARENT").ToArray();
+    private IReadOnlyList<WideFactorDto> DaAtomicFactors => DaFactors.Where(f => f.NodeKind == "ATOMIC").ToArray();
+    private IReadOnlyList<WideFactorDto> DaContradictedFactors => DaFactors.Where(f => f.Contradictions.Count > 0).ToArray();
+    private IReadOnlyList<WideInspectorDependencyDto> DaSharedDeps => _response?.DecisionInspector?.SharedDependencies?.ToArray() ?? [];
+    private IReadOnlyList<WideInspectorDependencyDto> DaFrontierDeps => DaSharedDeps.Where(d => !string.IsNullOrWhiteSpace(d.UnresolvedInformation)).ToArray();
+    private IReadOnlyList<WideProposedAuthorityDto> DaAuthorities => _response?.ProposedLegalAuthorities?.ToArray() ?? [];
+    private IReadOnlyList<PoloxiEvidenceDto> DaEvidence => _response?.Evidence?.OrderByDescending(e => e.RelevanceScore).ToArray() ?? [];
+    private WideFactorDto? DaSelectedFactor => _daSelectedFactorId is null
+        ? DaAtomicFactors.FirstOrDefault()
+        : DaFactors.FirstOrDefault(f => f.FactorId == _daSelectedFactorId) ?? DaAtomicFactors.FirstOrDefault();
+
+    private decimal DaModelConfidence => _response?.DecisionConfidence ?? _response?.FinalConfidence ?? 0m;
+    private decimal DaDecisionUncertainty => Math.Clamp(1m - DaModelConfidence, 0m, 1m);
+    private decimal DaStructuralCoverage => _response?.EvidenceCoverage ?? 0m;
+    private decimal DaEvidenceCoverage => _response?.DecisionEvidenceCoverage ?? 0m;
+    private decimal DaAuthorityCoverage => DaAuthorities.Count == 0 ? 0m
+        : (decimal)DaAuthorities.Count(a => string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase)) / DaAuthorities.Count;
+    private string DaStabilityState => _response?.WinnerStability switch
+    {
+        null => "INSUFFICIENT HISTORY",
+        >= 0.8m => "STABLE",
+        >= 0.5m => "RECENTLY CHANGED",
+        _ => "VOLATILE"
+    };
+    private string DaReadinessState => DaInventory?.DecisionReadinessStatus ?? "PROVISIONAL";
+    private string DaCandidateState(WideCandidateDto c) => c.IsConstraintViolation
+        ? "RULED OUT"
+        : c.SupportTierCode switch { "STRONG" => "SUPPORTED", "MODERATE" => "CONTESTED", "LIMITED" => "UNRESOLVED", _ => "CONTESTED" };
+    private static string DaFactorStateLabel(WideFactorDto f) => f.Contradictions.Count > 0 ? "CONTRADICTED"
+        : f.EvidenceAdmissionState switch
+        {
+            "VERIFIED" => "ESTABLISHED",
+            "SUPPORTED" => "SUPPORTED",
+            "EXTRACTED" or "SOURCE_AVAILABLE" or "SUPPLIED" => "SUPPLIED",
+            "UNRESOLVED" => "UNRESOLVED",
+            _ => f.EvidenceAdmissionState
+        };
+    private static string DaFactorTone(WideFactorDto f) => DaFactorStateLabel(f) switch
+    {
+        "ESTABLISHED" => "ok",
+        "SUPPORTED" => "ok",
+        "CONTRADICTED" => "bad",
+        "UNRESOLVED" => "warn",
+        _ => "muted"
+    };
+    private void DaSelectFactor(string factorId) => _daSelectedFactorId = factorId;
+
+    private RenderFragment DecisionAnalysisDashboard => __builder =>
+    {
+        <div class="da-root">
+            @if (_response is null || DaCandidates.Count == 0)
+            {
+                <div class="da-empty">
+                    <i class="bi bi-diagram-3" aria-hidden="true"></i>
+                    <h4>No decision snapshot yet</h4>
+                    <p>Run a decision analysis for this matter. Once POLOXI produces a candidate competition, this tab projects the authoritative decision snapshot — candidate headers, factor map, evidence balance, contradictions, authority map and full trace — with no fabricated values.</p>
+                </div>
+            }
+            else
+            {
+                var leader = DaCandidates[0];
+                var selected = DaSelectedCandidate ?? leader;
+                var selectedIdx = DaSelectedCandidateIndex + 1;
+                var maxScore = Math.Max(0.01m, DaCandidates.Max(c => c.CompositeScore));
+
+                <div class="da-candstrip" role="group" aria-label="Select a candidate to inspect">
+                    @for (var i = 0; i < DaCandidates.Count; i++)
+                    {
+                        var c = DaCandidates[i];
+                        var idx = i + 1;
+                        var isSel = c.WideCandidateId == selected.WideCandidateId;
+                        <button type="button" class="da-cand da-cand--c@(idx) @(isSel ? "da-cand--leader" : "")"
+                                aria-pressed="@(isSel ? "true" : "false")"
+                                aria-label="@($"Candidate {idx}: {c.DisplayName}, POLOXI score {(c.CompositeScore * 100m).ToString("0")}{(isSel ? ", selected" : "")}")"
+                                @onclick="() => DaSelectCandidate(c.WideCandidateId)">
+                            <span class="da-cand-code">C@(idx)</span>
+                            <span class="da-cand-name">@c.DisplayName</span>
+                            <span class="da-cand-score">@((c.CompositeScore * 100m).ToString("0"))</span>
+                            <span class="da-cand-track"><span class="da-cand-fill" style="width:@(((c.CompositeScore / maxScore) * 100m).ToString("0"))%"></span></span>
+                        </button>
+                    }
+                </div>
+
+                <div class="da-grid3">
+                    @* ── Selected candidate header card ── *@
+                    <div class="da-panel da-headercard">
+                        <div class="da-headercard-top">
+                            <span class="da-cand-code da-cand-code--lg da-cand--c@(selectedIdx)">C@(selectedIdx)</span>
+                            <div>
+                                <h4>@selected.DisplayName</h4>
+                                <span class="da-chip da-chip--@(selected.IsConstraintViolation ? "bad" : "warn")">@DaCandidateState(selected)</span>
+                            </div>
+                        </div>
+                        @if (!string.IsNullOrWhiteSpace(selected.Detail))
+                        {
+                            <p class="da-headercard-detail">@selected.Detail</p>
+                        }
+                        <div class="da-metricgrid">
+                            <div class="da-metric"><span class="da-metric-lbl">POLOXI Decision Score</span><span class="da-metric-val">@((selected.CompositeScore * 100m).ToString("0"))</span><span class="da-metric-scope da-metric-scope--cand">C@(selectedIdx)</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Model Confidence</span><span class="da-metric-val">@selected.EvidenceConfidence.ToString("0.00")</span><span class="da-metric-scope da-metric-scope--cand">C@(selectedIdx)</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Decision Uncertainty</span><span class="da-metric-val">@DaDecisionUncertainty.ToString("0.00")</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Decision Stability</span><span class="da-metric-val da-metric-val--sm">@DaStabilityState</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Structural Coverage</span><span class="da-metric-val">@DaStructuralCoverage.ToString("P0")</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Evidence Coverage</span><span class="da-metric-val">@selected.EvidenceCoverage.ToString("P0")</span><span class="da-metric-scope da-metric-scope--cand">C@(selectedIdx)</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Authority Coverage</span><span class="da-metric-val">@DaAuthorityCoverage.ToString("P0")</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Decision Frontier</span><span class="da-metric-val">@DaFrontierDeps.Count</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                            <div class="da-metric"><span class="da-metric-lbl">Decision Readiness</span><span class="da-metric-val da-metric-val--sm">@DaReadinessState</span><span class="da-metric-scope da-metric-scope--wide">Decision-wide</span></div>
+                        </div>
+                    </div>
+
+                    @* ── Candidate comparison (key metrics) ── *@
+                    <div class="da-panel">
+                        <h4 class="da-panel-title">Candidate Comparison <span class="da-panel-sub">Key metrics</span></h4>
+                        <div class="da-tablewrap">
+                            <table class="da-table">
+                                <thead>
+                                    <tr>
+                                        <th>Metric</th>
+                                        @for (var i = 0; i < DaCandidates.Count; i++)
+                                        {
+                                            <th>C@(i + 1) @DaCandidates[i].DisplayName</th>
+                                        }
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td>POLOXI Score</td>@foreach (var c in DaCandidates){<td>@((c.CompositeScore * 100m).ToString("0"))</td>}</tr>
+                                    <tr><td>Model Confidence</td>@foreach (var c in DaCandidates){<td>@c.EvidenceConfidence.ToString("0.00")</td>}</tr>
+                                    <tr><td>Quality Score</td>@foreach (var c in DaCandidates){<td>@c.QualityScore.ToString("P0")</td>}</tr>
+                                    <tr><td>Evidence Coverage</td>@foreach (var c in DaCandidates){<td>@c.EvidenceCoverage.ToString("P0")</td>}</tr>
+                                    <tr><td>Support Tier</td>@foreach (var c in DaCandidates){<td>@c.SupportTierCode</td>}</tr>
+                                    <tr><td>Interpretive Support</td>@foreach (var c in DaCandidates){<td>@c.InterpretiveSupportCount</td>}</tr>
+                                    <tr><td>Evidence Hosts</td>@foreach (var c in DaCandidates){<td>@c.EvidenceHostSupportCount</td>}</tr>
+                                    <tr><td>Decision State</td>@foreach (var c in DaCandidates){<td>@DaCandidateState(c)</td>}</tr>
+                                    <tr><td>Est. Resolution</td>@foreach (var c in DaCandidates){<td>@(c.EstimatedResolutionLabel ?? "—")</td>}</tr>
+                                    <tr><td>Est. Cost Band</td>@foreach (var c in DaCandidates){<td>@(c.EstimatedCostBand ?? "—")</td>}</tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    @* ── Decision landscape (value × likelihood) ── *@
+                    <div class="da-panel">
+                        <h4 class="da-panel-title">Decision Landscape</h4>
+                        <div class="da-scatter">
+                            <span class="da-scatter-ylbl">Higher likelihood</span>
+                            <span class="da-scatter-ylbl da-scatter-ylbl--low">Lower likelihood</span>
+                            <span class="da-scatter-xlbl da-scatter-xlbl--low">Lower value</span>
+                            <span class="da-scatter-xlbl">Higher value</span>
+                            @for (var i = 0; i < DaCandidates.Count; i++)
+                            {
+                                var c = DaCandidates[i];
+                                var x = Math.Clamp(c.CompositeScore * 100m, 4m, 94m);
+                                var y = Math.Clamp(c.EvidenceConfidence * 100m, 4m, 92m);
+                                <span class="da-scatter-dot da-scatter-dot--c@(i + 1)" style="left:@x.ToString("0")%;bottom:@y.ToString("0")%"
+                                      title="C@(i + 1) @c.DisplayName · score @((c.CompositeScore * 100m).ToString("0")) · confidence @c.EvidenceConfidence.ToString("0.00")">
+                                    C@(i + 1)
+                                </span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @* ── Inner sub-tab strip ── *@
+                <div class="da-subtabs" role="tablist">
+                    @foreach (var st in DaSubTabs)
+                    {
+                        <button type="button" role="tab" aria-selected="@(_daSubTab == st ? "true" : "false")" class="da-subtab @(_daSubTab == st ? "da-subtab--active" : "")" @onclick="() => _daSubTab = st">@st</button>
+                    }
+                </div>
+
+                <div class="da-subgrid">
+                    <div class="da-panel da-subbody">
+                        @switch (_daSubTab)
+                        {
+                            case "Decision Brief":
+                                <h4 class="da-panel-title">Executive Summary (C1)</h4>
+                                @if (!string.IsNullOrWhiteSpace(_response.FinalAnswer))
+                                {
+                                    <p class="da-brief">@_response.FinalAnswer</p>
+                                }
+                                else if (!string.IsNullOrWhiteSpace(leader.Detail))
+                                {
+                                    <p class="da-brief">@leader.Detail</p>
+                                }
+                                else
+                                {
+                                    <p class="da-empty-inline">No composed decision brief is available for this snapshot yet.</p>
+                                }
+                                @if (DaInventory is { BlockingObligations.Count: > 0 })
+                                {
+                                    <div class="da-callout da-callout--warn">
+                                        <strong>Blocking obligations</strong>
+                                        <ul>@foreach (var b in DaInventory.BlockingObligations){<li>@b</li>}</ul>
+                                    </div>
+                                }
+                                break;
+
+                            case "Factors":
+                                <h4 class="da-panel-title">Material Factors (L1 / L2)</h4>
+                                @if (DaParentFactors.Count == 0 && DaFactors.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No factor inventory was produced for this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <table class="da-table">
+                                        <thead><tr><th>Factor</th><th>Type</th><th>State</th><th>Availability</th><th>Verification</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var f in (DaParentFactors.Count > 0 ? DaParentFactors : DaFactors))
+                                            {
+                                                <tr>
+                                                    <td>@f.FactorName</td>
+                                                    <td>@f.FactorType</td>
+                                                    <td><span class="da-chip da-chip--@DaFactorTone(f)">@DaFactorStateLabel(f)</span></td>
+                                                    <td>@f.Availability</td>
+                                                    <td>@f.VerificationStatus</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                break;
+
+                            case "Propositions":
+                                <h4 class="da-panel-title">Proposition Ledger (@DaAtomicFactors.Count)</h4>
+                                @if (DaAtomicFactors.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No atomic propositions were resolved for this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <table class="da-table">
+                                        <thead><tr><th>Proposition</th><th>State</th><th>Admission</th><th>Binding</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var f in DaAtomicFactors)
+                                            {
+                                                <tr class="da-row-click" @onclick="() => DaSelectFactor(f.FactorId)">
+                                                    <td>@f.FactorName</td>
+                                                    <td><span class="da-chip da-chip--@DaFactorTone(f)">@DaFactorStateLabel(f)</span></td>
+                                                    <td>@f.EvidenceAdmissionState</td>
+                                                    <td>@f.BindingAdmissibility</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                break;
+
+                            case "Evidence":
+                                <h4 class="da-panel-title">Evidence Balance (@DaEvidence.Count)</h4>
+                                @if (DaEvidence.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No evidence items were admitted for this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <table class="da-table">
+                                        <thead><tr><th>Source</th><th>Module</th><th>Relevance</th><th>Rank</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var e in DaEvidence.Take(40))
+                                            {
+                                                <tr>
+                                                    <td>@e.Title</td>
+                                                    <td>@e.ModuleCode</td>
+                                                    <td>@e.RelevanceScore.ToString("P0")</td>
+                                                    <td>@e.RankNumber</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                break;
+
+                            case "Contradictions":
+                                <h4 class="da-panel-title">Contradiction Intelligence (@DaContradictedFactors.Count)</h4>
+                                @if (DaContradictedFactors.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No contradicted propositions were detected in this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <ul class="da-contra">
+                                        @foreach (var f in DaContradictedFactors)
+                                        {
+                                            <li>
+                                                <strong>@f.FactorName</strong>
+                                                <div class="da-contra-conflicts">
+                                                    @foreach (var conflict in f.Contradictions)
+                                                    {
+                                                        <span class="da-chip da-chip--bad">@conflict</span>
+                                                    }
+                                                </div>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                                break;
+
+                            case "Authority":
+                                <h4 class="da-panel-title">Authority Map (@DaAuthorities.Count)</h4>
+                                @if (DaAuthorities.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No legal authorities were proposed for this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <table class="da-table">
+                                        <thead><tr><th>Authority</th><th>Kind</th><th>Relevance</th><th>Verification</th></tr></thead>
+                                        <tbody>
+                                            @foreach (var a in DaAuthorities)
+                                            {
+                                                <tr>
+                                                    <td>@a.Name</td>
+                                                    <td>@a.Kind</td>
+                                                    <td>@a.Relevance</td>
+                                                    <td><span class="da-chip da-chip--@(string.Equals(a.VerificationStatus, "VERIFIED", StringComparison.OrdinalIgnoreCase) ? "ok" : "muted")">@a.VerificationStatus</span></td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                break;
+
+                            case "Frontier & Gaps":
+                                <h4 class="da-panel-title">Decision Frontier (@DaFrontierDeps.Count)</h4>
+                                @if (DaFrontierDeps.Count == 0)
+                                {
+                                    <p class="da-empty-inline">No unresolved decision-frontier dependencies remain for this snapshot.</p>
+                                }
+                                else
+                                {
+                                    <ul class="da-frontier">
+                                        @foreach (var d in DaFrontierDeps)
+                                        {
+                                            <li>
+                                                <div><strong>@d.Proposition</strong><span class="da-chip da-chip--warn">@d.VerificationState</span></div>
+                                                @if (!string.IsNullOrWhiteSpace(d.UnresolvedInformation))
+                                                {
+                                                    <p class="da-frontier-un">@d.UnresolvedInformation</p>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                                break;
+
+                            case "Attorney Input":
+                                <h4 class="da-panel-title">Attorney Decision Input</h4>
+                                <p class="da-empty-inline">Attorney assessments for this snapshot are surfaced on the Human Intelligence tab. When authorized attorneys assess these candidates, factors and propositions, their approved matter assessments appear here.</p>
+                                break;
+
+                            default:
+                                <h4 class="da-panel-title">@_daSubTab</h4>
+                                <p class="da-empty-inline">This projection reads directly from the authoritative decision snapshot. Backed data for this view is populated as the Decision Proof Ledger substrate is produced for the current matter — no values are shown until they trace to real snapshot state.</p>
+                                break;
+                        }
+                    </div>
+
+                    @* ── Selected proposition drawer ── *@
+                    <div class="da-panel da-drawer">
+                        <h4 class="da-panel-title">Selected Proposition</h4>
+                        @if (DaSelectedFactor is { } sf)
+                        {
+                            <div class="da-drawer-head">
+                                <span class="da-chip da-chip--@DaFactorTone(sf)">@DaFactorStateLabel(sf)</span>
+                                <strong>@sf.FactorName</strong>
+                            </div>
+                            <dl class="da-drawer-dl">
+                                <dt>Factor type</dt><dd>@sf.FactorType</dd>
+                                <dt>Source</dt><dd>@sf.Source</dd>
+                                <dt>Actual value</dt><dd>@(sf.ActualValue ?? "—")</dd>
+                                <dt>Availability</dt><dd>@sf.Availability</dd>
+                                <dt>Verification</dt><dd>@sf.VerificationStatus</dd>
+                                <dt>Admission state</dt><dd>@sf.EvidenceAdmissionState</dd>
+                                <dt>Binding</dt><dd>@sf.BindingAdmissibility</dd>
+                            </dl>
+                            @if (!string.IsNullOrWhiteSpace(sf.VerificationObligation))
+                            {
+                                <div class="da-callout da-callout--warn"><strong>Verification obligation</strong><p>@sf.VerificationObligation</p></div>
+                            }
+                            @if (sf.Contradictions.Count > 0)
+                            {
+                                <div class="da-callout da-callout--bad">
+                                    <strong>Contradictions</strong>
+                                    <ul>@foreach (var conflict in sf.Contradictions){<li>@conflict</li>}</ul>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(sf.MissingInformation))
+                            {
+                                <div class="da-callout"><strong>Missing information</strong><p>@sf.MissingInformation</p></div>
+                            }
+                        }
+                        else
+                        {
+                            <p class="da-empty-inline">Select a proposition to trace its evidence, verification and candidate impact.</p>
+                        }
+                    </div>
+                </div>
+
+                @* ── Snapshot provenance / staleness ── *@
+                <div class="da-provenance">
+                    <span><i class="bi bi-hash" aria-hidden="true"></i> Snapshot @_response.WideExecutionId.ToString("N").Substring(0, 8)</span>
+                    <span><i class="bi bi-diagram-2" aria-hidden="true"></i> Depth @_response.DepthReached</span>
+                    <span><i class="bi bi-shield-check" aria-hidden="true"></i> @(_response.AnswerVerificationCode ?? "—")</span>
+                    <span><i class="bi bi-clock" aria-hidden="true"></i> @_response.DurationMilliseconds ms</span>
+                    <span class="da-provenance-note">Every value on this tab projects the authoritative POLOXI decision snapshot — no independent scoring.</span>
                 </div>
             }
         </div>
@@ -4311,7 +4938,19 @@
     // (with the run's CorrelationId) and cleared onto the final response when the run completes.
     private HubConnection? _hub;
     private string? _liveCorrelationId;
+    // True once the SignalR hub has connected AND the subscribe round-trip succeeded. Drives an honest
+    // LIVE/OFFLINE badge instead of tying "LIVE" to _loading (which lights up even when the socket
+    // never connected). _liveFeedError holds the last transport failure reason for diagnostics.
+    private bool _liveFeedConnected;
+    private string? _liveFeedError;
     private Wide2ProgressUpdate? _liveProgress;
+    // Local heartbeat that re-renders the pipeline strip roughly once per second while a run is
+    // loading. The pipeline bar and mm:ss clock are pure getters that only update when the component
+    // re-renders; without SignalR delivering progress messages the strip would otherwise freeze at
+    // the seeded ANALYZING snapshot (stage 2) for the whole run. The timer keeps the visual advancing
+    // via a time-based floor (see DfiPipelineFraction) even when the live feed never connects.
+    private System.Threading.Timer? _liveHeartbeat;
+    private DateTime _liveRunStartedUtc;
     // Rolling, newest-first log of execution phases pushed by the pipeline. Rendered as the shared
     // real-time execution strip at the top of every workspace tab so progress is visible regardless
     // of which tab the user is on. Capped to keep the strip compact.
@@ -4330,6 +4969,7 @@
     private bool DfiShowWorkspace => DfiShowLiveExecution || DfiShowCommandCenter;
     private string DfiLivePhaseLabel => _liveProgress?.Phase switch
     {
+        "PREPARING" => "Preparing documents",
         "ANALYZING" => "Interpreting",
         "HIERARCHY" => "Framing outcomes",
         "NARROWING" => "Refining",
@@ -4358,16 +4998,45 @@
     };
     // Fraction of the fixed journey completed, derived from the current coarse phase. Kept monotonic
     // so the bar only advances. COMPLETED fills the whole route.
-    private double DfiPipelineFraction => (_liveProgress?.Phase, DfiLiveProvisional) switch
+    private double DfiPipelineFraction
     {
-        (_, false) when _liveProgress is { Phase: "COMPLETED" } => 1d,
-        ("ANALYZING", _) => 0.18,
-        ("HIERARCHY", _) => 0.42,
-        ("NARROWING", _) => 0.66,
-        ("COMPLETED", _) => 1d,
-        (null, _) => 0.06,
-        _ => 0.30,
-    };
+        get
+        {
+            var phaseFraction = (_liveProgress?.Phase, DfiLiveProvisional) switch
+            {
+                (_, false) when _liveProgress is { Phase: "COMPLETED" } => 1d,
+                ("PREPARING", _) => 0.08,
+                ("ANALYZING", _) => 0.18,
+                ("HIERARCHY", _) => 0.42,
+                ("NARROWING", _) => 0.66,
+                ("COMPLETED", _) => 1d,
+                (null, _) => 0.06,
+                _ => 0.30,
+            };
+            // Real completion always wins outright.
+            if (_liveProgress is { Phase: "COMPLETED" }) return 1d;
+            // During document preparation (pre-pipeline corpus activation) the run has not entered the
+            // decision pipeline yet, so the time-floor creep must NOT advance the bar past the preparing
+            // stage — activation can legitimately take minutes. Hold the bar at the PREPARING fraction and
+            // let the live "Preparing documents (N of M)" message convey motion instead of a misleading creep.
+            if (_liveProgress is { Phase: "PREPARING" }) return phaseFraction;
+            // While loading, ease the bar smoothly along the journey using elapsed time so it always
+            // visibly advances even when no SignalR progress message arrives (transport/tenant/auth can
+            // silently drop the live feed). Capped at 0.85 so the time-only creep glides up to stage 6
+            // (ceil(0.85*7)=6) but never lights the final Readiness stage; stage 7 / 100% is reserved
+            // exclusively for a REAL COMPLETED phase (live feed) or the synthesized COMPLETED snapshot
+            // written in StopLiveProgressAsync when the run's result actually returns. This both unfreezes
+            // the seeded ANALYZING snapshot and removes the mid-pipeline stall the user reported.
+            if (_loading)
+            {
+                var elapsed = (DateTime.UtcNow - _liveRunStartedUtc).TotalSeconds;
+                if (elapsed < 0) elapsed = 0;
+                var timeFloor = 0.85 * (1 - Math.Exp(-elapsed / 20d));
+                return Math.Clamp(Math.Max(phaseFraction, timeFloor), 0.06, Math.Max(phaseFraction, 0.85));
+            }
+            return phaseFraction;
+        }
+    }
     private int DfiPipelineActiveIndex => Math.Clamp((int)Math.Ceiling(DfiPipelineFraction * DfiPipelineStages.Count), 1, DfiPipelineStages.Count);
     private int DfiPipelineProgressPct => (int)Math.Round(DfiPipelineFraction * 100);
     private string DfiPipelineStatusLine
@@ -4411,20 +5080,92 @@
     private string DfiLiveReadinessLabel => DfiLiveProvisional ? _liveProgress!.DecisionReadiness : DfiReadinessLabel;
     private string DfiLiveReadinessTone => DfiLiveProvisional ? "warn" : DfiReadinessTone;
 
+    // Seeds a local ANALYZING snapshot so the 1->7 pipeline strip is visible immediately for the
+    // whole run, independent of the SignalR live feed. Real "progress" messages replace this entry.
+    private void SeedLiveProgress(string correlationId)
+    {
+        _livePhaseLog.Clear();
+        _liveRunStartedUtc = DateTime.UtcNow;
+        _liveFeedConnected = false;
+        _liveFeedError = null;
+        var bootstrap = new Wide2ProgressUpdate(correlationId, "ANALYZING", 0, 0, 0, "Analyzing", true, "Starting decision pipeline…");
+        _liveProgress = bootstrap;
+        RecordLivePhase(bootstrap);
+        StartLiveHeartbeat();
+    }
+
+    // Pushes a local PREPARING snapshot onto the strip while pre-pipeline corpus activation runs. This
+    // window can take minutes (per-document LEGAL_DOCUMENT_SEMANTIC_EXTRACTION calls) and the decision
+    // pipeline — the only source of SignalR progress frames — has NOT started yet, so without this the
+    // strip would sit frozen at the seeded snapshot. The activated/pending counts convey real motion.
+    // Pushes a local PREPARING snapshot onto the strip while pre-pipeline corpus activation runs. This
+    // window can take minutes (per-document LEGAL_DOCUMENT_SEMANTIC_EXTRACTION calls) and the decision
+    // pipeline — the only source of SignalR progress frames — has NOT started yet, so without this the
+    // strip would sit frozen at the seeded snapshot. Counts are the authoritative DB totals: how many
+    // document versions are genuinely enriched out of the real corpus size (never an inflated tally).
+    private void ReportPreparingPhase(int enriched, int total)
+    {
+        if (!_loading) return;
+        var message = total > 0
+            ? $"Preparing documents ({enriched} of {total})…"
+            : "Preparing documents…";
+        var update = new Wide2ProgressUpdate(_liveCorrelationId, "PREPARING", 0, 0, enriched, "Preparing", true, message);
+        _liveProgress = update;
+        RecordLivePhase(update);
+    }
+
+    // Drives ~1s re-renders while a run is loading so the time-based pipeline floor and the mm:ss
+    // clock advance even when SignalR delivers no progress messages. Stopped when the run completes.
+    private void StartLiveHeartbeat()
+    {
+        _liveHeartbeat ??= new System.Threading.Timer(_ =>
+        {
+            if (!_loading) return;
+            _ = InvokeAsync(StateHasChanged);
+        }, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        _liveHeartbeat.Change(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    private void StopLiveHeartbeat()
+        => _liveHeartbeat?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+
     // Lazily creates and starts the hub connection to the API host, then subscribes to a run's
     // correlation group. Fully fail-soft: any transport error leaves the poll-based result intact.
     private async Task StartLiveProgressAsync(string correlationId)
     {
-        _liveProgress = null;
-        _livePhaseLog.Clear();
         _liveCorrelationId = correlationId;
+        // Ensure a local snapshot exists so the 1->7 pipeline strip renders even if the hub below
+        // never connects. If SearchAsync already seeded it for this correlation, keep the log intact.
+        if (_livePhaseLog.Count == 0 || !string.Equals(_liveProgress?.CorrelationId, correlationId, StringComparison.Ordinal))
+            SeedLiveProgress(correlationId);
+        StateHasChanged();
         try
         {
             if (_hub is null)
             {
                 var apiBase = Configuration["Api:BaseUrl"] ?? "https://localhost:7251/";
                 var hubUrl = new Uri(new Uri(apiBase), "hubs/wide2-progress");
-                _hub = new HubConnectionBuilder().WithUrl(hubUrl).WithAutomaticReconnect().Build();
+                _hub = new HubConnectionBuilder()
+                    .WithUrl(hubUrl, options =>
+                    {
+                        // Blazor Server opens this hub connection server->API. In Development the API is
+                        // served over the self-signed localhost dev certificate, which the HubConnection's
+                        // own HttpClient rejects during /negotiate — silently killing the live feed while
+                        // the ApiClient (which trusts the dev cert) still works. Bypass validation for
+                        // localhost dev only; production uses a real certificate and keeps full validation.
+                        if (HostEnvironment.IsDevelopment())
+                        {
+                            options.HttpMessageHandlerFactory = _ => new HttpClientHandler
+                            {
+                                ServerCertificateCustomValidationCallback =
+                                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                            };
+                            options.WebSocketConfiguration = ws =>
+                                ws.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+                        }
+                    })
+                    .WithAutomaticReconnect()
+                    .Build();
                 _hub.On<Wide2ProgressUpdate>("progress", update =>
                 {
                     if (!string.Equals(update.CorrelationId, _liveCorrelationId, StringComparison.Ordinal)) return;
@@ -4435,10 +5176,16 @@
             }
             if (_hub.State == HubConnectionState.Disconnected) await _hub.StartAsync();
             await _hub.InvokeAsync("Subscribe", correlationId);
+            _liveFeedConnected = true;
+            _liveFeedError = null;
         }
-        catch
+        catch (Exception ex)
         {
-            // Real-time feed is best-effort; the start+poll result path is unchanged.
+            // Real-time feed is best-effort; the start+poll result path is unchanged. Record the reason
+            // so the cockpit can indicate the live feed is offline instead of showing a misleading LIVE
+            // badge with frozen 0/0/0 counters.
+            _liveFeedConnected = false;
+            _liveFeedError = ex.Message;
         }
     }
 
@@ -4449,6 +5196,7 @@
     {
         var label = update.Phase switch
         {
+            "PREPARING" => "Preparing documents",
             "ANALYZING" => "Interpreting the question",
             "HIERARCHY" => "Framing candidate outcomes",
             "NARROWING" => "Refining interpretation paths",
@@ -4468,8 +5216,29 @@
 
     private async Task StopLiveProgressAsync()
     {
-        _liveProgress = null;
+        StopLiveHeartbeat();
+        // Deterministically finish the strip. The live SignalR feed may never deliver a COMPLETED
+        // phase (transport/tenant/auth), so when the run's result has actually returned we synthesize
+        // a COMPLETED snapshot ourselves. This fills the bar to 100% / stage 7 and flips the strip out
+        // of the provisional state, instead of leaving it frozen at the seeded snapshot.
         var correlationId = _liveCorrelationId;
+        if (!string.IsNullOrEmpty(correlationId))
+        {
+            var lastCounts = _liveProgress;
+            var completed = new Wide2ProgressUpdate(
+                correlationId, "COMPLETED",
+                lastCounts?.CompetingOutcomes ?? DfiCompetingOutcomes,
+                lastCounts?.IdentifiedFactors ?? DfiFactorCount,
+                lastCounts?.AdmittedEvidence ?? TotalEvidenceCount,
+                DfiReadinessLabel, false, "Decision complete");
+            _liveProgress = completed;
+            RecordLivePhase(completed);
+            await InvokeAsync(StateHasChanged);
+        }
+        else
+        {
+            _liveProgress = null;
+        }
         _liveCorrelationId = null;
         if (_hub is null || string.IsNullOrEmpty(correlationId)) return;
         try { if (_hub.State == HubConnectionState.Connected) await _hub.InvokeAsync("Unsubscribe", correlationId); }
@@ -4478,6 +5247,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        try { _liveHeartbeat?.Dispose(); } catch { /* best-effort */ }
         if (_hub is not null)
         {
             try { await _hub.DisposeAsync(); } catch { /* best-effort */ }
@@ -4506,13 +5276,15 @@
 
     // ── Decision Intelligence console (reads existing response + matter fields only) ──
     private string _dfiTab = "Overview";
-    private static readonly string[] DfiTabs = ["Overview", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Decision Contract", "Hierarchy", "Factor Matrix", "Evidence", "Competition", "Investigation", "Readiness", "Document Intelligence", "Audit"];
+    private static readonly string[] DfiTabs = ["Overview", "Decision Analysis", "Decision Change Intelligence (DCI)", "Continuous Decision Calibration (CDC)", "Decision Contract", "Hierarchy", "Factor Matrix", "Evidence", "Human Intelligence", "Competition", "Investigation", "Readiness", "Document Intelligence", "Audit"];
 
     private void SelectDfiTab(string tab)
     {
         _dfiTab = tab;
         if (tab == "Document Intelligence" && _evidenceGraph is null && !_evidenceGraphLoading)
             _ = LoadEvidenceGraphAsync();
+        if (tab == "Human Intelligence" && _humanIntel is null && !_humanIntelLoading)
+            _ = LoadHumanIntelligenceAsync();
     }
 
     // ══ Continuous Decision Calibration (CDC) projections ═══════════════════════════════════════════
@@ -5728,16 +6500,9 @@
             {
                 _matter = await Api.GetLegalDecisionMatterAsync(matterId);
                 try { _documents = await Api.GetLegalMatterDocumentsAsync(matterId); } catch { _documents = []; }
-                // Show the intake pipeline whenever the matter already owns a corpus, so the
-                // "Prepared on upload -> Activated on answer" indicator is visible before the first
-                // answer. Prepared stages reflect stored documents; activation stages await the answer.
-                if (_documents.Count > 0)
-                {
-                    _uploadStages = BuildUploadStages();
-                    foreach (var key in new[] { "upload", "scan", "blob", "db", "extract" })
-                        SetUploadStage(key, UploadStageState.Done);
-                    await SyncActivationIndicatorAsync(matterId);
-                }
+                // Do NOT pre-render the intake pipeline on first load. It should only appear during an
+                // actual upload or answer-time activation, not as a static banner over a matter that
+                // already owns a corpus. Leaving _uploadStages null keeps the strip hidden on load.
                 await LoadCalibrationDataAsync(matterId);
                 if (_matter is not null && string.IsNullOrWhiteSpace(_query))
                 {
@@ -5777,12 +6542,22 @@
         _error = null;
         _searchCancellation?.Dispose();
         _searchCancellation = new CancellationTokenSource();
+        var correlationId = Guid.NewGuid().ToString("N");
+        // Show the 1->7 pipeline strip for the ENTIRE run. The strip's visibility gate
+        // (DfiShowLiveExecution) needs _livePhaseLog.Count > 0, previously fed only by SignalR.
+        // Seed a local ANALYZING snapshot up front so the indicator is visible immediately, even
+        // during just-in-time corpus activation below and even if the live SignalR feed never
+        // connects (transport/tenant/auth). Real "progress" messages simply replace this entry.
+        SeedLiveProgress(correlationId);
+        await InvokeAsync(StateHasChanged);
+        // Connect the live SignalR progress feed FIRST so the hub subscription is established before the
+        // (potentially long) just-in-time corpus activation runs. Otherwise the strip sits frozen at the
+        // seeded 0/0/0 snapshot for the entire enrichment window and any early pipeline frames are missed.
+        await StartLiveProgressAsync(correlationId);
         // Activate any prepared-but-not-enriched corpus documents before answering, using the model
         // selected for this answer. Enrichment + CDC were deferred at upload; run them just-in-time so
         // the answer reasons over a fully activated corpus. Fail-soft: activation must not block the answer.
         await ActivateMatterCorpusForAnswerAsync();
-        var correlationId = Guid.NewGuid().ToString("N");
-        await StartLiveProgressAsync(correlationId);
         try
         {
             _response = await Api.IntelligentSearchWide2DynamicAsync(new(Guid.Empty, Guid.Empty, _query.Trim(), 50, correlationId) { UsePoloxiEngine = _usePoloxiEngine, ModelCode = _selectedModelCode, ForceRequestedModelAllStages = !string.IsNullOrWhiteSpace(_selectedModelCode), ContextCode = _selectedContextCode, MatterId = MatterId }, _searchCancellation.Token);
@@ -5852,16 +6627,32 @@
             _activationNotice = null;
             _activationFailed = false;
 
+            // Surface preparation on the live pipeline strip so it isn't frozen at the seeded snapshot
+            // while the (potentially multi-minute) document enrichment runs before the decision pipeline.
+            // Counts reflect the authoritative DB corpus size (EnrichedVersions of TotalVersions).
+            ReportPreparingPhase(status.EnrichedVersions, status.TotalVersions);
+            await InvokeAsync(StateHasChanged);
+
             var model = string.IsNullOrWhiteSpace(_selectedModelCode) ? null : _selectedModelCode;
             var guard = 0;
-            // Process bounded batches until no prepared versions remain (or a safety cap is reached).
+            var lastPending = status.PendingVersions;
+            // Process bounded batches until no prepared versions remain — or until a batch makes no
+            // forward progress (pending count did not drop), which means those versions cannot be
+            // enriched (e.g. no CHAT route). Re-running the same stuck versions only wastes time/money.
             while (guard++ < 50)
             {
                 var token = _searchCancellation?.Token ?? default;
                 token.ThrowIfCancellationRequested();
                 var result = await Api.ActivateLegalMatterCorpusAsync(matterId, model, 3, token);
-                if (result is null || result.IsComplete || result.ActivatedThisCall <= 0)
+                if (result is null || result.IsComplete)
                     break;
+                // Report the real DB progress after this batch.
+                ReportPreparingPhase(result.EnrichedVersions, result.TotalVersions);
+                await InvokeAsync(StateHasChanged);
+                // Stop if this batch did not reduce the pending backlog — no genuine progress was made.
+                if (result.PendingVersions >= lastPending)
+                    break;
+                lastPending = result.PendingVersions;
             }
 
             await LoadEvidenceGraphAsync();

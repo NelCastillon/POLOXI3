@@ -97,4 +97,31 @@ BEGIN
 	DROP TABLE #Tenants;
 END
 
+-- Raise the monthly.legal_decision limit to a high dev ceiling across the base entitlement,
+-- every plan entitlement, and every tenant override so capacity exists regardless of which
+-- tenant hit the cap or how many units were already committed. This makes the unblock
+-- independent of the usage reset above (which can miss rows on a different tenant/month).
+IF OBJECT_ID(N'SaaS.Commerce_Entitlement', N'U') IS NOT NULL
+BEGIN
+	DECLARE @DevLimit BIGINT = 1000000;
+	DECLARE @EntitlementId UNIQUEIDENTIFIER =
+		(SELECT TOP 1 EntitlementId FROM SaaS.Commerce_Entitlement
+		 WHERE Code = N'monthly.legal_decision' AND IsDeleted = 0);
+
+	IF @EntitlementId IS NOT NULL
+	BEGIN
+		IF OBJECT_ID(N'SaaS.Commerce_PlanEntitlement', N'U') IS NOT NULL
+			UPDATE SaaS.Commerce_PlanEntitlement
+			SET LimitValue = @DevLimit
+			WHERE EntitlementId = @EntitlementId AND IsDeleted = 0
+			  AND (LimitValue IS NULL OR LimitValue < @DevLimit);
+
+		IF OBJECT_ID(N'SaaS.Commerce_TenantEntitlementOverride', N'U') IS NOT NULL
+			UPDATE SaaS.Commerce_TenantEntitlementOverride
+			SET LimitValue = @DevLimit
+			WHERE EntitlementId = @EntitlementId AND IsDeleted = 0
+			  AND (LimitValue IS NULL OR LimitValue < @DevLimit);
+	END
+END
+
 COMMIT TRANSACTION;

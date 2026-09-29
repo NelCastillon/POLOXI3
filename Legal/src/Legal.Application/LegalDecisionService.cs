@@ -36,10 +36,13 @@ public sealed partial class LegalDecisionService(
     ILegalMatterContextRetriever matterContextRetriever,
     IDecisionResearchSourceRouter researchSourceRouter,
     IExecutionEnvironment executionEnvironment,
+    Abstractions.Intelligence.IAiProviderRouter aiProviderRouter,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
-    // Branch-first (v2) discovery prompt. Emits a SHARED L1→L3 branch tree + one GLOBAL candidate
+    // Feature code used to route query-embedding generation for hybrid matter-corpus retrieval; must match
+    // the passage-embedding feature policy seeded in migration 0354.
+    private const string MatterPassageEmbeddingFeatureCode = "LEGAL_DOCUMENT_PASSAGE_EMBEDDING";
     // universe + a candidate×branch competition matrix, matching the Wide/semantic pipeline. Selected
     // only when the Decision.Discovery.BranchFirst.Enabled feature flag is on; v1 stays the default.
     private const string DiscoveryPromptCodeV2 = "DECISION_DISCOVERY_V2";
@@ -217,6 +220,51 @@ public sealed partial class LegalDecisionService(
         || text.StartsWith($"{phrase} ", StringComparison.Ordinal)
         || text.EndsWith($" {phrase}", StringComparison.Ordinal)
         || text.Contains($" {phrase} ", StringComparison.Ordinal);
+
+    // ── Phase E2: proposition-first retrieval query construction (pure/deterministic) ────────────────
+    // Builds the SUPPORT-oriented semantic query for matter-corpus retrieval from the atomic proposition
+    // plus any structured search concepts. This is retrieval INTENT only: it shapes what we look for, it
+    // never asserts an evidence relation and never touches a POLOXI decision effect. Returns the fallback
+    // when the proposition yields no usable query text. Extracted so it is unit-testable in isolation.
+    internal static PropositionRetrievalQuery BuildPropositionRetrievalQuery(
+        string proposition,
+        IReadOnlyList<string> searchConcepts,
+        RetrievalDirection direction,
+        string fallbackQuery)
+    {
+        var propositionText = proposition?.Trim() ?? string.Empty;
+        var concepts = (searchConcepts ?? [])
+            .Where(concept => !string.IsNullOrWhiteSpace(concept))
+            .ToArray();
+        var queryText = JoinQuery([propositionText, .. concepts]);
+        if (string.IsNullOrWhiteSpace(queryText))
+            queryText = fallbackQuery;
+        return new PropositionRetrievalQuery(propositionText, queryText, direction, concepts);
+    }
+
+    // ── Phase E2: dual-direction retrieval merge (pure/deterministic) ────────────────────────────────
+    // Merges counter-oriented passages into the support-oriented candidate set without duplicating a
+    // passage that is already present. Identity is keyed on the strongest stable anchor available
+    // (PassageId, then EvidenceItemId, then a normalized SourceReference+Title). Support order is
+    // preserved and never reordered; counter items are appended so Stage 1 support ranking is untouched.
+    internal static IReadOnlyCollection<LegalMatterContextItem> MergeMatterContextItems(
+        IReadOnlyCollection<LegalMatterContextItem> support,
+        IReadOnlyCollection<LegalMatterContextItem> counter)
+    {
+        static string Key(LegalMatterContextItem item) =>
+            item.PassageId is { } passageId ? $"P:{passageId}"
+            : item.EvidenceItemId is { } evidenceId ? $"E:{evidenceId}"
+            : $"S:{item.SourceReference?.Trim().ToUpperInvariant()}|{item.Title?.Trim().ToUpperInvariant()}";
+
+        var merged = new List<LegalMatterContextItem>(support);
+        var seen = new HashSet<string>(merged.Select(Key), StringComparer.Ordinal);
+        foreach (var item in counter)
+        {
+            if (seen.Add(Key(item)))
+                merged.Add(item);
+        }
+        return merged;
+    }
 
     internal static bool IsUserResolvableClarification(DecisionBranchPersistence branch)
     {
@@ -2701,8 +2749,82 @@ public sealed partial class LegalDecisionService(
                     }
                     else
                     {
+                        // ── Phase E2: proposition-first retrieval (feature-gated, default off) ──────────────
+                        // When enabled, the semantic query is derived from the atomic proposition (plus any
+                        // structured search concepts) rather than the free-text SearchQuery alone, so retrieval
+                        // targets the claim we are trying to resolve. The keyword `searchQuery` fallback is
+                        // preserved unchanged for Stage 1 lexical scoring and for the disabled path.
+                        var embeddingQueryText = searchQuery;
+                        string? counterQueryText = null;
+                        if (retrievalArchitecture.PropositionQueryRetrievalEnabled)
+                        {
+                            var searchConcepts = ParseResearchValues(researchNeed.SearchConceptsJson).ToArray();
+                            var supportQuery = BuildPropositionRetrievalQuery(
+                                proposition, searchConcepts, RetrievalDirection.Support, searchQuery);
+                            embeddingQueryText = supportQuery.QueryText;
+                            // Dual-direction: when enabled, also retrieve counter-oriented passages (evidence
+                            // that could rebut the proposition). This never changes Stage 1 support ranking; the
+                            // counter results are merged in as ADDITIONAL context (deduplicated) so the verifier
+                            // sees both sides of the claim.
+                            if (retrievalArchitecture.DualDirectionRetrievalEnabled)
+                            {
+                                counterQueryText = BuildPropositionRetrievalQuery(
+                                    proposition, searchConcepts, RetrievalDirection.Counter, searchQuery).QueryText;
+                            }
+                        }
+
+                        // Hybrid semantic scoring (feature-gated): compute a query embedding so matter-corpus
+                        // retrieval can blend passage cosine similarity with keyword overlap. Falls back to
+                        // keyword-only scoring if disabled or if embedding generation fails.
+                        IReadOnlyCollection<float>? queryEmbedding = null;
+                        if (retrievalArchitecture.HybridSemanticScoringEnabled)
+                        {
+                            try
+                            {
+                                var embeddingResult = await aiProviderRouter.CreateEmbeddingAsync(
+                                    tenantId, MatterPassageEmbeddingFeatureCode, [embeddingQueryText],
+                                    decisionSessionId.ToString(), cancellationToken);
+                                var vector = embeddingResult.Embeddings.FirstOrDefault();
+                                if (vector.Length > 0)
+                                    queryEmbedding = vector.ToArray();
+                            }
+                            catch (Exception embeddingEx) when (embeddingEx is not OperationCanceledException)
+                            {
+                                logger.LogWarning(embeddingEx, "Query embedding generation failed for session {SessionId}; matter-corpus retrieval falls back to keyword scoring.", decisionSessionId);
+                            }
+                        }
                         var matterItems = await documentCorpusRepository.SearchRoutedMatterContextAsync(
-                            tenantId, matterId, searchQuery, route.DocumentTypeCodes, 5, cancellationToken);
+                            tenantId, matterId, embeddingQueryText, route.DocumentTypeCodes, 5, queryEmbedding, cancellationToken);
+                        // Dual-direction counter pass (feature-gated): a second retrieval with the counter-oriented
+                        // query, merged in as additional deduplicated context. Failures degrade gracefully to the
+                        // support-only result and never fault the round.
+                        if (!string.IsNullOrWhiteSpace(counterQueryText)
+                            && !string.Equals(counterQueryText, embeddingQueryText, StringComparison.Ordinal))
+                        {
+                            try
+                            {
+                                IReadOnlyCollection<float>? counterEmbedding = null;
+                                if (retrievalArchitecture.HybridSemanticScoringEnabled)
+                                {
+                                    var counterEmbeddingResult = await aiProviderRouter.CreateEmbeddingAsync(
+                                        tenantId, MatterPassageEmbeddingFeatureCode, [counterQueryText],
+                                        decisionSessionId.ToString(), cancellationToken);
+                                    var counterVector = counterEmbeddingResult.Embeddings.FirstOrDefault();
+                                    if (counterVector.Length > 0)
+                                        counterEmbedding = counterVector.ToArray();
+                                }
+                                var counterItems = await documentCorpusRepository.SearchRoutedMatterContextAsync(
+                                    tenantId, matterId, counterQueryText, route.DocumentTypeCodes, 5, counterEmbedding, cancellationToken);
+                                var beforeMerge = matterItems.Count;
+                                matterItems = MergeMatterContextItems(matterItems, counterItems);
+                                var addedCounter = matterItems.Count - beforeMerge;
+                                narrative.Add($"Dual-direction retrieval: merged {addedCounter} new counter-oriented passage(s) into the candidate set.");
+                            }
+                            catch (Exception counterEx) when (counterEx is not OperationCanceledException)
+                            {
+                                logger.LogWarning(counterEx, "Counter-direction retrieval failed for session {SessionId}; continuing with support-oriented results only.", decisionSessionId);
+                            }
+                        }
                         // Phase 2 promotion gate: non-admitted matter evidence (for example, INVALIDATED because its
                         // source passage lacks a traceable span) is preserved for audit but must never enter the
                         // SUPPLIED -> VERIFIED path, so it is excluded from the verification candidate set here.

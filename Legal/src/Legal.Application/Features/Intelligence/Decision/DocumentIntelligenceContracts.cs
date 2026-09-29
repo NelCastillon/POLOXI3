@@ -456,7 +456,76 @@ public sealed record DecisionRetrievalArchitectureSettings(
     bool Stage2LegacyProjectionFallbackEnabled,
     bool Stage3AuthoritativeRoutingEnabled,
     bool LegacyUnconditionalRetrievalEnabled,
-    bool TelemetryEnabled);
+    bool TelemetryEnabled,
+    bool HybridSemanticScoringEnabled,
+    // ── Phase E1: configurable hybrid retrieval weights and fusion ──────────────────────────────────
+    // Defaults preserve the original hard-coded 0.65/0.35/0.05/0.05 behavior exactly. VectorWeight +
+    // KeywordWeight must sum to 1.0 (validated/normalized in the settings loader).
+    double VectorWeight = 0.65,
+    double KeywordWeight = 0.35,
+    double AuthoritativeBoost = 0.05,
+    double VerifiedBoost = 0.05,
+    int InitialCandidateLimit = 50,
+    int RerankLimit = 10,
+    double MinimumCandidateScore = 0.0,
+    HybridFusionStrategy FusionStrategy = HybridFusionStrategy.WeightedScore,
+    // ── Phase E2: proposition-first retrieval & dual-direction evidence search ──────────────────────
+    // Both default to false so Stage 1 candidate-passage retrieval and current ranking are unchanged.
+    // When PropositionQueryRetrievalEnabled is on, the matter-corpus semantic query is derived from the
+    // atomic proposition rather than the free-text SearchQuery alone. DualDirectionRetrievalEnabled
+    // additionally requests counter-oriented passages (evidence that could rebut the proposition) and
+    // requires PropositionQueryRetrievalEnabled.
+    bool PropositionQueryRetrievalEnabled = false,
+    bool DualDirectionRetrievalEnabled = false);
+
+// A passage that still lacks a persisted embedding vector — the unit of work for embedding generation.
+public sealed record LegalPassageEmbeddingCandidate(
+    Guid LegalDocumentPassageId,
+    string PassageText);
+
+// ── Phase E1: retrieval score transparency ────────────────────────────────────────────────────────
+// The hybrid retrieval score is no longer an opaque single number. Every component is surfaced so a
+// passage's rank can be audited and explained. This is a RETRIEVAL RANK ("should we inspect this
+// passage?") and must never be treated as an evidence relation or a POLOXI decision effect.
+public sealed record PassageRetrievalScore(
+    double VectorSimilarity,
+    double KeywordScore,
+    double SemanticLexicalBlend,
+    double AuthorityBoost,
+    double VerificationBoost,
+    double FinalRetrievalRank,
+    string RetrievalVersion,
+    string FusionStrategy);
+
+// Fusion strategy for combining vector and keyword signals. WeightedScore is the established
+// production baseline; ReciprocalRankFusion is scaffolded for future benchmarking (Phase E3) and is
+// not wired into the production path yet.
+public enum HybridFusionStrategy
+{
+    WeightedScore = 0,
+    ReciprocalRankFusion = 1
+}
+
+// ── Phase E2: proposition-first retrieval ──────────────────────────────────────────────────────────
+// Retrieval orientation for a proposition-derived query. SUPPORT retrieves passages that could
+// corroborate the proposition; COUNTER retrieves passages that could rebut it. Counter retrieval is
+// only requested when DualDirectionRetrievalEnabled is on.
+public enum RetrievalDirection
+{
+    Support = 0,
+    Counter = 1
+}
+
+// A first-class retrieval query built from an atomic proposition (Stage 2 groundwork). It carries the
+// proposition text, the resolved embedding/keyword query text, the intended orientation, and any
+// structured search concepts extracted upstream. This is retrieval INTENT only — it never asserts an
+// evidence relation and never modifies a POLOXI decision effect.
+public sealed record PropositionRetrievalQuery(
+    string PropositionText,
+    string QueryText,
+    RetrievalDirection Direction,
+    IReadOnlyList<string> SearchConcepts);
+
 
 public sealed record DocumentExtractionRequest(
     Guid TenantId,

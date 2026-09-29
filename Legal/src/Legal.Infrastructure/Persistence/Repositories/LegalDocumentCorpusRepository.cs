@@ -20,6 +20,29 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         var settings = rows.ToDictionary(row => row.SettingKey, row => row.SettingValue, StringComparer.OrdinalIgnoreCase);
         bool B(string key, bool fallback) => settings.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) ? parsed : fallback;
         int I(string key, int fallback) => settings.TryGetValue(key, out var value) && int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+        double D(string key, double fallback) => settings.TryGetValue(key, out var value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+
+        // ── Phase E1: hybrid retrieval weights and fusion ───────────────────────────────────────────
+        // Read configurable weights; defensively normalize so a misconfigured pair can never distort
+        // ranking (production stays sound instead of throwing on a bad DB value).
+        var vectorWeight = D("Decision.Retrieval.VectorWeight", 0.65);
+        var keywordWeight = D("Decision.Retrieval.KeywordWeight", 0.35);
+        var weightSum = vectorWeight + keywordWeight;
+        if (weightSum <= 0)
+        {
+            vectorWeight = 0.65;
+            keywordWeight = 0.35;
+        }
+        else if (Math.Abs(weightSum - 1.0) > 0.0001)
+        {
+            vectorWeight /= weightSum;
+            keywordWeight /= weightSum;
+        }
+        var fusionStrategy = settings.TryGetValue("Decision.Retrieval.FusionStrategy", out var fusionValue)
+            && Enum.TryParse<HybridFusionStrategy>(fusionValue, ignoreCase: true, out var parsedFusion)
+            ? parsedFusion
+            : HybridFusionStrategy.WeightedScore;
+
         return new(
             B("Decision.DocumentIntelligence.SemanticEnrichment.Enabled", false),
             B("Decision.MatterContext.Enabled", false),
@@ -28,10 +51,22 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             B("Decision.MatterContext.LegacyProjectionFallback.Enabled", true),
             B("Decision.Research.AuthoritativeRouting.Enabled", true),
             B("Decision.LegacyUnconditionalRetrieval.Enabled", false),
-            B("Decision.RetrievalTelemetry.Enabled", true));
+            B("Decision.RetrievalTelemetry.Enabled", true),
+            B("Decision.Retrieval.HybridSemanticScoring.Enabled", false),
+            vectorWeight,
+            keywordWeight,
+            Math.Clamp(D("Decision.Retrieval.AuthoritativeBoost", 0.05), 0.0, 1.0),
+            Math.Clamp(D("Decision.Retrieval.VerifiedBoost", 0.05), 0.0, 1.0),
+            Math.Clamp(I("Decision.Retrieval.InitialCandidateLimit", 50), 1, 1000),
+            Math.Clamp(I("Decision.Retrieval.RerankLimit", 10), 1, 50),
+            Math.Clamp(D("Decision.Retrieval.MinimumCandidateScore", 0.0), 0.0, 1.0),
+            fusionStrategy,
+            // ── Phase E2: proposition-first retrieval & dual-direction search (opt-in, default off) ──
+            B("Decision.Retrieval.PropositionQueryRetrieval.Enabled", false),
+            B("Decision.Retrieval.DualDirectionRetrieval.Enabled", false));
     }
 
-    public async Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId, Guid matterId, string query, IReadOnlyCollection<string> documentTypeCodes, int maximumItems, IReadOnlyCollection<float>? queryEmbedding = null, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<MatterContextRow>(new CommandDefinition(
@@ -46,7 +81,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                    COALESCE(evidence.EvidenceStateCode,passage.EpistemicStateCode,N'PROPOSED') AS EvidenceStateCode,
                    COALESCE(proposition.FactStateCode,N'ALLEGED') AS FactStateCode,
                    COALESCE(proposition.IsDecisionAuthoritative,0) AS IsDecisionAuthoritative,
-                   document.DocumentTypeCode, evidence.DimensionCode
+                   document.DocumentTypeCode, evidence.DimensionCode, passage.EmbeddingJson
             FROM POLOXI.Legal_MatterDocument document
             INNER JOIN POLOXI.Legal_MatterDocumentVersion version ON version.LegalDocumentId=document.LegalDocumentId AND version.IsDeleted=0
             INNER JOIN POLOXI.Legal_DocumentPassage passage ON passage.LegalDocumentVersionId=version.LegalDocumentVersionId AND passage.IsDeleted=0
@@ -69,11 +104,19 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                 DocumentTypesJson = JsonSerializer.Serialize(documentTypeCodes)
             }, cancellationToken: cancellationToken));
         var terms = SearchTerms(query);
+        // When a query embedding is supplied (hybrid semantic scoring enabled), blend keyword overlap
+        // with passage-embedding cosine similarity; otherwise fall back to pure keyword scoring.
+        var queryVector = queryEmbedding is { Count: > 0 } ? queryEmbedding.ToArray() : null;
+        // Phase E1: pull configurable weights/fusion only on the hybrid path so the keyword-only path
+        // keeps its single round-trip. Defaults reproduce the original 0.65/0.35/0.05/0.05 behavior.
+        var weights = queryVector is null
+            ? RetrievalScoringWeights.Default
+            : RetrievalScoringWeights.From(await GetRetrievalArchitectureSettingsAsync(cancellationToken));
         return rows.Select(row => new LegalMatterContextItem(row.MatterId, row.LegalDocumentId, row.LegalDocumentVersionId,
                 row.PassageId, row.EvidenceItemId, row.FactPropositionId, row.Title, row.Text ?? string.Empty,
                 row.SourceReference, row.PageNumber, row.ExtractionMethodCode, row.EvidenceStateCode, row.FactStateCode,
-                row.IsDecisionAuthoritative, Score(row, terms), row.DocumentTypeCode, row.DimensionCode))
-            .Where(item => terms.Count == 0 || item.RelevanceScore > 0m)
+                row.IsDecisionAuthoritative, Score(row, terms, queryVector, weights), row.DocumentTypeCode, row.DimensionCode))
+            .Where(item => (terms.Count == 0 && queryVector is null) || item.RelevanceScore > 0m)
             .OrderByDescending(item => item.RelevanceScore)
             .Take(Math.Clamp(maximumItems, 1, 50))
             .ToArray();
@@ -119,6 +162,37 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             ORDER BY SequenceNumber;
             """, new { TenantId = tenantId, DocumentVersionId = documentVersionId }, cancellationToken: cancellationToken));
         return rows.Select(ToDto).ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<LegalPassageEmbeddingCandidate>> GetPassagesMissingEmbeddingAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<(Guid LegalDocumentPassageId, string PassageText)>(new CommandDefinition(
+            """
+            SELECT LegalDocumentPassageId, PassageText
+            FROM POLOXI.Legal_DocumentPassage
+            WHERE TenantId=@TenantId AND LegalDocumentVersionId=@DocumentVersionId AND IsDeleted=0
+              AND EmbeddingJson IS NULL AND PassageText IS NOT NULL AND LEN(PassageText) > 0
+            ORDER BY SequenceNumber;
+            """, new { TenantId = tenantId, DocumentVersionId = documentVersionId }, cancellationToken: cancellationToken));
+        return rows.Select(row => new LegalPassageEmbeddingCandidate(row.LegalDocumentPassageId, row.PassageText)).ToArray();
+    }
+
+    public async Task SavePassageEmbeddingAsync(Guid tenantId, Guid legalDocumentPassageId, string embeddingJson, string embeddingModelCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_DocumentPassage
+            SET EmbeddingJson=@EmbeddingJson, EmbeddingModelCode=@EmbeddingModelCode, EmbeddingGeneratedDateUtc=SYSUTCDATETIME()
+            WHERE TenantId=@TenantId AND LegalDocumentPassageId=@PassageId AND IsDeleted=0;
+            """, new
+            {
+                TenantId = tenantId,
+                PassageId = legalDocumentPassageId,
+                EmbeddingJson = embeddingJson,
+                EmbeddingModelCode = embeddingModelCode
+            }, cancellationToken: cancellationToken));
     }
 
     public async Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
@@ -545,7 +619,7 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
                      passage.SequenceNumber;
             """, new { TenantId = tenantId, MatterId = matterId, ScanLimit = Math.Clamp(maximumItems * 20, 20, 1000) }, cancellationToken: cancellationToken))).ToArray();
 
-        var ranked = rows.Select(row => (Row: row, Score: Score(row, terms)))
+        var ranked = rows.Select(row => (Row: row, Score: Score(row, terms, queryVector: null, RetrievalScoringWeights.Default)))
             .Where(item => item.Score > 0m || terms.Count == 0)
             .OrderByDescending(item => item.Score)
             .ThenBy(item => item.Row.PageNumber)
@@ -920,7 +994,25 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         .Where(term => term.Length >= 3)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    private static decimal Score(MatterContextRow row, IReadOnlySet<string> terms)
+    private static decimal Score(MatterContextRow row, IReadOnlySet<string> terms, float[]? queryVector, RetrievalScoringWeights weights)
+    {
+        var keywordScore = KeywordScore(row, terms, weights);
+        if (queryVector is null)
+            return keywordScore;
+        var similarity = CosineSimilarity(queryVector, ParseEmbedding(row.EmbeddingJson));
+        if (similarity is not { } cosine)
+            return keywordScore;
+        // Hybrid blend: weight semantic similarity and keyword overlap, then re-apply provenance bonuses.
+        // Weights are configurable (Phase E1) and default to the original 0.65/0.35/0.05/0.05 blend.
+        var blended = (weights.Vector * cosine) + (weights.Keyword * keywordScore);
+        if (row.IsDecisionAuthoritative)
+            blended += weights.AuthoritativeBoost;
+        if (string.Equals(row.EvidenceStateCode, LegalEvidenceStates.Verified, StringComparison.OrdinalIgnoreCase))
+            blended += weights.VerifiedBoost;
+        return Math.Clamp(blended, 0m, 1m);
+    }
+
+    private static decimal KeywordScore(MatterContextRow row, IReadOnlySet<string> terms, RetrievalScoringWeights weights)
     {
         if (terms.Count == 0)
             return 0.5m;
@@ -928,10 +1020,43 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         var matches = terms.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
         var score = (decimal)matches / terms.Count;
         if (row.IsDecisionAuthoritative)
-            score += 0.05m;
+            score += weights.AuthoritativeBoost;
         if (string.Equals(row.EvidenceStateCode, LegalEvidenceStates.Verified, StringComparison.OrdinalIgnoreCase))
-            score += 0.05m;
+            score += weights.VerifiedBoost;
         return Math.Min(score, 1m);
+    }
+
+    private static float[]? ParseEmbedding(string? embeddingJson)
+    {
+        if (string.IsNullOrWhiteSpace(embeddingJson))
+            return null;
+        try
+        {
+            var vector = JsonSerializer.Deserialize<float[]>(embeddingJson);
+            return vector is { Length: > 0 } ? vector : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static decimal? CosineSimilarity(float[] left, float[]? right)
+    {
+        if (right is null || left.Length == 0 || left.Length != right.Length)
+            return null;
+        double dot = 0, leftMagnitude = 0, rightMagnitude = 0;
+        for (var index = 0; index < left.Length; index++)
+        {
+            dot += (double)left[index] * right[index];
+            leftMagnitude += (double)left[index] * left[index];
+            rightMagnitude += (double)right[index] * right[index];
+        }
+        if (leftMagnitude <= 0 || rightMagnitude <= 0)
+            return null;
+        var cosine = dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
+        // Map cosine [-1,1] to [0,1] so it composes with the keyword score.
+        return (decimal)Math.Clamp((cosine + 1d) / 2d, 0d, 1d);
     }
 
     private static LegalDocumentVersionDto ToDto(DocumentVersionRow row) => new(row.LegalDocumentVersionId, row.VersionNumber,
@@ -945,6 +1070,19 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
     private sealed record DocumentVersionRow(Guid LegalDocumentVersionId, Guid LegalDocumentId, int VersionNumber, string Sha256Hash, string StorageReference, long FileSizeBytes, string MalwareStatusCode, string ProcessingStatusCode, string? ExtractionProviderCode, string? ExtractionModelCode, string? ExtractionModelVersion, DateTime CreatedDateUtc);
     private sealed record PassageRow(Guid LegalDocumentPassageId, Guid LegalDocumentVersionId, int? PageNumber, string? SectionPath, int SequenceNumber, string Text, string ExtractionMethodCode, decimal? ExtractionConfidence, string? BoundingRegionJson, string? SourceSpanJson, string EpistemicStateCode);
     private sealed record PropositionHeadRow(Guid LegalFactPropositionId, Guid MatterId, string PropositionText, string FactStateCode, string GenerationOriginCode, decimal? Confidence, bool IsDecisionAuthoritative);
-    private sealed record MatterContextRow(Guid MatterId, Guid LegalDocumentId, Guid LegalDocumentVersionId, Guid PassageId, Guid? EvidenceItemId, Guid? FactPropositionId, string Title, string? Text, string SourceReference, int? PageNumber, string ExtractionMethodCode, string EvidenceStateCode, string FactStateCode, bool IsDecisionAuthoritative, string? DocumentTypeCode, string? DimensionCode);
+    private sealed record MatterContextRow(Guid MatterId, Guid LegalDocumentId, Guid LegalDocumentVersionId, Guid PassageId, Guid? EvidenceItemId, Guid? FactPropositionId, string Title, string? Text, string SourceReference, int? PageNumber, string ExtractionMethodCode, string EvidenceStateCode, string FactStateCode, bool IsDecisionAuthoritative, string? DocumentTypeCode, string? DimensionCode, string? EmbeddingJson);
     private sealed record LegacyProjectionRow(Guid SearchDocumentId, Guid EntityId, string Title, string Text);
+
+    // Phase E1: immutable bundle of hybrid retrieval weights, decimal-typed for the scoring math.
+    // Default reproduces the original hard-coded 0.65/0.35/0.05/0.05 blend exactly.
+    private readonly record struct RetrievalScoringWeights(decimal Vector, decimal Keyword, decimal AuthoritativeBoost, decimal VerifiedBoost)
+    {
+        public static RetrievalScoringWeights Default { get; } = new(0.65m, 0.35m, 0.05m, 0.05m);
+
+        public static RetrievalScoringWeights From(DecisionRetrievalArchitectureSettings settings) => new(
+            (decimal)settings.VectorWeight,
+            (decimal)settings.KeywordWeight,
+            (decimal)settings.AuthoritativeBoost,
+            (decimal)settings.VerifiedBoost);
+    }
 }

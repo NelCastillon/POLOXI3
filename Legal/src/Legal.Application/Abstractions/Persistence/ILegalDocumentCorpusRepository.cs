@@ -32,6 +32,7 @@ public interface ILegalDocumentCorpusRepository
         string query,
         IReadOnlyCollection<string> documentTypeCodes,
         int maximumItems,
+        IReadOnlyCollection<float>? queryEmbedding = null,
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(
@@ -42,6 +43,21 @@ public interface ILegalDocumentCorpusRepository
     Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(
         Guid tenantId,
         Guid documentVersionId,
+        CancellationToken cancellationToken = default);
+
+    // Passages for a document version that still lack a persisted embedding vector, so activation can
+    // generate them in bounded batches. Returns only rows with non-empty text.
+    Task<IReadOnlyCollection<LegalPassageEmbeddingCandidate>> GetPassagesMissingEmbeddingAsync(
+        Guid tenantId,
+        Guid documentVersionId,
+        CancellationToken cancellationToken = default);
+
+    // Persists a generated embedding vector (JSON-serialized) plus model/provenance for a single passage.
+    Task SavePassageEmbeddingAsync(
+        Guid tenantId,
+        Guid legalDocumentPassageId,
+        string embeddingJson,
+        string embeddingModelCode,
         CancellationToken cancellationToken = default);
 
     Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(

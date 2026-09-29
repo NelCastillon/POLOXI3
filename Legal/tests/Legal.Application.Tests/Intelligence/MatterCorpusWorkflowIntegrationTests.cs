@@ -106,7 +106,7 @@ public sealed class MatterCorpusWorkflowIntegrationTests
     private sealed class RecordingCorpusRepository:ILegalDocumentCorpusRepository
     {
         private readonly List<LegalDocumentDto> documents=[];
-        public DecisionRetrievalArchitectureSettings Settings{get;}=new(true,true,10,10000,false,true,false,true);
+        public DecisionRetrievalArchitectureSettings Settings{get;}=new(true,true,10,10000,false,true,false,true,false);
         public List<LegalDocumentPassageDto> Passages{get;}=[];
         public LegalDocumentSemanticProposal? SemanticProposal{get;private set;}
         public List<LegalEvidenceItemDto> EvidenceItems{get;}=[];
@@ -164,7 +164,9 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId,Guid matterId,int maximumVersions,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalPendingCorpusVersion>>([]);
         public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId,Guid userId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(0);
         public Task<DecisionRetrievalArchitectureSettings> GetRetrievalArchitectureSettingsAsync(CancellationToken cancellationToken=default)=>Task.FromResult(Settings);
-        public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId,Guid matterId,string query,IReadOnlyCollection<string> documentTypeCodes,int maximumItems,CancellationToken cancellationToken=default)=>SearchMatterContextAsync(tenantId,Guid.Empty,matterId,query,maximumItems,int.MaxValue,cancellationToken);
+        public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchRoutedMatterContextAsync(Guid tenantId,Guid matterId,string query,IReadOnlyCollection<string> documentTypeCodes,int maximumItems,IReadOnlyCollection<float>? queryEmbedding=null,CancellationToken cancellationToken=default)=>SearchMatterContextAsync(tenantId,Guid.Empty,matterId,query,maximumItems,int.MaxValue,cancellationToken);
+        public Task<IReadOnlyCollection<LegalPassageEmbeddingCandidate>> GetPassagesMissingEmbeddingAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalPassageEmbeddingCandidate>>([]);
+        public Task SavePassageEmbeddingAsync(Guid tenantId,Guid passageId,string embeddingJson,string embeddingModelCode,CancellationToken cancellationToken=default)=>Task.CompletedTask;
         public Task<IReadOnlyCollection<LegalMatterContextItem>> SearchLegacyProjectionAsync(Guid tenantId,Guid userId,Guid matterId,string query,int maximumItems,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalMatterContextItem>>([]);
         public Task MarkProcessingFailedAsync(Guid tenantId,Guid userId,Guid documentVersionId,string errorCode,string errorMessage,CancellationToken cancellationToken=default)=>Task.CompletedTask;
         public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<Guid?>(documents.SingleOrDefault()?.MatterId);
