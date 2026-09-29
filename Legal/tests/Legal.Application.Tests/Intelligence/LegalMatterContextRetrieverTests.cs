@@ -81,6 +81,7 @@ public sealed class LegalMatterContextRetrieverTests
         public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId, Guid documentVersionId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> AppendSourceAssertionAsync(Guid tenantId, Guid userId, LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId, Guid matterId, int maximumVersions, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId, Guid userId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();

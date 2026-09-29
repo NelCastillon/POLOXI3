@@ -127,6 +127,18 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> MatterEvidenceGraph(Guid matterId, CancellationToken cancellationToken)
         => Ok(await documentCorpusRepository.GetMatterEvidenceGraphAsync(TenantId, matterId, cancellationToken));
 
+    // Appends an immutable, hash-verified source anchor (POLOXI.Legal_SourceAssertion) that pins an
+    // evidence item and/or proposition-support edge to an exact character span in a document passage.
+    [HttpPost("matters/{matterId:guid}/source-assertions")]
+    [Authorize(Policy = IntelligencePolicies.Configure)]
+    public async Task<IActionResult> AppendSourceAssertion(Guid matterId, [FromBody] LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken)
+    {
+        if (matterId != request.MatterId)
+            return BadRequest("Matter id in the route must match the request body.");
+        var assertionId = await documentCorpusRepository.AppendSourceAssertionAsync(TenantId, ActorUserId, request, cancellationToken);
+        return Ok(new { LegalSourceAssertionId = assertionId });
+    }
+
     // Attorney Decision Input (Human Intelligence): DB-backed canonical decision nodes with attorney
     // relative assessments and the single approved matter assessment per node. Read-only (Phase 1).
     [HttpGet("matters/{matterId:guid}/human-intelligence")]

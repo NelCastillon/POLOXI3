@@ -64,6 +64,15 @@ public interface ILegalDocumentCorpusRepository
         Guid tenantId,
         Guid matterId,
         CancellationToken cancellationToken = default);
+
+    // Appends a new immutable source anchor (POLOXI.Legal_SourceAssertion). The row is append-only:
+    // corrections supersede an existing anchor rather than mutating it. Returns the new anchor id.
+    Task<Guid> AppendSourceAssertionAsync(
+        Guid tenantId,
+        Guid userId,
+        LegalSourceAssertionCreateRequest request,
+        CancellationToken cancellationToken = default);
+
     // Enrichment/activation state for a matter: how many clean document versions have extracted text,
     // and how many of those still lack any derived evidence (i.e. are prepared but not yet activated).
     Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(

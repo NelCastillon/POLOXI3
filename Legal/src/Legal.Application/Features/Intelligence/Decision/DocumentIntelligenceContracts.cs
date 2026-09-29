@@ -262,7 +262,8 @@ public sealed record LegalPendingCorpusVersion(
     Guid LegalDocumentVersionId,
     string FileName,
     string Sha256Hash,
-    string? DocumentTypeCode);
+    string? DocumentTypeCode,
+    string? DomainPackCode = null);
 
 public sealed record LegalDocumentDto(
     Guid LegalDocumentId,
@@ -332,6 +333,91 @@ public sealed record LegalPropositionSupportDto(
     string RelationshipTypeCode,
     string? AssessmentReason);
 
+// Verification lifecycle of an immutable source anchor (POLOXI.Legal_SourceAssertion).
+public static class LegalSourceAssertionStates
+{
+    public const string Unverified = "UNVERIFIED";
+    public const string Verified = "VERIFIED";
+    public const string Drifted = "DRIFTED";
+    public const string Invalidated = "INVALIDATED";
+}
+
+// How a source anchor was captured against the sealed source text.
+public static class LegalSourceAssertionMethods
+{
+    public const string ExactSpan = "EXACT_SPAN";
+    public const string NormalizedSpan = "NORMALIZED_SPAN";
+    public const string ManualSpan = "MANUAL_SPAN";
+}
+
+// Immutable, hash-verified anchor pinning an evidence item and/or a proposition-support edge to an
+// EXACT character span within a document passage (POLOXI.Legal_SourceAssertion). Append-only: a
+// correction supersedes an older row rather than mutating it.
+public sealed record LegalSourceAssertionDto(
+    Guid LegalSourceAssertionId,
+    Guid MatterId,
+    Guid LegalDocumentVersionId,
+    Guid LegalDocumentPassageId,
+    Guid? LegalEvidenceItemId,
+    Guid? LegalPropositionSupportId,
+    int StartOffset,
+    int EndOffset,
+    string QuotedText,
+    string QuotedTextHash,
+    string SourceVersionHash,
+    string AnchorMethodCode,
+    string VerificationStateCode,
+    DateTime? VerifiedDateUtc,
+    Guid? SupersededBySourceAssertionId,
+    string GenerationOriginCode);
+
+// Request to append a new immutable source anchor. The caller supplies the exact span; the quoted
+// text hash and source version hash are computed/validated by the persistence layer.
+public sealed record LegalSourceAssertionCreateRequest(
+    Guid MatterId,
+    Guid LegalDocumentVersionId,
+    Guid LegalDocumentPassageId,
+    Guid? LegalEvidenceItemId,
+    Guid? LegalPropositionSupportId,
+    int StartOffset,
+    int EndOffset,
+    string QuotedText,
+    string QuotedTextHash,
+    string SourceVersionHash,
+    string AnchorMethodCode = LegalSourceAssertionMethods.ExactSpan,
+    string GenerationOriginCode = "DYNAMIC_LLM");
+
+// Validation invariants for appending an immutable source anchor. Kept as a pure, side-effect-free,
+// unit-testable policy (mirroring LegalEvidenceAdmissionPolicy) so the append path enforces the same
+// rules as the CK constraints on POLOXI.Legal_SourceAssertion without needing a database.
+public static class LegalSourceAssertionPolicy
+{
+    // A source anchor must pin at least one claim: an evidence item OR a proposition-support edge.
+    public static bool HasAnchorTarget(Guid? evidenceItemId, Guid? propositionSupportId)
+        => evidenceItemId is not null || propositionSupportId is not null;
+
+    // Offsets must be a non-empty forward span: StartOffset >= 0 and EndOffset > StartOffset
+    // (mirrors CK_Legal_SourceAssertion_Offsets).
+    public static bool HasValidSpan(int startOffset, int endOffset)
+        => startOffset >= 0 && endOffset > startOffset;
+
+    // Returns null when the request satisfies every invariant; otherwise a human-readable reason.
+    public static string? Validate(LegalSourceAssertionCreateRequest request)
+    {
+        if (!HasAnchorTarget(request.LegalEvidenceItemId, request.LegalPropositionSupportId))
+            return "A source assertion must anchor at least one evidence item or proposition-support edge.";
+        if (!HasValidSpan(request.StartOffset, request.EndOffset))
+            return "Source assertion offsets are invalid: StartOffset must be >= 0 and EndOffset must be greater than StartOffset.";
+        if (string.IsNullOrWhiteSpace(request.QuotedText))
+            return "Source assertion QuotedText is required.";
+        if (string.IsNullOrWhiteSpace(request.QuotedTextHash))
+            return "Source assertion QuotedTextHash is required.";
+        if (string.IsNullOrWhiteSpace(request.SourceVersionHash))
+            return "Source assertion SourceVersionHash is required.";
+        return null;
+    }
+}
+
 // ── Document Intelligence workspace read (matter-scoped evidence ↔ proposition graph) ──
 // Source-traceable evidence: EvidenceItem joined to its originating document + passage so the
 // UI can show the source citation (file, page, passage text) alongside the assertion.
@@ -373,7 +459,8 @@ public sealed record LegalMatterEvidenceGraphDto(
     Guid MatterId,
     int DocumentCount,
     IReadOnlyCollection<LegalEvidenceGraphItemDto> Evidence,
-    IReadOnlyCollection<LegalEvidenceGraphPropositionDto> Propositions);
+    IReadOnlyCollection<LegalEvidenceGraphPropositionDto> Propositions,
+    IReadOnlyCollection<LegalSourceAssertionDto> SourceAssertions);
 
 public sealed record LegalMatterContextItem(
     Guid MatterId,

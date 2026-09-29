@@ -159,7 +159,8 @@ public sealed class MatterCorpusWorkflowIntegrationTests
 
         public Task<IReadOnlyCollection<LegalDocumentDto>> GetMatterDocumentsAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalDocumentDto>>(documents);
         public Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetDocumentPassagesAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalDocumentPassageDto>>(Passages);
-        public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterEvidenceGraphDto(matterId,documents.Count,[],[]));
+        public Task<LegalMatterEvidenceGraphDto> GetMatterEvidenceGraphAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterEvidenceGraphDto(matterId,documents.Count,[],[],[]));
+        public Task<Guid> AppendSourceAssertionAsync(Guid tenantId,Guid userId,LegalSourceAssertionCreateRequest request,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
         public Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterCorpusActivationStatus(matterId,documents.Count,documents.Count,0,0));
         public Task<IReadOnlyCollection<LegalPendingCorpusVersion>> GetPendingCorpusVersionsAsync(Guid tenantId,Guid matterId,int maximumVersions,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalPendingCorpusVersion>>([]);
         public Task<int> GenerateRandomTestCorpusAsync(Guid tenantId,Guid userId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult(0);

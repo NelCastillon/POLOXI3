@@ -22,7 +22,7 @@ public sealed record AttorneyRelativeAssessmentDto(
     string? Rationale,
     string StatusCode,
     long AssessmentVersion,
-    DateTimeOffset CreatedDateUtc);
+    DateTime CreatedDateUtc);
 
 // The single active approved matter assessment for a node/scoring context (§5 invariant).
 public sealed record ApprovedMatterAssessmentDto(
@@ -33,7 +33,7 @@ public sealed record ApprovedMatterAssessmentDto(
     Guid ApprovedByUserId,
     string ApprovedByDisplayName,
     string GovernancePolicyCode,
-    DateTimeOffset ApprovedDateUtc);
+    DateTime ApprovedDateUtc);
 
 // A canonical decision node with its attorney signals for the Human Intelligence panel.
 public sealed record AttorneyDecisionNodeDto(

@@ -69,13 +69,19 @@ public sealed class LegalDocumentSemanticInterpreter(IAiProviderRouter aiRouter)
     {
         var allowedPassages = passages.Select(item => item.LegalDocumentPassageId).ToHashSet();
         var conceptsByCode = concepts.ToDictionary(item => item.ConceptCode, StringComparer.OrdinalIgnoreCase);
+        // When a Domain Pack supplies concepts, evidence must bind to one of its concepts. On the intake
+        // corpus-activation path no Domain Pack is provided (concepts is empty); requiring a concept match
+        // there would discard every extracted evidence item, leaving documents perpetually "not activated".
+        // So concept binding is enforced only when a concept set actually exists.
+        var requireConceptBinding = conceptsByCode.Count > 0;
         var evidence = proposal.EvidenceItems
             .Where(item => !string.IsNullOrWhiteSpace(item.ProposalKey) &&
                            !string.IsNullOrWhiteSpace(item.Summary) &&
                            item.PassageId.HasValue &&
                            allowedPassages.Contains(item.PassageId.Value) &&
-                           !string.IsNullOrWhiteSpace(item.DomainConceptCode) &&
-                           conceptsByCode.ContainsKey(item.DomainConceptCode))
+                           (!requireConceptBinding ||
+                            (!string.IsNullOrWhiteSpace(item.DomainConceptCode) &&
+                             conceptsByCode.ContainsKey(item.DomainConceptCode))))
             .Select(item =>
             {
                 var concept = item.DomainConceptCode is not null && conceptsByCode.TryGetValue(item.DomainConceptCode, out var match) ? match : null;

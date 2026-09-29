@@ -228,12 +228,22 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             FROM POLOXI.Legal_MatterPropositionSupport support
             INNER JOIN POLOXI.Legal_MatterFactProposition proposition ON proposition.LegalFactPropositionId=support.LegalFactPropositionId AND proposition.IsDeleted=0
             WHERE support.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId AND support.IsDeleted=0;
+
+            SELECT anchor.LegalSourceAssertionId, anchor.DecisionMatterId AS MatterId, anchor.LegalDocumentVersionId,
+                   anchor.LegalDocumentPassageId, anchor.LegalEvidenceItemId, anchor.LegalPropositionSupportId,
+                   anchor.StartOffset, anchor.EndOffset, anchor.QuotedText, anchor.QuotedTextHash, anchor.SourceVersionHash,
+                   anchor.AnchorMethodCode, anchor.VerificationStateCode, anchor.VerifiedDateUtc,
+                   anchor.SupersededBySourceAssertionId, anchor.GenerationOriginCode
+            FROM POLOXI.Legal_SourceAssertion anchor
+            WHERE anchor.TenantId=@TenantId AND anchor.DecisionMatterId=@MatterId AND anchor.IsDeleted=0
+            ORDER BY anchor.LegalDocumentPassageId, anchor.StartOffset, anchor.CreatedDateUtc;
             """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
 
         var documentCount = await multi.ReadSingleAsync<int>();
         var evidence = (await multi.ReadAsync<LegalEvidenceGraphItemDto>()).ToArray();
         var propositionRows = (await multi.ReadAsync<PropositionHeadRow>()).ToArray();
         var supports = (await multi.ReadAsync<LegalPropositionSupportDto>()).ToArray();
+        var sourceAssertions = (await multi.ReadAsync<LegalSourceAssertionDto>()).ToArray();
 
         var propositions = propositionRows.Select(head => new LegalEvidenceGraphPropositionDto(
             head.LegalFactPropositionId, head.MatterId, head.PropositionText, head.FactStateCode,
@@ -241,7 +251,48 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             supports.Where(support => support.LegalFactPropositionId == head.LegalFactPropositionId).ToArray()))
             .ToArray();
 
-        return new LegalMatterEvidenceGraphDto(matterId, documentCount, evidence, propositions);
+        return new LegalMatterEvidenceGraphDto(matterId, documentCount, evidence, propositions, sourceAssertions);
+    }
+
+    public async Task<Guid> AppendSourceAssertionAsync(Guid tenantId, Guid userId, LegalSourceAssertionCreateRequest request, CancellationToken cancellationToken = default)
+    {
+        var validationError = LegalSourceAssertionPolicy.Validate(request);
+        if (validationError is not null)
+            throw new ArgumentException(validationError, nameof(request));
+
+        var assertionId = Guid.NewGuid();
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            INSERT INTO POLOXI.Legal_SourceAssertion
+                (LegalSourceAssertionId, DecisionMatterId, LegalDocumentVersionId, LegalDocumentPassageId,
+                 LegalEvidenceItemId, LegalPropositionSupportId, StartOffset, EndOffset, QuotedText, QuotedTextHash,
+                 SourceVersionHash, AnchorMethodCode, GenerationOriginCode, TenantId, CreatedByUserId)
+            SELECT @Id, @MatterId, @VersionId, @PassageId, @EvidenceItemId, @SupportId, @StartOffset, @EndOffset,
+                   @QuotedText, @QuotedTextHash, @SourceVersionHash, @AnchorMethodCode, @GenerationOriginCode, @TenantId, @UserId
+            WHERE EXISTS (SELECT 1 FROM POLOXI.Legal_DocumentPassage passage
+                          WHERE passage.LegalDocumentPassageId=@PassageId AND passage.TenantId=@TenantId AND passage.IsDeleted=0);
+            """,
+            new
+            {
+                Id = assertionId,
+                MatterId = request.MatterId,
+                VersionId = request.LegalDocumentVersionId,
+                PassageId = request.LegalDocumentPassageId,
+                EvidenceItemId = request.LegalEvidenceItemId,
+                SupportId = request.LegalPropositionSupportId,
+                request.StartOffset,
+                request.EndOffset,
+                request.QuotedText,
+                request.QuotedTextHash,
+                request.SourceVersionHash,
+                request.AnchorMethodCode,
+                request.GenerationOriginCode,
+                TenantId = tenantId,
+                UserId = userId
+            }, cancellationToken: cancellationToken));
+
+        return assertionId;
     }
 
     public async Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
@@ -282,9 +333,10 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             """
             SELECT TOP(@MaximumVersions)
                    document.LegalDocumentId, version.LegalDocumentVersionId, document.FileName,
-                   version.Sha256Hash, document.DocumentTypeCode
+                   version.Sha256Hash, document.DocumentTypeCode, pack.PackCode AS DomainPackCode
             FROM POLOXI.Legal_MatterDocumentVersion version
             INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=version.LegalDocumentId AND document.IsDeleted=0
+            LEFT JOIN POLOXI.Legal_DecisionDomainPack pack ON pack.DecisionDomainPackId=document.DecisionDomainPackId AND pack.IsDeleted=0
             WHERE version.TenantId=@TenantId AND document.DecisionMatterId=@MatterId AND version.IsDeleted=0
               AND document.StatusCode<>N'QUARANTINED'
               AND version.MalwareStatusCode IN (N'CLEAN',N'NOT_DETECTED',N'PASSED')

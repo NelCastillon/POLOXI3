@@ -14,6 +14,7 @@ public sealed class LegalMatterCorpusActivationService(
     ILegalDocumentSemanticInterpreter semanticInterpreter,
     IMatterChangeProcessor matterChangeProcessor,
     IDecisionIntegrityRepository integrityRepository,
+    ILegalDecisionRepository decisionRepository,
     IAiProviderRouter aiRouter,
     ILogger<LegalMatterCorpusActivationService> logger) : ILegalMatterCorpusActivationService
 {
@@ -33,6 +34,11 @@ public sealed class LegalMatterCorpusActivationService(
 
         var activated = 0;
         var correlationId = Guid.NewGuid().ToString("N");
+        // Domain-pack concepts are resolved once per distinct pack code and reused across versions. When a
+        // document carries a Domain Pack, its concepts are passed to the interpreter so extracted evidence is
+        // concept-bound (dimension + verification profile) exactly like the decision path. Documents without a
+        // pack activate with unbound evidence (the interpreter only enforces concept binding when concepts exist).
+        var conceptsByPack = new Dictionary<string, IReadOnlyCollection<DecisionDomainConceptDto>>(StringComparer.OrdinalIgnoreCase);
         // Continuous Decision Integrity only has meaning once a prior decision snapshot exists — its job is
         // to detect whether a changed document disturbs an already-made decision. On first-time preparation
         // (no snapshot yet) it would be a pure no-op, so skip it entirely and defer CDI to the document
@@ -49,9 +55,11 @@ public sealed class LegalMatterCorpusActivationService(
                         tenantId, version.LegalDocumentVersionId, cancellationToken);
                     if (passages.Count > 0)
                     {
+                        var domainConcepts = await ResolveDomainConceptsAsync(
+                            tenantId, version.DomainPackCode, conceptsByPack, cancellationToken);
                         var proposal = await semanticInterpreter.InterpretAsync(
                             tenantId, matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
-                            null, [], passages, correlationId, modelCode, cancellationToken);
+                            version.DomainPackCode, domainConcepts, passages, correlationId, modelCode, cancellationToken);
                         await corpusRepository.SaveSemanticProposalAsync(
                             tenantId, userId, matterId, version.LegalDocumentId,
                             version.LegalDocumentVersionId, proposal, cancellationToken);
@@ -87,6 +95,35 @@ public sealed class LegalMatterCorpusActivationService(
 
         var status = await corpusRepository.GetMatterActivationStatusAsync(tenantId, matterId, cancellationToken);
         return status with { ActivatedThisCall = activated };
+    }
+
+    // Resolves (and caches per pack code) the Domain Pack concepts for a document. Returns an empty set when
+    // the document has no pack or the pack cannot be loaded, in which case the interpreter admits evidence
+    // without requiring concept binding. Best-effort: a lookup failure never blocks activation.
+    private async Task<IReadOnlyCollection<DecisionDomainConceptDto>> ResolveDomainConceptsAsync(
+        Guid tenantId,
+        string? domainPackCode,
+        Dictionary<string, IReadOnlyCollection<DecisionDomainConceptDto>> cache,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(domainPackCode))
+            return [];
+        if (cache.TryGetValue(domainPackCode, out var cached))
+            return cached;
+
+        IReadOnlyCollection<DecisionDomainConceptDto> concepts = [];
+        try
+        {
+            var pack = await decisionRepository.GetDomainPackAsync(tenantId, domainPackCode, cancellationToken);
+            concepts = pack?.Concepts ?? [];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Failed to resolve Domain Pack {DomainPackCode}; activating without concept binding.", domainPackCode);
+        }
+
+        cache[domainPackCode] = concepts;
+        return concepts;
     }
 
     // Generates embeddings for up to EmbeddingPassageBatchLimit passages of a version that still lack one,
