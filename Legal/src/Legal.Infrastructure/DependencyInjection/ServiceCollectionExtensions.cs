@@ -3,6 +3,7 @@ using Legal.Application.Abstractions.Intelligence;
 using Legal.Application.Abstractions.Persistence;
 using Legal.Application.Abstractions.Services;
 using Legal.Application.Features.Intelligence.Epistemic;
+using Legal.Application.Features.Intelligence.Decision;
 using Legal.Application.Features.Intelligence.Decision.Core;
 using Legal.Infrastructure.Configuration;
 using Legal.Infrastructure.Intelligence;
@@ -66,6 +67,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDecisionSupportSignalRepository, DecisionSupportSignalRepository>();
         services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
         services.AddScoped<IAttorneyDecisionInputRepository, AttorneyDecisionInputRepository>();
+        services.AddScoped<ILegalDecisionContractRepository, LegalDecisionContractRepository>();
 
         // Continuous Decision Integrity (Phase 1): change-awareness persistence + Matter Change Processor.
         services.AddScoped<IDecisionIntegrityRepository, LegalDecisionIntegrityRepository>();
@@ -130,6 +132,15 @@ public static class ServiceCollectionExtensions
         // propositions on POLOXI's shared VIV scale by reusing the ClaimVerificationPrioritizer. Scoped:
         // composes the scoped corpus + epistemic-claim repositories.
         services.AddScoped<IMatterPropositionInformationValueService, MatterPropositionInformationValueService>();
+
+        // Attorney Decision Input (Human Intelligence) write path: the orchestration service and the
+        // thin non-committing POLOXI preview adapter (§13/§15/§19). POLOXI remains the authoritative evaluator.
+        services.AddScoped<IExistingPoloxiEvaluationAdapter, ExistingPoloxiEvaluationAdapter>();
+        services.AddScoped<IAttorneyDecisionInputService, AttorneyDecisionInputService>();
+
+        // Decision Contract: first-class, versioned, DB-backed problem-specification workspace.
+        services.AddScoped<ILegalDecisionContractService, LegalDecisionContractService>();
+
 
         services.AddScoped<IPromptCatalog, PromptCatalog>();
         services.AddScoped<IAiProviderRouter, AiProviderRouter>();

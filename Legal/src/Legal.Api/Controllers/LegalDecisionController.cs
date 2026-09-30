@@ -16,7 +16,7 @@ namespace Legal.Api.Controllers;
 // (/legal/decision). Evolves independently from the Intelligence Wide (/legal/search) controller.
 [ApiController]
 [Route("api/legal_decision")]
-public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
+public sealed class LegalDecisionController(ILegalDecisionService service,IIntelligenceExecutionService executionService,ILegalDocumentCorpusRepository documentCorpusRepository,IAttorneyDecisionInputRepository attorneyDecisionInputRepository,IAttorneyDecisionInputService attorneyDecisionInputService,ILegalDecisionContractService decisionContractService,ILegalDocumentIntakeService documentIntakeService,ILegalMatterCorpusActivationService corpusActivationService,IDecisionIntegrityRepository integrityRepository,IMatterPropositionInformationValueService propositionInformationValueService,IOptions<DocumentIntelligenceOptions> documentOptions) : ControllerBase
 {
     private const string CapabilityCode = JudzCapabilities.LegalDecision;
     private Guid TenantId => AuthenticatedRequestContext.GetTenantId(User) ?? throw new UnauthorizedAccessException("An authenticated tenant context is required.");
@@ -146,6 +146,194 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     public async Task<IActionResult> MatterHumanIntelligence(Guid matterId, CancellationToken cancellationToken)
         => Ok(await attorneyDecisionInputRepository.GetMatterHumanIntelligenceAsync(TenantId, matterId, cancellationToken));
 
+    // ── Decision Contract (first-class, versioned problem specification) ────────────────────────────
+    // The authoritative attorney-defined decision boundary above POLOXI. Auto-provisions a DRAFT on
+    // first open; edits are section commands with optimistic concurrency; status changes only through
+    // governed lifecycle commands. POLOXI remains the single authoritative evaluator.
+
+    [HttpGet("matters/{matterId:guid}/decision-contract")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> GetDecisionContract(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await decisionContractService.GetWorkspaceAsync(TenantId, ActorUserId, matterId, cancellationToken));
+
+    [HttpGet("decision-contract/options")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> GetDecisionContractOptions(CancellationToken cancellationToken)
+        => Ok(await decisionContractService.GetOptionsAsync(TenantId, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/decision")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractDecision(Guid matterId, [FromBody] DecisionContractDecisionCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateDecisionAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/legal-context")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractLegalContext(Guid matterId, [FromBody] DecisionContractLegalContextCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateLegalContextAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/burden")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractBurden(Guid matterId, [FromBody] DecisionContractBurdenCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateBurdenAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/boundaries")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractBoundaries(Guid matterId, [FromBody] DecisionContractBoundariesCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateBoundariesAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/candidates")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractCandidates(Guid matterId, [FromBody] DecisionContractCandidatesCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateCandidatesAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPut("matters/{matterId:guid}/decision-contract/settings")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> UpdateDecisionContractSettings(Guid matterId, [FromBody] DecisionContractSettingsCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.UpdateSettingsAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPost("matters/{matterId:guid}/decision-contract/submit")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> SubmitDecisionContract(Guid matterId, [FromBody] DecisionContractLifecycleCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.SubmitAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPost("matters/{matterId:guid}/decision-contract/approve")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> ApproveDecisionContract(Guid matterId, [FromBody] DecisionContractLifecycleCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.ApproveAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPost("matters/{matterId:guid}/decision-contract/return")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> ReturnDecisionContract(Guid matterId, [FromBody] DecisionContractLifecycleCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.ReturnAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPost("matters/{matterId:guid}/decision-contract/activate")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> ActivateDecisionContract(Guid matterId, [FromBody] DecisionContractLifecycleCommand command, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.ActivateAsync(TenantId, ActorUserId, matterId, command, cancellationToken));
+
+    [HttpPost("matters/{matterId:guid}/decision-contract/{decisionContractId:guid}/new-version")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public Task<IActionResult> NewDecisionContractVersion(Guid matterId, Guid decisionContractId, CancellationToken cancellationToken)
+        => RunContract(matterId, () => decisionContractService.CreateNewVersionAsync(TenantId, ActorUserId, matterId, decisionContractId, cancellationToken));
+
+    private async Task<IActionResult> RunContract(Guid matterId, Func<Task<DecisionContractWorkspaceDto>> action)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, HttpContext.RequestAborted);
+        if (denied is not null) return denied;
+        try
+        {
+            return Ok(await action());
+        }
+        catch (DecisionContractConcurrencyException ex)
+        {
+            return Conflict(new { code = "CONCURRENCY_CONFLICT", message = ex.Message });
+        }
+        catch (DecisionContractStateException ex)
+        {
+            return BadRequest(new { code = "STATE_ERROR", message = ex.Message });
+        }
+    }
+
+
+    // ── Attorney Decision Input write path (§19/§20) ─────────────────────────────────────────────
+    // Add-Proposition workflow: Define → Placement → Preview → Confirm, plus node-scoped
+    // assessment/approval/challenge/reposition. POLOXI remains the single authoritative evaluator.
+
+    // Define — validate + build a draft with deterministic (and, when available, AI) structural checks.
+    [HttpPost("matters/{matterId:guid}/decision-input/drafts")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CreateAttorneyDraft(Guid matterId, [FromBody] CreateAttorneyInputCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.CreateDraftAsync(TenantId, ActorUserId, command with { MatterId = matterId }, cancellationToken));
+    }
+
+    // Placement — suggested midpoint + neighbor bounds for the chosen position (§4).
+    [HttpPost("matters/{matterId:guid}/decision-input/placement-analysis")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> AnalyzeAttorneyPlacement(Guid matterId, [FromBody] AnalyzePlacementCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.AnalyzePlacementAsync(TenantId, command with { MatterId = matterId }, cancellationToken));
+    }
+
+    // Preview — non-committing projection through the existing POLOXI scoring path (§15).
+    [HttpPost("matters/{matterId:guid}/decision-input/preview")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> PreviewAttorneyInput(Guid matterId, [FromBody] PreviewAttorneyInputCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.PreviewAsync(TenantId, ActorUserId, command with { MatterId = matterId }, cancellationToken));
+    }
+
+    // Confirm/Commit — node + assessment (+optional approval) + edges + audit + outbox in one tx (§16).
+    [HttpPost("matters/{matterId:guid}/decision-input/commit")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CommitAttorneyInput(Guid matterId, [FromBody] CommitAttorneyInputCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        try
+        {
+            return Ok(await attorneyDecisionInputService.CommitAsync(TenantId, ActorUserId, command with { MatterId = matterId }, cancellationToken));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
+        }
+    }
+
+    // Submit a node-scoped relative assessment (multi-attorney; never auto-averaged) (§5).
+    [HttpPost("matters/{matterId:guid}/nodes/{nodeId:guid}/attorney-assessments")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> SubmitAttorneyAssessment(Guid matterId, Guid nodeId, [FromBody] SubmitAttorneyAssessmentCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.SubmitAssessmentAsync(TenantId, ActorUserId, command with { MatterId = matterId, DecisionNodeId = nodeId }, cancellationToken));
+    }
+
+    // Approve a specific assessment as the single active Approved Matter Assessment for the node (§5).
+    [HttpPost("matters/{matterId:guid}/nodes/{nodeId:guid}/assessment-approval")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> ApproveMatterAssessment(Guid matterId, Guid nodeId, [FromBody] ApproveMatterAssessmentCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(await attorneyDecisionInputService.ApproveAssessmentAsync(TenantId, ActorUserId, command with { MatterId = matterId, DecisionNodeId = nodeId }, cancellationToken));
+    }
+
+    // Raise a challenge against a node or relationship (§3).
+    [HttpPost("matters/{matterId:guid}/nodes/{nodeId:guid}/challenge")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RaiseAttorneyChallenge(Guid matterId, Guid nodeId, [FromBody] RaiseChallengeCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        return Ok(new { ChallengeId = await attorneyDecisionInputService.RaiseChallengeAsync(TenantId, ActorUserId, command with { MatterId = matterId, DecisionNodeId = nodeId }, cancellationToken) });
+    }
+
+    // Reposition an existing node — creates a new version and DecisionDelta (§4).
+    [HttpPost("matters/{matterId:guid}/nodes/{nodeId:guid}/reposition")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> RepositionAttorneyNode(Guid matterId, Guid nodeId, [FromBody] RepositionNodeCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, CapabilityCode, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        try
+        {
+            return Ok(await attorneyDecisionInputService.RepositionAsync(TenantId, ActorUserId, command with { MatterId = matterId, DecisionNodeId = nodeId }, cancellationToken));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
+        }
+    }
+
+
     // Advisory proposition-level Information Value: scores each atomic matter fact-proposition on POLOXI's
     // shared VIV scale (reusing ClaimVerificationPrioritizer) so the cockpit can surface which propositions
     // are most worth investigating next. Display-only — it never blocks or alters the authoritative decision.
@@ -256,6 +444,14 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         [FromForm] string? documentTypeCode,
         [FromForm] string? domainPackCode,
         [FromForm] string? modelCode,
+        [FromForm] string? idempotencyKey,
+        [FromForm] Guid? uploadBatchId,
+        [FromForm] string? sourceTypeCode,
+        [FromForm] string? custodian,
+        [FromForm] string? producedBy,
+        [FromForm] string? productionId,
+        [FromForm] string? batesStart,
+        [FromForm] string? batesEnd,
         CancellationToken cancellationToken)
     {
         // Upload is prepare-only and must NOT consume the metered legal.decision run quota.
@@ -277,6 +473,19 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
             DocumentTypeCode = documentTypeCode,
             DomainPackCode = domainPackCode,
             ModelCode = modelCode,
+            // Enterprise evidence-upload provenance (all optional; intake is unchanged when absent).
+            IdempotencyKey = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey,
+            UploadBatchId = uploadBatchId,
+            Source = new EvidenceSourceDescriptor
+            {
+                SourceTypeCode = string.IsNullOrWhiteSpace(sourceTypeCode) ? "USER_UPLOAD" : sourceTypeCode,
+                Custodian = custodian,
+                ProducedBy = producedBy,
+                ProductionId = productionId,
+                BatesStart = batesStart,
+                BatesEnd = batesEnd,
+                OriginalPath = Path.GetFileName(file.FileName)
+            },
             // Upload only prepares the document (validate, scan, store, persist, extract). The metered
             // Stage 1 semantic enrichment and Continuous Decision Integrity run later, on the
             // Disambiguate & Answer path, via corpus activation.
@@ -284,6 +493,109 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
         };
         return Ok(await documentIntakeService.IngestAsync(request, content, cancellationToken));
     }
+
+    // Opens a new upload batch (one "add evidence" action) for a matter. Batch counters and provenance
+    // occurrences are grouped under the returned batch id for the enterprise upload dashboard.
+    [HttpPost("matters/{matterId:guid}/upload-batches")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> StartUploadBatch(Guid matterId, [FromBody] StartUploadBatchCommand command, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        var batchId = await documentCorpusRepository.CreateUploadBatchAsync(TenantId, ActorUserId, matterId, command, cancellationToken);
+        return Ok(batchId);
+    }
+
+    // Read-only upload batch reports for the enterprise upload dashboard (newest first).
+    [HttpGet("matters/{matterId:guid}/upload-batches")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterUploadBatches(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await documentCorpusRepository.GetUploadBatchesAsync(TenantId, matterId, cancellationToken));
+
+    // Read-only legal provenance occurrences for a matter (same bytes can appear as multiple occurrences).
+    [HttpGet("matters/{matterId:guid}/evidence-occurrences")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterEvidenceOccurrences(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await documentCorpusRepository.GetEvidenceOccurrencesAsync(TenantId, matterId, cancellationToken));
+
+    // Declares how many files a batch expects to process, so the dashboard shows discovered-vs-accepted.
+    [HttpPut("matters/{matterId:guid}/upload-batches/{batchId:guid}/discovered")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> SetUploadBatchDiscovered(Guid matterId, Guid batchId, [FromBody] SetBatchDiscoveredBody body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        await documentCorpusRepository.SetUploadBatchDiscoveredAsync(TenantId, batchId, body.FilesDiscovered, cancellationToken);
+        return NoContent();
+    }
+
+    // Closes a batch once its files are processed (idempotent). Default terminal status is CLOSED.
+    [HttpPost("matters/{matterId:guid}/upload-batches/{batchId:guid}/close")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CloseUploadBatch(Guid matterId, Guid batchId, [FromBody] CloseBatchBody? body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        await documentCorpusRepository.CloseUploadBatchAsync(TenantId, ActorUserId, batchId, body?.StatusCode ?? "CLOSED", cancellationToken);
+        return NoContent();
+    }
+
+    // Read-only evidence lineage groups (independent-source identity) with their members for a matter.
+    [HttpGet("matters/{matterId:guid}/evidence-lineage")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> MatterEvidenceLineage(Guid matterId, CancellationToken cancellationToken)
+        => Ok(await documentCorpusRepository.GetEvidenceLineageAsync(TenantId, matterId, cancellationToken));
+
+    // Creates a lineage group representing one underlying independent source.
+    [HttpPost("matters/{matterId:guid}/evidence-lineage")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CreateEvidenceLineageGroup(Guid matterId, [FromBody] CreateLineageGroupBody body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        var groupId = await documentCorpusRepository.CreateEvidenceLineageGroupAsync(TenantId, ActorUserId, matterId, body.LineageLabel, body.OriginDescription, body.IndependenceBasisCode ?? "UNRESOLVED", cancellationToken);
+        return Ok(groupId);
+    }
+
+    // Adds an occurrence to a lineage group as ORIGINAL (primary source) or DERIVATIVE (quotes/restates it).
+    [HttpPost("matters/{matterId:guid}/evidence-lineage/{groupId:guid}/members")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> AddEvidenceLineageMember(Guid matterId, Guid groupId, [FromBody] AddLineageMemberBody body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        var memberId = await documentCorpusRepository.AddEvidenceLineageMemberAsync(TenantId, ActorUserId, groupId, body.OccurrenceId, body.RoleCode ?? "ORIGINAL", body.DerivationNote, cancellationToken);
+        return Ok(memberId);
+    }
+
+    // Creates a document family (email + attachments / archive + children) for a matter.
+    [HttpPost("matters/{matterId:guid}/document-families")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> CreateDocumentFamily(Guid matterId, [FromBody] CreateDocumentFamilyBody body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        var familyId = await documentCorpusRepository.CreateDocumentFamilyAsync(TenantId, ActorUserId, matterId, body.FamilyLabel, body.ContainerTypeCode ?? "LOOSE", cancellationToken);
+        return Ok(familyId);
+    }
+
+    // Attaches an occurrence to a family with its container position (depth/ordinal) and optional parent.
+    [HttpPost("matters/{matterId:guid}/document-families/{familyId:guid}/members")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> LinkOccurrenceToFamily(Guid matterId, Guid familyId, [FromBody] LinkFamilyMemberBody body, CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+        await documentCorpusRepository.LinkOccurrenceToFamilyAsync(TenantId, ActorUserId, body.OccurrenceId, familyId, body.ParentOccurrenceId, body.FamilyDepth, body.FamilyOrdinal, cancellationToken);
+        return NoContent();
+    }
+
+    public sealed record SetBatchDiscoveredBody(int FilesDiscovered);
+    public sealed record CloseBatchBody(string? StatusCode);
+    public sealed record CreateLineageGroupBody(string? LineageLabel, string? OriginDescription, string? IndependenceBasisCode);
+    public sealed record AddLineageMemberBody(Guid OccurrenceId, string? RoleCode, string? DerivationNote);
+    public sealed record CreateDocumentFamilyBody(string? FamilyLabel, string? ContainerTypeCode);
+    public sealed record LinkFamilyMemberBody(Guid OccurrenceId, Guid? ParentOccurrenceId, int FamilyDepth, int FamilyOrdinal);
 
     // Activates prepared corpus documents (one bounded batch per call): runs Stage 1 semantic
     // enrichment and Continuous Decision Integrity for versions uploaded prepare-only. The answer
@@ -310,6 +622,33 @@ public sealed class LegalDecisionController(ILegalDecisionService service,IIntel
     [Authorize(Policy = IntelligencePolicies.Search)]
     public async Task<IActionResult> MatterCorpusEnrichmentStatus(Guid matterId, CancellationToken cancellationToken)
         => Ok(await corpusActivationService.GetStatusAsync(TenantId, matterId, cancellationToken));
+
+    public sealed record PurgeMatterDocumentsBody(IReadOnlyCollection<Guid>? DocumentIds);
+
+    // Hard-deletes document-derived evidence for a matter (single/multiple documents, or ALL when the
+    // body has no DocumentIds), then synchronously recomputes: re-activation re-enriches any remaining
+    // prepared documents and re-runs Continuous Decision Integrity so all associated scoring, evidence/
+    // proposition states and decision statuses are refreshed. Document-evidence only; the matter and its
+    // configuration are preserved. Gated on the non-metered 'legal.matters' capability like activation.
+    [HttpDelete("matters/{matterId:guid}/corpus/documents")]
+    [Authorize(Policy = IntelligencePolicies.Search)]
+    public async Task<IActionResult> PurgeMatterDocuments(
+        Guid matterId,
+        [FromBody] PurgeMatterDocumentsBody? body,
+        CancellationToken cancellationToken)
+    {
+        var (denied, _) = await CapabilityGate.EnforceAsync(executionService, User, JudzCapabilities.Matters, matterId, null, cancellationToken);
+        if (denied is not null) return denied;
+
+        var purge = await documentCorpusRepository.PurgeMatterDocumentEvidenceAsync(
+            TenantId, ActorUserId, matterId, new LegalMatterDocumentPurgeRequest(body?.DocumentIds), cancellationToken);
+
+        // Synchronous recompute of all associated scoring/statuses for the surviving corpus.
+        var recompute = await corpusActivationService.ActivateAsync(
+            TenantId, ActorUserId, matterId, null, 3, cancellationToken);
+
+        return Ok(new LegalMatterDocumentPurgeOutcome(purge, recompute));
+    }
 
     [HttpGet("documents/versions/{documentVersionId:guid}/passages")]
     [Authorize(Policy = IntelligencePolicies.Search)]

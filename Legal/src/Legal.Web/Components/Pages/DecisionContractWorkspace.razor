@@ -1,0 +1,646 @@
+@using Legal.Application.Features.Intelligence.Decision
+@inject ApiClient Api
+
+@* ─── Decision Contract workspace ──────────────────────────────────────────────────────────────────
+   First-class, versioned, DB-backed problem specification above POLOXI. Three regions: section nav,
+   the section editor, and a live contract summary. Status changes only through governed commands.
+   POLOXI remains the single authoritative evaluator; POLOXI weights are shown read-only. *@
+
+@if (_loadError is not null)
+{
+    <div class="dc-alert" style="border-left:4px solid #dc3545;animation:um-shake 0.3s ease;">
+        <i class="bi bi-exclamation-triangle"></i> <span>@_loadError</span>
+    </div>
+}
+
+@if (_ws is null)
+{
+    <div class="dc-loading"><span class="dc-spinner"></span> Loading Decision Contract…</div>
+}
+else
+{
+    var c = _ws.Contract;
+    <div class="dc-root">
+        @* ── Header ─────────────────────────────────────────────────────────────────────────── *@
+        <div class="dc-header">
+            <div class="dc-header-title">
+                <h3>@(_ws.MatterTitle ?? "Decision Contract")</h3>
+                <span class="dc-subtitle">Define the legal decision, scope, and analytical framework for POLOXI.</span>
+            </div>
+            <div class="dc-header-meta">
+                <div class="dc-meta-block">
+                    <span class="dc-meta-label">Contract Readiness</span>
+                    <div class="dc-readiness">
+                        <div class="dc-readiness-bar"><span style="width:@(_ws.CompletionPercent)%"></span></div>
+                        <span class="dc-readiness-val">@_ws.CompletionPercent%</span>
+                    </div>
+                    <span class="dc-meta-hint">@_ws.Sections.Count(s => s.Complete)/@_ws.Sections.Count sections · @BlockingCount blocking</span>
+                </div>
+                <div class="dc-meta-block">
+                    <span class="dc-meta-label">Contract Version</span>
+                    <span class="dc-meta-strong">v@(c.VersionNumber) <span class="dc-status-badge dc-status-@StatusTone(c.StatusCode)">@StatusLabel(c.StatusCode)</span></span>
+                </div>
+                <div class="dc-header-actions">
+                    @if (_ws.CanCreateVersion)
+                    {
+                        <button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="CreateVersionAsync"><i class="bi bi-plus-lg"></i> New Version</button>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="dc-body">
+            @* ── Section nav ────────────────────────────────────────────────────────────────── *@
+            <nav class="dc-nav">
+                @{ var idx = 0; }
+                @foreach (var s in _ws.Sections)
+                {
+                    idx++;
+                    var active = _activeSection == s.SectionCode;
+                    <button type="button" class="dc-nav-item @(active ? "dc-nav-item--active" : "")" @onclick="() => _activeSection = s.SectionCode">
+                        <span class="dc-nav-num @(s.Complete ? "dc-nav-num--done" : "")">@(s.Complete ? "" : idx.ToString())@(s.Complete ? "✓" : "")</span>
+                        <span class="dc-nav-label">@s.Title</span>
+                    </button>
+                }
+                <button type="button" class="dc-nav-item @(_activeSection == "Review" ? "dc-nav-item--active" : "")" @onclick="@(() => _activeSection = "Review")">
+                    <span class="dc-nav-num">@(_ws.Sections.Count + 1)</span>
+                    <span class="dc-nav-label">Review &amp; Approve</span>
+                </button>
+            </nav>
+
+            @* ── Editor ─────────────────────────────────────────────────────────────────────── *@
+            <section class="dc-editor">
+                @switch (_activeSection)
+                {
+                    case "Decision":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-bullseye"></i><div><h4>Decision</h4><span>Define the legal question and objective POLOXI is analyzing.</span></div></div>
+                            <div class="dc-form-grid">
+                                <label class="dc-field dc-field--full">Decision Question <span class="dc-req">*</span>
+                                    <textarea rows="2" maxlength="2000" disabled="@ReadOnly" @bind="_form.DecisionQuestion"></textarea>
+                                </label>
+                                <label class="dc-field">Client Objective <span class="dc-req">*</span>
+                                    <textarea rows="2" maxlength="1000" disabled="@ReadOnly" @bind="_form.ClientObjective"></textarea>
+                                </label>
+                                <label class="dc-field">Decision Date
+                                    <input type="date" disabled="@ReadOnly" @bind="_form.DecisionDate" />
+                                </label>
+                                <label class="dc-field dc-field--full">Success Definition
+                                    <textarea rows="2" maxlength="1500" disabled="@ReadOnly" @bind="_form.SuccessDefinition"></textarea>
+                                </label>
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot"><button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveDecisionAsync"><i class="bi bi-check2"></i> Save Decision</button></div>
+                            }
+                        </div>
+                        break;
+
+                    case "LegalContext":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-bank"></i><div><h4>Legal Context</h4><span>Specify the legal jurisdiction, court, and governing framework.</span></div></div>
+                            <div class="dc-form-grid">
+                                <label class="dc-field">Jurisdiction <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.Jurisdiction, _form.Jurisdiction, v => _form.Jurisdiction = v)
+                                </label>
+                                <label class="dc-field">Procedural Posture <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.ProceduralPosture, _form.ProceduralPosture, v => _form.ProceduralPosture = v)
+                                </label>
+                                <label class="dc-field">Court / Forum
+                                    <input type="text" maxlength="500" disabled="@ReadOnly" @bind="_form.CourtOrForum" />
+                                </label>
+                                <label class="dc-field">Case Type
+                                    @DropdownFor(DecisionContractOptionGroups.CaseType, _form.CaseType, v => _form.CaseType = v)
+                                </label>
+                                <label class="dc-field">Governing Law <span class="dc-req">*</span>
+                                    <input type="text" maxlength="1000" disabled="@ReadOnly" @bind="_form.GoverningLaw" />
+                                </label>
+                                <label class="dc-field">Applicable Legal Framework
+                                    @DropdownFor(DecisionContractOptionGroups.LegalFramework, _form.ApplicableLegalFramework, v => _form.ApplicableLegalFramework = v)
+                                </label>
+                                <div class="dc-field dc-field--full">Related Statutes / Rules
+                                    @TagEditor(_form.StatutesOrRules)
+                                </div>
+                                <div class="dc-field dc-field--full">Key Issues / Theories
+                                    @TagEditor(_form.KeyIssues)
+                                </div>
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot"><button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveLegalContextAsync"><i class="bi bi-check2"></i> Save Legal Context</button></div>
+                            }
+                        </div>
+                        break;
+
+                    case "Burden":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-diagram-2"></i><div><h4>Burden &amp; Standard</h4><span>Define who has the burden and the applicable standard of proof or review.</span></div></div>
+                            <div class="dc-form-grid">
+                                <label class="dc-field">Moving Party <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.BurdenParty, _form.MovingParty, v => _form.MovingParty = v)
+                                </label>
+                                <label class="dc-field">Ultimate Burden <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.BurdenParty, _form.UltimateBurden, v => _form.UltimateBurden = v)
+                                </label>
+                                <label class="dc-field">Initial Burden <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.BurdenParty, _form.InitialBurden, v => _form.InitialBurden = v)
+                                </label>
+                                <label class="dc-field">Decision Standard <span class="dc-req">*</span>
+                                    @DropdownFor(DecisionContractOptionGroups.DecisionStandard, _form.StandardOfProofOrReview, v => _form.StandardOfProofOrReview = v)
+                                </label>
+                                <label class="dc-field dc-field--full">Burden Notes
+                                    <textarea rows="2" maxlength="2000" disabled="@ReadOnly" @bind="_form.BurdenNotes"></textarea>
+                                </label>
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot"><button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveBurdenAsync"><i class="bi bi-check2"></i> Save Burden</button></div>
+                            }
+                        </div>
+                        break;
+
+                    case "Boundaries":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-shield-lock"></i><div><h4>Decision Boundaries</h4><span>Constrain the evidence and authority POLOXI may rely on.</span></div></div>
+                            <div class="dc-form-grid">
+                                <label class="dc-field">Evidence Boundary <span class="dc-req">*</span>
+                                    <input type="text" maxlength="2000" disabled="@ReadOnly" @bind="_form.EvidenceBoundary" />
+                                </label>
+                                <label class="dc-field">Authority Boundary <span class="dc-req">*</span>
+                                    <input type="text" maxlength="2000" disabled="@ReadOnly" @bind="_form.AuthorityBoundary" />
+                                </label>
+                                <label class="dc-field">Source Restrictions
+                                    <input type="text" maxlength="2000" disabled="@ReadOnly" @bind="_form.SourceRestrictions" />
+                                </label>
+                                <label class="dc-field">Authority Cutoff
+                                    <input type="date" disabled="@ReadOnly" @bind="_form.AuthorityCutoffDate" />
+                                </label>
+                            </div>
+                            <div class="dc-facts">
+                                <div class="dc-facts-head">
+                                    <span>Fact boundary (known / disputed / unknown)</span>
+                                    @if (!ReadOnly)
+                                    {
+                                        <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AddFact"><i class="bi bi-plus-lg"></i> Add fact</button>
+                                    }
+                                </div>
+                                @foreach (var f in _form.Facts)
+                                {
+                                    <div class="dc-fact-row">
+                                        <input type="text" placeholder="Fact statement" disabled="@ReadOnly" @bind="f.SnapshotText" />
+                                        <select disabled="@ReadOnly" @bind="f.FactStateCode">
+                                            <option value="@DecisionContractFactStates.Known">Known</option>
+                                            <option value="@DecisionContractFactStates.Disputed">Disputed</option>
+                                            <option value="@DecisionContractFactStates.Unknown">Unknown</option>
+                                        </select>
+                                        @if (!ReadOnly)
+                                        {
+                                            <button type="button" class="dc-icon-btn" @onclick="() => _form.Facts.Remove(f)"><i class="bi bi-x-lg"></i></button>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot"><button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveBoundariesAsync"><i class="bi bi-check2"></i> Save Boundaries</button></div>
+                            }
+                        </div>
+                        break;
+
+                    case "Outcomes":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-signpost-split"></i><div><h4>Competing Outcomes</h4><span>At least two active outcomes. POLOXI decides which one prevails — not this contract.</span></div></div>
+                            <div class="dc-outcomes">
+                                <div class="dc-outcome-row dc-outcome-row--head">
+                                    <span>Code</span><span>Outcome</span><span>Type</span><span>State</span><span></span>
+                                </div>
+                                @foreach (var o in _form.Candidates)
+                                {
+                                    <div class="dc-outcome-row">
+                                        <input type="text" class="dc-code" disabled="@ReadOnly" @bind="o.CandidateCode" />
+                                        <input type="text" disabled="@ReadOnly" @bind="o.OutcomeText" />
+                                        @DropdownForInline(DecisionContractOptionGroups.CandidateType, o.CandidateTypeCode, v => o.CandidateTypeCode = v)
+                                        <select disabled="@ReadOnly" @bind="o.StateCode">
+                                            <option value="ACTIVE">Active</option>
+                                            <option value="INACTIVE">Inactive</option>
+                                        </select>
+                                        @if (!ReadOnly)
+                                        {
+                                            <button type="button" class="dc-icon-btn" @onclick="() => _form.Candidates.Remove(o)"><i class="bi bi-x-lg"></i></button>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot">
+                                    <button type="button" class="um-btn um-btn-ghost um-btn-sm" @onclick="AddCandidate"><i class="bi bi-plus-lg"></i> Add Outcome</button>
+                                    <button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveCandidatesAsync"><i class="bi bi-check2"></i> Save Outcomes</button>
+                                </div>
+                            }
+                        </div>
+                        break;
+
+                    case "Settings":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-sliders"></i><div><h4>Additional Settings</h4><span>Research, review gates, and semantic validation strictness.</span></div></div>
+                            <div class="dc-form-grid">
+                                <label class="dc-field">Decision Horizon
+                                    @DropdownFor(DecisionContractOptionGroups.DecisionHorizon, _form.DecisionHorizon, v => _form.DecisionHorizon = v)
+                                </label>
+                                <label class="dc-field">Legal Semantic Validation
+                                    @DropdownFor(DecisionContractOptionGroups.SemanticMode, _form.SemanticValidationMode, v => _form.SemanticValidationMode = v)
+                                </label>
+                                <label class="dc-check"><input type="checkbox" disabled="@ReadOnly" @bind="_form.ExternalResearchPermitted" /> External research permitted</label>
+                                <label class="dc-check"><input type="checkbox" disabled="@ReadOnly" @bind="_form.ReviewBeforeActivation" /> Attorney review before activation</label>
+                                <label class="dc-check"><input type="checkbox" disabled="@ReadOnly" @bind="_form.ReviewBeforeFinal" /> Attorney review before final decision artifact</label>
+                                <label class="dc-field dc-field--full">Notes
+                                    <textarea rows="2" maxlength="2000" disabled="@ReadOnly" @bind="_form.Notes"></textarea>
+                                </label>
+                            </div>
+                            @if (!ReadOnly)
+                            {
+                                <div class="dc-card-foot"><button type="button" class="um-btn um-btn-primary um-btn-sm" disabled="@_busy" @onclick="SaveSettingsAsync"><i class="bi bi-check2"></i> Save Settings</button></div>
+                            }
+                        </div>
+                        break;
+
+                    case "Review":
+                        <div class="dc-card">
+                            <div class="dc-card-head"><i class="bi bi-clipboard-check"></i><div><h4>Review &amp; Approve</h4><span>Governed state transitions. State changes never happen through a dropdown.</span></div></div>
+                            <div class="dc-review-grid">
+                                <div class="dc-review-col">
+                                    <h5>Contract Completeness — @_ws.CompletionPercent%</h5>
+                                    @foreach (var s in _ws.Sections)
+                                    {
+                                        <div class="dc-review-line"><i class="bi bi-@(s.Complete ? "check-circle-fill dc-ok" : "circle dc-pending")"></i> @s.Title</div>
+                                    }
+                                </div>
+                                <div class="dc-review-col">
+                                    <h5>Validation</h5>
+                                    @if (_ws.Validation.Count == 0)
+                                    {
+                                        <div class="dc-review-line"><i class="bi bi-check-circle-fill dc-ok"></i> No issues</div>
+                                    }
+                                    @foreach (var v in _ws.Validation)
+                                    {
+                                        <div class="dc-review-line dc-sev-@v.Severity.ToLowerInvariant()">
+                                            <i class="bi bi-@(v.Severity == "ERROR" ? "x-circle-fill" : "exclamation-triangle-fill")"></i>
+                                            <span>@v.Message <em>(@v.Section)</em></span>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                            <div class="dc-lifecycle">
+                                @if (_ws.CanSubmit)
+                                {
+                                    <button type="button" class="um-btn um-btn-primary" disabled="@_busy" @onclick="SubmitAsync"><i class="bi bi-send"></i> Submit for Review</button>
+                                }
+                                @if (_ws.CanApprove)
+                                {
+                                    <button type="button" class="um-btn um-btn-primary" disabled="@_busy" @onclick="ApproveAsync"><i class="bi bi-check2-circle"></i> Approve</button>
+                                }
+                                @if (_ws.CanReturn)
+                                {
+                                    <button type="button" class="um-btn um-btn-ghost" disabled="@_busy" @onclick="ReturnAsync"><i class="bi bi-arrow-counterclockwise"></i> Return for Changes</button>
+                                }
+                                @if (_ws.CanActivate)
+                                {
+                                    <button type="button" class="um-btn um-btn-primary" disabled="@_busy" @onclick="ActivateAsync"><i class="bi bi-lightning-charge"></i> Activate</button>
+                                }
+                            </div>
+                            @if (_ws.Reviews.Count > 0)
+                            {
+                                <div class="dc-history">
+                                    <h5>Review history</h5>
+                                    @foreach (var r in _ws.Reviews)
+                                    {
+                                        <div class="dc-history-line"><span class="dc-status-badge dc-status-@StatusTone(r.ReviewActionCode)">@r.ReviewActionCode</span> @r.ReviewerDisplayName <span class="dc-muted">· @r.CreatedDateUtc.ToLocalTime().ToString("MMM d, yyyy h:mm tt")</span>@(string.IsNullOrWhiteSpace(r.Comment) ? "" : $" — {r.Comment}")</div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        break;
+                }
+            </section>
+
+            @* ── Summary + POLOXI weights ────────────────────────────────────────────────────── *@
+            <aside class="dc-summary">
+                <div class="dc-summary-head"><span>Contract Summary</span><span class="dc-status-badge dc-status-@StatusTone(c.StatusCode)">v@(c.VersionNumber) @StatusLabel(c.StatusCode)</span></div>
+
+                <div class="dc-summary-group"><h6><i class="bi bi-bullseye"></i> Decision</h6>
+                    @SummaryRow("Question", c.DecisionQuestion)
+                    @SummaryRow("Objective", c.ClientObjective)
+                    @SummaryRow("Decision Date", c.DecisionDate?.ToString("MMM d, yyyy"))
+                </div>
+                <div class="dc-summary-group"><h6><i class="bi bi-bank"></i> Legal Context</h6>
+                    @SummaryRow("Jurisdiction", c.Jurisdiction)
+                    @SummaryRow("Court / Forum", c.CourtOrForum)
+                    @SummaryRow("Posture", c.ProceduralPosture)
+                    @SummaryRow("Governing Law", c.GoverningLaw)
+                </div>
+                <div class="dc-summary-group"><h6><i class="bi bi-diagram-2"></i> Burden &amp; Standard</h6>
+                    @SummaryRow("Moving Party", c.MovingParty)
+                    @SummaryRow("Initial Burden", c.InitialBurden)
+                    @SummaryRow("Ultimate Burden", c.UltimateBurden)
+                    @SummaryRow("Standard", c.StandardOfProofOrReview)
+                </div>
+                <div class="dc-summary-group"><h6><i class="bi bi-shield-lock"></i> Decision Boundaries</h6>
+                    @SummaryRow("Known Facts", c.FactBoundaries.Count(f => f.FactStateCode == DecisionContractFactStates.Known).ToString())
+                    @SummaryRow("Disputed Facts", c.FactBoundaries.Count(f => f.FactStateCode == DecisionContractFactStates.Disputed).ToString())
+                    @SummaryRow("Unknown Facts", c.FactBoundaries.Count(f => f.FactStateCode == DecisionContractFactStates.Unknown).ToString())
+                    @SummaryRow("Evidence Boundary", c.EvidenceBoundary)
+                    @SummaryRow("Authority Boundary", c.AuthorityBoundary)
+                </div>
+                <div class="dc-summary-group"><h6><i class="bi bi-signpost-split"></i> Competing Outcomes</h6>
+                    @foreach (var o in c.Candidates.OrderBy(x => x.DisplayOrder))
+                    {
+                        <div class="dc-summary-outcome">
+                            <span class="dc-outcome-dot dc-outcome-dot--@(o.StateCode == "ACTIVE" ? "on" : "off")"></span>
+                            <span class="dc-outcome-code">@o.CandidateCode</span>
+                            <span class="dc-outcome-text">@o.OutcomeText</span>
+                        </div>
+                    }
+                </div>
+                <div class="dc-summary-group"><h6><i class="bi bi-check2-circle"></i> Approval</h6>
+                    @SummaryRow("Created By", c.CreatedByDisplayName)
+                    @SummaryRow("Approved By", c.ApprovedByDisplayName)
+                </div>
+
+                @* POLOXI scoring weights — read-only, DB-backed, transparency only. *@
+                <div class="dc-summary-group dc-weights"><h6><i class="bi bi-cpu"></i> POLOXI Weights <span class="dc-muted">(read-only)</span></h6>
+                    @if (_ws.PoloxiWeights.Count == 0)
+                    {
+                        <div class="dc-summary-row"><span class="dc-muted">No weights configured.</span></div>
+                    }
+                    @foreach (var w in _ws.PoloxiWeights)
+                    {
+                        <div class="dc-weight-row" title="@w.Description">
+                            <span class="dc-weight-name">@w.DisplayName</span>
+                            <div class="dc-weight-bar"><span style="width:@(Math.Clamp((double)w.Value * 100, 0, 100))%"></span></div>
+                            <span class="dc-weight-val">@w.Value.ToString("0.00")</span>
+                        </div>
+                    }
+                    <p class="dc-weights-note">Weights govern POLOXI's confidence blend. They are configured in system settings and are shown here for transparency; the Decision Contract never edits them or scores candidates.</p>
+                </div>
+            </aside>
+        </div>
+
+        @if (_toast is not null)
+        {
+            <div class="dc-toast dc-toast--@_toastKind">@_toast</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public Guid MatterId { get; set; }
+
+    private DecisionContractWorkspaceDto? _ws;
+    private IReadOnlyCollection<DecisionContractOptionDto> _options = [];
+    private string? _loadError;
+    private string _activeSection = "Decision";
+    private bool _busy;
+    private string? _toast;
+    private string _toastKind = "success";
+    private readonly ContractForm _form = new();
+
+    private bool ReadOnly => _ws is null || !_ws.CanEdit;
+    private int BlockingCount => _ws?.Validation.Count(v => v.Severity == "ERROR") ?? 0;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_ws is not null && _ws.MatterId == MatterId) return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _loadError = null;
+            _options = await Api.GetLegalDecisionContractOptionsAsync();
+            var ws = await Api.GetLegalDecisionContractAsync(MatterId);
+            if (ws is not null) ApplyWorkspace(ws);
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load Decision Contract: {ex.Message}";
+        }
+    }
+
+    private void ApplyWorkspace(DecisionContractWorkspaceDto ws)
+    {
+        _ws = ws;
+        var c = ws.Contract;
+        _form.DecisionQuestion = c.DecisionQuestion;
+        _form.ClientObjective = c.ClientObjective;
+        _form.SuccessDefinition = c.SuccessDefinition;
+        _form.DecisionDate = c.DecisionDate is { } dd ? dd.ToDateTime(TimeOnly.MinValue) : null;
+        _form.Jurisdiction = c.Jurisdiction;
+        _form.CourtOrForum = c.CourtOrForum;
+        _form.GoverningLaw = c.GoverningLaw;
+        _form.ProceduralPosture = c.ProceduralPosture;
+        _form.CaseType = c.CaseType;
+        _form.ApplicableLegalFramework = c.ApplicableLegalFramework;
+        _form.MovingParty = c.MovingParty;
+        _form.InitialBurden = c.InitialBurden;
+        _form.UltimateBurden = c.UltimateBurden;
+        _form.StandardOfProofOrReview = c.StandardOfProofOrReview;
+        _form.BurdenNotes = c.BurdenNotes;
+        _form.EvidenceBoundary = c.EvidenceBoundary;
+        _form.AuthorityBoundary = c.AuthorityBoundary;
+        _form.SourceRestrictions = c.SourceRestrictions;
+        _form.AuthorityCutoffDate = c.AuthorityCutoffDate is { } ac ? ac.ToDateTime(TimeOnly.MinValue) : null;
+        _form.DecisionHorizon = c.DecisionHorizon;
+        _form.ExternalResearchPermitted = c.ExternalResearchPermitted;
+        _form.ReviewBeforeActivation = c.ReviewBeforeActivation;
+        _form.ReviewBeforeFinal = c.ReviewBeforeFinal;
+        _form.SemanticValidationMode = c.SemanticValidationMode;
+        _form.Notes = c.Notes;
+        _form.StatutesOrRules = c.Tags.Where(t => t.TagKindCode == DecisionContractTagKinds.StatuteRule).OrderBy(t => t.DisplayOrder).Select(t => t.TagText).ToList();
+        _form.KeyIssues = c.Tags.Where(t => t.TagKindCode == DecisionContractTagKinds.KeyIssue).OrderBy(t => t.DisplayOrder).Select(t => t.TagText).ToList();
+        _form.Facts = c.FactBoundaries.OrderBy(f => f.DisplayOrder).Select(f => new FactEntry { FactId = f.FactId, FactStateCode = f.FactStateCode, SnapshotText = f.SnapshotText }).ToList();
+        _form.Candidates = c.Candidates.OrderBy(x => x.DisplayOrder).Select(x => new CandidateEntry { CandidateCode = x.CandidateCode, OutcomeText = x.OutcomeText, CandidateTypeCode = x.CandidateTypeCode, StateCode = x.StateCode }).ToList();
+    }
+
+    private byte[] Row => _ws!.Contract.RowVersion;
+    private Guid ContractId => _ws!.Contract.DecisionContractId;
+    private DateOnly? ToDateOnly(DateTime? dt) => dt is { } d ? DateOnly.FromDateTime(d) : null;
+
+    private async Task RunAsync(Func<Task<DecisionContractWorkspaceDto?>> action, string success)
+    {
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            var ws = await action();
+            if (ws is not null) { ApplyWorkspace(ws); ShowToast(success, "success"); }
+        }
+        catch (Exception ex)
+        {
+            ShowToast(ex.Message, "error");
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private Task SaveDecisionAsync() => RunAsync(() => Api.UpdateLegalDecisionContractDecisionAsync(MatterId,
+        new DecisionContractDecisionCommand(ContractId, Row, _form.DecisionQuestion, _form.ClientObjective, _form.SuccessDefinition, ToDateOnly(_form.DecisionDate))), "Decision saved.");
+
+    private Task SaveLegalContextAsync() => RunAsync(() => Api.UpdateLegalDecisionContractLegalContextAsync(MatterId,
+        new DecisionContractLegalContextCommand(ContractId, Row, _form.Jurisdiction, _form.CourtOrForum, _form.GoverningLaw, _form.ProceduralPosture, _form.CaseType, _form.ApplicableLegalFramework, _form.StatutesOrRules, _form.KeyIssues)), "Legal context saved.");
+
+    private Task SaveBurdenAsync() => RunAsync(() => Api.UpdateLegalDecisionContractBurdenAsync(MatterId,
+        new DecisionContractBurdenCommand(ContractId, Row, _form.MovingParty, _form.InitialBurden, _form.UltimateBurden, _form.StandardOfProofOrReview, _form.BurdenNotes)), "Burden saved.");
+
+    private Task SaveBoundariesAsync() => RunAsync(() => Api.UpdateLegalDecisionContractBoundariesAsync(MatterId,
+        new DecisionContractBoundariesCommand(ContractId, Row, _form.EvidenceBoundary, _form.AuthorityBoundary, _form.SourceRestrictions, ToDateOnly(_form.AuthorityCutoffDate),
+            _form.Facts.Select(f => new DecisionContractFactBoundaryInput(f.FactId, f.FactStateCode, f.SnapshotText)).ToList())), "Boundaries saved.");
+
+    private Task SaveCandidatesAsync() => RunAsync(() => Api.UpdateLegalDecisionContractCandidatesAsync(MatterId,
+        new DecisionContractCandidatesCommand(ContractId, Row,
+            _form.Candidates.Select(x => new DecisionContractCandidateInput(x.CandidateCode, x.OutcomeText, x.CandidateTypeCode, x.StateCode)).ToList())), "Competing outcomes saved.");
+
+    private Task SaveSettingsAsync() => RunAsync(() => Api.UpdateLegalDecisionContractSettingsAsync(MatterId,
+        new DecisionContractSettingsCommand(ContractId, Row, _form.DecisionHorizon, _form.ExternalResearchPermitted, _form.ReviewBeforeActivation, _form.ReviewBeforeFinal, _form.SemanticValidationMode ?? "STRICT", _form.Notes)), "Settings saved.");
+
+    private Task SubmitAsync() => RunAsync(() => Api.SubmitLegalDecisionContractAsync(MatterId, new DecisionContractLifecycleCommand(ContractId, Row, null)), "Submitted for review.");
+    private Task ApproveAsync() => RunAsync(() => Api.ApproveLegalDecisionContractAsync(MatterId, new DecisionContractLifecycleCommand(ContractId, Row, null)), "Contract approved.");
+    private Task ReturnAsync() => RunAsync(() => Api.ReturnLegalDecisionContractAsync(MatterId, new DecisionContractLifecycleCommand(ContractId, Row, null)), "Returned for changes.");
+    private Task ActivateAsync() => RunAsync(() => Api.ActivateLegalDecisionContractAsync(MatterId, new DecisionContractLifecycleCommand(ContractId, Row, null)), "Contract activated.");
+    private Task CreateVersionAsync() => RunAsync(() => Api.CreateLegalDecisionContractVersionAsync(MatterId, ContractId), "New draft version created.");
+
+    private void AddFact() => _form.Facts.Add(new FactEntry { FactStateCode = DecisionContractFactStates.Known });
+    private void AddCandidate() => _form.Candidates.Add(new CandidateEntry { CandidateCode = $"C{_form.Candidates.Count + 1}", StateCode = "ACTIVE" });
+
+    private void ShowToast(string message, string kind) { _toast = message; _toastKind = kind; }
+
+    private IEnumerable<DecisionContractOptionDto> OptionsFor(string field) => _options.Where(o => o.FieldCode == field).OrderBy(o => o.SortOrder);
+
+    private RenderFragment DropdownFor(string field, string? value, Action<string?> setter) => builder =>
+    {
+        builder.OpenElement(0, "select");
+        builder.AddAttribute(1, "disabled", ReadOnly);
+        builder.AddAttribute(2, "value", value ?? "");
+        builder.AddAttribute(3, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => setter(string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString())));
+        builder.AddAttribute(4, "class", "dc-select");
+        builder.OpenElement(5, "option"); builder.AddAttribute(6, "value", ""); builder.AddContent(7, "— Select —"); builder.CloseElement();
+        foreach (var opt in OptionsFor(field))
+        {
+            builder.OpenElement(8, "option");
+            builder.AddAttribute(9, "value", opt.Value);
+            builder.AddContent(10, opt.DisplayName);
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private RenderFragment DropdownForInline(string field, string? value, Action<string?> setter) => DropdownFor(field, value, setter);
+
+    private RenderFragment TagEditor(List<string> tags) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "dc-tags");
+        var seq = 2;
+        foreach (var tag in tags.ToList())
+        {
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "dc-tag");
+            builder.AddContent(seq++, tag);
+            if (!ReadOnly)
+            {
+                builder.OpenElement(seq++, "button");
+                builder.AddAttribute(seq++, "type", "button");
+                builder.AddAttribute(seq++, "class", "dc-tag-x");
+                builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => tags.Remove(tag)));
+                builder.AddContent(seq++, "×");
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        if (!ReadOnly)
+        {
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "type", "text");
+            builder.AddAttribute(seq++, "class", "dc-tag-input");
+            builder.AddAttribute(seq++, "placeholder", "Add + Enter");
+            builder.AddAttribute(seq++, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e =>
+            {
+                // handled via onchange below for simplicity
+            }));
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+            {
+                var val = e.Value?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(val) && !tags.Contains(val)) tags.Add(val);
+            }));
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private RenderFragment SummaryRow(string label, string? value) => builder =>
+    {
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "dc-summary-row");
+        builder.OpenElement(2, "span"); builder.AddAttribute(3, "class", "dc-summary-label"); builder.AddContent(4, label); builder.CloseElement();
+        builder.OpenElement(5, "span"); builder.AddAttribute(6, "class", "dc-summary-value"); builder.AddContent(7, string.IsNullOrWhiteSpace(value) ? "—" : value); builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private static string StatusLabel(string code) => code switch
+    {
+        DecisionContractStatuses.Draft => "Draft",
+        DecisionContractStatuses.ReadyForReview => "Ready for Review",
+        DecisionContractStatuses.Approved => "Approved",
+        DecisionContractStatuses.Active => "Active",
+        DecisionContractStatuses.Superseded => "Superseded",
+        DecisionContractStatuses.Rejected => "Rejected",
+        _ => code
+    };
+
+    private static string StatusTone(string code) => code switch
+    {
+        DecisionContractStatuses.Active or "APPROVED" => "ok",
+        DecisionContractStatuses.ReadyForReview or "SUBMITTED" => "info",
+        DecisionContractStatuses.Rejected or "RETURNED" => "danger",
+        DecisionContractStatuses.Superseded => "muted",
+        _ => "warn"
+    };
+
+    private sealed class ContractForm
+    {
+        public string? DecisionQuestion { get; set; }
+        public string? ClientObjective { get; set; }
+        public string? SuccessDefinition { get; set; }
+        public DateTime? DecisionDate { get; set; }
+        public string? Jurisdiction { get; set; }
+        public string? CourtOrForum { get; set; }
+        public string? GoverningLaw { get; set; }
+        public string? ProceduralPosture { get; set; }
+        public string? CaseType { get; set; }
+        public string? ApplicableLegalFramework { get; set; }
+        public List<string> StatutesOrRules { get; set; } = [];
+        public List<string> KeyIssues { get; set; } = [];
+        public string? MovingParty { get; set; }
+        public string? InitialBurden { get; set; }
+        public string? UltimateBurden { get; set; }
+        public string? StandardOfProofOrReview { get; set; }
+        public string? BurdenNotes { get; set; }
+        public string? EvidenceBoundary { get; set; }
+        public string? AuthorityBoundary { get; set; }
+        public string? SourceRestrictions { get; set; }
+        public DateTime? AuthorityCutoffDate { get; set; }
+        public List<FactEntry> Facts { get; set; } = [];
+        public List<CandidateEntry> Candidates { get; set; } = [];
+        public string? DecisionHorizon { get; set; }
+        public bool ExternalResearchPermitted { get; set; } = true;
+        public bool ReviewBeforeActivation { get; set; } = true;
+        public bool ReviewBeforeFinal { get; set; } = true;
+        public string? SemanticValidationMode { get; set; } = "STRICT";
+        public string? Notes { get; set; }
+    }
+
+    private sealed class FactEntry { public Guid? FactId { get; set; } public string FactStateCode { get; set; } = "KNOWN"; public string SnapshotText { get; set; } = ""; }
+    private sealed class CandidateEntry { public string CandidateCode { get; set; } = ""; public string OutcomeText { get; set; } = ""; public string? CandidateTypeCode { get; set; } public string StateCode { get; set; } = "ACTIVE"; }
+}

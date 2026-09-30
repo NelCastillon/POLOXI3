@@ -65,6 +65,18 @@ public interface ILegalDocumentCorpusRepository
         Guid matterId,
         CancellationToken cancellationToken = default);
 
+    // Hard-deletes document-derived evidence for a matter in a single transaction. When
+    // request.DocumentIds is null/empty, every supporting document for the matter is purged
+    // (full clean slate); otherwise only the specified documents and their derived rows are
+    // removed. Document-evidence only: the matter and non-document data are preserved. Returns
+    // per-table removed counts.
+    Task<LegalMatterDocumentPurgeResult> PurgeMatterDocumentEvidenceAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        LegalMatterDocumentPurgeRequest request,
+        CancellationToken cancellationToken = default);
+
     // Appends a new immutable source anchor (POLOXI.Legal_SourceAssertion). The row is append-only:
     // corrections supersede an existing anchor rather than mutating it. Returns the new anchor id.
     Task<Guid> AppendSourceAssertionAsync(
@@ -155,5 +167,174 @@ public interface ILegalDocumentCorpusRepository
         Guid tenantId,
         Guid userId,
         DecisionRetrievalTelemetry telemetry,
+        CancellationToken cancellationToken = default);
+
+    // ── Enterprise evidence-upload provenance layer (additive; never mutates canonical document rows) ──
+
+    // Opens a new upload batch (one "add evidence" action) and returns its id. BatchNumber is generated.
+    Task<Guid> CreateUploadBatchAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        StartUploadBatchCommand command,
+        CancellationToken cancellationToken = default);
+
+    // Returns the matter's upload batches (newest first) for the enterprise upload dashboard.
+    Task<IReadOnlyCollection<LegalUploadBatchDto>> GetUploadBatchesAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
+    // Idempotency guard: returns an existing completed upload operation for the same (matter, key) when
+    // the request fingerprint matches; throws when the same key is reused for a different file. Returns
+    // null when the key has not been seen (a new operation should proceed).
+    Task<LegalUploadOperationLookup?> FindUploadOperationAsync(
+        Guid tenantId,
+        Guid matterId,
+        string idempotencyKey,
+        string requestFingerprint,
+        CancellationToken cancellationToken = default);
+
+    // Records a completed upload operation result (idempotency ledger) and returns its id.
+    Task<Guid> RecordUploadOperationAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        Guid? batchId,
+        string idempotencyKey,
+        string requestFingerprint,
+        string fileName,
+        string? declaredContentType,
+        long expectedLength,
+        Guid resultDocumentId,
+        Guid resultDocumentVersionId,
+        bool contentReused,
+        string sha256Hash,
+        string? correlationId,
+        CancellationToken cancellationToken = default);
+
+    // Records a legal provenance occurrence of a document version within a matter. Physical content is
+    // deduplicated; provenance is preserved as a distinct occurrence. Returns the new occurrence id.
+    Task<Guid> CreateEvidenceOccurrenceAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        Guid documentId,
+        Guid documentVersionId,
+        Guid? batchId,
+        Guid? uploadOperationId,
+        bool contentReused,
+        EvidenceSourceDescriptor source,
+        CancellationToken cancellationToken = default);
+
+    // Returns the provenance occurrences for a matter (newest first).
+    Task<IReadOnlyCollection<LegalEvidenceOccurrenceDto>> GetEvidenceOccurrencesAsync(
+        Guid tenantId,
+        Guid matterId,
+        CancellationToken cancellationToken = default);
+
+    // Increments the rolling report counters on an upload batch as each file is processed.
+    Task IncrementUploadBatchCountersAsync(
+        Guid tenantId,
+        Guid batchId,
+        UploadBatchCounterDelta delta,
+        CancellationToken cancellationToken = default);
+
+    // Sets the number of files a batch expects to process (declared at open time) so the dashboard can
+    // show discovered-vs-accepted progress. Tenant-scoped and idempotent.
+    Task SetUploadBatchDiscoveredAsync(
+        Guid tenantId,
+        Guid batchId,
+        int filesDiscovered,
+        CancellationToken cancellationToken = default);
+
+    // Transitions a batch to a terminal status (default CLOSED) once its files are processed. Idempotent
+    // and tenant-scoped; closing never discards counters recorded by in-flight files.
+    Task CloseUploadBatchAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid batchId,
+        string statusCode,
+        CancellationToken cancellationToken = default);
+
+    // ── Deterministic processing-operation ledger (wraps Legal_DocumentProcessingRun; never replaces it) ──
+
+    // Reuse-or-record: given a deterministic operation identity, returns an existing completed operation
+    // (RETRY reuse) when present, otherwise records a new PENDING operation and returns it as a miss.
+    // Fail-soft callers treat any exception as "run the effect" so the ledger never blocks processing.
+    Task<LegalProcessingOperationLookup> AcquireProcessingOperationAsync(
+        Guid tenantId,
+        Guid userId,
+        LegalProcessingOperationRequest request,
+        CancellationToken cancellationToken = default);
+
+    // Marks a processing operation COMPLETE with its result identity/hash so a later identical request reuses it.
+    Task CompleteProcessingOperationAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid processingOperationId,
+        string? resultEntityTypeCode,
+        Guid? resultEntityId,
+        string? resultHash,
+        CancellationToken cancellationToken = default);
+
+    // Marks a processing operation FAILED with an error code/message; a retry may re-run the effect.
+    Task FailProcessingOperationAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid processingOperationId,
+        string errorCode,
+        string errorMessage,
+        CancellationToken cancellationToken = default);
+
+    // ── Document family grouping (email + attachments, container + children) ──
+
+    // Creates a container family for a matter (e.g. an email or archive) and returns its id.
+    Task<Guid> CreateDocumentFamilyAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        string? familyLabel,
+        string containerTypeCode,
+        CancellationToken cancellationToken = default);
+
+    // Attaches an occurrence to a family with its container position (depth/ordinal) and optional parent.
+    Task LinkOccurrenceToFamilyAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid occurrenceId,
+        Guid familyId,
+        Guid? parentOccurrenceId,
+        int familyDepth,
+        int familyOrdinal,
+        CancellationToken cancellationToken = default);
+
+    // ── Evidence lineage (independent-source identity; advisory, resolved after physical dedup) ──
+
+    // Creates a lineage group representing one underlying independent source and returns its id.
+    Task<Guid> CreateEvidenceLineageGroupAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid matterId,
+        string? lineageLabel,
+        string? originDescription,
+        string independenceBasisCode,
+        CancellationToken cancellationToken = default);
+
+    // Adds an occurrence to a lineage group as ORIGINAL (primary source) or DERIVATIVE (quotes/restates
+    // it, adding no independent weight). Idempotent per (group, occurrence).
+    Task<Guid> AddEvidenceLineageMemberAsync(
+        Guid tenantId,
+        Guid userId,
+        Guid lineageGroupId,
+        Guid occurrenceId,
+        string roleCode,
+        string? derivationNote,
+        CancellationToken cancellationToken = default);
+
+    // Returns the lineage groups (with members) for a matter so POLOXI/UI can weigh independent support.
+    Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetEvidenceLineageAsync(
+        Guid tenantId,
+        Guid matterId,
         CancellationToken cancellationToken = default);
 }

@@ -134,9 +134,18 @@ public sealed class ApiClient(HttpClient httpClient)
         public async Task<IReadOnlyCollection<LegalDocumentDto>> GetLegalMatterDocumentsAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalDocumentDto>>($"api/legal_decision/matters/{matterId}/documents",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto?> GetLegalMatterEvidenceGraphAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterEvidenceGraphDto>($"api/legal_decision/matters/{matterId}/evidence-graph",token);
         public async Task<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto?> GetLegalMatterHumanIntelligenceAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.MatterHumanIntelligenceDto>($"api/legal_decision/matters/{matterId}/human-intelligence",token);
+        // ── Attorney Decision Input (Human Intelligence) write path ──────────────────────────────
+        public async Task<Legal.Application.Features.Intelligence.Decision.AttorneyInputDraft?> CreateLegalAttorneyDraftAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.CreateAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/drafts",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.AttorneyInputDraft>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.PlacementAnalysis?> AnalyzeLegalAttorneyPlacementAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.AnalyzePlacementCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/placement-analysis",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.PlacementAnalysis>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.DecisionMutationPreview?> PreviewLegalAttorneyInputAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.PreviewAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/preview",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionMutationPreview>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.CommitResult?> CommitLegalAttorneyInputAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.CommitAttorneyInputCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/decision-input/commit",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.CommitResult>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.AttorneyRelativeAssessmentDto?> SubmitLegalAttorneyAssessmentAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.SubmitAttorneyAssessmentCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/attorney-assessments",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.AttorneyRelativeAssessmentDto>(cancellationToken:token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.ApprovedMatterAssessmentDto?> ApproveLegalMatterAssessmentAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.ApproveMatterAssessmentCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/assessment-approval",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.ApprovedMatterAssessmentDto>(cancellationToken:token);}
+        public async Task RaiseLegalAttorneyChallengeAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.RaiseChallengeCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/challenge",command,token);await EnsureSuccessWithDetailAsync(response,token);}
+        public async Task<Legal.Application.Features.Intelligence.Decision.CommitResult?> RepositionLegalAttorneyNodeAsync(Guid matterId,Guid nodeId,Legal.Application.Features.Intelligence.Decision.RepositionNodeCommand command,CancellationToken token=default){using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/nodes/{nodeId}/reposition",command,token);await EnsureSuccessWithDetailAsync(response,token);return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.CommitResult>(cancellationToken:token);}
         public async Task<Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult?> GetLegalMatterPropositionInformationValueAsync(Guid matterId,Guid sessionId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Epistemic.MatterPropositionInformationValueResult>($"api/legal_decision/matters/{matterId}/sessions/{sessionId}/proposition-information-value",token);
         public async Task GenerateLegalMatterTestCorpusAsync(Guid matterId,CancellationToken token=default){using var response=await _httpClient.PostAsync($"api/legal_decision/matters/{matterId}/generate-test-corpus",null,token);await EnsureSuccessWithDetailAsync(response,token);}
-        public async Task<LegalDocumentDto?> UploadLegalMatterDocumentAsync(Guid matterId,IBrowserFile file,string? documentTypeCode,string? domainPackCode,string? modelCode=null,CancellationToken token=default)
+        public async Task<LegalDocumentDto?> UploadLegalMatterDocumentAsync(Guid matterId,IBrowserFile file,string? documentTypeCode,string? domainPackCode,string? modelCode=null,CancellationToken token=default,string? idempotencyKey=null,Guid? uploadBatchId=null,EvidenceSourceDescriptor? source=null)
         {
             using var form=new MultipartFormDataContent();
             using var stream=file.OpenReadStream(100*1024*1024,token);
@@ -146,9 +155,63 @@ public sealed class ApiClient(HttpClient httpClient)
             if(!string.IsNullOrWhiteSpace(documentTypeCode))form.Add(new StringContent(documentTypeCode),"documentTypeCode");
             if(!string.IsNullOrWhiteSpace(domainPackCode))form.Add(new StringContent(domainPackCode),"domainPackCode");
             if(!string.IsNullOrWhiteSpace(modelCode))form.Add(new StringContent(modelCode),"modelCode");
+            if(!string.IsNullOrWhiteSpace(idempotencyKey))form.Add(new StringContent(idempotencyKey),"idempotencyKey");
+            if(uploadBatchId is {} batchId)form.Add(new StringContent(batchId.ToString()),"uploadBatchId");
+            if(source is not null)
+            {
+                if(!string.IsNullOrWhiteSpace(source.SourceTypeCode))form.Add(new StringContent(source.SourceTypeCode),"sourceTypeCode");
+                if(!string.IsNullOrWhiteSpace(source.Custodian))form.Add(new StringContent(source.Custodian),"custodian");
+                if(!string.IsNullOrWhiteSpace(source.ProducedBy))form.Add(new StringContent(source.ProducedBy),"producedBy");
+                if(!string.IsNullOrWhiteSpace(source.ProductionId))form.Add(new StringContent(source.ProductionId),"productionId");
+                if(!string.IsNullOrWhiteSpace(source.BatesStart))form.Add(new StringContent(source.BatesStart),"batesStart");
+                if(!string.IsNullOrWhiteSpace(source.BatesEnd))form.Add(new StringContent(source.BatesEnd),"batesEnd");
+            }
             using var response=await _httpClient.PostAsync($"api/legal_decision/matters/{matterId}/documents",form,token);
             await EnsureSuccessWithDetailAsync(response,token);
             return await response.Content.ReadFromJsonAsync<LegalDocumentDto>(cancellationToken:token);
+        }
+        // ── Enterprise evidence-upload provenance layer ────────────────────────────────────────────────
+        public async Task<Guid> StartLegalUploadBatchAsync(Guid matterId,StartUploadBatchCommand command,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/upload-batches",command,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task<IReadOnlyCollection<LegalUploadBatchDto>> GetLegalUploadBatchesAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalUploadBatchDto>>($"api/legal_decision/matters/{matterId}/upload-batches",token)??[];
+        public async Task<IReadOnlyCollection<LegalEvidenceOccurrenceDto>> GetLegalEvidenceOccurrencesAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalEvidenceOccurrenceDto>>($"api/legal_decision/matters/{matterId}/evidence-occurrences",token)??[];
+        public async Task SetLegalUploadBatchDiscoveredAsync(Guid matterId,Guid batchId,int filesDiscovered,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PutAsJsonAsync($"api/legal_decision/matters/{matterId}/upload-batches/{batchId}/discovered",new{FilesDiscovered=filesDiscovered},token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
+        public async Task CloseLegalUploadBatchAsync(Guid matterId,Guid batchId,string? statusCode=null,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/upload-batches/{batchId}/close",new{StatusCode=statusCode},token);
+            await EnsureSuccessWithDetailAsync(response,token);
+        }
+        public async Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetLegalEvidenceLineageAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<LegalEvidenceLineageGroupDto>>($"api/legal_decision/matters/{matterId}/evidence-lineage",token)??[];
+        public async Task<Guid> CreateLegalEvidenceLineageGroupAsync(Guid matterId,string? lineageLabel,string? originDescription,string? independenceBasisCode,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/evidence-lineage",new{LineageLabel=lineageLabel,OriginDescription=originDescription,IndependenceBasisCode=independenceBasisCode},token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task<Guid> AddLegalEvidenceLineageMemberAsync(Guid matterId,Guid groupId,Guid occurrenceId,string? roleCode,string? derivationNote,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/evidence-lineage/{groupId}/members",new{OccurrenceId=occurrenceId,RoleCode=roleCode,DerivationNote=derivationNote},token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task<Guid> CreateLegalDocumentFamilyAsync(Guid matterId,string? familyLabel,string? containerTypeCode,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/document-families",new{FamilyLabel=familyLabel,ContainerTypeCode=containerTypeCode},token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Guid>(cancellationToken:token);
+        }
+        public async Task LinkLegalOccurrenceToFamilyAsync(Guid matterId,Guid familyId,Guid occurrenceId,Guid? parentOccurrenceId,int familyDepth,int familyOrdinal,CancellationToken token=default)
+        {
+            using var response=await _httpClient.PostAsJsonAsync($"api/legal_decision/matters/{matterId}/document-families/{familyId}/members",new{OccurrenceId=occurrenceId,ParentOccurrenceId=parentOccurrenceId,FamilyDepth=familyDepth,FamilyOrdinal=familyOrdinal},token);
+            await EnsureSuccessWithDetailAsync(response,token);
         }
         public async Task<IReadOnlyCollection<LegalDocumentPassageDto>> GetLegalDocumentPassagesAsync(Guid documentVersionId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<LegalDocumentPassageDto>>($"api/legal_decision/documents/versions/{documentVersionId}/passages",token)??[];
         public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationStatus?> GetLegalMatterCorpusStatusAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationStatus>($"api/legal_decision/matters/{matterId}/corpus/enrichment-status",token);
@@ -161,7 +224,41 @@ public sealed class ApiClient(HttpClient httpClient)
             return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationStatus>(cancellationToken:token);
         }
         public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetLegalMatterRetrievalTelemetryAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>($"api/legal_decision/matters/{matterId}/retrieval-telemetry",token)??[];
-        public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetLegalSessionRetrievalTelemetryAsync(Guid sessionId,CancellationToken token=default)=>await _httpClient.GetFromJsonAsync<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>($"api/legal_decision/sessions/{sessionId}/retrieval-telemetry",token)??[];
+        // Hard-deletes document-derived evidence (single/multiple documents when documentIds is provided,
+        // or ALL supporting documents when null/empty) then synchronously recomputes all associated scoring
+        // and decision statuses. Returns the purge counts plus the recomputed corpus activation status.
+        public async Task<Legal.Application.Features.Intelligence.Decision.LegalMatterDocumentPurgeOutcome?> PurgeLegalMatterDocumentsAsync(Guid matterId,IReadOnlyCollection<Guid>? documentIds,CancellationToken token=default)
+        {
+            using var request=new HttpRequestMessage(HttpMethod.Delete,$"api/legal_decision/matters/{matterId}/corpus/documents")
+            {
+                Content=JsonContent.Create(new{DocumentIds=documentIds})
+            };
+            using var response=await _httpClient.SendAsync(request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.LegalMatterDocumentPurgeOutcome>(cancellationToken:token);
+        }
+        public async Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetLegalSessionRetrievalTelemetryAsync(Guid sessionId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>($"api/legal_decision/sessions/{sessionId}/retrieval-telemetry",token)??[];
+        // ── Decision Contract (first-class, versioned problem specification) ──────────────────────────
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> GetLegalDecisionContractAsync(Guid matterId,CancellationToken token=default)=>GetFromJsonWithTransientThrottleRetryAsync<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto>($"api/legal_decision/matters/{matterId}/decision-contract",token);
+        public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionContractOptionDto>> GetLegalDecisionContractOptionsAsync(CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionContractOptionDto>>("api/legal_decision/decision-contract/options",token)??[];
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractDecisionAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractDecisionCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/decision",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractLegalContextAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractLegalContextCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/legal-context",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractBurdenAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractBurdenCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/burden",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractBoundariesAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractBoundariesCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/boundaries",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractCandidatesAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractCandidatesCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/candidates",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> UpdateLegalDecisionContractSettingsAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractSettingsCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Put,$"api/legal_decision/matters/{matterId}/decision-contract/settings",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> SubmitLegalDecisionContractAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractLifecycleCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Post,$"api/legal_decision/matters/{matterId}/decision-contract/submit",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> ApproveLegalDecisionContractAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractLifecycleCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Post,$"api/legal_decision/matters/{matterId}/decision-contract/approve",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> ReturnLegalDecisionContractAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractLifecycleCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Post,$"api/legal_decision/matters/{matterId}/decision-contract/return",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> ActivateLegalDecisionContractAsync(Guid matterId,Legal.Application.Features.Intelligence.Decision.DecisionContractLifecycleCommand command,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Post,$"api/legal_decision/matters/{matterId}/decision-contract/activate",command,token);
+        public Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> CreateLegalDecisionContractVersionAsync(Guid matterId,Guid decisionContractId,CancellationToken token=default)=>SendDecisionContractAsync(HttpMethod.Post,$"api/legal_decision/matters/{matterId}/decision-contract/{decisionContractId}/new-version",new{},token);
+        private async Task<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto?> SendDecisionContractAsync(HttpMethod method,string url,object body,CancellationToken token)
+        {
+            using var request=new HttpRequestMessage(method,url){Content=JsonContent.Create(body)};
+            using var response=await _httpClient.SendAsync(request,token);
+            await EnsureSuccessWithDetailAsync(response,token);
+            return await response.Content.ReadFromJsonAsync<Legal.Application.Features.Intelligence.Decision.DecisionContractWorkspaceDto>(cancellationToken:token);
+        }
         // ── Continuous Decision Integrity — Decision Change Review workspace ─────────────────────────
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterChangeReviewSummaryDto>> GetLegalDecisionChangeReviewsAsync(CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.MatterChangeReviewSummaryDto>>("api/legal_decision/change-reviews",token)??[];
         public async Task<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSnapshotDto>> GetLegalDecisionMatterSnapshotsAsync(Guid matterId,CancellationToken token=default)=>await GetFromJsonWithTransientThrottleRetryAsync<IReadOnlyCollection<Legal.Application.Features.Intelligence.Decision.DecisionSnapshotDto>>($"api/legal_decision/matters/{matterId}/snapshots",token)??[];

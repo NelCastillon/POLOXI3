@@ -295,6 +295,213 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
         return assertionId;
     }
 
+    public async Task<LegalMatterDocumentPurgeResult> PurgeMatterDocumentEvidenceAsync(
+        Guid tenantId, Guid userId, Guid matterId, LegalMatterDocumentPurgeRequest request, CancellationToken cancellationToken = default)
+    {
+        var documentIds = request.DocumentIds?.Distinct().ToArray() ?? [];
+        var purgeAll = documentIds.Length == 0;
+
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
+        try
+        {
+            // Resolve the exact set of documents to purge. When purging all, every non-deleted
+            // document for the matter is targeted; otherwise only the supplied documents that
+            // actually belong to this matter/tenant are targeted (defensive scoping).
+            var targetDocumentIds = (await connection.QueryAsync<Guid>(new CommandDefinition(
+                purgeAll
+                    ? """
+                      SELECT LegalDocumentId FROM POLOXI.Legal_MatterDocument
+                      WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0;
+                      """
+                    : """
+                      SELECT LegalDocumentId FROM POLOXI.Legal_MatterDocument
+                      WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0
+                        AND LegalDocumentId IN @DocumentIds;
+                      """,
+                new { TenantId = tenantId, MatterId = matterId, DocumentIds = documentIds },
+                transaction, cancellationToken: cancellationToken))).ToArray();
+
+            if (targetDocumentIds.Length == 0)
+            {
+                transaction.Commit();
+                return new LegalMatterDocumentPurgeResult(matterId, purgeAll, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            }
+
+            var versionIds = (await connection.QueryAsync<Guid>(new CommandDefinition(
+                """
+                SELECT LegalDocumentVersionId FROM POLOXI.Legal_MatterDocumentVersion
+                WHERE TenantId=@TenantId AND LegalDocumentId IN @DocumentIds;
+                """,
+                new { TenantId = tenantId, DocumentIds = targetDocumentIds },
+                transaction, cancellationToken: cancellationToken))).ToArray();
+
+            async Task<int> ExecAsync(string sql, object args) =>
+                await connection.ExecuteAsync(new CommandDefinition(sql, args, transaction, cancellationToken: cancellationToken));
+
+            var docArgs = new { TenantId = tenantId, MatterId = matterId, DocumentIds = targetDocumentIds };
+            var verArgs = new { TenantId = tenantId, VersionIds = versionIds };
+            var hasVersions = versionIds.Length > 0;
+
+            // FK-safe hard-delete order: leaf provenance/anchors first, then propositions/evidence,
+            // then normalized layout/passages/runs, then versions, then documents. All scoped by the
+            // resolved document/version id sets so nothing outside the selection is touched.
+
+            // Source anchors: keyed by matter but scoped to the versions being removed.
+            var sourceAssertionsRemoved = hasVersions
+                ? await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_SourceAssertion
+                    WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND LegalDocumentVersionId IN @VersionIds;
+                    """, new { TenantId = tenantId, MatterId = matterId, VersionIds = versionIds })
+                : 0;
+
+            // Proposition supports for evidence items derived from these versions.
+            var propositionSupportsRemoved = hasVersions
+                ? await ExecAsync(
+                    """
+                    DELETE support FROM POLOXI.Legal_MatterPropositionSupport support
+                    INNER JOIN POLOXI.Legal_MatterEvidenceItem evidence
+                        ON evidence.LegalEvidenceItemId=support.LegalEvidenceItemId
+                    WHERE support.TenantId=@TenantId AND evidence.LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs)
+                : 0;
+
+            var evidenceItemsRemoved = hasVersions
+                ? await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_MatterEvidenceItem
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs)
+                : 0;
+
+            // Fact propositions that no longer have any supporting evidence become orphaned; remove
+            // the matter's propositions that have lost all support (clean recompute baseline).
+            var propositionsRemoved = await ExecAsync(
+                """
+                DELETE proposition FROM POLOXI.Legal_MatterFactProposition proposition
+                WHERE proposition.TenantId=@TenantId AND proposition.DecisionMatterId=@MatterId
+                  AND NOT EXISTS (
+                      SELECT 1 FROM POLOXI.Legal_MatterPropositionSupport support
+                      WHERE support.LegalFactPropositionId=proposition.LegalFactPropositionId AND support.IsDeleted=0);
+                """, new { TenantId = tenantId, MatterId = matterId });
+
+            // Evidence lineage members/groups reference occurrences for these documents.
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE member FROM POLOXI.Legal_EvidenceLineageMember member
+                    INNER JOIN POLOXI.Legal_EvidenceOccurrence occurrence
+                        ON occurrence.LegalEvidenceOccurrenceId=member.LegalEvidenceOccurrenceId
+                    WHERE member.TenantId=@TenantId AND occurrence.LegalDocumentId IN @DocumentIds;
+                    """, docArgs);
+            }
+            // Lineage groups left with no members are removed to avoid dangling provenance groups.
+            await ExecAsync(
+                """
+                DELETE grp FROM POLOXI.Legal_EvidenceLineageGroup grp
+                WHERE grp.TenantId=@TenantId AND grp.DecisionMatterId=@MatterId
+                  AND NOT EXISTS (
+                      SELECT 1 FROM POLOXI.Legal_EvidenceLineageMember member
+                      WHERE member.LegalEvidenceLineageGroupId=grp.LegalEvidenceLineageGroupId);
+                """, new { TenantId = tenantId, MatterId = matterId });
+
+            // Processing operations whose result/input entity is one of these versions/documents.
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_ProcessingOperation
+                    WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId
+                      AND (InputEntityId IN @VersionIds OR ResultEntityId IN @VersionIds
+                           OR InputEntityId IN @DocumentIds OR ResultEntityId IN @DocumentIds);
+                    """, new { TenantId = tenantId, MatterId = matterId, VersionIds = versionIds, DocumentIds = targetDocumentIds });
+            }
+
+            // Provenance occurrences (children first via ParentOccurrenceId self-reference).
+            var evidenceOccurrencesRemoved = await ExecAsync(
+                """
+                DELETE FROM POLOXI.Legal_EvidenceOccurrence
+                WHERE TenantId=@TenantId AND LegalDocumentId IN @DocumentIds AND ParentOccurrenceId IS NOT NULL;
+                """, docArgs);
+            evidenceOccurrencesRemoved += await ExecAsync(
+                """
+                DELETE FROM POLOXI.Legal_EvidenceOccurrence
+                WHERE TenantId=@TenantId AND LegalDocumentId IN @DocumentIds;
+                """, docArgs);
+
+            // Normalized layout artifacts + pages, then passages + processing runs, all by version.
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_DocumentLayoutArtifact
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_DocumentPage
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+            }
+
+            var passagesRemoved = hasVersions
+                ? await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_DocumentPassage
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs)
+                : 0;
+
+            if (hasVersions)
+            {
+                await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_DocumentProcessingRun
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs);
+            }
+
+            var versionsRemoved = hasVersions
+                ? await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_MatterDocumentVersion
+                    WHERE TenantId=@TenantId AND LegalDocumentVersionId IN @VersionIds;
+                    """, verArgs)
+                : 0;
+
+            var documentsRemoved = await ExecAsync(
+                """
+                DELETE FROM POLOXI.Legal_MatterDocument
+                WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND LegalDocumentId IN @DocumentIds;
+                """, docArgs);
+
+            // Upload batches are matter-level provenance reports. Only remove them on a full clean
+            // slate (purging specific documents preserves the immutable batch report history).
+            var uploadBatchesRemoved = 0;
+            if (purgeAll)
+            {
+                uploadBatchesRemoved = await ExecAsync(
+                    """
+                    DELETE FROM POLOXI.Legal_UploadBatch
+                    WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId;
+                    """, new { TenantId = tenantId, MatterId = matterId });
+            }
+
+            transaction.Commit();
+            return new LegalMatterDocumentPurgeResult(
+                matterId, purgeAll, documentsRemoved, versionsRemoved, passagesRemoved,
+                evidenceItemsRemoved, propositionsRemoved, propositionSupportsRemoved,
+                sourceAssertionsRemoved, evidenceOccurrencesRemoved, uploadBatchesRemoved);
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     public async Task<LegalMatterCorpusActivationStatus> GetMatterActivationStatusAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
@@ -448,13 +655,13 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             // 3) Passages.
             await connection.ExecuteAsync(new CommandDefinition(
                 """
-                INSERT POLOXI.Legal_DocumentPassage (LegalDocumentPassageId, LegalDocumentVersionId, PageNumber, SectionPath, SequenceNumber, PassageText, ExtractionMethodCode, ExtractionConfidence, EpistemicStateCode, ContentHash, TenantId, CreatedDateUtc, CreatedByUserId)
+                INSERT POLOXI.Legal_DocumentPassage (LegalDocumentPassageId, LegalDocumentVersionId, PageNumber, SectionPath, SequenceNumber, PassageText, ExtractionMethodCode, ExtractionConfidence, SourceSpanJson, EpistemicStateCode, ContentHash, TenantId, CreatedDateUtc, CreatedByUserId)
                 VALUES
-                    (@PasReport1,  @VerReport,  1, N'Incident Narrative',   1, @TxtReport1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport1,  N'VERIFIED', @HashR1, @TenantId, @Now, @UserId),
-                    (@PasReport2,  @VerReport,  2, N'Employee Observations', 2, @TxtReport2,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport2,  N'VERIFIED', @HashR2, @TenantId, @Now, @UserId),
-                    (@PasMedical1, @VerMedical, 3, N'Diagnosis',            1, @TxtMedical1, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical1, N'VERIFIED', @HashM1, @TenantId, @Now, @UserId),
-                    (@PasMedical2, @VerMedical, 5, N'Treatment Plan',       2, @TxtMedical2, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical2, N'VERIFIED', @HashM2, @TenantId, @Now, @UserId),
-                    (@PasPolicy1,  @VerPolicy,  1, N'Declarations',         1, @TxtPolicy1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfPolicy1,  N'VERIFIED', @HashP1, @TenantId, @Now, @UserId);
+                    (@PasReport1,  @VerReport,  1, N'Incident Narrative',   1, @TxtReport1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport1,  N'{"Offset":0,"Length":1}', N'VERIFIED', @HashR1, @TenantId, @Now, @UserId),
+                    (@PasReport2,  @VerReport,  2, N'Employee Observations', 2, @TxtReport2,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfReport2,  N'{"Offset":0,"Length":1}', N'VERIFIED', @HashR2, @TenantId, @Now, @UserId),
+                    (@PasMedical1, @VerMedical, 3, N'Diagnosis',            1, @TxtMedical1, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical1, N'{"Offset":0,"Length":1}', N'VERIFIED', @HashM1, @TenantId, @Now, @UserId),
+                    (@PasMedical2, @VerMedical, 5, N'Treatment Plan',       2, @TxtMedical2, N'AZURE_DOCUMENT_INTELLIGENCE', @CfMedical2, N'{"Offset":0,"Length":1}', N'VERIFIED', @HashM2, @TenantId, @Now, @UserId),
+                    (@PasPolicy1,  @VerPolicy,  1, N'Declarations',         1, @TxtPolicy1,  N'AZURE_DOCUMENT_INTELLIGENCE', @CfPolicy1,  N'{"Offset":0,"Length":1}', N'VERIFIED', @HashP1, @TenantId, @Now, @UserId);
                 """,
                 new
                 {
@@ -772,6 +979,352 @@ public sealed class LegalDocumentCorpusRepository(ISqlConnectionFactory connecti
             WHERE document.LegalDocumentId=@DocumentId AND document.TenantId=@TenantId;
             COMMIT;
             """, new { TenantId = tenantId, UserId = userId, DocumentId = documentId }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<Guid> CreateUploadBatchAsync(Guid tenantId, Guid userId, Guid matterId, StartUploadBatchCommand command, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var batchId = Guid.NewGuid();
+        const string sql = """
+            SET XACT_ABORT ON; BEGIN TRANSACTION;
+            IF NOT EXISTS (SELECT 1 FROM POLOXI.Legal_DecisionMatter WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0)
+                THROW 50010, 'Legal matter was not found for this tenant.', 1;
+            INSERT POLOXI.Legal_UploadBatch
+                (LegalUploadBatchId,DecisionMatterId,BatchNumber,SourceTypeCode,Custodian,ProducedBy,ProductionId,ReceivedDateUtc,Notes,StatusCode,FilesDiscovered,TenantId,CreatedByUserId)
+            VALUES (@BatchId,@MatterId,CONCAT(N'U-',FORMAT(SYSUTCDATETIME(),N'yyyyMMddHHmmss'),N'-',RIGHT(REPLACE(CONVERT(nvarchar(36),@BatchId),N'-',N''),6)),@SourceTypeCode,@Custodian,@ProducedBy,@ProductionId,@ReceivedDateUtc,@Notes,N'OPEN',0,@TenantId,@UserId);
+            COMMIT; SELECT @BatchId;
+            """;
+        return await connection.QuerySingleAsync<Guid>(new CommandDefinition(sql, new
+        {
+            BatchId = batchId, TenantId = tenantId, UserId = userId, MatterId = matterId,
+            command.SourceTypeCode, command.Custodian, command.ProducedBy, command.ProductionId,
+            command.ReceivedDateUtc, command.Notes
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyCollection<LegalUploadBatchDto>> GetUploadBatchesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<LegalUploadBatchDto>(new CommandDefinition(
+            """
+            SELECT LegalUploadBatchId, DecisionMatterId AS MatterId, BatchNumber, StatusCode, SourceTypeCode,
+                   Custodian, ProducedBy, ProductionId, FilesDiscovered, FilesAccepted, ExactContentDuplicates,
+                   NewEvidenceOccurrences, ProcessingReused, SecurityFailures, ProcessingFailures, CreatedDateUtc
+            FROM POLOXI.Legal_UploadBatch
+            WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task<LegalUploadOperationLookup?> FindUploadOperationAsync(Guid tenantId, Guid matterId, string idempotencyKey, string requestFingerprint, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row = await connection.QuerySingleOrDefaultAsync<UploadOperationRow?>(new CommandDefinition(
+            """
+            SELECT TOP 1 LegalUploadOperationId, RequestFingerprint, StatusCode,
+                   ResultLegalDocumentId, ResultLegalDocumentVersionId, ContentReused
+            FROM POLOXI.Legal_UploadOperation
+            WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IdempotencyKey=@IdempotencyKey AND IsDeleted=0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { TenantId = tenantId, MatterId = matterId, IdempotencyKey = idempotencyKey }, cancellationToken: cancellationToken));
+        if (row is null)
+            return null;
+        if (!string.Equals(row.RequestFingerprint, requestFingerprint, StringComparison.Ordinal))
+            throw new InvalidOperationException("IDEMPOTENCY_KEY_REUSED: the same upload idempotency key was used for a different file.");
+        if (row.ResultLegalDocumentId is not { } docId || row.ResultLegalDocumentVersionId is not { } versionId)
+            return null;
+        return new LegalUploadOperationLookup(row.LegalUploadOperationId, docId, versionId, row.ContentReused);
+    }
+
+    public async Task<Guid> RecordUploadOperationAsync(Guid tenantId, Guid userId, Guid matterId, Guid? batchId, string idempotencyKey, string requestFingerprint, string fileName, string? declaredContentType, long expectedLength, Guid resultDocumentId, Guid resultDocumentVersionId, bool contentReused, string sha256Hash, string? correlationId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var operationId = Guid.NewGuid();
+        const string sql = """
+            INSERT POLOXI.Legal_UploadOperation
+                (LegalUploadOperationId,LegalUploadBatchId,DecisionMatterId,IdempotencyKey,RequestFingerprint,FileName,DeclaredContentType,ExpectedLength,StatusCode,ResultLegalDocumentId,ResultLegalDocumentVersionId,ContentReused,Sha256Hash,CorrelationId,CompletedDateUtc,TenantId,CreatedByUserId)
+            VALUES (@OperationId,@BatchId,@MatterId,@IdempotencyKey,@RequestFingerprint,@FileName,@DeclaredContentType,@ExpectedLength,N'READY',@ResultDocumentId,@ResultDocumentVersionId,@ContentReused,@Sha256Hash,@CorrelationId,SYSUTCDATETIME(),@TenantId,@UserId);
+            SELECT @OperationId;
+            """;
+        return await connection.QuerySingleAsync<Guid>(new CommandDefinition(sql, new
+        {
+            OperationId = operationId, BatchId = batchId, MatterId = matterId, IdempotencyKey = idempotencyKey,
+            RequestFingerprint = requestFingerprint, FileName = fileName, DeclaredContentType = declaredContentType,
+            ExpectedLength = expectedLength, ResultDocumentId = resultDocumentId, ResultDocumentVersionId = resultDocumentVersionId,
+            ContentReused = contentReused, Sha256Hash = sha256Hash, CorrelationId = correlationId, TenantId = tenantId, UserId = userId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<Guid> CreateEvidenceOccurrenceAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, Guid? batchId, Guid? uploadOperationId, bool contentReused, EvidenceSourceDescriptor source, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var occurrenceId = Guid.NewGuid();
+        const string sql = """
+            INSERT POLOXI.Legal_EvidenceOccurrence
+                (LegalEvidenceOccurrenceId,DecisionMatterId,LegalDocumentId,LegalDocumentVersionId,LegalUploadOperationId,SourceTypeCode,Custodian,ProducedBy,ProductionId,BatesStart,BatesEnd,OriginalPath,ConfidentialityCode,PrivilegeCode,ContentReused,ReceivedDateUtc,Notes,TenantId,CreatedByUserId)
+            VALUES (@OccurrenceId,@MatterId,@DocumentId,@DocumentVersionId,@UploadOperationId,@SourceTypeCode,@Custodian,@ProducedBy,@ProductionId,@BatesStart,@BatesEnd,@OriginalPath,@ConfidentialityCode,@PrivilegeCode,@ContentReused,@ReceivedDateUtc,@Notes,@TenantId,@UserId);
+            SELECT @OccurrenceId;
+            """;
+        return await connection.QuerySingleAsync<Guid>(new CommandDefinition(sql, new
+        {
+            OccurrenceId = occurrenceId, MatterId = matterId, DocumentId = documentId, DocumentVersionId = documentVersionId,
+            UploadOperationId = uploadOperationId, SourceTypeCode = string.IsNullOrWhiteSpace(source.SourceTypeCode) ? "USER_UPLOAD" : source.SourceTypeCode,
+            source.Custodian, source.ProducedBy, source.ProductionId, source.BatesStart, source.BatesEnd,
+            source.OriginalPath, source.ConfidentialityCode, source.PrivilegeCode, ContentReused = contentReused,
+            source.ReceivedDateUtc, source.Notes, TenantId = tenantId, UserId = userId
+        }, cancellationToken: cancellationToken));
+    }
+
+    public async Task<IReadOnlyCollection<LegalEvidenceOccurrenceDto>> GetEvidenceOccurrencesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<LegalEvidenceOccurrenceDto>(new CommandDefinition(
+            """
+            SELECT occurrence.LegalEvidenceOccurrenceId, occurrence.DecisionMatterId AS MatterId, occurrence.LegalDocumentId,
+                   occurrence.LegalDocumentVersionId, version.Sha256Hash, document.FileName, occurrence.SourceTypeCode,
+                   occurrence.Custodian, occurrence.ProducedBy, occurrence.ProductionId, occurrence.BatesStart, occurrence.BatesEnd,
+                   occurrence.ContentReused, occurrence.ReceivedDateUtc, occurrence.CreatedDateUtc,
+                   occurrence.LegalUploadOperationId, occurrence.OriginalPath, occurrence.ConfidentialityCode, occurrence.PrivilegeCode,
+                   occurrence.LegalDocumentFamilyId, occurrence.ParentOccurrenceId, occurrence.FamilyDepth, occurrence.FamilyOrdinal, occurrence.Notes
+            FROM POLOXI.Legal_EvidenceOccurrence occurrence
+            INNER JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=occurrence.LegalDocumentId
+            INNER JOIN POLOXI.Legal_MatterDocumentVersion version ON version.LegalDocumentVersionId=occurrence.LegalDocumentVersionId
+            WHERE occurrence.TenantId=@TenantId AND occurrence.DecisionMatterId=@MatterId AND occurrence.IsDeleted=0
+            ORDER BY occurrence.CreatedDateUtc DESC;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
+    public async Task IncrementUploadBatchCountersAsync(Guid tenantId, Guid batchId, UploadBatchCounterDelta delta, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        const string sql = """
+            UPDATE POLOXI.Legal_UploadBatch
+            SET FilesDiscovered=FilesDiscovered+1,
+                FilesAccepted=FilesAccepted+@FilesAccepted,
+                ExactContentDuplicates=ExactContentDuplicates+@ExactContentDuplicates,
+                NewEvidenceOccurrences=NewEvidenceOccurrences+@NewEvidenceOccurrences,
+                ProcessingReused=ProcessingReused+@ProcessingReused,
+                SecurityFailures=SecurityFailures+@SecurityFailures,
+                ProcessingFailures=ProcessingFailures+@ProcessingFailures,
+                ModifiedDateUtc=SYSUTCDATETIME()
+            WHERE TenantId=@TenantId AND LegalUploadBatchId=@BatchId AND IsDeleted=0;
+            """;
+        await connection.ExecuteAsync(new CommandDefinition(sql, new
+        {
+            TenantId = tenantId, BatchId = batchId, delta.FilesAccepted, delta.ExactContentDuplicates,
+            delta.NewEvidenceOccurrences, delta.ProcessingReused, delta.SecurityFailures, delta.ProcessingFailures
+        }, cancellationToken: cancellationToken));
+    }
+
+    private sealed record UploadOperationRow(
+        Guid LegalUploadOperationId,
+        string RequestFingerprint,
+        string StatusCode,
+        Guid? ResultLegalDocumentId,
+        Guid? ResultLegalDocumentVersionId,
+        bool ContentReused);
+
+    public async Task SetUploadBatchDiscoveredAsync(Guid tenantId, Guid batchId, int filesDiscovered, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_UploadBatch
+            SET FilesDiscovered=@FilesDiscovered, ModifiedDateUtc=SYSUTCDATETIME()
+            WHERE TenantId=@TenantId AND LegalUploadBatchId=@BatchId AND IsDeleted=0;
+            """, new { TenantId = tenantId, BatchId = batchId, FilesDiscovered = filesDiscovered }, cancellationToken: cancellationToken));
+    }
+
+    public async Task CloseUploadBatchAsync(Guid tenantId, Guid userId, Guid batchId, string statusCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_UploadBatch
+            SET StatusCode=@StatusCode, ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@UserId
+            WHERE TenantId=@TenantId AND LegalUploadBatchId=@BatchId AND IsDeleted=0 AND StatusCode<>@StatusCode;
+            """, new { TenantId = tenantId, UserId = userId, BatchId = batchId, StatusCode = string.IsNullOrWhiteSpace(statusCode) ? "CLOSED" : statusCode }, cancellationToken: cancellationToken));
+    }
+
+    // ── Deterministic processing-operation ledger ───────────────────────────────────────────────────
+    public async Task<LegalProcessingOperationLookup> AcquireProcessingOperationAsync(Guid tenantId, Guid userId, LegalProcessingOperationRequest request, CancellationToken cancellationToken = default)
+    {
+        var operationKey = ComputeProcessingOperationKey(request);
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var newId = Guid.NewGuid();
+        // Reuse-or-record in one round trip: if a completed operation exists for the deterministic key,
+        // return it as a reuse; otherwise insert a PENDING operation (unique key prevents duplicates).
+        const string sql = """
+            SET XACT_ABORT ON; BEGIN TRANSACTION;
+            DECLARE @ExistingId uniqueidentifier, @ExistingStatus nvarchar(40), @ExistingResultType nvarchar(60), @ExistingResultId uniqueidentifier, @ExistingResultHash char(64);
+            SELECT TOP 1 @ExistingId=LegalProcessingOperationId, @ExistingStatus=StatusCode, @ExistingResultType=ResultEntityTypeCode, @ExistingResultId=ResultEntityId, @ExistingResultHash=ResultHash
+            FROM POLOXI.Legal_ProcessingOperation WITH (UPDLOCK, HOLDLOCK)
+            WHERE TenantId=@TenantId AND OperationTypeCode=@OperationTypeCode AND OperationKey=@OperationKey AND IsDeleted=0;
+            IF @ExistingId IS NOT NULL
+            BEGIN
+                COMMIT;
+                SELECT @ExistingId AS LegalProcessingOperationId, CAST(CASE WHEN @ExistingStatus=N'COMPLETE' THEN 1 ELSE 0 END AS bit) AS Reused,
+                       @ExistingStatus AS StatusCode, @ExistingResultType AS ResultEntityTypeCode, @ExistingResultId AS ResultEntityId, @ExistingResultHash AS ResultHash;
+            END
+            ELSE
+            BEGIN
+                INSERT POLOXI.Legal_ProcessingOperation
+                    (LegalProcessingOperationId,DecisionMatterId,OperationTypeCode,OperationKey,InputEntityTypeCode,InputEntityId,InputVersion,InputHash,ProcessorCode,ProcessorVersion,ConfigVersion,StatusCode,AttemptCount,StartedDateUtc,CorrelationId,CausationId,TenantId,CreatedByUserId)
+                VALUES (@NewId,@MatterId,@OperationTypeCode,@OperationKey,@InputEntityTypeCode,@InputEntityId,@InputVersion,@InputHash,@ProcessorCode,@ProcessorVersion,@ConfigVersion,N'PENDING',1,SYSUTCDATETIME(),@CorrelationId,@CausationId,@TenantId,@UserId);
+                COMMIT;
+                SELECT @NewId AS LegalProcessingOperationId, CAST(0 AS bit) AS Reused, N'PENDING' AS StatusCode,
+                       CAST(NULL AS nvarchar(60)) AS ResultEntityTypeCode, CAST(NULL AS uniqueidentifier) AS ResultEntityId, CAST(NULL AS char(64)) AS ResultHash;
+            END
+            """;
+        var row = await connection.QuerySingleAsync<LegalProcessingOperationLookup>(new CommandDefinition(sql, new
+        {
+            NewId = newId, TenantId = tenantId, UserId = userId, MatterId = request.MatterId,
+            request.OperationTypeCode, OperationKey = operationKey, request.InputEntityTypeCode, request.InputEntityId,
+            request.InputVersion, request.InputHash, request.ProcessorCode, request.ProcessorVersion, request.ConfigVersion,
+            request.CorrelationId, request.CausationId
+        }, cancellationToken: cancellationToken));
+        return row;
+    }
+
+    public async Task CompleteProcessingOperationAsync(Guid tenantId, Guid userId, Guid processingOperationId, string? resultEntityTypeCode, Guid? resultEntityId, string? resultHash, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_ProcessingOperation
+            SET StatusCode=N'COMPLETE', CompletedDateUtc=SYSUTCDATETIME(), ResultEntityTypeCode=@ResultEntityTypeCode,
+                ResultEntityId=@ResultEntityId, ResultHash=@ResultHash, ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@UserId
+            WHERE TenantId=@TenantId AND LegalProcessingOperationId=@Id AND IsDeleted=0;
+            """, new { TenantId = tenantId, UserId = userId, Id = processingOperationId, ResultEntityTypeCode = resultEntityTypeCode, ResultEntityId = resultEntityId, ResultHash = resultHash }, cancellationToken: cancellationToken));
+    }
+
+    public async Task FailProcessingOperationAsync(Guid tenantId, Guid userId, Guid processingOperationId, string errorCode, string errorMessage, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_ProcessingOperation
+            SET StatusCode=N'FAILED', CompletedDateUtc=SYSUTCDATETIME(), ErrorCode=@ErrorCode, ErrorMessage=LEFT(@ErrorMessage,4000),
+                ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@UserId
+            WHERE TenantId=@TenantId AND LegalProcessingOperationId=@Id AND IsDeleted=0;
+            """, new { TenantId = tenantId, UserId = userId, Id = processingOperationId, ErrorCode = errorCode, ErrorMessage = errorMessage }, cancellationToken: cancellationToken));
+    }
+
+    private static string ComputeProcessingOperationKey(LegalProcessingOperationRequest request)
+    {
+        var canonical = string.Join('\u001F', new[]
+        {
+            request.OperationTypeCode ?? string.Empty,
+            request.InputEntityTypeCode ?? string.Empty,
+            request.InputEntityId?.ToString("N") ?? string.Empty,
+            request.InputVersion?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            request.InputHash ?? string.Empty,
+            request.ProcessorCode ?? string.Empty,
+            request.ProcessorVersion ?? string.Empty,
+            request.ConfigVersion ?? string.Empty
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    // ── Document family grouping ────────────────────────────────────────────────────────────────────
+    public async Task<Guid> CreateDocumentFamilyAsync(Guid tenantId, Guid userId, Guid matterId, string? familyLabel, string containerTypeCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var familyId = Guid.NewGuid();
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            IF NOT EXISTS (SELECT 1 FROM POLOXI.Legal_DecisionMatter WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0)
+                THROW 50010, 'Legal matter was not found for this tenant.', 1;
+            INSERT POLOXI.Legal_DocumentFamily
+                (LegalDocumentFamilyId,DecisionMatterId,FamilyLabel,ContainerTypeCode,TenantId,CreatedByUserId)
+            VALUES (@FamilyId,@MatterId,@FamilyLabel,@ContainerTypeCode,@TenantId,@UserId);
+            """, new { FamilyId = familyId, MatterId = matterId, FamilyLabel = familyLabel, ContainerTypeCode = string.IsNullOrWhiteSpace(containerTypeCode) ? "LOOSE" : containerTypeCode, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
+        return familyId;
+    }
+
+    public async Task LinkOccurrenceToFamilyAsync(Guid tenantId, Guid userId, Guid occurrenceId, Guid familyId, Guid? parentOccurrenceId, int familyDepth, int familyOrdinal, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            UPDATE POLOXI.Legal_EvidenceOccurrence
+            SET LegalDocumentFamilyId=@FamilyId, ParentOccurrenceId=@ParentOccurrenceId, FamilyDepth=@FamilyDepth,
+                FamilyOrdinal=@FamilyOrdinal, ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@UserId
+            WHERE TenantId=@TenantId AND LegalEvidenceOccurrenceId=@OccurrenceId AND IsDeleted=0;
+            """, new { TenantId = tenantId, UserId = userId, OccurrenceId = occurrenceId, FamilyId = familyId, ParentOccurrenceId = parentOccurrenceId, FamilyDepth = familyDepth, FamilyOrdinal = familyOrdinal }, cancellationToken: cancellationToken));
+    }
+
+    // ── Evidence lineage ────────────────────────────────────────────────────────────────────────────
+    public async Task<Guid> CreateEvidenceLineageGroupAsync(Guid tenantId, Guid userId, Guid matterId, string? lineageLabel, string? originDescription, string independenceBasisCode, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var groupId = Guid.NewGuid();
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            IF NOT EXISTS (SELECT 1 FROM POLOXI.Legal_DecisionMatter WHERE DecisionMatterId=@MatterId AND TenantId=@TenantId AND IsDeleted=0)
+                THROW 50010, 'Legal matter was not found for this tenant.', 1;
+            INSERT POLOXI.Legal_EvidenceLineageGroup
+                (LegalEvidenceLineageGroupId,DecisionMatterId,LineageLabel,OriginDescription,IndependenceBasisCode,TenantId,CreatedByUserId)
+            VALUES (@GroupId,@MatterId,@LineageLabel,@OriginDescription,@IndependenceBasisCode,@TenantId,@UserId);
+            """, new { GroupId = groupId, MatterId = matterId, LineageLabel = lineageLabel, OriginDescription = originDescription, IndependenceBasisCode = string.IsNullOrWhiteSpace(independenceBasisCode) ? "UNRESOLVED" : independenceBasisCode, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
+        return groupId;
+    }
+
+    public async Task<Guid> AddEvidenceLineageMemberAsync(Guid tenantId, Guid userId, Guid lineageGroupId, Guid occurrenceId, string roleCode, string? derivationNote, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var memberId = Guid.NewGuid();
+        // Idempotent per (group, occurrence): reactivate/return an existing member instead of duplicating.
+        var id = await connection.QuerySingleAsync<Guid>(new CommandDefinition(
+            """
+            DECLARE @ExistingId uniqueidentifier;
+            SELECT TOP 1 @ExistingId=LegalEvidenceLineageMemberId FROM POLOXI.Legal_EvidenceLineageMember
+            WHERE TenantId=@TenantId AND LegalEvidenceLineageGroupId=@GroupId AND LegalEvidenceOccurrenceId=@OccurrenceId AND IsDeleted=0;
+            IF @ExistingId IS NOT NULL
+            BEGIN
+                UPDATE POLOXI.Legal_EvidenceLineageMember SET RoleCode=@RoleCode, DerivationNote=@DerivationNote, ModifiedDateUtc=SYSUTCDATETIME(), ModifiedByUserId=@UserId
+                WHERE LegalEvidenceLineageMemberId=@ExistingId;
+                SELECT @ExistingId;
+            END
+            ELSE
+            BEGIN
+                INSERT POLOXI.Legal_EvidenceLineageMember
+                    (LegalEvidenceLineageMemberId,LegalEvidenceLineageGroupId,LegalEvidenceOccurrenceId,RoleCode,DerivationNote,TenantId,CreatedByUserId)
+                VALUES (@MemberId,@GroupId,@OccurrenceId,@RoleCode,@DerivationNote,@TenantId,@UserId);
+                SELECT @MemberId;
+            END
+            """, new { MemberId = memberId, GroupId = lineageGroupId, OccurrenceId = occurrenceId, RoleCode = string.IsNullOrWhiteSpace(roleCode) ? "ORIGINAL" : roleCode, DerivationNote = derivationNote, TenantId = tenantId, UserId = userId }, cancellationToken: cancellationToken));
+        return id;
+    }
+
+    public async Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetEvidenceLineageAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var groups = (await connection.QueryAsync<LegalEvidenceLineageGroupDto>(new CommandDefinition(
+            """
+            SELECT LegalEvidenceLineageGroupId, DecisionMatterId AS MatterId, LineageLabel, OriginDescription, IndependenceBasisCode, CreatedDateUtc
+            FROM POLOXI.Legal_EvidenceLineageGroup
+            WHERE TenantId=@TenantId AND DecisionMatterId=@MatterId AND IsDeleted=0
+            ORDER BY CreatedDateUtc DESC;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken))).ToArray();
+        if (groups.Length == 0)
+            return groups;
+
+        var members = await connection.QueryAsync<LegalEvidenceLineageMemberDto>(new CommandDefinition(
+            """
+            SELECT member.LegalEvidenceLineageMemberId, member.LegalEvidenceLineageGroupId, member.LegalEvidenceOccurrenceId,
+                   member.RoleCode, member.DerivationNote, document.FileName, occurrence.SourceTypeCode
+            FROM POLOXI.Legal_EvidenceLineageMember member
+            INNER JOIN POLOXI.Legal_EvidenceLineageGroup grp ON grp.LegalEvidenceLineageGroupId=member.LegalEvidenceLineageGroupId
+            LEFT JOIN POLOXI.Legal_EvidenceOccurrence occurrence ON occurrence.LegalEvidenceOccurrenceId=member.LegalEvidenceOccurrenceId
+            LEFT JOIN POLOXI.Legal_MatterDocument document ON document.LegalDocumentId=occurrence.LegalDocumentId
+            WHERE member.TenantId=@TenantId AND grp.DecisionMatterId=@MatterId AND member.IsDeleted=0
+            ORDER BY member.RoleCode, member.CreatedDateUtc;
+            """, new { TenantId = tenantId, MatterId = matterId }, cancellationToken: cancellationToken));
+        var byGroup = members.GroupBy(m => m.LegalEvidenceLineageGroupId).ToDictionary(g => g.Key, g => (IReadOnlyCollection<LegalEvidenceLineageMemberDto>)g.ToArray());
+        return groups.Select(g => byGroup.TryGetValue(g.LegalEvidenceLineageGroupId, out var m) ? g with { Members = m } : g).ToArray();
     }
 
     public async Task SaveExtractionAsync(Guid tenantId, Guid userId, Guid documentVersionId, string correlationId, DocumentExtractionResult extraction, IReadOnlyCollection<LegalDocumentPassageDto> passages, CancellationToken cancellationToken = default)

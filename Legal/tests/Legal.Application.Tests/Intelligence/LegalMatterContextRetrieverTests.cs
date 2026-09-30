@@ -93,10 +93,29 @@ public sealed class LegalMatterContextRetrieverTests
         public Task<Guid> CreateDocumentAsync(Guid documentId, LegalDocumentIntakeRequest request, string sha256Hash, string storageReference, string malwareStatusCode, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task<Guid?> FindActiveDocumentByHashAsync(Guid tenantId, Guid matterId, string sha256Hash, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task PurgeDocumentAsync(Guid tenantId, Guid userId, Guid documentId, CancellationToken cancellationToken = default) => throw Unexpected();
+
+        public Task<LegalMatterDocumentPurgeResult> PurgeMatterDocumentEvidenceAsync(Guid tenantId, Guid userId, Guid matterId, LegalMatterDocumentPurgeRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task SaveExtractionAsync(Guid tenantId, Guid userId, Guid documentVersionId, string correlationId, DocumentExtractionResult extraction, IReadOnlyCollection<LegalDocumentPassageDto> passages, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task MarkProcessingFailedAsync(Guid tenantId, Guid userId, Guid documentVersionId, string errorCode, string errorMessage, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task SaveSemanticProposalAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, LegalDocumentSemanticProposal proposal, CancellationToken cancellationToken = default) => throw Unexpected();
         public Task PersistRetrievalTelemetryAsync(Guid tenantId, Guid userId, DecisionRetrievalTelemetry telemetry, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> CreateUploadBatchAsync(Guid tenantId, Guid userId, Guid matterId, StartUploadBatchCommand command, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<IReadOnlyCollection<LegalUploadBatchDto>> GetUploadBatchesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<LegalUploadOperationLookup?> FindUploadOperationAsync(Guid tenantId, Guid matterId, string idempotencyKey, string requestFingerprint, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> RecordUploadOperationAsync(Guid tenantId, Guid userId, Guid matterId, Guid? batchId, string idempotencyKey, string requestFingerprint, string fileName, string? declaredContentType, long expectedLength, Guid resultDocumentId, Guid resultDocumentVersionId, bool contentReused, string sha256Hash, string? correlationId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> CreateEvidenceOccurrenceAsync(Guid tenantId, Guid userId, Guid matterId, Guid documentId, Guid documentVersionId, Guid? batchId, Guid? uploadOperationId, bool contentReused, EvidenceSourceDescriptor source, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<IReadOnlyCollection<LegalEvidenceOccurrenceDto>> GetEvidenceOccurrencesAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task IncrementUploadBatchCountersAsync(Guid tenantId, Guid batchId, UploadBatchCounterDelta delta, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task SetUploadBatchDiscoveredAsync(Guid tenantId, Guid batchId, int filesDiscovered, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task CloseUploadBatchAsync(Guid tenantId, Guid userId, Guid batchId, string statusCode, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<LegalProcessingOperationLookup> AcquireProcessingOperationAsync(Guid tenantId, Guid userId, LegalProcessingOperationRequest request, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task CompleteProcessingOperationAsync(Guid tenantId, Guid userId, Guid processingOperationId, string? resultEntityTypeCode, Guid? resultEntityId, string? resultHash, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task FailProcessingOperationAsync(Guid tenantId, Guid userId, Guid processingOperationId, string errorCode, string errorMessage, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> CreateDocumentFamilyAsync(Guid tenantId, Guid userId, Guid matterId, string? familyLabel, string containerTypeCode, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task LinkOccurrenceToFamilyAsync(Guid tenantId, Guid userId, Guid occurrenceId, Guid familyId, Guid? parentOccurrenceId, int familyDepth, int familyOrdinal, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> CreateEvidenceLineageGroupAsync(Guid tenantId, Guid userId, Guid matterId, string? lineageLabel, string? originDescription, string independenceBasisCode, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<Guid> AddEvidenceLineageMemberAsync(Guid tenantId, Guid userId, Guid lineageGroupId, Guid occurrenceId, string roleCode, string? derivationNote, CancellationToken cancellationToken = default) => throw Unexpected();
+        public Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetEvidenceLineageAsync(Guid tenantId, Guid matterId, CancellationToken cancellationToken = default) => throw Unexpected();
         private static NotSupportedException Unexpected() => new("Unexpected repository call.");
     }
 }

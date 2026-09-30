@@ -241,7 +241,162 @@ public sealed record LegalDocumentIntakeRequest(
     // extract text). The metered Stage 1 semantic enrichment and Continuous Decision Integrity (CDC)
     // re-check are deferred to explicit activation on the Disambiguate & Answer path.
     public bool PrepareOnly { get; init; }
+
+    // ── Enterprise evidence-upload extensions (all optional; intake is unchanged when absent) ────────
+    // Client-supplied request identity. When set, a retried upload with the same key returns the same
+    // upload operation instead of creating a duplicate evidence intake. When null, intake behaves as
+    // before (no request-idempotency guard).
+    [StringLength(200)] public string? IdempotencyKey { get; init; }
+    // The batch this file belongs to (one "add evidence" action). Used for the upload dashboard and to
+    // group evidence occurrences. When null, a standalone occurrence is recorded.
+    public Guid? UploadBatchId { get; init; }
+    // Legal provenance for THIS occurrence of the file. Multiple occurrences of the same physical bytes
+    // (same SHA-256) are preserved with distinct provenance rather than deduplicated away.
+    public EvidenceSourceDescriptor? Source { get; init; }
 }
+
+// Legal provenance descriptor for a single evidence occurrence. Physical content is deduplicated by
+// SHA-256; provenance described here is NEVER collapsed, because the same bytes can be legally distinct
+// evidence (plaintiff production vs defendant production vs email attachment).
+public sealed record EvidenceSourceDescriptor
+{
+    [StringLength(60)] public string? SourceTypeCode { get; init; }
+    [StringLength(300)] public string? Custodian { get; init; }
+    [StringLength(300)] public string? ProducedBy { get; init; }
+    [StringLength(120)] public string? ProductionId { get; init; }
+    [StringLength(100)] public string? BatesStart { get; init; }
+    [StringLength(100)] public string? BatesEnd { get; init; }
+    [StringLength(2000)] public string? OriginalPath { get; init; }
+    [StringLength(60)] public string? ConfidentialityCode { get; init; }
+    [StringLength(60)] public string? PrivilegeCode { get; init; }
+    public DateTime? ReceivedDateUtc { get; init; }
+    [StringLength(2000)] public string? Notes { get; init; }
+}
+
+// Request to open an upload batch for a matter (one "add evidence" action).
+public sealed record StartUploadBatchCommand
+{
+    [StringLength(60)] public string? SourceTypeCode { get; init; }
+    [StringLength(300)] public string? Custodian { get; init; }
+    [StringLength(300)] public string? ProducedBy { get; init; }
+    [StringLength(120)] public string? ProductionId { get; init; }
+    public DateTime? ReceivedDateUtc { get; init; }
+    [StringLength(2000)] public string? Notes { get; init; }
+}
+
+// Immutable batch report surfaced on the enterprise upload dashboard.
+public sealed record LegalUploadBatchDto(
+    Guid LegalUploadBatchId,
+    Guid MatterId,
+    string BatchNumber,
+    string StatusCode,
+    string? SourceTypeCode,
+    string? Custodian,
+    string? ProducedBy,
+    string? ProductionId,
+    int FilesDiscovered,
+    int FilesAccepted,
+    int ExactContentDuplicates,
+    int NewEvidenceOccurrences,
+    int ProcessingReused,
+    int SecurityFailures,
+    int ProcessingFailures,
+    DateTime CreatedDateUtc);
+
+// One legal provenance occurrence of a document within a matter.
+public sealed record LegalEvidenceOccurrenceDto(
+    Guid LegalEvidenceOccurrenceId,
+    Guid MatterId,
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    string Sha256Hash,
+    string FileName,
+    string SourceTypeCode,
+    string? Custodian,
+    string? ProducedBy,
+    string? ProductionId,
+    string? BatesStart,
+    string? BatesEnd,
+    bool ContentReused,
+    DateTime? ReceivedDateUtc,
+    DateTime CreatedDateUtc,
+    Guid? LegalUploadOperationId = null,
+    string? OriginalPath = null,
+    string? ConfidentialityCode = null,
+    string? PrivilegeCode = null,
+    Guid? LegalDocumentFamilyId = null,
+    Guid? ParentOccurrenceId = null,
+    int FamilyDepth = 0,
+    int FamilyOrdinal = 0,
+    string? Notes = null);
+
+// Result of the request-idempotency lookup for an upload command.
+public sealed record LegalUploadOperationLookup(
+    Guid LegalUploadOperationId,
+    Guid ResultLegalDocumentId,
+    Guid ResultLegalDocumentVersionId,
+    bool ContentReused);
+
+// Rolling counter deltas applied to an upload batch report as each file is processed.
+public sealed record UploadBatchCounterDelta(
+    int FilesAccepted = 0,
+    int ExactContentDuplicates = 0,
+    int NewEvidenceOccurrences = 0,
+    int ProcessingReused = 0,
+    int SecurityFailures = 0,
+    int ProcessingFailures = 0);
+
+// ── Deterministic processing-operation ledger ──────────────────────────────────────────────────────
+// Identity of an expensive, reusable processing effect (extract, OCR, passage, embed, assert, AER, bind).
+// The OperationKey is a SHA-256 over the operation type + input identity/version/hash + processor +
+// config version. Same key => same effect (RETRY reuse); any change => a new operation (reprocessing).
+public sealed record LegalProcessingOperationRequest
+{
+    [Required, StringLength(60)] public required string OperationTypeCode { get; init; }
+    public Guid? MatterId { get; init; }
+    [StringLength(60)] public string? InputEntityTypeCode { get; init; }
+    public Guid? InputEntityId { get; init; }
+    public int? InputVersion { get; init; }
+    [StringLength(64)] public string? InputHash { get; init; }
+    [StringLength(100)] public string? ProcessorCode { get; init; }
+    [StringLength(60)] public string? ProcessorVersion { get; init; }
+    [StringLength(60)] public string? ConfigVersion { get; init; }
+    [StringLength(120)] public string? CorrelationId { get; init; }
+    [StringLength(120)] public string? CausationId { get; init; }
+}
+
+// Result of reuse-or-record: Reused=true means a completed operation already exists and the caller can
+// skip the effect; Reused=false means a fresh PENDING operation was recorded and the caller must run it.
+public sealed record LegalProcessingOperationLookup(
+    Guid LegalProcessingOperationId,
+    bool Reused,
+    string StatusCode,
+    string? ResultEntityTypeCode,
+    Guid? ResultEntityId,
+    string? ResultHash);
+
+// ── Evidence lineage read models (independent-source identity; advisory) ─────────────────────────────
+// A lineage group is one underlying independent source; members are occurrences that are the source
+// (ORIGINAL) or derive from it (DERIVATIVE, adding no independent evidentiary weight).
+public sealed record LegalEvidenceLineageGroupDto(
+    Guid LegalEvidenceLineageGroupId,
+    Guid MatterId,
+    string? LineageLabel,
+    string? OriginDescription,
+    string IndependenceBasisCode,
+    DateTime CreatedDateUtc)
+{
+    public IReadOnlyCollection<LegalEvidenceLineageMemberDto> Members { get; init; } = [];
+}
+
+public sealed record LegalEvidenceLineageMemberDto(
+    Guid LegalEvidenceLineageMemberId,
+    Guid LegalEvidenceLineageGroupId,
+    Guid LegalEvidenceOccurrenceId,
+    string RoleCode,
+    string? DerivationNote,
+    string? FileName,
+    string? SourceTypeCode);
 
 // Summary of a matter's corpus enrichment/activation state. Prepared versions have extracted text but
 // no derived propositions yet; activation enriches them and re-runs Continuous Decision Integrity.
@@ -253,7 +408,33 @@ public sealed record LegalMatterCorpusActivationStatus(
     int ActivatedThisCall)
 {
     public bool IsComplete => PendingVersions == 0;
+
+    // Per-document detail for the documents processed in the most recent activation batch, so the
+    // real-time pipeline strip can name the actual file and describe what was done to it (semantic
+    // enrichment, evidence extracted, concept binding, embeddings) instead of a bare "N of M" count.
+    // Empty on a pure status read; populated by ActivateAsync for the batch it just processed.
+    public IReadOnlyList<LegalCorpusActivationDocumentDetail> BatchDetails { get; init; } = [];
+
+    // The document currently being processed (or the most recently completed one in the batch), used
+    // as the headline real-time line. Null when no document has been processed in this batch.
+    public LegalCorpusActivationDocumentDetail? CurrentDocument =>
+        BatchDetails.Count > 0 ? BatchDetails[^1] : null;
 }
+
+// Real-time detail for a single document version processed during corpus activation. Drives the
+// human-readable pipeline line, e.g. "Extracting evidence from 'Harper-Medical-Records.pdf' —
+// 12 evidence items, concept-bound (Personal Injury)".
+public sealed record LegalCorpusActivationDocumentDetail(
+    Guid LegalDocumentId,
+    Guid LegalDocumentVersionId,
+    string FileName,
+    string ActionCode,
+    string ActionLabel,
+    int PassagesRead,
+    int EvidenceExtracted,
+    bool ConceptBound,
+    string? DomainPackCode,
+    bool Succeeded);
 
 // A prepared-but-not-activated document version: extracted text exists, but Stage 1 semantic
 // enrichment (atomic propositions) has not yet produced any evidence rows for it.
@@ -461,6 +642,33 @@ public sealed record LegalMatterEvidenceGraphDto(
     IReadOnlyCollection<LegalEvidenceGraphItemDto> Evidence,
     IReadOnlyCollection<LegalEvidenceGraphPropositionDto> Propositions,
     IReadOnlyCollection<LegalSourceAssertionDto> SourceAssertions);
+
+// ── Document cleanup (hard delete of document-derived evidence) ──────────────────────────────────
+// Request to purge document-derived evidence for a matter. When DocumentIds is null or empty, ALL
+// supporting documents for the matter are purged (full clean slate). When DocumentIds is provided,
+// only those documents and everything derived from them are hard-deleted. The purge is document-
+// evidence only: the matter, decision-session configuration and non-document data are preserved.
+public sealed record LegalMatterDocumentPurgeRequest(
+    IReadOnlyCollection<Guid>? DocumentIds);
+
+// Row counts removed per table so the UI can confirm exactly what the clean-up affected.
+public sealed record LegalMatterDocumentPurgeResult(
+    Guid MatterId,
+    bool PurgedAllDocuments,
+    int DocumentsRemoved,
+    int DocumentVersionsRemoved,
+    int PassagesRemoved,
+    int EvidenceItemsRemoved,
+    int PropositionsRemoved,
+    int PropositionSupportsRemoved,
+    int SourceAssertionsRemoved,
+    int EvidenceOccurrencesRemoved,
+    int UploadBatchesRemoved);
+
+// Combined outcome returned by the cleanup endpoint: what was purged plus the recomputed corpus state.
+public sealed record LegalMatterDocumentPurgeOutcome(
+    LegalMatterDocumentPurgeResult Purge,
+    LegalMatterCorpusActivationStatus Recompute);
 
 public sealed record LegalMatterContextItem(
     Guid MatterId,

@@ -124,6 +124,8 @@ public sealed class MatterCorpusWorkflowIntegrationTests
 
         public Task PurgeDocumentAsync(Guid tenantId,Guid userId,Guid documentId,CancellationToken cancellationToken=default)=>Task.CompletedTask;
 
+        public Task<LegalMatterDocumentPurgeResult> PurgeMatterDocumentEvidenceAsync(Guid tenantId,Guid userId,Guid matterId,LegalMatterDocumentPurgeRequest request,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalMatterDocumentPurgeResult(matterId,request.DocumentIds is null,0,0,0,0,0,0,0,0,0));
+
         public Task SaveExtractionAsync(Guid tenantId,Guid userId,Guid documentVersionId,string correlationId,DocumentExtractionResult extraction,IReadOnlyCollection<LegalDocumentPassageDto> passages,CancellationToken cancellationToken=default)
         {
             Passages.AddRange(passages);
@@ -173,6 +175,23 @@ public sealed class MatterCorpusWorkflowIntegrationTests
         public Task<Guid?> GetDocumentMatterIdAsync(Guid tenantId,Guid documentVersionId,CancellationToken cancellationToken=default)=>Task.FromResult<Guid?>(documents.SingleOrDefault()?.MatterId);
         public Task<IReadOnlyCollection<DecisionRetrievalTelemetryDto>> GetRetrievalTelemetryAsync(Guid tenantId,Guid? matterId,Guid? decisionSessionId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<DecisionRetrievalTelemetryDto>>([]);
         public Task PersistRetrievalTelemetryAsync(Guid tenantId,Guid userId,DecisionRetrievalTelemetry telemetry,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task<Guid> CreateUploadBatchAsync(Guid tenantId,Guid userId,Guid matterId,StartUploadBatchCommand command,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task<IReadOnlyCollection<LegalUploadBatchDto>> GetUploadBatchesAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalUploadBatchDto>>([]);
+        public Task<LegalUploadOperationLookup?> FindUploadOperationAsync(Guid tenantId,Guid matterId,string idempotencyKey,string requestFingerprint,CancellationToken cancellationToken=default)=>Task.FromResult<LegalUploadOperationLookup?>(null);
+        public Task<Guid> RecordUploadOperationAsync(Guid tenantId,Guid userId,Guid matterId,Guid? batchId,string idempotencyKey,string requestFingerprint,string fileName,string? declaredContentType,long expectedLength,Guid resultDocumentId,Guid resultDocumentVersionId,bool contentReused,string sha256Hash,string? correlationId,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task<Guid> CreateEvidenceOccurrenceAsync(Guid tenantId,Guid userId,Guid matterId,Guid documentId,Guid documentVersionId,Guid? batchId,Guid? uploadOperationId,bool contentReused,EvidenceSourceDescriptor source,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task<IReadOnlyCollection<LegalEvidenceOccurrenceDto>> GetEvidenceOccurrencesAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalEvidenceOccurrenceDto>>([]);
+        public Task IncrementUploadBatchCountersAsync(Guid tenantId,Guid batchId,UploadBatchCounterDelta delta,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task SetUploadBatchDiscoveredAsync(Guid tenantId,Guid batchId,int filesDiscovered,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task CloseUploadBatchAsync(Guid tenantId,Guid userId,Guid batchId,string statusCode,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task<LegalProcessingOperationLookup> AcquireProcessingOperationAsync(Guid tenantId,Guid userId,LegalProcessingOperationRequest request,CancellationToken cancellationToken=default)=>Task.FromResult(new LegalProcessingOperationLookup(Guid.NewGuid(),false,"PENDING",null,null,null));
+        public Task CompleteProcessingOperationAsync(Guid tenantId,Guid userId,Guid processingOperationId,string? resultEntityTypeCode,Guid? resultEntityId,string? resultHash,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task FailProcessingOperationAsync(Guid tenantId,Guid userId,Guid processingOperationId,string errorCode,string errorMessage,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task<Guid> CreateDocumentFamilyAsync(Guid tenantId,Guid userId,Guid matterId,string? familyLabel,string containerTypeCode,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task LinkOccurrenceToFamilyAsync(Guid tenantId,Guid userId,Guid occurrenceId,Guid familyId,Guid? parentOccurrenceId,int familyDepth,int familyOrdinal,CancellationToken cancellationToken=default)=>Task.CompletedTask;
+        public Task<Guid> CreateEvidenceLineageGroupAsync(Guid tenantId,Guid userId,Guid matterId,string? lineageLabel,string? originDescription,string independenceBasisCode,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task<Guid> AddEvidenceLineageMemberAsync(Guid tenantId,Guid userId,Guid lineageGroupId,Guid occurrenceId,string roleCode,string? derivationNote,CancellationToken cancellationToken=default)=>Task.FromResult(Guid.NewGuid());
+        public Task<IReadOnlyCollection<LegalEvidenceLineageGroupDto>> GetEvidenceLineageAsync(Guid tenantId,Guid matterId,CancellationToken cancellationToken=default)=>Task.FromResult<IReadOnlyCollection<LegalEvidenceLineageGroupDto>>([]);
 
         private void ReplaceDocumentStatus(string status,DocumentExtractionResult? extraction)
         {

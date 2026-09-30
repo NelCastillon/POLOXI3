@@ -33,6 +33,9 @@ public sealed class LegalMatterCorpusActivationService(
             tenantId, matterId, Math.Clamp(batchSize, 1, 25), cancellationToken);
 
         var activated = 0;
+        // Per-document real-time detail for the batch, so the UI can name the actual file and describe
+        // exactly what was done to it instead of a bare "N of M" count.
+        var batchDetails = new List<LegalCorpusActivationDocumentDetail>(pending.Count);
         var correlationId = Guid.NewGuid().ToString("N");
         // Domain-pack concepts are resolved once per distinct pack code and reused across versions. When a
         // document carries a Domain Pack, its concepts are passed to the interpreter so extracted evidence is
@@ -47,19 +50,25 @@ public sealed class LegalMatterCorpusActivationService(
         foreach (var version in pending)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var passagesRead = 0;
+            var evidenceExtracted = 0;
+            var conceptBound = false;
             try
             {
                 if (settings.Stage1SemanticEnrichmentEnabled)
                 {
                     var passages = await corpusRepository.GetDocumentPassagesAsync(
                         tenantId, version.LegalDocumentVersionId, cancellationToken);
+                    passagesRead = passages.Count;
                     if (passages.Count > 0)
                     {
                         var domainConcepts = await ResolveDomainConceptsAsync(
                             tenantId, version.DomainPackCode, conceptsByPack, cancellationToken);
+                        conceptBound = domainConcepts.Count > 0;
                         var proposal = await semanticInterpreter.InterpretAsync(
                             tenantId, matterId, version.LegalDocumentId, version.LegalDocumentVersionId,
                             version.DomainPackCode, domainConcepts, passages, correlationId, modelCode, cancellationToken);
+                        evidenceExtracted = proposal.EvidenceItems.Count;
                         await corpusRepository.SaveSemanticProposalAsync(
                             tenantId, userId, matterId, version.LegalDocumentId,
                             version.LegalDocumentVersionId, proposal, cancellationToken);
@@ -86,15 +95,23 @@ public sealed class LegalMatterCorpusActivationService(
                 }
 
                 activated++;
+                batchDetails.Add(new LegalCorpusActivationDocumentDetail(
+                    version.LegalDocumentId, version.LegalDocumentVersionId, version.FileName,
+                    "ENRICHED", "Extracting evidence", passagesRead, evidenceExtracted,
+                    conceptBound, version.DomainPackCode, Succeeded: true));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 logger.LogWarning(ex, "Corpus activation failed for document version {VersionId}; will retry on next activation pass.", version.LegalDocumentVersionId);
+                batchDetails.Add(new LegalCorpusActivationDocumentDetail(
+                    version.LegalDocumentId, version.LegalDocumentVersionId, version.FileName,
+                    "FAILED", "Activation failed", passagesRead, evidenceExtracted,
+                    conceptBound, version.DomainPackCode, Succeeded: false));
             }
         }
 
         var status = await corpusRepository.GetMatterActivationStatusAsync(tenantId, matterId, cancellationToken);
-        return status with { ActivatedThisCall = activated };
+        return status with { ActivatedThisCall = activated, BatchDetails = batchDetails };
     }
 
     // Resolves (and caches per pack code) the Domain Pack concepts for a document. Returns an empty set when
