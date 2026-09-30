@@ -1,0 +1,411 @@
+@using HNode = Legal.Application.Features.Intelligence.Decision.HierarchyNodeDto
+@using HDetail = Legal.Application.Features.Intelligence.Decision.HierarchyExecutionDetailDto
+@using HSummary = Legal.Application.Features.Intelligence.Decision.HierarchyExecutionSummaryDto
+@using HAuthority = Legal.Application.Features.Intelligence.Decision.HierarchyAuthorityDto
+@inject ApiClient Api
+
+@*
+    Hierarchy Details tab — projects the persisted POLOXI Hierarchy Execution Lineage & Authority
+    layer (schema 0366) for the selected matter's active Decision Contract. Read-model only: every
+    value is sourced from the API DTOs (runs, current authority, execution detail). Nothing is
+    fabricated — metrics absent from the read-model are not shown.
+*@
+
+<div class="hd-root">
+    @if (_loadError is not null)
+    {
+        <div class="hd-alert" role="alert" style="border-left:4px solid #dc3545;animation:hd-shake 0.3s ease;">
+            <i class="bi bi-exclamation-octagon"></i>
+            <span>@_loadError</span>
+        </div>
+    }
+
+    @if (_toast is not null)
+    {
+        <div class="hd-toast hd-toast--@_toastKind" role="status">
+            <i class="bi bi-@(_toastKind == "success" ? "check-circle" : "exclamation-triangle")"></i>
+            <span>@_toast</span>
+            <button type="button" class="hd-toast-x" @onclick="() => _toast = null"><i class="bi bi-x-lg"></i></button>
+        </div>
+    }
+
+    @if (_busy && _runs.Count == 0)
+    {
+        <div class="hd-empty"><span class="hd-spinner"></span> Loading hierarchy executions…</div>
+    }
+    else if (_noContract)
+    {
+        <div class="hd-empty">
+            <i class="bi bi-diagram-3"></i>
+            <p>This matter has no Decision Contract yet. A hierarchy can only be recorded inside a decision-contract context.</p>
+        </div>
+    }
+    else if (_runs.Count == 0)
+    {
+        <div class="hd-empty">
+            <i class="bi bi-diagram-3"></i>
+            <p>No hierarchy executions have been recorded for the active contract version yet. Run a POLOXI Wide analysis with a decision-contract context to populate this tab.</p>
+        </div>
+    }
+    else
+    {
+        var sel = SelectedRun;
+
+        @* ── KPI header strip ─────────────────────────────────────────────────────────── *@
+        <header class="hd-header">
+            <div class="hd-header-id">
+                <span class="hd-header-ic"><i class="bi bi-folder2-open"></i></span>
+                <div>
+                    <h3>@(_matterTitle ?? "Decision matter")</h3>
+                    <p class="hd-crumbs">Matters › @(_matterTitle ?? "Matter") › Decision Workspace › Hierarchy</p>
+                </div>
+            </div>
+            <div class="hd-kpis">
+                <div class="hd-kpi">
+                    <span class="hd-kpi-label">Decision Contract</span>
+                    <strong class="hd-kpi-value">v@(_contractVersion)</strong>
+                </div>
+                <div class="hd-kpi">
+                    <span class="hd-kpi-label">Authoritative Run</span>
+                    <strong class="hd-kpi-value">
+                        @if (_authority is { } auth)
+                        {
+                            <span class="hd-dot hd-dot--ok"></span>@("R" + auth.RunNumber)
+                            <span class="hd-badge hd-badge--ok">Authoritative</span>
+                        }
+                        else
+                        {
+                            <span class="hd-muted">None promoted</span>
+                        }
+                    </strong>
+                </div>
+                <div class="hd-kpi">
+                    <span class="hd-kpi-label">Model</span>
+                    <strong class="hd-kpi-value">@(sel?.ModelCode ?? "—")</strong>
+                </div>
+                <div class="hd-kpi">
+                    <span class="hd-kpi-label">Nodes</span>
+                    <strong class="hd-kpi-value">@(sel?.NodeCount ?? 0) <small>(max depth @(sel?.MaxDepth ?? 0))</small></strong>
+                </div>
+                <div class="hd-kpi">
+                    <span class="hd-kpi-label">Last Updated</span>
+                    <strong class="hd-kpi-value">@((sel?.CompletedDateUtc ?? sel?.StartedDateUtc)?.ToLocalTime().ToString("MMM d, yyyy HH:mm") ?? "—")</strong>
+                </div>
+            </div>
+        </header>
+
+        <div class="hd-body">
+            @* ── Left · Hierarchy tree ─────────────────────────────────────────────────── *@
+            <aside class="hd-tree">
+                <div class="hd-tree-head">
+                    <div class="hd-tree-title"><i class="bi bi-diagram-3"></i><span>Current Hierarchy</span></div>
+                    <div class="hd-search">
+                        <i class="bi bi-search"></i>
+                        <input type="text" placeholder="Search hierarchy…" @bind="_search" @bind:event="oninput" />
+                    </div>
+                </div>
+                <div class="hd-tree-body">
+                    @if (_detail is null)
+                    {
+                        <div class="hd-empty hd-empty--sm"><span class="hd-spinner"></span> Loading nodes…</div>
+                    }
+                    else
+                    {
+                        @foreach (var root in RootNodes)
+                        {
+                            <HierarchyNodeRow Node="root" Detail="_detail" SelectedId="_selectedNodeId"
+                                              Collapsed="_collapsed" Search="_search"
+                                              OnSelect="SelectNode" OnToggle="ToggleCollapse" />
+                        }
+                    }
+                </div>
+            </aside>
+
+            @* ── Center · Selected node detail ─────────────────────────────────────────── *@
+            <section class="hd-detail">
+                @if (SelectedNode is { } node)
+                {
+                    var kids = ChildrenOf(node);
+                    <header class="hd-detail-head">
+                        <div class="hd-detail-title">
+                            <span class="hd-lvl hd-lvl--lg">L@(node.Depth)</span>
+                            <div>
+                                <h3>@(node.Title ?? node.Statement)</h3>
+                                <p>@node.Statement</p>
+                            </div>
+                        </div>
+                        <span class="hd-badge hd-badge--@StateTone(node.BranchStateCode)">@Humanize(node.BranchStateCode)</span>
+                    </header>
+
+                    <div class="hd-facts">
+                        <div class="hd-fact"><span>Role</span><strong>@Humanize(node.NodeRoleCode)</strong></div>
+                        <div class="hd-fact"><span>Type</span><strong>@Humanize(node.NodeTypeCode)</strong></div>
+                        <div class="hd-fact"><span>Continue narrowing</span><strong>@(node.ContinueNarrowing ? "true" : "false")</strong></div>
+                        <div class="hd-fact"><span>Stop reason</span><strong>@(string.IsNullOrWhiteSpace(node.StopReasonCode) ? "—" : Humanize(node.StopReasonCode!))</strong></div>
+                        <div class="hd-fact"><span>Children</span><strong>@kids.Count (@DescendantCount(node) total)</strong></div>
+                        <div class="hd-fact"><span>Confidence</span><strong>@(node.Confidence is { } c ? c.ToString("P0") : "—")</strong></div>
+                        <div class="hd-fact"><span>Capability</span><strong>@(string.IsNullOrWhiteSpace(node.CapabilityCode) ? "—" : node.CapabilityCode!)</strong></div>
+                        <div class="hd-fact"><span>Origin</span><strong>@Humanize(node.OriginCode)</strong></div>
+                    </div>
+
+                    <div class="hd-children">
+                        <div class="hd-children-head"><i class="bi bi-list-nested"></i><span>Children (@kids.Count)</span></div>
+                        @if (kids.Count > 0)
+                        {
+                            <table class="hd-table">
+                                <thead>
+                                    <tr><th>#</th><th>Title</th><th>Role</th><th>State</th><th>Continue</th><th>Children</th><th></th></tr>
+                                </thead>
+                                <tbody>
+                                    @{ var i = 0; }
+                                    @foreach (var kid in kids)
+                                    {
+                                        i++;
+                                        var ki = i;
+                                        <tr class="hd-row" @onclick="() => SelectNode(kid.HierarchyNodeId)">
+                                            <td>@($"{node.Depth}.{ki}")</td>
+                                            <td class="hd-row-title">@(kid.Title ?? kid.Statement)</td>
+                                            <td><span class="hd-chip">@Humanize(kid.NodeRoleCode)</span></td>
+                                            <td><span class="hd-badge hd-badge--@StateTone(kid.BranchStateCode)">@Humanize(kid.BranchStateCode)</span></td>
+                                            <td>@(kid.ContinueNarrowing ? "Yes" : "No")</td>
+                                            <td>@ChildrenOf(kid).Count (@DescendantCount(kid))</td>
+                                            <td class="hd-row-actions">
+                                                <button type="button" class="hd-btn hd-btn-sm" @onclick:stopPropagation="true"
+                                                        @onclick="() => SelectNode(kid.HierarchyNodeId)">View</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        }
+                        else
+                        {
+                            <p class="hd-empty hd-empty--sm">This node is a leaf — it has no child branches.</p>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div class="hd-empty">
+                        <i class="bi bi-diagram-2"></i>
+                        <p>Select a node in the hierarchy to inspect its proposition, state and children.</p>
+                    </div>
+                }
+            </section>
+
+            @* ── Right · Hierarchy Runs ────────────────────────────────────────────────── *@
+            <aside class="hd-runs">
+                <div class="hd-runs-head"><span>Hierarchy Runs</span><small>@_runs.Count total</small></div>
+                <div class="hd-runs-list">
+                    @foreach (var run in _runs)
+                    {
+                        var isSel = run.HierarchyExecutionId == _selectedRunId;
+                        var isAuth = run.AuthorityStatusCode == "AUTHORITATIVE";
+                        <button type="button" class="hd-run @(isSel ? "hd-run--active" : "")" @onclick="() => SelectRunAsync(run.HierarchyExecutionId)">
+                            <div class="hd-run-top">
+                                <span class="hd-dot hd-dot--@(isAuth ? "ok" : "muted")"></span>
+                                <strong>R@(run.RunNumber)</strong>
+                                @if (isAuth)
+                                {
+                                    <span class="hd-badge hd-badge--ok">Authoritative</span>
+                                }
+                                else
+                                {
+                                    <span class="hd-badge hd-badge--muted">@Humanize(run.ValidationStatusCode)</span>
+                                }
+                            </div>
+                            <div class="hd-run-meta">
+                                <span>@run.NodeCount nodes · depth @run.MaxDepth</span>
+                                <span>@((run.CompletedDateUtc ?? run.StartedDateUtc).ToLocalTime().ToString("MMM d, yyyy HH:mm"))</span>
+                            </div>
+                            @if (!isAuth && CanPromote(run))
+                            {
+                                <span class="hd-run-promote" @onclick:stopPropagation="true" @onclick="() => AskPromote(run)">
+                                    <i class="bi bi-star"></i> Promote to authoritative
+                                </span>
+                            }
+                        </button>
+                    }
+                </div>
+            </aside>
+        </div>
+    }
+
+    @* ── Promote confirmation dialog ───────────────────────────────────────────────────── *@
+    @if (_promoteTarget is { } target)
+    {
+        <div class="hd-modal-backdrop" @onclick="() => _promoteTarget = null">
+            <div class="hd-confirm" @onclick:stopPropagation="true">
+                <div class="hd-confirm-icon hd-confirm-icon--warn"><i class="bi bi-star-fill"></i></div>
+                <h4>Promote R@(target.RunNumber) to authoritative?</h4>
+                <p>This makes run R@(target.RunNumber) the current authoritative hierarchy for contract v@(_contractVersion). The prior authoritative run (if any) is superseded. This is an audited action.</p>
+                <div class="hd-modal-footer">
+                    <button type="button" class="hd-btn" @onclick="() => _promoteTarget = null" disabled="@_busy">Cancel</button>
+                    <button type="button" class="hd-btn hd-btn-primary" @onclick="() => PromoteAsync(target)" disabled="@_busy">
+                        @if (_busy) { <span class="hd-spinner"></span> }
+                        Promote
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Guid MatterId { get; set; }
+
+    private Guid _contractId;
+    private int _contractVersion;
+    private string? _matterTitle;
+    private bool _noContract;
+
+    private IReadOnlyList<HSummary> _runs = [];
+    private HAuthority? _authority;
+    private HDetail? _detail;
+
+    private Guid? _selectedRunId;
+    private Guid? _selectedNodeId;
+    private readonly HashSet<Guid> _collapsed = [];
+    private string _search = "";
+
+    private HSummary? SelectedRun => _runs.FirstOrDefault(r => r.HierarchyExecutionId == _selectedRunId);
+    private HNode? SelectedNode => _detail?.Nodes.FirstOrDefault(n => n.HierarchyNodeId == _selectedNodeId);
+    private IReadOnlyList<HNode> RootNodes =>
+        _detail?.Nodes.Where(n => n.ParentHierarchyNodeId is null).OrderBy(n => n.DisplayOrder).ToArray() ?? [];
+
+    private bool _busy;
+    private string? _loadError;
+    private string? _toast;
+    private string _toastKind = "success";
+    private HSummary? _promoteTarget;
+    private Guid _loadedMatterId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedMatterId == MatterId && (_runs.Count > 0 || _noContract || _loadError is not null)) return;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _busy = true;
+        _loadError = null;
+        _noContract = false;
+        try
+        {
+            var ws = await Api.GetLegalDecisionContractAsync(MatterId);
+            if (ws is null)
+            {
+                _noContract = true;
+                _loadedMatterId = MatterId;
+                return;
+            }
+            _matterTitle = ws.MatterTitle;
+            _contractId = ws.Contract.DecisionContractId;
+            _contractVersion = ws.Contract.VersionNumber;
+
+            _runs = (await Api.GetLegalHierarchyRunsAsync(MatterId, _contractId, _contractVersion)).ToArray();
+            _authority = await Api.GetLegalHierarchyAuthorityAsync(MatterId, _contractId, _contractVersion);
+            _loadedMatterId = MatterId;
+
+            var initial = _runs.FirstOrDefault(r => r.AuthorityStatusCode == "AUTHORITATIVE") ?? _runs.FirstOrDefault();
+            if (initial is not null)
+            {
+                await SelectRunAsync(initial.HierarchyExecutionId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load hierarchy details: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SelectRunAsync(Guid runId)
+    {
+        if (_selectedRunId == runId && _detail is not null) return;
+        _selectedRunId = runId;
+        _selectedNodeId = null;
+        _detail = null;
+        try
+        {
+            _detail = await Api.GetLegalHierarchyExecutionAsync(runId);
+            _selectedNodeId = _detail?.Nodes.Where(n => n.ParentHierarchyNodeId is null)
+                .OrderBy(n => n.DisplayOrder).FirstOrDefault()?.HierarchyNodeId;
+        }
+        catch (Exception ex)
+        {
+            _loadError = $"Failed to load execution: {ex.Message}";
+        }
+    }
+
+    private void SelectNode(Guid nodeId) => _selectedNodeId = nodeId;
+
+    private void ToggleCollapse(Guid nodeId)
+    {
+        if (!_collapsed.Remove(nodeId)) _collapsed.Add(nodeId);
+    }
+
+    private IReadOnlyList<HNode> ChildrenOf(HNode node) =>
+        _detail?.Nodes.Where(n => n.ParentHierarchyNodeId == node.HierarchyNodeId)
+            .OrderBy(n => n.DisplayOrder).ToArray() ?? [];
+
+    private int DescendantCount(HNode node)
+    {
+        var count = 0;
+        foreach (var kid in ChildrenOf(node))
+        {
+            count += 1 + DescendantCount(kid);
+        }
+        return count;
+    }
+
+    private bool CanPromote(HSummary run) =>
+        run.AuthorityStatusCode != "AUTHORITATIVE"
+        && (run.ValidationStatusCode == "VALID" || run.ValidationStatusCode == "VALID_WITH_WARNINGS");
+
+    private void AskPromote(HSummary run) => _promoteTarget = run;
+
+    private async Task PromoteAsync(HSummary run)
+    {
+        _busy = true;
+        try
+        {
+            await Api.PromoteLegalHierarchyExecutionAsync(run.HierarchyExecutionId, run.RowVersion, "MANUAL_PROMOTION");
+            _promoteTarget = null;
+            _toast = $"Run R{run.RunNumber} is now authoritative.";
+            _toastKind = "success";
+            _selectedRunId = null;
+            _detail = null;
+            _runs = [];
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _toast = $"Promotion failed: {ex.Message}";
+            _toastKind = "error";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StateTone(string? code) => (code ?? "").ToUpperInvariant() switch
+    {
+        "ACTIVE" or "COMPLETE" or "RESOLVED" or "VALID" => "ok",
+        "IN_PROGRESS" or "PENDING" or "NARROWING" => "info",
+        "ELIMINATED" or "STOPPED" or "REJECTED" => "muted",
+        _ => "info"
+    };
+
+    private static string Humanize(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "—";
+        var parts = code.Replace('_', ' ').ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', parts.Select(p => char.ToUpperInvariant(p[0]) + p[1..]));
+    }
+}

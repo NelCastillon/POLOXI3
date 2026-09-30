@@ -15,7 +15,7 @@ namespace Legal.Application;
 // Isolated clone of the POLOXI search orchestration used by /intelligence/search/poloxi_wide.
 // Intentionally duplicates IntelligenceService.SearchWithPoloxiAsync so this "Wide" path can be
 // tweaked freely without changing /intelligence/search/poloxi behavior.
-public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null):IIntelligenceWide2Service
+public sealed partial class IntelligenceWide2Service(IIntelligenceRepository repository,IIntelligenceWide2Repository wideRepository,IAiProviderRouter aiProviderRouter,IExternalKnowledgeProvider externalKnowledgeProvider,ILegalRetriever legalRetriever,IPromptCatalog promptCatalog,IAdaptiveRetriever adaptiveRetriever,IAbvResolutionEngine abvEngine,ILegalDecisionRepository legalDecisionRepository,IErrorLogService errorLog,ILogger<IntelligenceWide2Service> logger,IWide2ProgressPublisher? progressPublisher=null,ILegalHierarchyExecutionRepository? hierarchyExecutionRepository=null):IIntelligenceWide2Service
 {
     // Real-time cockpit KPI feed. Optional so hosts without SignalR (or tests) run unchanged. Publishing
     // is fully fail-soft: a broken/absent transport must never affect grounding, scoring, or readiness.
@@ -210,6 +210,9 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             return new PoloxiBranchOutcomeRecord(branch.HierarchyBranchId,outcomeCode,raw.Count,kept,recovery?.RecoveredCount??0,recovery?.AlternateSearchText);
         }).ToArray();
         await wideRepository.SavePoloxiBranchOutcomesAsync(request.TenantId,request.UserId,executionId,outcomeRecords,cancellationToken);
+        // Authoritative hierarchy lineage (context-gated, fail-soft): persist this accepted POLOXI run as an
+        // immutable Legal_HierarchyExecution only when it carries a real Decision Contract context.
+        await RecordAcceptedHierarchyAsync(request.TenantId,request.UserId,request.DecisionMatterId,request.DecisionContractId,request.DecisionContractVersion,hierarchy.Branches,hierarchy.GeneratedByModelCode,executionId.ToString("N"),cancellationToken);
         return new(executionId,hierarchy.HierarchyId,request.Query,hierarchy.ConceptCode,hierarchy.DisplayName,hierarchy.VersionNumber,reused,hierarchy.Confidence,hierarchy.Branches,ranked,explanation,explanationStatus,timer.ElapsedMilliseconds);
     }
 
@@ -1756,6 +1759,11 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             }
             timer.Stop();
             await wideRepository.CompleteWideExecutionAsync(request.TenantId,request.UserId,executionId,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,timer.ElapsedMilliseconds,cancellationToken);
+            // POLOXI computation-details for the Candidate Competition tab. DB-backed (Core.ConfigurationSetting);
+            // fail-soft so a config read error never blocks the answer \u2014 the UI simply omits the details tile.
+            WidePoloxiComputationDetailsDto? poloxiComputationDetails=null;
+            try{poloxiComputationDetails=await wideRepository.GetPoloxiComputationDetailsAsync(request.TenantId,cancellationToken);}
+            catch(Exception ex){logger.LogWarning(ex,"Failed to load POLOXI computation details for tenant {TenantId}.",request.TenantId);}
             var response=new WideSearchResponse(executionId,request.Query,answerStatus,terminationReason,depth,llmCalls,aggregateConfidence,answer.VerificationCode,finalAnswerText,allBranches.Select(ToDto).ToArray(),relevantEvidence,answer.SuggestedActions.Select(action=>new WideActionSuggestionDto(action.DisplayName,action.NavigationRoute,action.Rationale)).ToArray(),timer.ElapsedMilliseconds){ExternalReferences=MapExternalReferences(answer),InterpretiveResults=interpretiveResults,ExternalKnowledge=externalKnowledge,ProposedLegalAuthorities=MapProposedLegalAuthorities(proposedLegalAuthorities,externalKnowledge),QueryContract=queryContract,
             Candidates=candidates,AmbiguityGroups=ambiguityGroups,EvidenceCoverage=evidenceCoverage,DecisionEvidenceCoverage=decisionEvidenceCoverage,ExternalEvidenceCount=externalKnowledge.Count,EnterpriseEvidenceCount=relevantEvidence.Length,
             InitialEntropy=initialEntropy.Entropy,FinalEntropy=finalEntropy.Entropy,InitialNormalizedEntropy=initialEntropy.NormalizedEntropy,FinalNormalizedEntropy=finalEntropy.NormalizedEntropy,TotalActualInformationGain=totalActualInformationGain,EntropyBasisCode=finalEntropy.EntropyBasisCode,InformationRounds=informationRounds,
@@ -1764,7 +1772,7 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             ClarificationOptionItems=clarificationOptionItems,IntentEntropy=intentEntropy,BestClarificationValue=bestClarificationValueOut,
             ClarificationGain=clarificationGain,ClarificationRound=request.ClarificationRound,AnswerContext=answerContext,
             NarrowingIterations=narrowingIterations,FinalNarrowingTrend=narrowingIterations.Count>0?narrowingIterations[^1].TrendCode:null,
-            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic(),DecisionInspector=BuildDecisionInspector(queryContract?.AnswerKind,interpretiveResults,candidates)};
+            AnswerKindCode=queryContract?.AnswerKind,AnswerKindRoutingApplied=answerKindRoutingApplied,ProviderCodeUsed=providerCodeUsed,ModelCodeUsed=modelCodeUsed,LlmRawItems=await llmRawTask,AbvAction=abvAction,ResolutionDeliverable=resolutionDeliverable,LegalAnswer=legalAnswer,MatterContext=BuildMatterContextDiagnostic(),DecisionInspector=BuildDecisionInspector(queryContract?.AnswerKind,interpretiveResults,candidates),PoloxiComputationDetails=poloxiComputationDetails};
             // Real-time cockpit feed: final, authoritative snapshot. Reconcile the KPI counters with the
             // completed response so the console lands on the true values and drops the provisional label.
             _progressCompetingOutcomes=candidates.Count>0?candidates.Count:_progressCompetingOutcomes;
@@ -1772,6 +1780,10 @@ public sealed partial class IntelligenceWide2Service(IIntelligenceRepository rep
             _progressAdmittedEvidence=relevantEvidence.Length;
             var finalReadiness=answerStatus=="USER_CLARIFICATION_REQUIRED"?"Clarification needed":decisionConfidence>=configuration.TargetConfidence?"Established":"Provisional";
             await PublishProgressAsync("COMPLETED",finalReadiness,false,"Decision complete",cancellationToken);
+            // Authoritative hierarchy lineage: when this accepted run carries a Decision Contract context,
+            // persist it as an immutable Legal_HierarchyExecution. Context-gated and fully fail-soft — a
+            // standalone/diagnostic run records nothing and a recording failure never affects the response.
+            await RecordAcceptedHierarchyAsync(request.TenantId,request.UserId,request.DecisionMatterId,request.DecisionContractId,request.DecisionContractVersion,answerStatus,response.Branches,response.ModelCodeUsed,executionId.ToString("N"),cancellationToken);
             return response;
         }
         catch(Exception fault)

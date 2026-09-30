@@ -9,6 +9,11 @@ namespace Legal.Application.Features.Intelligence;
 public sealed record WideSearchRequest(Guid TenantId,Guid UserId,[Required,StringLength(4000,MinimumLength=2)]string Query,[Range(1,100)]int MaximumResults=25,[Required,StringLength(120)]string CorrelationId="")
 {
     public IReadOnlyCollection<string> GrantedPermissions{get;init;}=[];
+    // Optional Decision Contract context. When all three are present, an accepted WIDE run is persisted
+    // as an authoritative Legal_HierarchyExecution; when absent, the run is standalone/diagnostic only.
+    public Guid? DecisionMatterId{get;init;}
+    public Guid? DecisionContractId{get;init;}
+    public int? DecisionContractVersion{get;init;}
     // 'POLOXI Engine' filter: true runs the full dynamic disambiguation + enterprise grounding pipeline;
     // false returns a pure LLM answer without hierarchy, grounding, or elimination.
     public bool UsePoloxiEngine{get;init;}=true;
@@ -578,7 +583,30 @@ public sealed record WideSearchResponse(Guid WideExecutionId,string Query,string
     // mode, or when the deterministic output guard rejected the composed answer — in every null case the
     // standard POLOXI answer is shown instead. Never influences ranking, confidence, or persistence.
     public WideLegalAnswerDto? LegalAnswer{get;init;}
+    // POLOXI computation details for the Candidate Competition UI. DB-backed: the composite-score
+    // dimension weights and the algorithm version are read from Core.ConfigurationSetting (platform
+    // defaults match the deterministic DecisionCoreMath constants). Null when the config read failed
+    // soft \u2014 the UI then omits the computation-details tile rather than fabricating constants.
+    public WidePoloxiComputationDetailsDto? PoloxiComputationDetails{get;init;}
 }
+// POLOXI computation-details projection for the Candidate Competition tab. Every value is DB-backed
+// (Core.ConfigurationSetting) so the UI never hardcodes scoring weights or the algorithm version.
+// The composite score = WeightLegal\u00B7L + WeightFact\u00B7F + WeightEvidence\u00B7E + WeightAuthority\u00B7A +
+// WeightVerification\u00B7V (weights normalized to sum 1). CertaintyCeilingFormula/UncertaintyFormula/
+// MarginFormula/InformationValueFormula/RecompetitionNote are human-facing descriptions of the
+// deterministic POLOXI Core math already applied \u2014 presentation only, never a scoring input.
+public sealed record WidePoloxiComputationDetailsDto(
+    decimal WeightLegal,
+    decimal WeightFact,
+    decimal WeightEvidence,
+    decimal WeightAuthority,
+    decimal WeightVerification,
+    string AlgorithmVersion,
+    string CertaintyCeilingFormula,
+    string UncertaintyFormula,
+    string MarginFormula,
+    string InformationValueFormula,
+    string RecompetitionNote);
 // V3.17 Deliverable Synthesis projection. Purely deterministic: assembled from the query contract,
 // grounded evidence, external knowledge, and uncertainty metrics already computed by the pipeline.
 // DeterminacyCode is one of RESOLVED (a concrete outcome is supported), PARTIAL (some inputs present

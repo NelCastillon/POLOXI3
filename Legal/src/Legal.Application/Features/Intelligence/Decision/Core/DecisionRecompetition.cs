@@ -42,49 +42,59 @@ public static class DecisionRecompetition
         var previousWinnerId = candidates.FirstOrDefault(c => c.IsWinner)?.DecisionCandidateId;
 
         // Aggregate signed support deltas per candidate (via direct candidate signals and via the
-        // candidate that owns each affected branch — branch code prefix "C{n}.").
-        var candidateDelta = new Dictionary<Guid, double>();
-        var branchDelta = new Dictionary<Guid, double>();
+        // candidate that owns each affected branch — branch code prefix "C{n}."). Each bundle keeps the
+        // legacy UNTARGETED sum (TargetSignal == null) separate from per-dimension TARGETED sums so a
+        // typed Evidence/Authority/etc. signal moves ONLY its dimension. Summation happens before a
+        // single Clamp01 (deterministic and order-independent), preserving idempotency.
+        var candidateDelta = new Dictionary<Guid, DeltaBundle>();
+        var branchDelta = new Dictionary<Guid, DeltaBundle>();
         var reopenBranchIds = new HashSet<Guid>();
 
         foreach (var s in signals)
         {
             if (s.BranchId is { } bid)
             {
-                branchDelta[bid] = branchDelta.TryGetValue(bid, out var bd) ? bd + s.SupportDelta : s.SupportDelta;
+                Accumulate(branchDelta, bid, s);
                 if (s.ReopenRequested && reopenAllowedBranchIds.Contains(bid))
                     reopenBranchIds.Add(bid);
             }
             if (s.CandidateId is { } cid)
-                candidateDelta[cid] = candidateDelta.TryGetValue(cid, out var cd) ? cd + s.SupportDelta : s.SupportDelta;
+                Accumulate(candidateDelta, cid, s);
         }
 
         // Fold branch deltas into their owning candidate by branch-code prefix (C{n}.Bxx).
         var candidateByCode = candidates.ToDictionary(c => c.CandidateCode, c => c.DecisionCandidateId, StringComparer.OrdinalIgnoreCase);
         foreach (var b in branches)
         {
-            if (!branchDelta.TryGetValue(b.DecisionBranchId, out var d) || Math.Abs(d) < 1e-9)
+            if (!branchDelta.TryGetValue(b.DecisionBranchId, out var bundle) || bundle.IsNegligible)
                 continue;
             var dot = b.BranchCode.IndexOf('.');
             var code = dot > 0 ? b.BranchCode[..dot] : b.BranchCode;
             if (candidateByCode.TryGetValue(code, out var cid))
-                candidateDelta[cid] = candidateDelta.TryGetValue(cid, out var cd) ? cd + d : d;
+                Fold(candidateDelta, cid, bundle);
         }
 
-        // Re-score candidates. The delta adjusts verification/authority support (the dependency-backed
-        // dimensions), then the authoritative composite + ceiling are recomputed by Core math.
+        // Re-score candidates. The UNTARGETED delta keeps the legacy coupling (Verification + Authority,
+        // Evidence at half weight); TARGETED deltas add to only their named dimension. The authoritative
+        // composite + ceiling are then recomputed by Core math — unchanged.
         var rescored = new List<DecisionCandidatePersistence>(candidates.Count);
         foreach (var c in candidates)
         {
-            var delta = candidateDelta.TryGetValue(c.DecisionCandidateId, out var d) ? d : 0d;
-            var verification = DecisionCoreMath.Clamp01((double)c.Verification + delta);
-            var authority = DecisionCoreMath.Clamp01((double)c.AuthoritySupport + delta);
-            var evidence = DecisionCoreMath.Clamp01((double)c.EvidenceSupport + (delta * 0.5));
-            var composite = DecisionCoreMath.CompositeScore((double)c.LegalSupport, (double)c.FactSupport, evidence, authority, verification);
-            var ceiling = DecisionCoreMath.CertaintyCeiling((double)c.LegalSupport, (double)c.FactSupport, evidence, authority);
+            var bundle = candidateDelta.TryGetValue(c.DecisionCandidateId, out var b) ? b : DeltaBundle.Empty;
+
+            var legacy = bundle.Untargeted;
+            var verification = DecisionCoreMath.Clamp01((double)c.Verification + legacy + bundle.Verification);
+            var authority = DecisionCoreMath.Clamp01((double)c.AuthoritySupport + legacy + bundle.Authority);
+            var evidence = DecisionCoreMath.Clamp01((double)c.EvidenceSupport + (legacy * 0.5) + bundle.Evidence);
+            var fact = DecisionCoreMath.Clamp01((double)c.FactSupport + bundle.Fact);
+            var legal = DecisionCoreMath.Clamp01((double)c.LegalSupport + bundle.Legal);
+            var composite = DecisionCoreMath.CompositeScore(legal, fact, evidence, authority, verification);
+            var ceiling = DecisionCoreMath.CertaintyCeiling(legal, fact, evidence, authority);
             var uncertainty = DecisionCoreMath.Clamp01(1d - verification);
             rescored.Add(c with
             {
+                LegalSupport = (decimal)legal,
+                FactSupport = (decimal)fact,
                 Verification = (decimal)verification,
                 AuthoritySupport = (decimal)authority,
                 EvidenceSupport = (decimal)evidence,
@@ -133,4 +143,39 @@ public static class DecisionRecompetition
             WinnerChanged: previousWinnerId != currentWinnerId,
             ReopenedBranchCount: reopenBranchIds.Count);
     }
+
+    // Per-target aggregation of signed deltas. Untargeted (TargetSignal == null) preserves the legacy
+    // V+A+E coupling; each dimension field accumulates only its typed signals. Summing before Clamp01
+    // keeps recompetition deterministic and order-independent.
+    private readonly record struct DeltaBundle(
+        double Untargeted, double Verification, double Authority, double Evidence, double Fact, double Legal)
+    {
+        public static readonly DeltaBundle Empty = default;
+
+        public bool IsNegligible =>
+            Math.Abs(Untargeted) < 1e-9 && Math.Abs(Verification) < 1e-9 && Math.Abs(Authority) < 1e-9
+            && Math.Abs(Evidence) < 1e-9 && Math.Abs(Fact) < 1e-9 && Math.Abs(Legal) < 1e-9;
+
+        public DeltaBundle Add(DecisionSignalTarget? target, double delta) => target switch
+        {
+            null => this with { Untargeted = Untargeted + delta },
+            DecisionSignalTarget.Verification => this with { Verification = Verification + delta },
+            DecisionSignalTarget.Authority => this with { Authority = Authority + delta },
+            DecisionSignalTarget.Evidence => this with { Evidence = Evidence + delta },
+            DecisionSignalTarget.Fact => this with { Fact = Fact + delta },
+            DecisionSignalTarget.Legal => this with { Legal = Legal + delta },
+            _ => this with { Untargeted = Untargeted + delta },
+        };
+
+        public DeltaBundle Merge(DeltaBundle other) => new(
+            Untargeted + other.Untargeted, Verification + other.Verification, Authority + other.Authority,
+            Evidence + other.Evidence, Fact + other.Fact, Legal + other.Legal);
+    }
+
+    private static void Accumulate(Dictionary<Guid, DeltaBundle> map, Guid key, DecisionBranchSignal signal)
+        => map[key] = (map.TryGetValue(key, out var existing) ? existing : DeltaBundle.Empty)
+            .Add(signal.TargetSignal, signal.SupportDelta);
+
+    private static void Fold(Dictionary<Guid, DeltaBundle> map, Guid key, DeltaBundle bundle)
+        => map[key] = (map.TryGetValue(key, out var existing) ? existing : DeltaBundle.Empty).Merge(bundle);
 }

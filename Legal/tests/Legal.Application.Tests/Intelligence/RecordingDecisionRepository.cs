@@ -133,6 +133,9 @@ internal sealed class RecordingDecisionRepository : ILegalDecisionRepository
     public Task<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>> GetEvidenceVerificationsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>>(EvidenceVerifications.ToArray());
 
+    public Task<IReadOnlyCollection<ExternalResearchEvidenceDto>> GetMatterExternalResearchEvidenceAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyCollection<ExternalResearchEvidenceDto>>([]);
+
     public Task PersistOutputClaimProvenanceAsync(IReadOnlyCollection<DecisionOutputClaimProvenancePersistence> provenance, CancellationToken cancellationToken = default)
     {
         OutputClaimProvenance.AddRange(provenance);

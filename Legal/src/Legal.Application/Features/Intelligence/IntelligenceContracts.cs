@@ -71,6 +71,11 @@ public sealed record PoloxiSearchRequest(Guid TenantId,Guid UserId,[Required,Str
     public bool IncludeExplanation { get; init; } = true;
     public bool UsePoloxiEngine { get; init; } = true;
     public IReadOnlyCollection<string> GrantedPermissions { get; init; } = [];
+    // Optional Decision Contract context. When all three are present, an accepted WIDE run is persisted
+    // as an authoritative Legal_HierarchyExecution; when absent, the run is standalone/diagnostic only.
+    public Guid? DecisionMatterId { get; init; }
+    public Guid? DecisionContractId { get; init; }
+    public int? DecisionContractVersion { get; init; }
 }
 public sealed record PoloxiCapabilityDto(Guid CapabilityId,string CapabilityCode,string DisplayName,string Description,string EntityTypeCode,string ModuleCode,string ExecutionHandlerCode,IReadOnlyCollection<string> ApprovedTerms,bool SupportsRecency,decimal MinimumConfidence,int SortOrder);
 public sealed record PoloxiConfiguration(bool EnableHierarchyReuse,int HierarchyCacheHours,decimal MinimumBranchConfidence,int MaximumBranches,int MaximumResults,bool EnableSemanticProposal);

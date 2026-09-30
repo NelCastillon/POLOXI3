@@ -615,6 +615,24 @@ public sealed record DecisionEvidencePersistence(
     public string? LifecycleState { get; init; }
 }
 
+// Matter-scoped read of EXTERNALLY-RESEARCHED, verified authority evidence (statutes, regulations,
+// case law retrieved from external providers via the research loop) — the source-truth the
+// ExternalResearch decision channel binds to authoritative hierarchy nodes. Projects one verified
+// external-evidence item joined to its retrieved source; only the qualitative verification lifecycle
+// crosses the boundary (numeric factor values are intentionally not carried).
+public sealed record ExternalResearchEvidenceDto(
+    Guid DecisionEvidenceVerificationId,
+    Guid DecisionEvidenceId,
+    string SourceTypeCode,
+    string DispositionCode,
+    bool IsVerified,
+    bool IsDecisionAuthorized,
+    string? SourceProvider,
+    string? SourceRef,
+    string? SourceTitle,
+    string? Snippet,
+    DateTime EvaluatedDateUtc);
+
 // Evidence attachment authority is separate from both structural graph verification and the source's
 // verification lifecycle. Every retrieval attempt starts non-authoritative; only verified proposition
 // support may finalize as SUPPORTED_BY and influence the decision.

@@ -348,6 +348,39 @@ WHEN NOT MATCHED THEN
         await connection.ExecuteAsync(new CommandDefinition(sql,new{SettingKey=ShowPipelineSettingKey,SettingValue=showPipeline?"true":"false"},cancellationToken:cancellationToken));
     }
 
+    public async Task<WidePoloxiComputationDetailsDto> GetPoloxiComputationDetailsAsync(Guid tenantId,CancellationToken cancellationToken=default)
+    {
+        // Platform defaults mirror DecisionCoreMath.CompositeScore constants (L .25 / F .20 / E .20 /
+        // A .15 / V .20) and the current algorithm version. Tenant override wins over platform default.
+        const string sql="""
+SELECT
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.Composite.WeightLegal' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.25) WeightLegal,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.Composite.WeightFact' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.20) WeightFact,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.Composite.WeightEvidence' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.20) WeightEvidence,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.Composite.WeightAuthority' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.15) WeightAuthority,
+COALESCE(TRY_CONVERT(decimal(5,4),(SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.Composite.WeightVerification' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END)),0.20) WeightVerification,
+COALESCE((SELECT TOP(1) COALESCE(SettingValue,DefaultValue) FROM Core.ConfigurationSetting WHERE SettingKey=N'Intelligence.Decision.AlgorithmVersion' AND IsDeleted=0 AND (TenantId=@TenantId OR TenantId IS NULL) ORDER BY CASE WHEN TenantId=@TenantId THEN 0 ELSE 1 END),N'POLOXI_WIDE_V3.21') AlgorithmVersion;
+""";
+        using var connection=await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var row=await connection.QuerySingleAsync<ComputationDetailsRow>(new CommandDefinition(sql,new{TenantId=tenantId},cancellationToken:cancellationToken));
+        return new WidePoloxiComputationDetailsDto(
+            row.WeightLegal,row.WeightFact,row.WeightEvidence,row.WeightAuthority,row.WeightVerification,
+            string.IsNullOrWhiteSpace(row.AlgorithmVersion)?"POLOXI_WIDE_V3.21":row.AlgorithmVersion.Trim(),
+            "Certainty ceiling = min(essential Legal, Fact, Evidence, Authority) \u2014 support cannot exceed its weakest essential dependency.",
+            "Normalized entropy H\u2099 = H(C)/log n over the candidate composite distribution (0 = certain, 1 = maximally uncertain).",
+            "Top-2 margin = Score(C\u2081) \u2212 Score(C\u2082) between the leading and runner-up candidates.",
+            "Information value = 0.20\u00B7U + 0.25\u00B7RI + 0.25\u00B7D + 0.15\u00B7EA + 0.10\u00B7N \u2212 0.05\u00B7RP (exploration value only).",
+            "Recompetition: verified typed signals are applied with aggregation; composite is capped by the certainty ceiling before re-ranking.");
+    }
+
+    private sealed record ComputationDetailsRow(
+        decimal WeightLegal,
+        decimal WeightFact,
+        decimal WeightEvidence,
+        decimal WeightAuthority,
+        decimal WeightVerification,
+        string? AlgorithmVersion);
+
     public async Task SavePoloxiBranchOutcomesAsync(Guid tenantId,Guid userId,Guid poloxiExecutionId,IReadOnlyCollection<PoloxiBranchOutcomeRecord> outcomes,CancellationToken cancellationToken=default)
     {
         if(outcomes.Count==0)return;

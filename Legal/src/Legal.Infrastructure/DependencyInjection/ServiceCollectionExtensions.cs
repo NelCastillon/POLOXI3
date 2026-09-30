@@ -68,9 +68,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILegalDocumentCorpusRepository, LegalDocumentCorpusRepository>();
         services.AddScoped<IAttorneyDecisionInputRepository, AttorneyDecisionInputRepository>();
         services.AddScoped<ILegalDecisionContractRepository, LegalDecisionContractRepository>();
+        services.AddScoped<ILegalHierarchyExecutionRepository, LegalHierarchyExecutionRepository>();
 
         // Continuous Decision Integrity (Phase 1): change-awareness persistence + Matter Change Processor.
         services.AddScoped<IDecisionIntegrityRepository, LegalDecisionIntegrityRepository>();
+
+        // Decision Channels: qualitative source-truth contributions bound to authoritative hierarchy nodes.
+        services.AddScoped<IChannelContributionRepository, LegalChannelContributionRepository>();
+        // Durable Hierarchy Node → Decision lineage map (migration 0368): the node→branch/candidate source-of-truth.
+        services.AddScoped<IHierarchyNodeDecisionLineageRepository, HierarchyNodeDecisionLineageRepository>();
 
         // Enterprise error-log store: scoped Dapper repository plus a fail-soft service used by every
         // pipeline module (API request filter, Wide2 decision pipeline, retrievers, workers). The service
@@ -230,6 +236,18 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Legal.Application.Abstractions.Intelligence.ILegalMatterCorpusActivationService, Legal.Application.Features.Intelligence.Decision.LegalMatterCorpusActivationService>();
         services.AddScoped<Legal.Application.Abstractions.Intelligence.IMatterChangeProcessor, Legal.Application.Features.Intelligence.Decision.MatterChangeProcessor>();
         services.AddScoped<Legal.Application.Features.Intelligence.Decision.DecisionReevaluationService>();
+
+        // Decision Channels: each channel emits qualitative contributions; POLOXI Wide2 owns the outcome.
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.DocumentEvidenceChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.HumanIntelligenceChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.LegalAuthorityChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.InvestigationChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.DecisionContractChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannel, Legal.Application.Features.Intelligence.Decision.Channels.ExternalResearchChannel>();
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IDecisionChannelOrchestrator, Legal.Application.Features.Intelligence.Decision.Channels.DecisionChannelOrchestrator>();
+        // Channel → typed recompetition bridge: rehydrates persisted contributions, prefetches durable
+        // node lineage (0368), and runs the pure LegalChannelSignalAdapter to emit typed DecisionBranchSignals.
+        services.AddScoped<Legal.Application.Features.Intelligence.Decision.Channels.IChannelContributionProjectionService, Legal.Application.Features.Intelligence.Decision.Channels.ChannelContributionProjectionService>();
         services.AddScoped<IDecisionReevaluationDispatcher, DecisionReevaluationDispatcher>();
         services.AddScoped<ILegalMatterContextRetriever, Legal.Application.Features.Intelligence.Decision.LegalMatterContextRetriever>();
         services.AddSingleton<IDecisionResearchSourceRouter, Legal.Application.Features.Intelligence.Decision.DecisionResearchSourceRouter>();

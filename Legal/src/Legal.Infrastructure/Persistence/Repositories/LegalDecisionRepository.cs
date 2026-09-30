@@ -357,6 +357,40 @@ public sealed class LegalDecisionRepository(ISqlConnectionFactory connectionFact
             }).ToArray();
     }
 
+    // Matter-scoped read of externally-researched, verified authority evidence for the ExternalResearch
+    // decision channel. Restricts to verification rows whose SourceTypeCode is an external legal-authority
+    // type and joins the retrieved DecisionEvidence source plus optional provider from the source snapshot.
+    // Only the qualitative verification lifecycle crosses the boundary; no numeric factor is projected.
+    public async Task<IReadOnlyCollection<ExternalResearchEvidenceDto>> GetMatterExternalResearchEvidenceAsync(
+        Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var rows = await connection.QueryAsync<ExternalResearchEvidenceDto>(new CommandDefinition("""
+            SELECT v.DecisionEvidenceVerificationId,
+                   v.DecisionEvidenceId,
+                   v.SourceTypeCode,
+                   v.DispositionCode,
+                   v.IsVerified,
+                   v.IsDecisionAuthorized,
+                   snap.SourceProvider AS SourceProvider,
+                   e.SourceRef   AS SourceRef,
+                   e.SourceTitle AS SourceTitle,
+                   e.Snippet     AS Snippet,
+                   v.EvaluatedDateUtc
+            FROM POLOXI.Legal_DecisionEvidenceVerification v
+            INNER JOIN POLOXI.Legal_DecisionEvidence e
+                ON e.DecisionEvidenceId = v.DecisionEvidenceId AND e.IsDeleted = 0
+            LEFT JOIN POLOXI.Legal_EvidenceSourceSnapshot snap
+                ON snap.SourceSnapshotId = v.SourceSnapshotId
+            WHERE v.TenantId = @TenantId
+              AND v.MatterId = @MatterId
+              AND v.IsDeleted = 0
+              AND v.SourceTypeCode IN
+                  (N'CASE_LAW', N'STATUTE', N'REGULATION', N'ADMINISTRATIVE_AUTHORITY', N'SECONDARY_AUTHORITY');
+            """, new { TenantId = tenantId, MatterId = decisionMatterId }, cancellationToken: cancellationToken));
+        return rows.ToArray();
+    }
+
     public async Task<DecisionV2Settings> GetV2SettingsAsync(CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.CreateOpenConnectionAsync(cancellationToken);

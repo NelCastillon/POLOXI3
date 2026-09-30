@@ -36,6 +36,11 @@ public interface ILegalDecisionRepository
     Task UpdateResearchEvidenceAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEvidencePersistence> evidence, CancellationToken cancellationToken = default);
     Task PersistEvidenceVerificationsAsync(IReadOnlyCollection<DecisionEvidenceVerificationPersistence> verifications, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>> GetEvidenceVerificationsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default);
+    // Matter-scoped read of EXTERNALLY-RESEARCHED, verified authority evidence for the ExternalResearch
+    // decision channel: verification rows whose SourceTypeCode is an external legal-authority type
+    // (CASE_LAW / STATUTE / REGULATION / ADMINISTRATIVE_AUTHORITY / SECONDARY_AUTHORITY), joined to their
+    // retrieved DecisionEvidence source. Tenant-scoped; the verification lifecycle stays authoritative.
+    Task<IReadOnlyCollection<ExternalResearchEvidenceDto>> GetMatterExternalResearchEvidenceAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default);
     Task PersistOutputClaimProvenanceAsync(IReadOnlyCollection<DecisionOutputClaimProvenancePersistence> provenance, CancellationToken cancellationToken = default);
 
     // Matter aggregate + cockpit support.

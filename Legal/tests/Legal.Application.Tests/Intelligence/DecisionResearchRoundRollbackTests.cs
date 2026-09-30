@@ -589,7 +589,19 @@ internal static class RollbackFixture
             new DecisionResearchSourceRouter(),
             new TestExecutionEnvironment(),
             new UnusedAiProviderRouter(),
+            new EmptyChannelContributionProjectionService(),
             NullLogger<LegalDecisionService>.Instance);
+}
+
+// Fail-soft channel projection stub: the rollback/loop tests do not exercise channel contributions.
+internal sealed class EmptyChannelContributionProjectionService
+    : Legal.Application.Features.Intelligence.Decision.Channels.IChannelContributionProjectionService
+{
+    public Task<IReadOnlyList<DecisionBranchSignal>> ProjectForExecutionAsync(Guid tenantId, Guid hierarchyExecutionId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<DecisionBranchSignal>>([]);
+
+    public Task<IReadOnlyList<DecisionBranchSignal>> ProjectForSessionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<DecisionBranchSignal>>([]);
 }
 
 // ── Unused-on-the-loop-path dependencies: fail loudly if the loop ever touches them unexpectedly. ──

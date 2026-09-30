@@ -91,16 +91,37 @@ public static class DecisionResearchSemanticNodeRoles
     public const string FrontierQuestion = "FRONTIER_QUESTION";
 }
 
+// Which existing POLOXI candidate input dimension a typed support signal moves. This lets a producer
+// state that its information affects a SPECIFIC dimension (e.g. verified document evidence → Evidence,
+// verified legal authority → Authority) instead of the legacy undifferentiated V+A+E coupling. It never
+// adds a new scoring system: POLOXI still owns the composite/ceiling/entropy/margin math; the target
+// only selects which existing input δ lands on. A null target preserves the original legacy behavior.
+public enum DecisionSignalTarget
+{
+    Verification = 0,
+    Authority = 1,
+    Evidence = 2,
+    Fact = 3,
+    Legal = 4,
+}
+
 // A single domain-neutral signal: "something a branch/candidate depends on changed, by this delta."
 // SupportDelta is a signed multiplier in [-1,1] applied by POLOXI to the branch's inputs; POLOXI
 // decides what (if anything) that means for candidate ranking.
+//
+// TargetSignal is OPTIONAL and backward-compatible:
+//   * null  → legacy behavior: δ moves Verification + Authority (and Evidence at half weight) together.
+//     All existing producers omit it, so they are byte-identical.
+//   * set   → typed behavior: δ moves ONLY the designated dimension. New channel producers use this so
+//     e.g. a verified Evidence contribution changes Evidence and no unrelated POLOXI dimension.
 public sealed record DecisionBranchSignal(
     string SignalKind,
     Guid? BranchId,
     Guid? CandidateId,
     double SupportDelta,
     bool ReopenRequested,
-    string ReasonCode);
+    string ReasonCode,
+    DecisionSignalTarget? TargetSignal = null);
 
 // The structured result of deterministic dependency propagation (§7). The graph produces THIS,
 // never a rescored candidate. POLOXI consumes the affected ids + signals to recompete.

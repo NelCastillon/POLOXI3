@@ -1,0 +1,70 @@
+@using HNode = Legal.Application.Features.Intelligence.Decision.HierarchyNodeDto
+@using HDetail = Legal.Application.Features.Intelligence.Decision.HierarchyExecutionDetailDto
+
+@{
+    var children = Detail.Nodes.Where(n => n.ParentHierarchyNodeId == Node.HierarchyNodeId)
+        .OrderBy(n => n.DisplayOrder).ToArray();
+    var isCollapsed = Collapsed.Contains(Node.HierarchyNodeId);
+    var isSelected = SelectedId == Node.HierarchyNodeId;
+    var matches = string.IsNullOrWhiteSpace(Search)
+        || (Node.Title ?? Node.Statement).Contains(Search, StringComparison.OrdinalIgnoreCase);
+}
+
+@if (matches || DescendantMatches(Node))
+{
+    <div class="hd-node @(isSelected ? "hd-node--active" : "")" style="padding-left:@(Node.Depth * 14 + 8)px">
+        @if (children.Length > 0)
+        {
+            <button type="button" class="hd-node-toggle" @onclick="() => OnToggle.InvokeAsync(Node.HierarchyNodeId)">
+                <i class="bi bi-@(isCollapsed ? "chevron-right" : "chevron-down")"></i>
+            </button>
+        }
+        else
+        {
+            <span class="hd-node-toggle hd-node-toggle--leaf"></span>
+        }
+        <button type="button" class="hd-node-btn" @onclick="() => OnSelect.InvokeAsync(Node.HierarchyNodeId)">
+            <span class="hd-lvl">L@(Node.Depth)</span>
+            <span class="hd-node-text">@(Node.Title ?? Node.Statement)</span>
+            <span class="hd-node-dot hd-node-dot--@Tone(Node.BranchStateCode)"></span>
+        </button>
+    </div>
+
+    @if (!isCollapsed)
+    {
+        @foreach (var child in children)
+        {
+            <HierarchyNodeRow Node="child" Detail="Detail" SelectedId="SelectedId"
+                              Collapsed="Collapsed" Search="Search"
+                              OnSelect="OnSelect" OnToggle="OnToggle" />
+        }
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public HNode Node { get; set; } = default!;
+    [Parameter, EditorRequired] public HDetail Detail { get; set; } = default!;
+    [Parameter] public Guid? SelectedId { get; set; }
+    [Parameter, EditorRequired] public HashSet<Guid> Collapsed { get; set; } = default!;
+    [Parameter] public string Search { get; set; } = "";
+    [Parameter] public EventCallback<Guid> OnSelect { get; set; }
+    [Parameter] public EventCallback<Guid> OnToggle { get; set; }
+
+    private bool DescendantMatches(HNode node)
+    {
+        if (string.IsNullOrWhiteSpace(Search)) return false;
+        foreach (var kid in Detail.Nodes.Where(n => n.ParentHierarchyNodeId == node.HierarchyNodeId))
+        {
+            if ((kid.Title ?? kid.Statement).Contains(Search, StringComparison.OrdinalIgnoreCase)) return true;
+            if (DescendantMatches(kid)) return true;
+        }
+        return false;
+    }
+
+    private static string Tone(string? code) => (code ?? "").ToUpperInvariant() switch
+    {
+        "ACTIVE" or "COMPLETE" or "RESOLVED" or "VALID" => "ok",
+        "ELIMINATED" or "STOPPED" or "REJECTED" => "muted",
+        _ => "info"
+    };
+}

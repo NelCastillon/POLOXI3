@@ -1,0 +1,95 @@
+using Legal.Application.Abstractions.Intelligence;
+using Legal.Application.Abstractions.Persistence;
+using Legal.Application.Features.Intelligence.Decision;
+using Legal.Application.Features.Intelligence.Decision.Core;
+
+namespace Legal.Application.Tests.Intelligence;
+
+// Throwing stub for the large ILegalDecisionRepository surface. Tests override only the members they
+// exercise; every other member throws NotSupportedException so an unexpected call fails loudly.
+internal abstract class StubDecisionRepository : ILegalDecisionRepository
+{
+    public virtual Task<IReadOnlyCollection<ExternalResearchEvidenceDto>> GetMatterExternalResearchEvidenceAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<DecisionCoreSettings> GetCoreSettingsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionV2Settings> GetV2SettingsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionExecutionModeDto>> GetExecutionModesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveExecutionModeAsync(SaveDecisionExecutionModeRequest request, Guid actorUserId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionContextDto>> GetContextsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionModelRouteDto>> GetModelRoutesAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveModelRouteAsync(Guid actorUserId, SaveDecisionModelRouteRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionPromptDefinition?> GetPromptAsync(string promptCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionPromptConfigurationDto>> GetPromptConfigurationsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SavePromptConfigurationAsync(Guid actorUserId, SaveDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task CreatePromptConfigurationAsync(Guid tenantId, Guid actorUserId, CreateDecisionPromptConfigurationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeletePromptConfigurationAsync(Guid actorUserId, string promptCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionSettingDto>> GetSettingsAsync(string? keyPrefix = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<FactBindingConfig?> GetFactBindingConfigAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveSettingAsync(Guid actorUserId, SaveDecisionSettingRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistSessionAsync(DecisionSessionPersistence session, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistClarificationAsync(DecisionClarificationPersistence clarification, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionClarificationPersistence>> GetClarificationLineageAsync(Guid tenantId, Guid parentDecisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task AppendSessionEventsAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEventPersistence> events, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionSessionPersistence?> GetSessionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistResearchEvidenceAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEvidencePersistence> evidence, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task UpdateResearchEvidenceAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionEvidencePersistence> evidence, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistEvidenceVerificationsAsync(IReadOnlyCollection<DecisionEvidenceVerificationPersistence> verifications, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionEvidenceVerificationPersistence>> GetEvidenceVerificationsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistOutputClaimProvenanceAsync(IReadOnlyCollection<DecisionOutputClaimProvenancePersistence> provenance, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionMatterDto>> GetMattersAsync(Guid tenantId, bool includeAllTenants, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionMatterDto?> GetMatterAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<Guid> CreateMatterAsync(Guid tenantId, Guid userId, DecisionMatterCreateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionTimelineEventDto>> GetSessionTimelineAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionSessionSummaryDto>> GetMatterSessionsAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<bool> UpdateMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, DecisionMatterUpdateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<bool> UpdateMatterStatusAsync(Guid tenantId, Guid userId, Guid decisionMatterId, string statusCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<bool> DeleteMatterAsync(Guid tenantId, Guid userId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionMatterFacetsDto> GetMatterFacetsAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionDomainPackDto?> GetDomainPackAsync(Guid tenantId, string packCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<DecisionDomainPackDto>> GetDomainPacksAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackDimensionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackDimensionAsync(Guid tenantId, Guid actorUserId, string packCode, string dimensionCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackEvidenceTypeRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackEvidenceTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string evidenceTypeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackVerificationProfileRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackVerificationProfileAsync(Guid tenantId, Guid actorUserId, string packCode, string profileCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackMatterTypeRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackMatterTypeAsync(Guid tenantId, Guid actorUserId, string packCode, string matterTypeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackConceptAsync(Guid tenantId, Guid actorUserId, string packCode, string conceptCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SaveDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, SaveDomainPackConceptRelationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task DeleteDomainPackConceptRelationAsync(Guid tenantId, Guid actorUserId, string packCode, string sourceConceptCode, string targetConceptCode, string relationTypeCode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<PersonalInjuryOptionsDto> GetPersonalInjuryOptionsAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<PersonalInjuryProfileDto?> GetPersonalInjuryProfileAsync(Guid tenantId, Guid decisionMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task SavePersonalInjuryProfileAsync(Guid tenantId, Guid userId, Guid decisionMatterId, PersonalInjuryProfileSaveRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<PersonalInjuryDecisionTypeDto>> GetPersonalInjuryDecisionTypesAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<IReadOnlyCollection<PersonalInjuryStageDecisionDto>> GetPersonalInjuryStageDecisionMapAsync(Guid tenantId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<Guid> CreatePersonalInjuryDraftAsync(Guid tenantId, Guid userId, PersonalInjuryMatterDraftCreateRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<PersonalInjuryMatterDraftDto?> GetPersonalInjuryDraftAsync(Guid tenantId, Guid decisionPIMatterDraftId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<bool> MarkPersonalInjuryDraftConfirmedAsync(Guid tenantId, Guid userId, Guid decisionPIMatterDraftId, Guid confirmedMatterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistGraphAsync(DecisionGraphPersistence graph, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionGraphPersistence?> GetGraphAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task UpdateEdgeVerificationAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionGraphEdgePersistence> edges, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionV21Settings> GetV21SettingsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionResearchLoopSettings> GetResearchLoopSettingsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionDependencyEventPersistence?> GetDependencyEventAsync(Guid tenantId, Guid decisionSessionId, string idempotencyKey, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistDependencyEventAsync(DecisionDependencyEventPersistence dependencyEvent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistRecompetitionAsync(DecisionRecompetitionPersistence recompetition, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistResearchNeedAsync(DecisionResearchNeedPersistence researchNeed, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistLegalResearchExecutionAsync(LegalSearchPlan plan, LegalAuthorityRetrievalResult result, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistVerifiedLegalPropositionsAsync(Guid tenantId, Guid decisionSessionId, IReadOnlyCollection<VerifiedLegalProposition> propositions, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistLegalDecisionImpactAsync(Guid tenantId, Guid decisionSessionId, LegalDecisionImpactResult impact, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task UpdateEvidenceAttachmentsAsync(IReadOnlyCollection<DecisionEvidenceAttachmentPersistence> attachments, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task PersistFrontierSnapshotAsync(DecisionFrontierSnapshotPersistence snapshot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<int> CountBranchReopensAsync(Guid tenantId, Guid decisionSessionId, Guid decisionBranchId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<int> CountResearchNeedsAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionRecompetitionPersistence?> GetLatestRecompetitionAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task<DecisionResearchNeedPersistence?> GetLatestOpenResearchNeedAsync(Guid tenantId, Guid decisionSessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task UpdateSessionOutcomeAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string statusCode, decimal entropy, decimal margin, Guid? winnerCandidateId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task UpdateSessionAnswerAsync(Guid tenantId, Guid userId, Guid decisionSessionId, string? finalAnswer, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task ReplaceBranchesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionBranchPersistence> branches, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    public Task ReplaceCandidatesAsync(Guid tenantId, Guid userId, Guid decisionSessionId, IReadOnlyCollection<DecisionCandidatePersistence> candidates, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+}

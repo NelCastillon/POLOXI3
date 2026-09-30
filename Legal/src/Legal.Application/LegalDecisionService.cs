@@ -37,6 +37,7 @@ public sealed partial class LegalDecisionService(
     IDecisionResearchSourceRouter researchSourceRouter,
     IExecutionEnvironment executionEnvironment,
     Abstractions.Intelligence.IAiProviderRouter aiProviderRouter,
+    Features.Intelligence.Decision.Channels.IChannelContributionProjectionService channelProjectionService,
     ILogger<LegalDecisionService> logger) : ILegalDecisionService
 {
     private const string DiscoveryPromptCode = "DECISION_DISCOVERY";
@@ -2368,6 +2369,24 @@ public sealed partial class LegalDecisionService(
         if (request.RunClosedLoop && v21.UseGraphDrivenRecompetition && impact.RecompetitionRequired)
         {
             var signals = impactMapper.Map(impact, graph, session.Branches.ToList(), session.Candidates.ToList());
+
+            // Additively fold in verified channel contributions that map (via durable 0368 lineage) to
+            // this session. Fail-soft: no lineage / no contributions simply yields nothing. POLOXI Wide2
+            // remains the sole scorer — these are typed DecisionBranchSignals, never a parallel algorithm.
+            try
+            {
+                var channelSignals = await channelProjectionService.ProjectForSessionAsync(tenantId, decisionSessionId, cancellationToken);
+                if (channelSignals.Count > 0)
+                {
+                    signals = signals.Concat(channelSignals).ToList();
+                    audit.Add($"Channel contributions: {channelSignals.Count} verified typed signal(s) folded into recompetition.");
+                }
+            }
+            catch (Exception channelEx)
+            {
+                logger.LogWarning(channelEx, "Channel contribution projection failed for session {SessionId}; recompetition proceeds on graph signals only.", decisionSessionId);
+            }
+
             if (signals.Count > 0)
             {
                 // Loop-safety: only branches under the reopen cap may be reopened this session.

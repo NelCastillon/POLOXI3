@@ -12,6 +12,10 @@ public interface IIntelligenceWide2Repository
     Task<IReadOnlyCollection<WideSearchContextDto>> GetSearchContextsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     // Legal-context grounding configuration (CourtListener + GovInfo/eCFR) from Core.ConfigurationSetting.
     Task<WideLegalGroundingConfiguration> GetLegalGroundingConfigurationAsync(Guid tenantId,CancellationToken cancellationToken=default);
+    // POLOXI computation-details for the Candidate Competition tab (composite dimension weights +
+    // algorithm version) resolved from Core.ConfigurationSetting; platform defaults mirror the
+    // deterministic DecisionCoreMath constants so behavior is unchanged when no override exists.
+    Task<WidePoloxiComputationDetailsDto> GetPoloxiComputationDetailsAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task<IReadOnlyCollection<LegalAuthoritySourceDescriptor>> GetLegalAuthoritySourcesAsync(Guid tenantId,CancellationToken cancellationToken=default);
     Task UpsertLegalAuthoritySourceAsync(LegalAuthoritySourceRegistration registration,CancellationToken cancellationToken=default);
     // DB-backed concept -> legal authority map (POLOXI.Legal_LegalConceptAuthority) used to resolve
